@@ -1,0 +1,9 @@
+.git
+.gitignore
+bin
+tmp
+vendor
+*.test
+*.out
+Dockerfile
+.dockerignore
