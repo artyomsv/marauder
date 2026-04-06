@@ -15,6 +15,7 @@ import (
 	"github.com/artyomsv/marauder/backend/internal/api/middleware"
 	"github.com/artyomsv/marauder/backend/internal/auth"
 	"github.com/artyomsv/marauder/backend/internal/config"
+	"github.com/artyomsv/marauder/backend/internal/crypto"
 	"github.com/artyomsv/marauder/backend/internal/db/repo"
 )
 
@@ -24,6 +25,7 @@ type Deps struct {
 	Log     zerolog.Logger
 	Pool    *pgxpool.Pool
 	Manager *auth.Manager
+	Master  *crypto.MasterKey
 	Users   *repo.Users
 	Topics  *repo.Topics
 	Clients *repo.Clients
@@ -72,6 +74,11 @@ func NewRouter(d Deps) http.Handler {
 		Topics:  d.Topics,
 		BaseURL: d.Cfg.PublicBaseURL,
 	}
+	clientsH := &handlers.Clients{
+		Clients: d.Clients,
+		Master:  d.Master,
+		BaseURL: d.Cfg.PublicBaseURL,
+	}
 	sysH := &handlers.System{BaseURL: d.Cfg.PublicBaseURL}
 
 	r.Route("/api/v1", func(r chi.Router) {
@@ -95,6 +102,11 @@ func NewRouter(d Deps) http.Handler {
 			r.Delete("/topics/{id}", topicsH.Delete)
 			r.Post("/topics/{id}/pause", topicsH.Pause)
 			r.Post("/topics/{id}/resume", topicsH.Resume)
+
+			r.Get("/clients", clientsH.List)
+			r.Post("/clients", clientsH.Create)
+			r.Delete("/clients/{id}", clientsH.Delete)
+			r.Post("/clients/{id}/test", clientsH.Test)
 		})
 	})
 

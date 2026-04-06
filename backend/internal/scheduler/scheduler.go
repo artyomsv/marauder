@@ -19,7 +19,6 @@ package scheduler
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -29,6 +28,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/artyomsv/marauder/backend/internal/config"
+	"github.com/artyomsv/marauder/backend/internal/crypto"
 	"github.com/artyomsv/marauder/backend/internal/db/repo"
 	"github.com/artyomsv/marauder/backend/internal/domain"
 	"github.com/artyomsv/marauder/backend/internal/plugins/registry"
@@ -40,7 +40,7 @@ type Scheduler struct {
 	log     zerolog.Logger
 	topics  *repo.Topics
 	clients *repo.Clients
-	// Future: credentials repo, events repo, notifications dispatcher.
+	master  *crypto.MasterKey
 
 	jobs  chan *domain.Topic
 	wg    sync.WaitGroup
@@ -49,12 +49,13 @@ type Scheduler struct {
 }
 
 // New constructs a scheduler.
-func New(cfg *config.Config, log zerolog.Logger, topics *repo.Topics, clients *repo.Clients) *Scheduler {
+func New(cfg *config.Config, log zerolog.Logger, topics *repo.Topics, clients *repo.Clients, master *crypto.MasterKey) *Scheduler {
 	return &Scheduler{
 		cfg:     cfg,
 		log:     log.With().Str("component", "scheduler").Logger(),
 		topics:  topics,
 		clients: clients,
+		master:  master,
 		jobs:    make(chan *domain.Topic, cfg.SchedulerWorkers*4),
 		stop:    make(chan struct{}),
 		ready:   make(chan struct{}),
@@ -172,22 +173,32 @@ func (s *Scheduler) runCheck(ctx context.Context, log zerolog.Logger, t *domain.
 }
 
 func (s *Scheduler) submitToClient(ctx context.Context, log zerolog.Logger, t *domain.Topic, payload *domain.Payload) error {
+	_ = log
 	if t.ClientID == nil {
-		return errors.New("no client configured for this topic")
+		// No explicit client — fall back to the user's default client,
+		// if any.
+		def, err := s.clients.GetDefault(ctx, t.UserID)
+		if err != nil {
+			return errors.New("no client configured for this topic and no default client")
+		}
+		return s.sendViaClient(ctx, def, t, payload)
 	}
 	cfg, err := s.clients.GetByID(ctx, *t.ClientID, t.UserID)
 	if err != nil {
 		return fmt.Errorf("load client: %w", err)
 	}
+	return s.sendViaClient(ctx, cfg, t, payload)
+}
+
+func (s *Scheduler) sendViaClient(ctx context.Context, cfg *domain.Client, t *domain.Topic, payload *domain.Payload) error {
 	clientPlugin := registry.GetClient(cfg.ClientName)
 	if clientPlugin == nil {
 		return fmt.Errorf("client plugin %q not installed", cfg.ClientName)
 	}
-	// For v0.1 we store config as JSON in ConfigEnc (encrypted); however
-	// in this scaffold we pass the raw bytes through unchanged because
-	// the encryption/decryption is wired elsewhere. The plugin unmarshals
-	// JSON from its schema.
-	rawConfig := cfg.ConfigEnc
+	rawConfig, err := s.master.Decrypt(cfg.ConfigEnc, cfg.ConfigNonce)
+	if err != nil {
+		return fmt.Errorf("decrypt client config: %w", err)
+	}
 	return clientPlugin.Add(ctx, rawConfig, payload, domain.AddOptions{
 		DownloadDir: t.DownloadDir,
 	})
@@ -209,8 +220,3 @@ func (s *Scheduler) backoff(t *domain.Topic, failure bool) time.Time {
 	return time.Now().UTC().Add(d)
 }
 
-// marshalExtra is kept for future "event details" use.
-func marshalExtra(v any) []byte {
-	b, _ := json.Marshal(v)
-	return b
-}

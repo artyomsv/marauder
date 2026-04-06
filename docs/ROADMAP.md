@@ -27,9 +27,11 @@ add a generic magnet URI, and see it land in qBittorrent.
 - [x] Login screen + dashboard + topics list + add-topic inline card
 - [x] docker-compose.yml (db + backend + frontend + gateway)
 - [x] End-to-end smoke test: stack up -> login as admin -> JWT issued
-- [ ] E2E smoke test: add magnet, it appears in qBittorrent, topic event logged
-- [ ] CONTRIBUTING.md + first unit tests for `crypto`, `auth`, and the
-      plugin registry
+- [x] **E2E smoke test: add magnet -> appears in qBittorrent, topic event
+      logged** (see `docs/test-e2e-magnet.md`)
+- [x] Clients CRUD endpoints with master-key config encryption
+- [x] First unit tests for `crypto` and the plugin registry
+- [ ] CONTRIBUTING.md and unit tests for `auth` (JWT round-trip)
 
 **Done when:** the five-minute quick-start from the README actually works on
 a clean Linux host.

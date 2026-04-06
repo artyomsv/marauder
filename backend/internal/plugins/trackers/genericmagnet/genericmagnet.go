@@ -76,6 +76,8 @@ func extractBTIH(xt string) string {
 
 // stableHash is a deterministic hash of a magnet URI. We don't need a
 // cryptographic hash here — the scheduler only uses it for equality.
+// The hash is the magnet URI itself, so a one-shot magnet topic only
+// "updates" once: the first time it is checked.
 func stableHash(s string) string {
-	return "magnet:" + s
+	return s
 }

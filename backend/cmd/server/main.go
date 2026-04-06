@@ -102,7 +102,7 @@ func run() error {
 	}
 
 	// Scheduler
-	sch := scheduler.New(cfg, logger, topicsRepo, clientsRepo)
+	sch := scheduler.New(cfg, logger, topicsRepo, clientsRepo, master)
 	go func() {
 		if err := sch.Start(rootCtx); err != nil {
 			logger.Error().Err(err).Msg("scheduler exited with error")
@@ -115,6 +115,7 @@ func run() error {
 		Log:     logger,
 		Pool:    pool,
 		Manager: mgr,
+		Master:  master,
 		Users:   users,
 		Topics:  topicsRepo,
 		Clients: clientsRepo,
