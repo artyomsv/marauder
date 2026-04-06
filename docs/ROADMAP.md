@@ -11,19 +11,25 @@
 add a generic magnet URI, and see it land in qBittorrent.
 
 - [x] Project vision, competitors, PRD, roadmap, README, MIT license
-- [ ] Go backend skeleton: `chi` router, `pgx` pool, zerolog, viper/envconfig
-- [ ] Postgres 18.4 + goose migrations (users, refresh_tokens, jwt_keys,
+- [x] Go backend skeleton: `chi` router, `pgx` pool, zerolog, envconfig
+- [x] Postgres 18 + goose migrations (users, refresh_tokens, jwt_keys,
       topics, topic_events, tracker_credentials, clients, notifiers,
       audit_log, settings)
-- [ ] Internal JWT auth: local login, refresh rotation, logout
-- [ ] First admin user auto-created from env on first start
-- [ ] `genericmagnet` tracker plugin (accepts magnet URIs, no monitoring)
-- [ ] `qbittorrent` client plugin (WebUI API v2)
-- [ ] Scheduler loop with bounded worker pool
-- [ ] React 19 + Vite 8 + Tailwind 4 + shadcn/ui frontend skeleton
-- [ ] Login screen + topics list + add-topic sheet
-- [ ] docker-compose.yml (db + backend + frontend + gateway)
-- [ ] Smoke test: add magnet, it appears in qBittorrent, topic event logged
+- [x] Internal JWT auth: local login, refresh rotation, logout
+- [x] First admin user auto-created from env on first start
+- [x] `genericmagnet` tracker plugin (accepts magnet URIs, no monitoring)
+- [x] `generictorrentfile` tracker plugin (SHA-1 monitoring of a .torrent URL)
+- [x] `qbittorrent` client plugin (WebUI API v2)
+- [x] `downloadfolder` client plugin
+- [x] `telegram` notifier plugin
+- [x] Scheduler loop with bounded worker pool and exponential backoff
+- [x] React 19.2 + Vite 8 + Tailwind 4 + shadcn/ui frontend skeleton
+- [x] Login screen + dashboard + topics list + add-topic inline card
+- [x] docker-compose.yml (db + backend + frontend + gateway)
+- [x] End-to-end smoke test: stack up -> login as admin -> JWT issued
+- [ ] E2E smoke test: add magnet, it appears in qBittorrent, topic event logged
+- [ ] CONTRIBUTING.md + first unit tests for `crypto`, `auth`, and the
+      plugin registry
 
 **Done when:** the five-minute quick-start from the README actually works on
 a clean Linux host.

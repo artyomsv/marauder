@@ -15,10 +15,10 @@ import (
 // Config holds all runtime configuration for the backend.
 type Config struct {
 	// Server
-	HTTPAddr    string        `env:"MARAUDER_HTTP_ADDR" envDefault:":8080"`
+	HTTPAddr    string        `env:"MARAUDER_HTTP_ADDR" envDefault:":8679"`
 	LogLevel    string        `env:"MARAUDER_LOG_LEVEL" envDefault:"info"`
 	LogJSON     bool          `env:"MARAUDER_LOG_JSON" envDefault:"true"`
-	CORSOrigins []string      `env:"MARAUDER_CORS_ORIGINS" envDefault:"http://localhost:5173,http://localhost:6688"`
+	CORSOrigins []string      `env:"MARAUDER_CORS_ORIGINS" envDefault:"http://localhost:5174,http://localhost:6688"`
 	ShutdownTO  time.Duration `env:"MARAUDER_SHUTDOWN_TIMEOUT" envDefault:"15s"`
 
 	// Public base URL (used in OIDC redirect, RFC7807 type URIs)

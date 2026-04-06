@@ -1,0 +1,72 @@
+# Development overlay for Marauder.
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+#
+# What it does differently from the production stack:
+#   - publishes the postgres, backend, and frontend ports directly to
+#     the host so developers can hit them without going through nginx;
+#   - starts qBittorrent and Transmission containers so tracker-to-client
+#     integration tests can run end-to-end against real clients.
+#
+# None of these services are exposed in production.
+
+services:
+  db:
+    ports:
+      - "55432:5432"
+
+  backend:
+    ports:
+      - "8679:8679"
+
+  frontend:
+    ports:
+      - "8680:8081"
+
+  # Real qBittorrent for integration testing.
+  # Web UI: http://localhost:6611 (default user "admin", password in
+  # logs on first start).
+  qbittorrent:
+    image: lscr.io/linuxserver/qbittorrent:latest
+    restart: unless-stopped
+    environment:
+      PUID: "1000"
+      PGID: "1000"
+      TZ: "Etc/UTC"
+      WEBUI_PORT: "6611"
+    volumes:
+      - qbit_config:/config
+      - qbit_downloads:/downloads
+    ports:
+      - "6611:6611"
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
+
+  # Real Transmission for integration testing.
+  transmission:
+    image: lscr.io/linuxserver/transmission:latest
+    restart: unless-stopped
+    environment:
+      PUID: "1000"
+      PGID: "1000"
+      TZ: "Etc/UTC"
+    volumes:
+      - transmission_config:/config
+      - transmission_downloads:/downloads
+    ports:
+      - "9191:9091"
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
+
+volumes:
+  qbit_config:
+  qbit_downloads:
+  transmission_config:
+  transmission_downloads:

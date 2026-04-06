@@ -37,9 +37,9 @@ WORKDIR /home/marauder
 
 COPY --from=builder /out/marauder /usr/local/bin/marauder
 
-EXPOSE 8080
+EXPOSE 8679
 
 HEALTHCHECK --interval=30s --timeout=3s --retries=3 \
-  CMD wget -qO- http://localhost:8080/health || exit 1
+  CMD wget -qO- http://localhost:8679/health || exit 1
 
 ENTRYPOINT ["/usr/local/bin/marauder"]
