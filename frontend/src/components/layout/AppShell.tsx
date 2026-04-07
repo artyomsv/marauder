@@ -1,10 +1,11 @@
 import { Link, NavLink, Outlet, useNavigate } from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
 import { LogOut, Radio, LayoutDashboard, Server, Bell, Settings, KeyRound, Moon, Sun, Activity, Shield } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { useAuthStore } from "@/lib/auth-store";
-import { api } from "@/lib/api";
+import { api, type SystemInfo } from "@/lib/api";
 import { useT } from "@/i18n";
 import { usePrefs } from "@/lib/prefs";
 import { LocaleSwitcher } from "@/components/layout/LocaleSwitcher";
@@ -35,6 +36,12 @@ export function AppShell() {
   const t = useT();
   const theme = usePrefs((s) => s.theme);
   const setTheme = usePrefs((s) => s.setTheme);
+  const { data: systemInfo } = useQuery({
+    queryKey: ["system-info"],
+    queryFn: () => api.get<SystemInfo>("/system/info", { auth: false }),
+    staleTime: 5 * 60_000,
+  });
+  const version = systemInfo?.version?.version ?? "";
 
   const handleLogout = async () => {
     if (refreshToken) {
@@ -58,7 +65,7 @@ export function AppShell() {
             marauder
           </span>
           <span className="ml-auto font-mono text-[10px] text-muted-foreground">
-            v0.1
+            {version ? `v${version}` : ""}
           </span>
         </div>
 

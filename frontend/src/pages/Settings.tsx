@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { motion } from "framer-motion";
 import { Check, Moon, Sun } from "lucide-react";
 
@@ -7,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useAuthStore } from "@/lib/auth-store";
-import { api, ApiError } from "@/lib/api";
+import { api, ApiError, type SystemInfo } from "@/lib/api";
 import { useT, useI18n, LOCALES, type Locale } from "@/i18n";
 import { usePrefs, type Density, type Theme } from "@/lib/prefs";
 import { cn } from "@/lib/utils";
@@ -244,6 +245,14 @@ function AccountCard({ username, email }: { username: string; email: string }) {
 
 function AboutCard() {
   const t = useT();
+  const { data: systemInfo } = useQuery({
+    queryKey: ["system-info"],
+    queryFn: () => api.get<SystemInfo>("/system/info", { auth: false }),
+    staleTime: 5 * 60_000,
+  });
+  const version = systemInfo?.version?.version ?? "—";
+  const commit = systemInfo?.version?.commit ?? "";
+  const buildDate = systemInfo?.version?.buildDate ?? "";
   return (
     <Card>
       <CardHeader>
@@ -252,8 +261,18 @@ function AboutCard() {
       </CardHeader>
       <CardContent className="space-y-3 text-sm">
         <Row label={t("settings.about.version")}>
-          <span className="font-mono text-foreground">v0.4.0-alpha</span>
+          <span className="font-mono text-foreground">v{version}</span>
         </Row>
+        {commit && commit !== "unknown" && (
+          <Row label="Commit">
+            <span className="font-mono text-xs text-muted-foreground">{commit}</span>
+          </Row>
+        )}
+        {buildDate && buildDate !== "unknown" && (
+          <Row label="Built">
+            <span className="font-mono text-xs text-muted-foreground">{buildDate}</span>
+          </Row>
+        )}
         <Row label={t("settings.about.license")}>
           <span className="font-mono text-foreground">MIT</span>
         </Row>
