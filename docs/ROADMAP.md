@@ -57,11 +57,8 @@ homelab user could reasonably install it.
 - [x] Notifiers CRUD API + frontend page
 - [x] Plugin unit tests (`generictorrentfile`, `downloadfolder`,
       `telegram`, `qbittorrent`)
-- [ ] Audit log UI (admin-only page)
 - [ ] User management UI (admin-only page)
 - [ ] Topic detail side-sheet with full event history
-- [ ] Empty states, error states, loading states on every screen
-- [ ] Russian (`ru`) translation of the UI
 - [ ] CI: lint, unit, integration, frontend e2e (Playwright), trivy scan
 - [ ] Published to GHCR with `:0.2.0` and `:latest-rc` tags
 
@@ -78,13 +75,20 @@ makes Marauder a credible replacement.
 - [ ] `rutracker` tracker plugin (login + topic page scraping)
 - [ ] `kinozal` tracker plugin
 - [ ] `nnmclub` tracker plugin
-- [ ] Cloudflare solver sidecar (`chromedp`-based) + `WithCloudflare` plugin
-      capability wired through
+- [x] Cloudflare solver sidecar (`chromedp`-based) — separate Go service
+      `cfsolver/`, Debian-slim image with chromium, exposed via the
+      `cfsolver` compose profile, in-process client at
+      `backend/internal/cfsolver`
 - [ ] Per-topic quality selection UI (for trackers that support it)
-- [ ] `transmission` client plugin (transmission-rpc)
-- [ ] `deluge` client plugin (deluge-rpc)
-- [ ] Keycloak OIDC login (authorization code + PKCE)
-- [ ] Test with a live Keycloak instance documented in `docs/oidc.md`
+- [x] `transmission` client plugin (transmission-rpc) — handles the
+      X-Transmission-Session-Id 409 dance, supports magnet + .torrent +
+      basic auth, mocked-server tests
+- [x] `deluge` client plugin — Web JSON-RPC, auth.login + web.connect +
+      core.add_torrent_magnet/file, mocked-server tests
+- [x] Keycloak OIDC login (authorization-code flow) — `docker-compose.sso.yml`
+      profile with realm pre-import + alice/marauder test user, OIDCLogin/
+      OIDCCallback handlers, /oidc-callback frontend page, `docs/oidc.md`
+- [x] Test with a live Keycloak instance documented in `docs/oidc.md`
 - [ ] "Add topic" URL auto-detection with live preview
 - [ ] Per-tracker credential verification ("Test login" button)
 

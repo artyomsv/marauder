@@ -84,6 +84,15 @@ func run() error {
 	auditRepo := repo.NewAudit(pool)
 	auditLogger := audit.NewLogger(rootCtx, auditRepo, logger)
 
+	// Optional OIDC provider (nil when MARAUDER_OIDC_ENABLED=false)
+	oidcProvider, err := auth.NewOIDCProvider(rootCtx, cfg)
+	if err != nil {
+		return fmt.Errorf("oidc provider: %w", err)
+	}
+	if oidcProvider != nil {
+		logger.Info().Str("issuer", cfg.OIDCIssuer).Msg("OIDC enabled")
+	}
+
 	// Auth manager (issues/validates JWTs)
 	mgr, err := auth.NewManager(rootCtx, auth.ManagerConfig{
 		Issuer:     cfg.JWTIssuer,
@@ -126,6 +135,7 @@ func run() error {
 		Notifiers: notifiersRepo,
 		Audit:     auditRepo,
 		AuditLog:  auditLogger,
+		OIDC:      oidcProvider,
 		Scheduler: sch,
 	})
 	srv := &http.Server{

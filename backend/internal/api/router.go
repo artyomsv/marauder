@@ -34,6 +34,7 @@ type Deps struct {
 	Notifiers *repo.Notifiers
 	Audit     *repo.Audit
 	AuditLog  *audit.Logger
+	OIDC      *auth.OIDCProvider
 	Scheduler *scheduler.Scheduler
 }
 
@@ -75,6 +76,7 @@ func NewRouter(d Deps) http.Handler {
 		Users:   d.Users,
 		Manager: d.Manager,
 		Audit:   d.AuditLog,
+		OIDC:    d.OIDC,
 		BaseURL: d.Cfg.PublicBaseURL,
 	}
 	topicsH := &handlers.Topics{
@@ -98,6 +100,8 @@ func NewRouter(d Deps) http.Handler {
 		r.Post("/auth/login", authH.Login)
 		r.Post("/auth/refresh", authH.Refresh)
 		r.Post("/auth/logout", authH.Logout)
+		r.Get("/auth/oidc/login", authH.OIDCLogin)
+		r.Get("/auth/oidc/callback", authH.OIDCCallback)
 
 		// System info (public but terse)
 		r.Get("/system/info", sysH.Info)

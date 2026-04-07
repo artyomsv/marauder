@@ -16,6 +16,7 @@ import { ClientsPage } from "@/pages/Clients";
 import { NotifiersPage } from "@/pages/Notifiers";
 import { SystemPage } from "@/pages/System";
 import { AuditPage } from "@/pages/Audit";
+import { OIDCCallbackPage } from "@/pages/OIDCCallback";
 import { PlaceholderPage } from "@/pages/Placeholder";
 import { useAuthStore } from "@/lib/auth-store";
 import { api, type Me } from "@/lib/api";
@@ -55,6 +56,7 @@ export default function App() {
       <BrowserRouter>
         <Routes>
           <Route path="/login" element={<LoginPage />} />
+          <Route path="/oidc-callback" element={<OIDCCallbackPage />} />
           <Route element={<ProtectedLayout />}>
             <Route element={<AppShell />}>
               <Route index element={<DashboardPage />} />

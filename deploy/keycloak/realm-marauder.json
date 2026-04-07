@@ -1,0 +1,42 @@
+{
+  "realm": "marauder",
+  "enabled": true,
+  "displayName": "Marauder",
+  "registrationAllowed": false,
+  "rememberMe": true,
+  "users": [
+    {
+      "username": "alice",
+      "enabled": true,
+      "email": "alice@example.com",
+      "emailVerified": true,
+      "firstName": "Alice",
+      "lastName": "Tester",
+      "credentials": [
+        { "type": "password", "value": "marauder", "temporary": false }
+      ]
+    }
+  ],
+  "clients": [
+    {
+      "clientId": "marauder",
+      "enabled": true,
+      "publicClient": false,
+      "secret": "marauder-dev-secret",
+      "redirectUris": [
+        "http://localhost:6688/api/v1/auth/oidc/callback",
+        "https://marauder.cc/api/v1/auth/oidc/callback"
+      ],
+      "webOrigins": [
+        "http://localhost:6688",
+        "https://marauder.cc"
+      ],
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "protocol": "openid-connect",
+      "attributes": {
+        "post.logout.redirect.uris": "http://localhost:6688/*"
+      }
+    }
+  ]
+}

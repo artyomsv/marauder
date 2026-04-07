@@ -1,0 +1,43 @@
+# SSO overlay for Marauder.
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.sso.yml up -d
+#
+# Brings up Keycloak with a pre-imported realm called "marauder" and a
+# pre-created test user (alice / marauder). The Marauder backend is
+# configured via env vars to discover Keycloak at the in-network host
+# and use the marauder client.
+
+services:
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0
+    restart: unless-stopped
+    command:
+      - "start-dev"
+      - "--import-realm"
+      - "--http-port=8643"
+      - "--hostname-strict=false"
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+    volumes:
+      - ./keycloak:/opt/keycloak/data/import:ro
+    ports:
+      - "8643:8643"
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/localhost/8643 && echo -e 'GET /realms/master/.well-known/openid-configuration HTTP/1.0\\r\\n\\r\\n' >&3 && head -1 <&3 | grep -q 200"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+
+  backend:
+    environment:
+      MARAUDER_OIDC_ENABLED: "true"
+      MARAUDER_OIDC_ISSUER: "http://keycloak:8643/realms/marauder"
+      MARAUDER_OIDC_CLIENT_ID: "marauder"
+      MARAUDER_OIDC_CLIENT_SECRET: "marauder-dev-secret"
+      MARAUDER_OIDC_REDIRECT_URL: "http://localhost:6688/api/v1/auth/oidc/callback"
+      MARAUDER_OIDC_SCOPES: "openid,profile,email"
+    depends_on:
+      keycloak:
+        condition: service_healthy

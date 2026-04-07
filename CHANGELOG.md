@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (v0.3 work in progress)
+- **Keycloak / OIDC end-to-end:** `auth.OIDCProvider` is wired into the
+  router. New handlers `OIDCLogin` (begin auth-code flow with state
+  cookie) and `OIDCCallback` (exchange + verify ID token + provision
+  user + issue Marauder JWT pair). Frontend `OIDCCallbackPage` parses
+  the access/refresh tokens out of the URL fragment and lands on the
+  dashboard. New `deploy/docker-compose.sso.yml` overlay starts
+  Keycloak 26.0 with a pre-imported `marauder` realm and an
+  `alice/marauder` test user. `docs/oidc.md` walks through the full
+  E2E flow plus troubleshooting.
+- **Transmission client plugin** (`internal/plugins/clients/transmission`):
+  full RPC client with the `X-Transmission-Session-Id` 409-retry dance,
+  basic auth support, magnet + base64 .torrent submission, and mocked
+  test server.
+- **Deluge client plugin** (`internal/plugins/clients/deluge`): Web
+  JSON-RPC client (`/json` endpoint), auth.login + web.connected +
+  web.connect handshake, magnet + base64 .torrent submission, and
+  mocked test server.
+- **Cloudflare solver sidecar** (`cfsolver/`): standalone Go service
+  using `chromedp` + Debian-slim chromium. Exposes
+  `POST /solve {url}` returning `{user_agent, cookies}`. Built as a
+  separate Docker image and started via the `cfsolver` compose
+  profile. The main backend talks to it via `internal/cfsolver/client.go`.
+
 ### Added (v0.2 work in progress, batch 2)
 - **Audit log:** `internal/audit` package with an async logger backed
   by a 256-deep buffered channel — handlers Record() entries and the

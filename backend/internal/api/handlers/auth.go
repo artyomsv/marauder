@@ -14,6 +14,7 @@ import (
 	"github.com/artyomsv/marauder/backend/internal/auth"
 	"github.com/artyomsv/marauder/backend/internal/crypto"
 	"github.com/artyomsv/marauder/backend/internal/db/repo"
+	"github.com/artyomsv/marauder/backend/internal/domain"
 	"github.com/artyomsv/marauder/backend/internal/problem"
 )
 
@@ -22,6 +23,7 @@ type Auth struct {
 	Users   *repo.Users
 	Manager *auth.Manager
 	Audit   *audit.Logger
+	OIDC    *auth.OIDCProvider
 	BaseURL string
 }
 
@@ -146,6 +148,103 @@ func (h *Auth) Logout(w http.ResponseWriter, r *http.Request) {
 	ip, ua := audit.FromRequest(r)
 	h.Audit.Logout(nil, ip, ua)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// OIDCLogin handles GET /auth/oidc/login. It begins the authorization-code
+// flow by redirecting the browser to the OIDC provider's authorize endpoint
+// with a random state token stored in a short-lived cookie.
+func (h *Auth) OIDCLogin(w http.ResponseWriter, r *http.Request) {
+	if h.OIDC == nil {
+		problem.Write(w, r, h.BaseURL, problem.ErrNotFound("OIDC is not enabled"))
+		return
+	}
+	state, err := crypto.RandomToken(16)
+	if err != nil {
+		problem.Write(w, r, h.BaseURL, problem.ErrInternal(err.Error()))
+		return
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name:     "marauder_oidc_state",
+		Value:    state,
+		Path:     "/",
+		MaxAge:   600,
+		HttpOnly: true,
+		Secure:   strings.HasPrefix(h.BaseURL, "https://"),
+		SameSite: http.SameSiteLaxMode,
+	})
+	url := h.OIDC.OAuth2.AuthCodeURL(state)
+	http.Redirect(w, r, url, http.StatusFound)
+}
+
+// OIDCCallback handles GET /auth/oidc/callback. It exchanges the
+// authorization code, validates the ID token, and issues a Marauder
+// JWT pair, then redirects to the SPA root with the pair in the URL
+// fragment so the frontend can pick them up.
+func (h *Auth) OIDCCallback(w http.ResponseWriter, r *http.Request) {
+	if h.OIDC == nil {
+		problem.Write(w, r, h.BaseURL, problem.ErrNotFound("OIDC is not enabled"))
+		return
+	}
+	state := r.URL.Query().Get("state")
+	cookie, err := r.Cookie("marauder_oidc_state")
+	if err != nil || cookie.Value != state {
+		problem.Write(w, r, h.BaseURL, problem.ErrBadRequest("oidc state mismatch"))
+		return
+	}
+	code := r.URL.Query().Get("code")
+	if code == "" {
+		problem.Write(w, r, h.BaseURL, problem.ErrBadRequest("missing code"))
+		return
+	}
+
+	id, err := h.OIDC.Exchange(r.Context(), code)
+	if err != nil {
+		problem.Write(w, r, h.BaseURL, problem.ErrUnauthorized("oidc exchange: "+err.Error()))
+		return
+	}
+
+	// Find or provision the user.
+	user, err := h.Users.GetByOIDCSubject(r.Context(), id.Issuer, id.Subject)
+	if err != nil {
+		// Provision a fresh user — they default to the "user" role.
+		username := id.Email
+		if username == "" {
+			username = id.Subject
+		}
+		user, err = h.Users.Create(r.Context(), &domain.User{
+			Username:    username,
+			Email:       id.Email,
+			Role:        domain.RoleUser,
+			OIDCSubject: id.Subject,
+			OIDCIssuer:  id.Issuer,
+		})
+		if err != nil {
+			problem.Write(w, r, h.BaseURL, problem.ErrInternal("create user: "+err.Error()))
+			return
+		}
+	}
+	if user.IsDisabled {
+		problem.Write(w, r, h.BaseURL, problem.ErrForbidden("account disabled"))
+		return
+	}
+
+	ip, ua := audit.FromRequest(r)
+	pair, err := h.Manager.Issue(r.Context(), user, ua, ip)
+	if err != nil {
+		problem.Write(w, r, h.BaseURL, problem.ErrInternal(err.Error()))
+		return
+	}
+	h.Audit.LoginSuccess(user.ID, user.Username, ip, ua)
+
+	// Clear state cookie
+	http.SetCookie(w, &http.Cookie{Name: "marauder_oidc_state", Value: "", Path: "/", MaxAge: -1})
+
+	// Redirect to /#access=...&refresh=... — the SPA picks these up.
+	frag := "access_token=" + pair.AccessToken +
+		"&refresh_token=" + pair.RefreshToken +
+		"&access_expires=" + pair.AccessTokenExpiresAt.Format("2006-01-02T15:04:05Z") +
+		"&refresh_expires=" + pair.RefreshTokenExpiresAt.Format("2006-01-02T15:04:05Z")
+	http.Redirect(w, r, h.BaseURL+"/oidc-callback#"+frag, http.StatusFound)
 }
 
 // Me handles GET /auth/me.
