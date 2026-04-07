@@ -3,13 +3,16 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { motion, AnimatePresence } from "framer-motion";
 import { Plus, Loader2, CheckCircle2, Bell, AlertCircle } from "lucide-react";
 
-import { api, type SystemInfo } from "@/lib/api";
+import { api } from "@/lib/api";
+import { useSystemInfo } from "@/lib/hooks/useSystemInfo";
+import { QK } from "@/lib/queryKeys";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { DeleteConfirm } from "@/components/shared/DeleteConfirm";
+import { ResourceCard } from "@/components/shared/ResourceCard";
 
 type NotifierView = {
   id: string;
@@ -24,20 +27,17 @@ type NotifiersList = { notifiers: NotifierView[] | null };
 export function NotifiersPage() {
   const qc = useQueryClient();
   const { data, isLoading } = useQuery({
-    queryKey: ["notifiers"],
+    queryKey: QK.notifiers,
     queryFn: () => api.get<NotifiersList>("/notifiers"),
   });
-  const { data: systemInfo } = useQuery({
-    queryKey: ["system-info"],
-    queryFn: () => api.get<SystemInfo>("/system/info", { auth: false }),
-  });
+  const { data: systemInfo } = useSystemInfo();
   const [showAdd, setShowAdd] = useState(false);
   const items = data?.notifiers ?? [];
   const plugins = systemInfo?.notifiers ?? [];
 
   const del = useMutation({
     mutationFn: (id: string) => api.del<void>(`/notifiers/${id}`),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["notifiers"] }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: QK.notifiers }),
   });
   const test = useMutation({
     mutationFn: (id: string) => api.post<{ ok: boolean }>(`/notifiers/${id}/test`),
@@ -68,7 +68,7 @@ export function NotifiersPage() {
             onClose={() => setShowAdd(false)}
             onCreated={() => {
               setShowAdd(false);
-              qc.invalidateQueries({ queryKey: ["notifiers"] });
+              qc.invalidateQueries({ queryKey: QK.notifiers });
             }}
           />
         )}
@@ -101,63 +101,55 @@ export function NotifiersPage() {
       ) : (
         <div className="grid gap-4 md:grid-cols-2">
           {items.map((n) => (
-            <motion.div
+            <ResourceCard
               key={n.id}
-              initial={{ opacity: 0, y: 8 }}
-              animate={{ opacity: 1, y: 0 }}
+              glow="accent"
+              title={n.display_name}
+              badges={
+                <>
+                  <Badge variant="outline" className="font-mono">
+                    {n.notifier_name}
+                  </Badge>
+                  {n.events.map((e) => (
+                    <Badge key={e} variant="secondary">
+                      {e}
+                    </Badge>
+                  ))}
+                </>
+              }
+              actions={
+                <DeleteConfirm
+                  onConfirm={() => del.mutate(n.id)}
+                  isPending={del.isPending && del.variables === n.id}
+                  label="Delete notifier"
+                />
+              }
             >
-              <Card className="group relative overflow-hidden">
-                <div className="pointer-events-none absolute -right-12 -top-12 size-40 rounded-full bg-gradient-to-br from-accent/30 to-primary/10 blur-2xl" />
-                <div className="relative p-6">
-                  <div className="mb-2 flex items-start justify-between gap-2">
-                    <div>
-                      <div className="text-base font-semibold">{n.display_name}</div>
-                      <div className="mt-0.5 flex flex-wrap items-center gap-2">
-                        <Badge variant="outline" className="font-mono">
-                          {n.notifier_name}
-                        </Badge>
-                        {n.events.map((e) => (
-                          <Badge key={e} variant="secondary">
-                            {e}
-                          </Badge>
-                        ))}
-                      </div>
-                    </div>
-                    <div className="opacity-0 group-hover:opacity-100">
-                      <DeleteConfirm
-                        onConfirm={() => del.mutate(n.id)}
-                        isPending={del.isPending && del.variables === n.id}
-                        label="Delete notifier"
-                      />
-                    </div>
-                  </div>
-                  <div className="mt-4">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => test.mutate(n.id)}
-                      disabled={test.isPending}
-                    >
-                      {test.isPending ? (
-                        <Loader2 className="size-4 animate-spin" />
-                      ) : test.isSuccess && test.variables === n.id ? (
-                        <CheckCircle2 className="size-4 text-success" />
-                      ) : test.isError && test.variables === n.id ? (
-                        <AlertCircle className="size-4 text-destructive" />
-                      ) : (
-                        <CheckCircle2 className="size-4" />
-                      )}
-                      Send test
-                    </Button>
-                  </div>
-                  {test.isError && test.variables === n.id && (
-                    <div className="mt-2 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
-                      {(test.error as Error)?.message}
-                    </div>
+              <div className="mt-4">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => test.mutate(n.id)}
+                  disabled={test.isPending}
+                >
+                  {test.isPending ? (
+                    <Loader2 className="size-4 animate-spin" />
+                  ) : test.isSuccess && test.variables === n.id ? (
+                    <CheckCircle2 className="size-4 text-success" />
+                  ) : test.isError && test.variables === n.id ? (
+                    <AlertCircle className="size-4 text-destructive" />
+                  ) : (
+                    <CheckCircle2 className="size-4" />
                   )}
+                  Send test
+                </Button>
+              </div>
+              {test.isError && test.variables === n.id && (
+                <div className="mt-2 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+                  {(test.error as Error)?.message}
                 </div>
-              </Card>
-            </motion.div>
+              )}
+            </ResourceCard>
           ))}
         </div>
       )}

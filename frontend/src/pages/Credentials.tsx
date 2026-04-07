@@ -10,13 +10,16 @@ import {
   Plus,
 } from "lucide-react";
 
-import { api, ApiError, type SystemInfo } from "@/lib/api";
+import { api, ApiError } from "@/lib/api";
+import { useSystemInfo } from "@/lib/hooks/useSystemInfo";
+import { QK } from "@/lib/queryKeys";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { DeleteConfirm } from "@/components/shared/DeleteConfirm";
+import { ResourceCard } from "@/components/shared/ResourceCard";
 
 /**
  * Tracker accounts page (route: /accounts).
@@ -40,13 +43,10 @@ type CredList = { credentials: CredentialView[] | null };
 export function CredentialsPage() {
   const qc = useQueryClient();
   const { data: credsData, isLoading } = useQuery({
-    queryKey: ["credentials"],
+    queryKey: QK.credentials,
     queryFn: () => api.get<CredList>("/credentials"),
   });
-  const { data: systemInfo } = useQuery({
-    queryKey: ["system-info"],
-    queryFn: () => api.get<SystemInfo>("/system/info", { auth: false }),
-  });
+  const { data: systemInfo } = useSystemInfo();
 
   const [showAdd, setShowAdd] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -55,7 +55,7 @@ export function CredentialsPage() {
 
   const del = useMutation({
     mutationFn: (id: string) => api.del<void>(`/credentials/${id}`),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["credentials"] }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: QK.credentials }),
   });
 
   const test = useMutation({
@@ -92,7 +92,7 @@ export function CredentialsPage() {
             onClose={() => setShowAdd(false)}
             onCreated={() => {
               setShowAdd(false);
-              qc.invalidateQueries({ queryKey: ["credentials"] });
+              qc.invalidateQueries({ queryKey: QK.credentials });
             }}
           />
         )}
@@ -103,7 +103,7 @@ export function CredentialsPage() {
             onClose={() => setEditingId(null)}
             onSaved={() => {
               setEditingId(null);
-              qc.invalidateQueries({ queryKey: ["credentials"] });
+              qc.invalidateQueries({ queryKey: QK.credentials });
             }}
           />
         )}
@@ -137,69 +137,62 @@ export function CredentialsPage() {
       ) : (
         <div className="grid gap-4 md:grid-cols-2">
           {credentials.map((c) => (
-            <motion.div
+            <ResourceCard
               key={c.id}
-              initial={{ opacity: 0, y: 8 }}
-              animate={{ opacity: 1, y: 0 }}
+              title={c.display_name}
+              badges={
+                <>
+                  <Badge variant="outline" className="font-mono">
+                    {c.tracker_name}
+                  </Badge>
+                  <span className="text-xs text-muted-foreground">
+                    {c.username}
+                  </span>
+                </>
+              }
+              actions={
+                <>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => setEditingId(c.id)}
+                    aria-label="Edit credential"
+                  >
+                    <Pencil className="size-4" />
+                  </Button>
+                  <DeleteConfirm
+                    onConfirm={() => del.mutate(c.id)}
+                    isPending={del.isPending && del.variables === c.id}
+                    label="Delete credential"
+                  />
+                </>
+              }
             >
-              <Card className="group relative overflow-hidden">
-                <div className="pointer-events-none absolute -right-12 -top-12 size-40 rounded-full bg-gradient-to-br from-primary/30 to-accent/10 blur-2xl" />
-                <div className="relative p-6">
-                  <div className="mb-2 flex items-start justify-between gap-2">
-                    <div>
-                      <div className="text-base font-semibold">{c.display_name}</div>
-                      <div className="mt-0.5 flex items-center gap-2">
-                        <Badge variant="outline" className="font-mono">
-                          {c.tracker_name}
-                        </Badge>
-                        <span className="text-xs text-muted-foreground">
-                          {c.username}
-                        </span>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100">
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        onClick={() => setEditingId(c.id)}
-                        aria-label="Edit credential"
-                      >
-                        <Pencil className="size-4" />
-                      </Button>
-                      <DeleteConfirm
-                        onConfirm={() => del.mutate(c.id)}
-                        isPending={del.isPending && del.variables === c.id}
-                        label="Delete credential"
-                      />
-                    </div>
-                  </div>
-                  <div className="mt-4 flex items-center gap-2">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => test.mutate(c.id)}
-                      disabled={test.isPending && test.variables === c.id}
-                    >
-                      {test.isPending && test.variables === c.id ? (
-                        <Loader2 className="size-4 animate-spin" />
-                      ) : test.isSuccess && test.variables === c.id ? (
-                        <CheckCircle2 className="size-4 text-success" />
-                      ) : test.isError && test.variables === c.id ? (
-                        <AlertCircle className="size-4 text-destructive" />
-                      ) : (
-                        <CheckCircle2 className="size-4" />
-                      )}
-                      Test login
-                    </Button>
-                  </div>
-                  {test.isError && test.variables === c.id && (
-                    <div className="mt-2 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
-                      {(test.error as Error)?.message}
-                    </div>
+              <div className="mt-4 flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => test.mutate(c.id)}
+                  disabled={test.isPending && test.variables === c.id}
+                >
+                  {test.isPending && test.variables === c.id ? (
+                    <Loader2 className="size-4 animate-spin" />
+                  ) : test.isSuccess && test.variables === c.id ? (
+                    <CheckCircle2 className="size-4 text-success" />
+                  ) : test.isError && test.variables === c.id ? (
+                    <AlertCircle className="size-4 text-destructive" />
+                  ) : (
+                    <CheckCircle2 className="size-4" />
                   )}
+                  Test login
+                </Button>
+              </div>
+              {test.isError && test.variables === c.id && (
+                <div className="mt-2 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+                  {(test.error as Error)?.message}
                 </div>
-              </Card>
-            </motion.div>
+              )}
+            </ResourceCard>
           ))}
         </div>
       )}
