@@ -104,15 +104,19 @@ touching config files.
 
 **Goal:** close the gap on the remaining monitorrent trackers and clients.
 
-- [ ] `lostfilm` tracker plugin (with quality selection)
-- [ ] `anilibria` tracker plugin
-- [ ] `anidub` tracker plugin
-- [ ] `rutor`, `toloka`, `unionpeer`, `tapochek`, `hdclub`, `freetorrents` —
-      ship as many as can be validated against a live site in a single release
-- [ ] `utorrent` client plugin
-- [ ] `email` notifier (SMTP)
-- [ ] `webhook` notifier (POST JSON to arbitrary URL)
-- [ ] `pushover` notifier
+- [x] `lostfilm` tracker plugin (with quality selection via WithQuality
+      capability) — alpha, structurally complete
+- [x] `anilibria` tracker plugin — uses the public Anilibria v3 JSON API
+- [x] `anidub` tracker plugin — alpha, with WithQuality
+- [x] `rutor` tracker plugin — public, no auth
+- [x] `toloka` tracker plugin — alpha
+- [x] `unionpeer` tracker plugin — alpha
+- [x] `tapochek` tracker plugin — alpha
+- [ ] `hdclub`, `freetorrents` — out of scope for this iteration
+- [x] `utorrent` client plugin — token-based WebUI flow with mocked tests
+- [x] `email` notifier (SMTP) — net/smtp PLAIN auth, mocked-sender tests
+- [x] `webhook` notifier — POST JSON, httptest-based tests
+- [x] `pushover` notifier — form POST, httptest-based tests
 - [ ] Per-user theme + density preferences persisted server-side
 - [ ] Compact topic table density for 200+ topics
 - [ ] Bulk-edit: pause/resume/delete multiple topics

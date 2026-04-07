@@ -31,12 +31,23 @@ import (
 	_ "github.com/artyomsv/marauder/backend/internal/plugins/clients/downloadfolder"
 	_ "github.com/artyomsv/marauder/backend/internal/plugins/clients/qbittorrent"
 	_ "github.com/artyomsv/marauder/backend/internal/plugins/clients/transmission"
+	_ "github.com/artyomsv/marauder/backend/internal/plugins/clients/utorrent"
+	_ "github.com/artyomsv/marauder/backend/internal/plugins/notifiers/email"
+	_ "github.com/artyomsv/marauder/backend/internal/plugins/notifiers/pushover"
 	_ "github.com/artyomsv/marauder/backend/internal/plugins/notifiers/telegram"
+	_ "github.com/artyomsv/marauder/backend/internal/plugins/notifiers/webhook"
+	_ "github.com/artyomsv/marauder/backend/internal/plugins/trackers/anidub"
+	_ "github.com/artyomsv/marauder/backend/internal/plugins/trackers/anilibria"
 	_ "github.com/artyomsv/marauder/backend/internal/plugins/trackers/genericmagnet"
 	_ "github.com/artyomsv/marauder/backend/internal/plugins/trackers/generictorrentfile"
 	_ "github.com/artyomsv/marauder/backend/internal/plugins/trackers/kinozal"
+	_ "github.com/artyomsv/marauder/backend/internal/plugins/trackers/lostfilm"
 	_ "github.com/artyomsv/marauder/backend/internal/plugins/trackers/nnmclub"
+	_ "github.com/artyomsv/marauder/backend/internal/plugins/trackers/rutor"
 	_ "github.com/artyomsv/marauder/backend/internal/plugins/trackers/rutracker"
+	_ "github.com/artyomsv/marauder/backend/internal/plugins/trackers/tapochek"
+	_ "github.com/artyomsv/marauder/backend/internal/plugins/trackers/toloka"
+	_ "github.com/artyomsv/marauder/backend/internal/plugins/trackers/unionpeer"
 )
 
 func main() {
