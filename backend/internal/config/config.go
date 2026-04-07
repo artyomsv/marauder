@@ -58,14 +58,15 @@ type Config struct {
 	OIDCScopes       []string `env:"MARAUDER_OIDC_SCOPES" envDefault:"openid,profile,email"`
 
 	// Scheduler
-	SchedulerEnabled    bool          `env:"MARAUDER_SCHEDULER_ENABLED" envDefault:"true"`
-	SchedulerTick       time.Duration `env:"MARAUDER_SCHEDULER_TICK" envDefault:"1m"`
-	SchedulerWorkers    int           `env:"MARAUDER_SCHEDULER_WORKERS" envDefault:"8"`
-	DefaultCheckEvery   time.Duration `env:"MARAUDER_DEFAULT_CHECK_INTERVAL" envDefault:"15m"`
-	CheckMaxBackoff     time.Duration `env:"MARAUDER_CHECK_MAX_BACKOFF" envDefault:"6h"`
-	TrackerHTTPTimeout  time.Duration `env:"MARAUDER_TRACKER_HTTP_TIMEOUT" envDefault:"30s"`
-	TrackerHTTPProxyURL string        `env:"MARAUDER_HTTPS_PROXY" envDefault:""`
-	UserAgent           string        `env:"MARAUDER_USER_AGENT" envDefault:"Marauder/0.0.0-dev (+https://marauder.cc)"`
+	SchedulerEnabled            bool          `env:"MARAUDER_SCHEDULER_ENABLED" envDefault:"true"`
+	SchedulerTick               time.Duration `env:"MARAUDER_SCHEDULER_TICK" envDefault:"1m"`
+	SchedulerWorkers            int           `env:"MARAUDER_SCHEDULER_WORKERS" envDefault:"8"`
+	SchedulerMaxEpisodesPerTick int           `env:"MARAUDER_SCHEDULER_MAX_EPISODES_PER_TICK" envDefault:"25"`
+	DefaultCheckEvery           time.Duration `env:"MARAUDER_DEFAULT_CHECK_INTERVAL" envDefault:"15m"`
+	CheckMaxBackoff             time.Duration `env:"MARAUDER_CHECK_MAX_BACKOFF" envDefault:"6h"`
+	TrackerHTTPTimeout          time.Duration `env:"MARAUDER_TRACKER_HTTP_TIMEOUT" envDefault:"30s"`
+	TrackerHTTPProxyURL         string        `env:"MARAUDER_HTTPS_PROXY" envDefault:""`
+	UserAgent                   string        `env:"MARAUDER_USER_AGENT" envDefault:"Marauder/0.0.0-dev (+https://marauder.cc)"`
 
 	// Optional Cloudflare solver sidecar
 	CFSolverEnabled bool   `env:"MARAUDER_CFSOLVER_ENABLED" envDefault:"false"`

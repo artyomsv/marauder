@@ -22,19 +22,67 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"strings"
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 
 	"github.com/artyomsv/marauder/backend/internal/config"
 	"github.com/artyomsv/marauder/backend/internal/crypto"
 	"github.com/artyomsv/marauder/backend/internal/db/repo"
 	"github.com/artyomsv/marauder/backend/internal/domain"
+	"github.com/artyomsv/marauder/backend/internal/extra"
 	"github.com/artyomsv/marauder/backend/internal/metrics"
 	"github.com/artyomsv/marauder/backend/internal/plugins/registry"
 )
+
+// --- Consumer-side interfaces ------------------------------------------
+//
+// The scheduler depends on small interfaces rather than the concrete
+// repo types so unit tests can supply in-memory fakes without touching
+// a Postgres pool. The concrete repo.Topics / repo.Clients /
+// repo.TrackerCredentials types satisfy these interfaces structurally.
+
+// topicsRepo is the subset of *repo.Topics that the scheduler uses.
+type topicsRepo interface {
+	DueForCheck(ctx context.Context, limit int) ([]*domain.Topic, error)
+	RecordCheckResult(ctx context.Context, id uuid.UUID, hash string, updated bool, nextCheckAt time.Time, errMsg string) error
+	UpdateExtra(ctx context.Context, id uuid.UUID, extra map[string]any) error
+}
+
+// markEpisodeDownloader is an optional capability of topicsRepo.
+// Track C is adding *repo.Topics.MarkEpisodeDownloaded as an atomic
+// JSONB append; if present, the scheduler uses it instead of the
+// non-atomic UpdateExtra(full map) round-trip.
+type markEpisodeDownloader interface {
+	MarkEpisodeDownloaded(ctx context.Context, id uuid.UUID, packed string) error
+}
+
+// clientsRepo is the subset of *repo.Clients that the scheduler uses.
+type clientsRepo interface {
+	GetByID(ctx context.Context, id uuid.UUID, userID uuid.UUID) (*domain.Client, error)
+	GetDefault(ctx context.Context, userID uuid.UUID) (*domain.Client, error)
+}
+
+// credentialsRepo is the subset of *repo.TrackerCredentials that the
+// scheduler uses.
+type credentialsRepo interface {
+	GetForTracker(ctx context.Context, userID uuid.UUID, trackerName string) (*domain.TrackerCredential, error)
+}
+
+// decryptor is the subset of *crypto.MasterKey that the scheduler uses.
+type decryptor interface {
+	Decrypt(ct, nonce []byte) ([]byte, error)
+}
+
+// trackerLookupFn is a test seam: the scheduler resolves a tracker by
+// name through this function so tests can inject fakes without touching
+// the global registry.
+type trackerLookupFn func(name string) registry.Tracker
+
+// clientLookupFn is the analogous seam for client plugins.
+type clientLookupFn func(name string) registry.Client
 
 // RunSummary captures one tick's outcome for the system status endpoint.
 type RunSummary struct {
@@ -49,10 +97,14 @@ type RunSummary struct {
 type Scheduler struct {
 	cfg     *config.Config
 	log     zerolog.Logger
-	topics  *repo.Topics
-	clients *repo.Clients
-	creds   *repo.TrackerCredentials
-	master  *crypto.MasterKey
+	topics  topicsRepo
+	clients clientsRepo
+	creds   credentialsRepo
+	master  decryptor
+
+	// Test seams (default to registry.GetTracker / registry.GetClient).
+	lookupTracker trackerLookupFn
+	lookupClient  clientLookupFn
 
 	jobs  chan *domain.Topic
 	wg    sync.WaitGroup
@@ -71,15 +123,17 @@ type Scheduler struct {
 // New constructs a scheduler.
 func New(cfg *config.Config, log zerolog.Logger, topics *repo.Topics, clients *repo.Clients, creds *repo.TrackerCredentials, master *crypto.MasterKey) *Scheduler {
 	return &Scheduler{
-		cfg:     cfg,
-		log:     log.With().Str("component", "scheduler").Logger(),
-		topics:  topics,
-		clients: clients,
-		creds:   creds,
-		master:  master,
-		jobs:    make(chan *domain.Topic, cfg.SchedulerWorkers*4),
-		stop:    make(chan struct{}),
-		ready:   make(chan struct{}),
+		cfg:           cfg,
+		log:           log.With().Str("component", "scheduler").Logger(),
+		topics:        topics,
+		clients:       clients,
+		creds:         creds,
+		master:        master,
+		lookupTracker: registry.GetTracker,
+		lookupClient:  registry.GetClient,
+		jobs:          make(chan *domain.Topic, cfg.SchedulerWorkers*4),
+		stop:          make(chan struct{}),
+		ready:         make(chan struct{}),
 	}
 }
 
@@ -217,6 +271,18 @@ func (s *Scheduler) worker(ctx context.Context, id int) {
 	}
 }
 
+// recordResult is a tiny wrapper around RecordCheckResult that logs the
+// (rare) persistence failure rather than discarding it. Persistence
+// errors are non-fatal here — the next tick re-evaluates the topic.
+func (s *Scheduler) recordResult(ctx context.Context, log zerolog.Logger, id uuid.UUID, hash string, updated bool, nextCheckAt time.Time, errMsg string) {
+	if err := s.topics.RecordCheckResult(ctx, id, hash, updated, nextCheckAt, errMsg); err != nil {
+		log.Warn().Err(err).Msg("RecordCheckResult failed")
+	}
+}
+
+// runCheck is the per-topic orchestrator. It loads credentials, runs
+// the tracker's Check, and — if the hash changed — hands off to
+// downloadAllPending which drains every queued episode in one tick.
 func (s *Scheduler) runCheck(ctx context.Context, log zerolog.Logger, t *domain.Topic) {
 	log = log.With().
 		Str("topic_id", t.ID.String()).
@@ -231,178 +297,193 @@ func (s *Scheduler) runCheck(ctx context.Context, log zerolog.Logger, t *domain.
 			Observe(time.Since(start).Seconds())
 	}()
 
-	tr := registry.GetTracker(t.TrackerName)
+	tr := s.lookupTracker(t.TrackerName)
 	if tr == nil {
 		log.Error().Msg("no registered tracker")
 		metrics.SchedulerTopicChecksTotal.WithLabelValues(t.TrackerName, "no_plugin").Inc()
-		_ = s.topics.RecordCheckResult(ctx, t.ID, "", false, s.backoff(t, true), "tracker plugin not installed")
+		s.recordResult(ctx, log, t.ID, "", false, s.backoff(t, true), "tracker plugin not installed")
 		s.recordChecked(false, true)
 		return
 	}
 
+	// checkCtx covers credential decryption, login, and the initial
+	// Check call. The per-episode Download loop allocates its own
+	// per-iteration context with the same TrackerHTTPTimeout so each
+	// download has its own clock.
 	checkCtx, cancel := context.WithTimeout(ctx, s.cfg.TrackerHTTPTimeout+5*time.Second)
 	defer cancel()
 
-	// Look up the per-user credential for this tracker (if any) and
-	// perform Login first. The credential's SecretEnc field carries
-	// the plaintext password in-memory after decryption — that's the
-	// contract WithCredentials plugins expect.
-	var creds *domain.TrackerCredential
-	if wc, ok := tr.(registry.WithCredentials); ok && s.creds != nil {
-		stored, lerr := s.creds.GetForTracker(ctx, t.UserID, t.TrackerName)
-		if lerr == nil && stored != nil {
-			plain, derr := s.master.Decrypt(stored.SecretEnc, stored.SecretNonce)
-			if derr != nil {
-				log.Warn().Err(derr).Msg("decrypt credential failed")
-			} else {
-				stored.SecretEnc = plain
-				if loginErr := wc.Login(checkCtx, stored); loginErr != nil {
-					log.Warn().Err(loginErr).Msg("tracker login failed")
-					metrics.SchedulerTopicChecksTotal.WithLabelValues(t.TrackerName, "auth_error").Inc()
-					_ = s.topics.RecordCheckResult(ctx, t.ID, "", false, s.backoff(t, true), "auth failed: "+loginErr.Error())
-					s.recordChecked(false, true)
-					return
-				}
-				creds = stored
-			}
-		}
+	creds, ok := s.loadCredentials(ctx, checkCtx, log, t, tr)
+	if !ok {
+		// loadCredentials already recorded the result + metric.
+		return
 	}
 
 	check, err := tr.Check(checkCtx, t, creds)
 	if err != nil {
 		log.Warn().Err(err).Msg("check failed")
 		metrics.SchedulerTopicChecksTotal.WithLabelValues(t.TrackerName, "error").Inc()
-		_ = s.topics.RecordCheckResult(ctx, t.ID, "", false, s.backoff(t, true), err.Error())
+		s.recordResult(ctx, log, t.ID, "", false, s.backoff(t, true), err.Error())
 		s.recordChecked(false, true)
 		return
 	}
 
 	updated := check.Hash != "" && check.Hash != t.LastHash
-	anySubmitted := false
+	var anySubmitted bool
 	if updated {
 		log.Info().Str("old_hash", t.LastHash).Str("new_hash", check.Hash).Msg("topic updated")
 		metrics.TrackerUpdatesTotal.WithLabelValues(t.TrackerName).Inc()
 
-		// Per-episode loop: keep calling Download until pending is
-		// empty OR a download fails. Plugins that don't track per-
-		// episode state (most of them) will simply return one
-		// payload and Download() will then return "no pending
-		// episodes" on the second call, breaking the loop cleanly.
-		const maxPerTick = 25 // safety guard against runaway loops
-		for i := 0; i < maxPerTick; i++ {
-			payload, derr := tr.Download(checkCtx, t, check, creds)
-			if derr != nil {
-				if i > 0 && isNoPendingError(derr) {
-					// Loop terminated naturally — at least one
-					// episode was downloaded this tick.
-					break
-				}
-				if i == 0 {
-					log.Warn().Err(derr).Msg("download failed")
-					metrics.SchedulerTopicChecksTotal.WithLabelValues(t.TrackerName, "download_error").Inc()
-					_ = s.topics.RecordCheckResult(ctx, t.ID, check.Hash, false, s.backoff(t, true), derr.Error())
-					s.recordChecked(true, true)
-					return
-				}
-				// Mid-loop failure — surface it but keep the
-				// progress made so far.
-				log.Warn().Err(derr).Int("submitted_so_far", i).Msg("download failed mid-loop")
-				_ = s.topics.RecordCheckResult(ctx, t.ID, check.Hash, true, s.backoff(t, true), derr.Error())
-				s.recordChecked(true, true)
-				return
+		var dlErr error
+		anySubmitted, dlErr = s.downloadAllPending(ctx, log, t, tr, check, creds)
+		if dlErr != nil {
+			// Mid-loop and first-iteration failures both arrive here.
+			// anySubmitted distinguishes "we made progress" from "we
+			// got nothing", which controls whether RecordCheckResult
+			// persists the new hash + last_updated_at timestamp.
+			if anySubmitted {
+				log.Warn().Err(dlErr).Msg("download loop failed mid-progress")
+			} else {
+				log.Warn().Err(dlErr).Msg("download failed")
+				metrics.SchedulerTopicChecksTotal.WithLabelValues(t.TrackerName, "download_error").Inc()
 			}
-
-			if err := s.submitToClient(ctx, log, t, payload); err != nil {
-				log.Warn().Err(err).Msg("submit to client failed")
-				metrics.SchedulerTopicChecksTotal.WithLabelValues(t.TrackerName, "submit_error").Inc()
-				_ = s.topics.RecordCheckResult(ctx, t.ID, check.Hash, false, s.backoff(t, true), err.Error())
-				s.recordChecked(true, true)
-				return
-			}
-			anySubmitted = true
-
-			// Mark this episode as downloaded in topic.extra and
-			// persist. Then re-run Check on the (now-updated) topic
-			// state so the next loop iteration sees the shrunken
-			// pending list.
-			if !s.markEpisodeDownloaded(ctx, t, check, log) {
-				break
-			}
-			fresh, ferr := tr.Check(checkCtx, t, creds)
-			if ferr != nil || fresh == nil {
-				break
-			}
-			check = fresh
-			if len(extraStringSliceLocal(check.Extra, "pending_episodes")) == 0 {
-				break
-			}
+			s.recordResult(ctx, log, t.ID, check.Hash, anySubmitted, s.backoff(t, true), dlErr.Error())
+			s.recordChecked(true, true)
+			return
 		}
 	}
 
 	metrics.SchedulerTopicChecksTotal.WithLabelValues(t.TrackerName, "ok").Inc()
-	_ = s.topics.RecordCheckResult(ctx, t.ID, check.Hash, updated || anySubmitted, s.backoff(t, false), "")
-	s.recordChecked(updated, false)
+	s.recordResult(ctx, log, t.ID, check.Hash, updated || anySubmitted, s.backoff(t, false), "")
+	s.recordChecked(updated || anySubmitted, false)
 }
 
-// markEpisodeDownloaded pops the first pending episode off check.Extra,
-// appends it to topic.Extra["downloaded_episodes"], and persists. Returns
-// false if there's nothing to mark or persistence fails (caller should
-// stop looping).
-func (s *Scheduler) markEpisodeDownloaded(ctx context.Context, t *domain.Topic, check *domain.Check, log zerolog.Logger) bool {
-	if check == nil || check.Extra == nil {
-		return false
+// loadCredentials fetches and decrypts the per-user tracker credential
+// for trackers that implement WithCredentials, then performs the
+// plugin's Login. Returns (nil, true) if the tracker doesn't need
+// credentials at all. Returns (_, false) on any failure, having
+// already persisted the error result and recorded metrics.
+func (s *Scheduler) loadCredentials(ctx context.Context, checkCtx context.Context, log zerolog.Logger, t *domain.Topic, tr registry.Tracker) (*domain.TrackerCredential, bool) {
+	wc, isWC := tr.(registry.WithCredentials)
+	if !isWC || s.creds == nil {
+		return nil, true
 	}
-	pending := extraStringSliceLocal(check.Extra, "pending_episodes")
-	if len(pending) == 0 {
-		return false
+	stored, lerr := s.creds.GetForTracker(ctx, t.UserID, t.TrackerName)
+	if lerr != nil || stored == nil {
+		// No credentials stored — the plugin will run anonymously.
+		// Plugins that require auth will fail their own Check() with
+		// a clear error.
+		return nil, true
 	}
-	just := pending[0]
+	plain, derr := s.master.Decrypt(stored.SecretEnc, stored.SecretNonce)
+	if derr != nil {
+		log.Warn().Err(derr).Msg("decrypt credential failed")
+		return nil, true
+	}
+	stored.SecretEnc = plain
+	if loginErr := wc.Login(checkCtx, stored); loginErr != nil {
+		log.Warn().Err(loginErr).Msg("tracker login failed")
+		metrics.SchedulerTopicChecksTotal.WithLabelValues(t.TrackerName, "auth_error").Inc()
+		s.recordResult(ctx, log, t.ID, "", false, s.backoff(t, true), "auth failed: "+loginErr.Error())
+		s.recordChecked(false, true)
+		return nil, false
+	}
+	return stored, true
+}
+
+// downloadAllPending drains every pending episode for a topic in one
+// tick. The loop runs at most cfg.SchedulerMaxEpisodesPerTick times.
+//
+// Returns (anySubmitted, error). error is non-nil if the loop
+// terminated abnormally; anySubmitted reports whether at least one
+// payload was successfully handed off to the client. The caller uses
+// the pair to decide whether to record an "updated" timestamp even
+// when an error occurred mid-loop.
+//
+// Each iteration uses its own context derived from ctx with a
+// TrackerHTTPTimeout deadline so a slow download cannot starve the
+// remaining iterations. Persistence calls (MarkEpisodeDownloaded) use
+// the parent ctx so they survive a per-iteration deadline expiry.
+func (s *Scheduler) downloadAllPending(ctx context.Context, log zerolog.Logger, t *domain.Topic, tr registry.Tracker, check *domain.Check, creds *domain.TrackerCredential) (bool, error) {
+	maxPerTick := s.cfg.SchedulerMaxEpisodesPerTick
+	if maxPerTick <= 0 {
+		maxPerTick = 25
+	}
+
+	var anySubmitted bool
+	var i int
+	for i = 0; i < maxPerTick; i++ {
+		// Per-iteration ctx so each download has its own clock.
+		iterCtx, cancel := context.WithTimeout(ctx, s.cfg.TrackerHTTPTimeout)
+		payload, derr := tr.Download(iterCtx, t, check, creds)
+		cancel()
+
+		if derr != nil {
+			if i > 0 && isNoPendingError(derr) {
+				// Graceful loop end — natural exit signal from the plugin.
+				return anySubmitted, nil
+			}
+			return anySubmitted, derr
+		}
+
+		if err := s.submitToClient(ctx, log, t, payload); err != nil {
+			metrics.SchedulerTopicChecksTotal.WithLabelValues(t.TrackerName, "submit_error").Inc()
+			return anySubmitted, fmt.Errorf("submit: %w", err)
+		}
+		anySubmitted = true
+
+		// Mark this episode downloaded. Use the parent ctx (not the
+		// per-iteration one) so persistence survives even if the
+		// download timeout fires moments later.
+		pending := extra.StringSlice(check.Extra, "pending_episodes")
+		if len(pending) == 0 {
+			// Single-payload plugin (most trackers) — done.
+			return anySubmitted, nil
+		}
+		if err := s.markDownloaded(ctx, t, pending[0]); err != nil {
+			return anySubmitted, fmt.Errorf("persist downloaded: %w", err)
+		}
+		log.Info().Str("packed", pending[0]).Msg("marked episode downloaded")
+
+		// Derive remaining locally; no second tr.Check call needed.
+		if len(pending) <= 1 {
+			return anySubmitted, nil
+		}
+		check.Extra["pending_episodes"] = pending[1:]
+	}
+
+	if i >= maxPerTick {
+		log.Warn().Int("max_per_tick", maxPerTick).Msg("scheduler hit per-tick episode cap")
+		metrics.SchedulerEpisodesPerTickCappedTotal.WithLabelValues(t.TrackerName).Inc()
+	}
+	return anySubmitted, nil
+}
+
+// markDownloaded persists the fact that one packed episode id was
+// successfully handed to a torrent client. If the underlying topics
+// repo implements the atomic MarkEpisodeDownloaded method (Track C),
+// it is used; otherwise this falls back to a read-modify-write through
+// UpdateExtra. The fallback path mutates t.Extra in place.
+func (s *Scheduler) markDownloaded(ctx context.Context, t *domain.Topic, packed string) error {
+	if med, ok := s.topics.(markEpisodeDownloader); ok {
+		return med.MarkEpisodeDownloaded(ctx, t.ID, packed)
+	}
+	// TODO Track C: drop this fallback once *repo.Topics.MarkEpisodeDownloaded ships.
 	if t.Extra == nil {
 		t.Extra = map[string]any{}
 	}
-	already := extraStringSliceLocal(t.Extra, "downloaded_episodes")
-	already = append(already, just)
+	already := extra.StringSlice(t.Extra, "downloaded_episodes")
+	already = append(already, packed)
 	t.Extra["downloaded_episodes"] = already
-	if err := s.topics.UpdateExtra(ctx, t.ID, t.Extra); err != nil {
-		log.Warn().Err(err).Str("packed", just).Msg("failed to persist downloaded_episodes")
-		return false
-	}
-	log.Info().Str("packed", just).Int("done", len(already)).Msg("marked episode downloaded")
-	return true
+	return s.topics.UpdateExtra(ctx, t.ID, t.Extra)
 }
 
-// extraStringSliceLocal handles JSON-roundtripped string slices that
-// arrive as []any.
-func extraStringSliceLocal(m map[string]any, key string) []string {
-	if m == nil {
-		return nil
-	}
-	v, ok := m[key]
-	if !ok {
-		return nil
-	}
-	switch t := v.(type) {
-	case []string:
-		return t
-	case []any:
-		out := make([]string, 0, len(t))
-		for _, item := range t {
-			if s, ok := item.(string); ok {
-				out = append(out, s)
-			}
-		}
-		return out
-	}
-	return nil
-}
-
-// isNoPendingError matches the error returned by LostFilm Download
-// when the pending list is empty.
+// isNoPendingError reports whether err signals that a per-episode
+// tracker has nothing left to download this tick. Per-episode plugins
+// (currently only LostFilm) wrap registry.ErrNoPendingEpisodes via
+// fmt.Errorf("...: %w", ...) so errors.Is matches at any depth.
 func isNoPendingError(err error) bool {
-	if err == nil {
-		return false
-	}
-	return strings.Contains(err.Error(), "no pending episodes")
+	return errors.Is(err, registry.ErrNoPendingEpisodes)
 }
 
 func (s *Scheduler) submitToClient(ctx context.Context, log zerolog.Logger, t *domain.Topic, payload *domain.Payload) error {
@@ -424,7 +505,7 @@ func (s *Scheduler) submitToClient(ctx context.Context, log zerolog.Logger, t *d
 }
 
 func (s *Scheduler) sendViaClient(ctx context.Context, cfg *domain.Client, t *domain.Topic, payload *domain.Payload) error {
-	clientPlugin := registry.GetClient(cfg.ClientName)
+	clientPlugin := s.lookupClient(cfg.ClientName)
 	if clientPlugin == nil {
 		metrics.ClientSubmitTotal.WithLabelValues(cfg.ClientName, "no_plugin").Inc()
 		return fmt.Errorf("client plugin %q not installed", cfg.ClientName)

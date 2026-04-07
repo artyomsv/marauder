@@ -78,6 +78,19 @@ var (
 		},
 		[]string{"client", "result"},
 	)
+
+	// SchedulerEpisodesPerTickCappedTotal counts the number of times a
+	// per-episode download loop was terminated by hitting the per-tick
+	// cap (config.SchedulerMaxEpisodesPerTick). A non-zero value here is
+	// an operator signal that the cap may be too low for a tracker that
+	// has built up a large backlog.
+	SchedulerEpisodesPerTickCappedTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "marauder_scheduler_episodes_per_tick_capped_total",
+			Help: "Number of scheduler ticks where the per-episode download loop hit the per-tick cap.",
+		},
+		[]string{"tracker"},
+	)
 )
 
 // ObserveHTTP is a convenience helper for the logging middleware.
