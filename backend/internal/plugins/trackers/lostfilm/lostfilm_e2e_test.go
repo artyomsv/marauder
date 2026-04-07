@@ -2,6 +2,7 @@ package lostfilm
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -10,10 +11,18 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/artyomsv/marauder/backend/internal/domain"
+	"github.com/artyomsv/marauder/backend/internal/extra"
 	"github.com/artyomsv/marauder/backend/internal/plugins/e2etest"
 	"github.com/artyomsv/marauder/backend/internal/plugins/registry"
 	"github.com/artyomsv/marauder/backend/internal/plugins/trackers/forumcommon"
 )
+
+// permissiveRedirectValidator is the test seam used in place of the
+// production SSRF allowlist. The httptest servers below run on
+// 127.0.0.1, which the production validator (correctly) rejects as a
+// non-routable IP. Tests that exercise the redirector chain install
+// this validator on the plugin so they can hit the loopback fake.
+func permissiveRedirectValidator(string) error { return nil }
 
 // e2eSeriesHTML is the magnet-on-the-page test fixture. It uses the
 // real LostFilm attribute format (hyphenated data-code + packed
@@ -75,6 +84,7 @@ func TestE2E(t *testing.T) {
 					To:    testHost,
 					Inner: &allHostsToTest{To: testHost},
 				},
+				redirectValidator: permissiveRedirectValidator,
 			}
 			return p, "https://www.lostfilm.tv/series/the-series/"
 		},
@@ -161,9 +171,10 @@ func TestRedirectorFlow(t *testing.T) {
 		Inner: &allHostsToTest{To: testHost},
 	}
 	p := &plugin{
-		sessions:  forumcommon.New(),
-		domain:    "www.lostfilm.tv",
-		transport: rewriter,
+		sessions:          forumcommon.New(),
+		domain:            "www.lostfilm.tv",
+		transport:         rewriter,
+		redirectValidator: permissiveRedirectValidator,
 	}
 
 	creds := &domain.TrackerCredential{
@@ -191,7 +202,7 @@ func TestRedirectorFlow(t *testing.T) {
 	if check.Hash != "eps:3/done:0/pending:3" {
 		t.Errorf("hash = %q, want eps:3/done:0/pending:3", check.Hash)
 	}
-	pending := extraStringSlice(check.Extra, "pending_episodes")
+	pending := extra.StringSlice(check.Extra, "pending_episodes")
 	if len(pending) != 3 {
 		t.Fatalf("pending = %v, want 3 episodes", pending)
 	}
@@ -235,7 +246,7 @@ func TestRedirectorFlow(t *testing.T) {
 	if check2.Hash != "eps:3/done:1/pending:2" {
 		t.Errorf("hash after first download = %q, want eps:3/done:1/pending:2", check2.Hash)
 	}
-	pending2 := extraStringSlice(check2.Extra, "pending_episodes")
+	pending2 := extra.StringSlice(check2.Extra, "pending_episodes")
 	if len(pending2) != 2 || pending2[0] != "791002001" {
 		t.Errorf("pending after first download = %v, want [791002001, 791002002]", pending2)
 	}
@@ -249,7 +260,7 @@ func TestRedirectorFlow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Check with filter: %v", err)
 	}
-	pending3 := extraStringSlice(check3.Extra, "pending_episodes")
+	pending3 := extra.StringSlice(check3.Extra, "pending_episodes")
 	if len(pending3) != 2 || pending3[0] != "791002001" {
 		t.Errorf("pending with filter = %v, want [791002001, 791002002]", pending3)
 	}
@@ -261,9 +272,94 @@ func TestRedirectorFlow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Check with high filter: %v", err)
 	}
-	pending4 := extraStringSlice(check4.Extra, "pending_episodes")
+	pending4 := extra.StringSlice(check4.Extra, "pending_episodes")
 	if len(pending4) != 0 {
 		t.Errorf("pending with start_season=3 = %v, want empty", pending4)
+	}
+}
+
+// TestDownloadEmptyPendingReturnsTypedSentinel verifies that Download
+// wraps registry.ErrNoPendingEpisodes when the pending list is empty,
+// so the scheduler's per-episode loop can match it via errors.Is and
+// exit cleanly. This is the cross-track integration point with the
+// scheduler refactor in Track A.
+func TestDownloadEmptyPendingReturnsTypedSentinel(t *testing.T) {
+	p := &plugin{
+		sessions:          forumcommon.New(),
+		domain:            "www.lostfilm.tv",
+		redirectValidator: permissiveRedirectValidator,
+	}
+	topic := &domain.Topic{
+		TrackerName: "lostfilm",
+		URL:         "https://www.lostfilm.tv/series/foo/",
+		Extra:       map[string]any{},
+	}
+
+	cases := []struct {
+		name  string
+		check *domain.Check
+	}{
+		{
+			name:  "nil check",
+			check: &domain.Check{Hash: "eps:0/done:0/pending:0"},
+		},
+		{
+			name: "empty pending slice",
+			check: &domain.Check{
+				Hash: "eps:0/done:0/pending:0",
+				Extra: map[string]any{
+					"pending_episodes": []string{},
+				},
+			},
+		},
+		{
+			name: "missing pending_episodes key",
+			check: &domain.Check{
+				Hash:  "eps:0/done:0/pending:0",
+				Extra: map[string]any{},
+			},
+		},
+	}
+
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := p.Download(context.Background(), topic, tt.check, nil)
+			if err == nil {
+				t.Fatal("Download returned nil error, want ErrNoPendingEpisodes")
+			}
+			if !errors.Is(err, registry.ErrNoPendingEpisodes) {
+				t.Errorf("Download error = %v, want errors.Is(err, registry.ErrNoPendingEpisodes)", err)
+			}
+		})
+	}
+}
+
+// TestValidateRedirectURL exercises the SSRF allowlist directly. The
+// loopback rejection path is critical: it's what stops a compromised
+// retre.org from pointing the cookie-bearing follow-up at
+// http://localhost:5432.
+func TestValidateRedirectURL(t *testing.T) {
+	cases := []struct {
+		name    string
+		url     string
+		wantErr bool
+	}{
+		{"valid lostfilm", "https://www.lostfilm.tv/foo", false},
+		{"valid retre", "https://retre.org/td.php?s=abc", false},
+		{"valid tracktor", "https://tracktor.in/td.php?id=x.torrent", false},
+		{"unknown host", "https://evil.example.com/x", true},
+		{"non-http scheme", "file:///etc/passwd", true},
+		{"loopback by IP", "http://127.0.0.1/x", true},
+		{"private 10.x by IP", "http://10.0.0.1/x", true},
+		{"empty url", "", true},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateRedirectURL(tt.url)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("validateRedirectURL(%q) err = %v, wantErr %v", tt.url, err, tt.wantErr)
+			}
+		})
 	}
 }
 
@@ -285,6 +381,11 @@ func TestQualityMatcher(t *testing.T) {
 		{"Download 1080p_mp4", "SD", false},
 		{"MP4", "1080p_mp4", true},
 		{"MP4", "1080p", false},
+		// Unknown qualities used to fall through to a substring match.
+		// They now return false unconditionally so callers must add
+		// new tiers explicitly.
+		{"Download 720p", "720p", false},
+		{"Download HEVC", "x265", false},
 	}
 	for _, c := range cases {
 		got := qualityMatches(c.label, c.want)
