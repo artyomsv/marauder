@@ -195,15 +195,40 @@ has run it for a week without reporting a release-blocker. **Released
       but was unreachable until this release. Now users can add
       LostFilm / RuTracker / Kinozal accounts and the scheduler
       passes the decrypted credential into every `Check`/`Download`.
-- [x] **LostFilm redirector flow live-implemented** — `lostfilm.go`
-      `Check` parses every `data-code="<show>:<season>:<episode>"`
-      marker; `Download` POSTs to `/v_search.php`, follows the
-      redirector chain through `retre.org` / `tracktor.in`, picks
-      the matching-quality `.torrent` and submits it. New
-      `TestRedirectorFlow` exercises the full chain end-to-end via
-      httptest. Live-validation against a real LostFilm account
-      happens the first time a contributor adds a credential and
-      runs a topic check.
+- [x] **LostFilm packed-int v_search flow** — `lostfilm.go` parses
+      both the canonical `data-code="<show>-<season>-<episode>"`
+      attribute (hyphens, not colons) and the packed
+      `data-episode="<show><sss><eee>"` integer used by the site's
+      `PlayEpisode(a)` JS function. `Download` GETs (not POSTs)
+      `/v_search.php?a=<packed>`, follows the redirector chain
+      through `retre.org` / `tracktor.in` / `lf-tracker.io`, parses
+      the per-quality `.torrent` buttons, and picks the matching
+      tier. The new `qualityMatches` helper hard-codes
+      SD / 1080p / 1080p_mp4 to dodge the substring trap where
+      "1080p" naïvely matches "1080p_mp4". `TestRedirectorFlow` and
+      `TestQualityMatcher` lock down the full pipeline against
+      `httptest.Server`.
+- [x] **Per-episode state tracking + scheduler multi-download loop** —
+      LostFilm tracks every downloaded episode in
+      `topic.Extra["downloaded_episodes"]` (slice of packed IDs).
+      `Check` returns the pending list in `check.Extra`; the
+      scheduler drains it inside one tick by calling `Download`
+      until the plugin returns the `"no pending episodes"` sentinel
+      (matched via `isNoPendingError`), capped at 25 iterations as
+      a runaway guard. Mid-loop failures preserve progress and
+      surface the error. `Topics.UpdateExtra` persists the growing
+      downloaded set after each successful submit.
+- [x] **Shared DeleteConfirm safety component** — new
+      `frontend/src/components/shared/DeleteConfirm.tsx`. Replaces
+      the one-click destructive trash button on Topics, Clients,
+      Credentials, and Notifiers pages with a single-component
+      "trash → ✓ ✗" inline confirm flow. Auto-cancels after 4s. No
+      modal dialog, no layout shift, no JS `confirm()`.
+- [x] **Real build version on AppShell + Settings** — both surfaces
+      now query `/api/v1/system/info` and render the live version
+      (plus commit + build date on the Settings About card),
+      replacing the hardcoded `v0.1` / `v0.4.0-alpha` strings.
+      `deploy/docker-compose.yml` dev marker bumped to `1.1.0-dev`.
 - [x] **Per-tracker setup guide** — new
       [`docs/trackers.md`](trackers.md) covering required accounts,
       quality options, episode filter usage, and the most common

@@ -7,46 +7,118 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added (Phase 4f–h — LostFilm real redirector flow + episode filter + docs)
-- **`lostfilm.go` rewritten** to walk the real LostFilm v_search
-  redirector chain. The plugin now:
-  - Parses every `data-code="<show>:<season>:<episode>"` marker on
-    the series page (the legacy `data-episode` regex is preserved as
-    a fallback for the test fixture).
-  - In `Check`, derives the hash from the highest `(season, episode)`
-    tuple (`s02e02`-style) and stores the full episode list in
-    `check.Extra["episodes"]` for `Download` to consume without
-    refetching.
-  - In `Download`, picks the latest episode (or the latest one above
-    the user's `start_season` / `start_episode` floor), POSTs to
-    `/v_search.php` with `c=<show>&s=<season>&e=<episode>`, captures
-    the redirect Location (or meta-refresh) — relative URLs are
-    resolved against the v_search base — fetches the destination
-    page, parses the per-quality `.torrent` links, picks the one
-    matching `topic.Extra["quality"]` (or `DefaultQuality()`), and
-    GETs the `.torrent` body.
-  - Implements `WithEpisodeFilter` and uses `topic.Extra["start_season"]`
-    / `topic.Extra["start_episode"]` to skip every episode older than
-    the floor. LostFilm is the first plugin to consume this capability.
-- **Selectors as named constants** at the top of `lostfilm.go`
-  (`dataCodeRe`, `qualityLinkRe`, `metaRefreshRe`, etc.). Future drift
-  in the LostFilm HTML is a one-line edit.
-- **`TestRedirectorFlow`** in `lostfilm_e2e_test.go` exercises the
-  full chain via `httptest.Server`: Login → Parse → Check (parses 3
-  `data-code` markers, identifies `s02e02` as latest) → Download
-  (POSTs `c=370&s=2&e=2`, follows the relative redirect, parses the
-  3-button quality page, picks `1080p`, GETs the bencode bytes).
-  Episode filter is verified with `start_season=2 start_episode=5`
-  (no match) and `start_season=2 start_episode=1` (latest s02e02).
-  All 14 existing tracker E2E tests still pass.
-- **`docs/trackers.md`** (new) — per-tracker setup guide. Covers
-  every plugin's auth requirement, quality options, episode filter
-  support, and the most common selector-drift failure modes (with
-  the exact regex line to update for each).
-- **`docs/ROADMAP.md`** Post-1.0 section updated with all of Phase 1–4
-  ticked off as landed.
-- **`site/src/data/trackers.ts`** LostFilm description updated to
-  mention quality selection and the v_search redirector flow.
+### Added (Phase 4f — LostFilm real packed-int v_search flow + per-episode state)
+The previous draft of Phase 4f–h posted `c/s/e` form fields to
+`/v_search.php` and "picked the latest episode per Check", which was
+a plausible-but-wrong reverse-engineering of LostFilm. This entry
+replaces that draft with the **actual** flow extracted from
+`main.min.js`:
+
+- **`lostfilm.go` rewritten end-to-end** around the real
+  `PlayEpisode(a) { window.open("/v_search.php?a=" + a) }` JS shape:
+  - **Series page parsing** now reads two redundant attributes per
+    episode: `data-code="<show>-<season>-<episode>"` (canonical,
+    hyphens not colons) and `data-episode="<show><sss><eee>"` (the
+    packed integer used by `PlayEpisode`). Both forms are decoded;
+    `data-episode` is the fallback when `data-code` is missing.
+  - **`Check` is now stateful**: it parses every episode, applies
+    the `start_season`/`start_episode` floor, subtracts the
+    `topic.Extra["downloaded_episodes"]` set, and returns the
+    pending list in `check.Extra["pending_episodes"]` (packed IDs)
+    plus a deterministic hash of the form `eps:N/done:M/pending:K`.
+    The hash flips both when new episodes appear AND when the user
+    catches up, so the scheduler always re-evaluates.
+  - **`Download` is now per-episode**: it pulls the **oldest**
+    pending packed ID from `check.Extra`, GETs
+    `/v_search.php?a=<packed>` (it is a GET, not a POST), captures
+    the 302 `Location` (or meta-refresh body fallback), follows the
+    redirect through external hosts (`retre.org` / `tracktor.in` /
+    `lf-tracker.io`), parses the destination's per-quality `.torrent`
+    buttons, picks the one matching `topic.Extra["quality"]`, and
+    GETs the bencode bytes. Failure when the redirect lands on
+    `/login` is surfaced explicitly as "session expired".
+- **`qualityMatches` helper** locks down a sharp footgun: the naive
+  `Contains(label, want)` test would have false-matched `1080p_mp4`
+  for a user asking for plain `1080p`. The helper hard-codes the
+  three known LostFilm tiers (`SD`, `1080p`, `1080p_mp4`/`mp4`) so
+  each maps to a distinct, non-overlapping label substring. New
+  `TestQualityMatcher` table-test pins all 11 cases.
+- **Per-episode state tracking** lives in
+  `topic.Extra["downloaded_episodes"]` (slice of packed IDs). The
+  scheduler appends to this list after every successful submit and
+  the next `Check` subtracts it from the pending set. JSON-roundtrip
+  through the JSONB column produces `[]any` instead of `[]string`,
+  so a new `extraStringSlice` helper handles both shapes.
+- **`TestRedirectorFlow`** rewritten to drive the new flow end-to-end
+  against an `httptest.Server`: 3 episodes parsed, all 3 pending →
+  Download fetches the **oldest** first → asserts `?a=791001005`
+  hits the server with method=GET → asserts the resulting torrent
+  path contains `1080p` but not `1080p_mp4` → marks the first
+  episode downloaded → reruns Check → asserts pending shrinks to
+  2 → applies start_season=3 filter → asserts pending is empty.
+- **`backend/internal/db/repo/topics.go`** gains
+  `Topics.UpdateExtra(ctx, id, extra)` so the scheduler can persist
+  the growing `downloaded_episodes` list without touching the rest
+  of the topic row.
+
+### Added (Phase 4g — scheduler multi-download loop with no-pending sentinel)
+- **`scheduler.runCheck` per-episode loop.** The scheduler now drains
+  every pending episode in one tick instead of one-per-tick. The
+  inner loop calls `tr.Download(ctx, t, check, creds)` repeatedly
+  until either:
+  - Download returns the `"no pending episodes"` sentinel error
+    (matched via `isNoPendingError`) — graceful exit, all submitted
+    work counted as success.
+  - A real download/submit error occurs mid-loop — record the
+    progress made so far AND record the error+backoff so the next
+    tick retries.
+  - The `maxPerTick = 25` safety guard fires — stops a misbehaving
+    plugin from burning unbounded download bandwidth per tick.
+- **`Scheduler.markEpisodeDownloaded`** pops the first pending packed
+  ID off `check.Extra["pending_episodes"]`, appends it to
+  `topic.Extra["downloaded_episodes"]`, and persists via
+  `Topics.UpdateExtra`. After persisting, the scheduler re-runs
+  `tr.Check` so the next loop iteration sees the shrunken pending
+  list (and a fresh hash).
+- **Backwards-compatible**: every existing tracker plugin returns
+  one payload from `Download` and then errors on the second call
+  ("nothing to download"). The loop's `i > 0 + isNoPendingError`
+  branch breaks cleanly after one iteration, so single-payload
+  plugins keep their old semantics for free.
+- **Tech debt logged**: `techdebt/2-3-scheduler-no-unit-tests.md`
+  notes that the scheduler still has zero unit-test coverage and
+  that the "no pending" contract is currently a stringly-typed
+  `errors.Is`-incompatible sentinel.
+
+### Added (Phase 4h — shared DeleteConfirm safety component)
+- **`frontend/src/components/shared/DeleteConfirm.tsx`** (new) — a
+  one-click trash icon that swaps in place to a `Delete? ✓ ✗` row
+  on the first click and only fires `onConfirm` after the second.
+  Auto-cancels after 4s of inactivity. No modal, no portal, no
+  layout shift — the confirm row replaces the trash icon at the
+  same position. Click events are stopped from bubbling so it can
+  live inside row-level click handlers. Spinner state via
+  `isPending`.
+- **Wired into 4 pages** (`Topics.tsx`, `Clients.tsx`,
+  `Credentials.tsx`, `Notifiers.tsx`), replacing the previous
+  `<Button onClick={() => del.mutate(id)}>` patterns. Removes the
+  accidental-deletion footgun without adding a modal dialog —
+  consistent with the "no JS confirm() / no blocking modals" rule.
+
+### Fixed (Phase 4i — real version from /system/info on AppShell + Settings)
+- **`AppShell.tsx` and `Settings.tsx`** now render the live build
+  version from `GET /api/v1/system/info` instead of hardcoded
+  `v0.1` / `v0.4.0-alpha` strings. Settings additionally renders
+  the build commit and date when present (suppressed if either is
+  literally `"unknown"`). 5-minute React Query stale time.
+- **`deploy/docker-compose.yml`** dev marker bumped from
+  `0.1.0-dev` → `1.1.0-dev` for backend / frontend / cfsolver, so
+  local images built off `main` post-1.0.0 no longer wear the
+  pre-v0.1 label.
+
+### Maintenance
+- **`.gitignore`** now excludes `.claude/` (per-machine Claude Code
+  settings). Stops `settings.local.json` from leaking into commits.
 
 ### Added (Phase 4e — tracker credentials surface end-to-end)
 The `tracker_credentials` table existed in the schema since v0.1

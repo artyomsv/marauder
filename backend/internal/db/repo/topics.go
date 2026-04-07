@@ -149,6 +149,26 @@ WHERE id = $1`
 	return err
 }
 
+// UpdateExtra overwrites the topic.extra JSONB blob with the supplied
+// map. Used by the scheduler when a plugin reports per-episode
+// download progress (e.g. LostFilm tracks the list of already-downloaded
+// packed episode IDs in extra["downloaded_episodes"] so the next check
+// only fetches what's missing).
+func (r *Topics) UpdateExtra(ctx context.Context, id uuid.UUID, extra map[string]any) error {
+	raw, err := json.Marshal(extra)
+	if err != nil {
+		return err
+	}
+	if len(raw) == 0 {
+		raw = []byte("{}")
+	}
+	_, err = r.pool.Exec(ctx,
+		`UPDATE topics SET extra = $2, updated_at = now() WHERE id = $1`,
+		id, raw,
+	)
+	return err
+}
+
 // DueForCheck returns up to `limit` topics whose next_check_at is in the past
 // and status is active. Used by the scheduler.
 func (r *Topics) DueForCheck(ctx context.Context, limit int) ([]*domain.Topic, error) {

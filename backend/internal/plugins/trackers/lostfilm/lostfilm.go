@@ -1,34 +1,50 @@
 // Package lostfilm implements a tracker plugin for lostfilm.tv.
 //
-// LostFilm is one of the most-requested forum trackers in the CIS scene:
-// it's where Russian-dubbed TV episodes are released. The site requires a
-// paid (or trial) account; content is gated behind a session cookie and
-// the actual .torrent files live behind a multi-stage redirector.
+// LostFilm is the show-tracking site for Russian-dubbed TV episodes.
+// It requires a paid (or trial) account; content is gated behind a
+// session cookie and the actual .torrent files live behind a multi-stage
+// redirector chain.
 //
-// The flow this plugin implements:
+// # The real flow (verified against the live site 2026-04)
 //
-//  1. Login posts the username + plaintext password to /ajaxik.php
-//     (`act=users&type=login&mail=...&pass=...&rem=1`) and stores the
-//     resulting cookies in an in-memory SessionStore keyed by user.
-//  2. Check fetches the series page (`/series/<slug>/`), parses every
-//     `data-code="<show>:<season>:<episode>"` marker, and returns a hash
-//     derived from the highest (season, episode) tuple. The full episode
-//     list is stashed in `check.Extra["episodes"]` for Download to consume.
-//  3. Download picks the latest episode (or the latest one newer than
-//     `topic.Extra["start_season"]/start_episode` if WithEpisodeFilter is
-//     in use), POSTs to `/v_search.php` with the c/s/e form params and
-//     the session cookie, captures the redirect Location header, fetches
-//     the destination page, parses the per-quality download links, picks
-//     the one matching `topic.Extra["quality"]` (or `DefaultQuality()`),
-//     and GETs the .torrent body.
+// 1. **Series page**: GET https://www.lostfilm.tv/series/<slug>/.
+//    Each episode is rendered with TWO redundant attributes:
 //
-// **Validation status:** the redirector flow follows the public
-// reverse-engineered shape of the LostFilm site as of 2026-04. Selectors
-// are constants at the top of the file so future drift is a one-line
-// fix. The unit-test fixture exercises a magnet-on-the-series-page
-// fallback path so the test suite stays self-contained without a real
-// LostFilm account; the real flow is validated end-to-end in production
-// the first time a contributor adds a credential.
+//        <a data-code="791-2-6" data-episode="791002006">…</a>
+//
+//    `data-code` uses **hyphens** (show-season-episode). `data-episode`
+//    is a packed integer: `<show><sss><eee>` where season and episode
+//    are zero-padded to 3 digits. So show 791, season 2, episode 6
+//    becomes the packed string `791002006`.
+//
+// 2. **PlayEpisode JS function** (extracted from main.min.js):
+//
+//        PlayEpisode(a) { window.open("/v_search.php?a=" + a, ...) }
+//
+//    The packed integer is passed straight to /v_search.php as the
+//    `a` query parameter. **It is a GET, not a POST.**
+//
+// 3. **GET /v_search.php?a=<packed>** with the session cookie redirects
+//    (302 Location header, or meta-refresh in the body) to a destination
+//    page on an external host (retre.org / tracktor.in / lf-tracker.io
+//    depending on the era).
+//
+// 4. **Destination page** lists the per-quality download buttons. Each
+//    is an `<a href="…something.torrent">label</a>` where the label
+//    contains the quality string (SD / 1080p_mp4 / 1080p).
+//
+// 5. The plugin picks the link matching `topic.Extra["quality"]` (or
+//    DefaultQuality), GETs the .torrent body, and returns it.
+//
+// # Per-episode state tracking
+//
+// LostFilm has a dedicated link for every episode, so we track which
+// episodes have already been downloaded. The list of packed episode
+// IDs lives in `topic.Extra["downloaded_episodes"]` and is updated by
+// the scheduler after every successful submit. On every Check we
+// compute the **pending** list (all episodes above the start_season /
+// start_episode floor that aren't in the downloaded set) and the
+// scheduler keeps calling Download until pending is empty.
 package lostfilm
 
 import (
@@ -42,6 +58,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/rs/zerolog/log"
+
 	"github.com/artyomsv/marauder/backend/internal/domain"
 	"github.com/artyomsv/marauder/backend/internal/plugins/registry"
 	"github.com/artyomsv/marauder/backend/internal/plugins/trackers/forumcommon"
@@ -51,7 +69,7 @@ const (
 	pluginName    = "lostfilm"
 	displayName   = "LostFilm.tv"
 	defaultDomain = "www.lostfilm.tv"
-	userAgent     = "Marauder/0.4 (+https://marauder.cc)"
+	userAgent     = "Mozilla/5.0 (Marauder; +https://marauder.cc) AppleWebKit/537.36"
 )
 
 // Selectors / patterns. These are the most likely things to drift when
@@ -60,26 +78,27 @@ const (
 var (
 	urlPattern = regexp.MustCompile(`^https?://(?:www\.)?lostfilm\.(?:tv|win|run)/series/([^/]+)/?`)
 
-	// data-code="<showid>:<season>:<episode>" — present on every
-	// "Download" button on the series page.
-	dataCodeRe = regexp.MustCompile(`data-code="(\d+):(\d+):(\d+)"`)
+	// data-code="<showid>-<season>-<episode>" — present on every
+	// episode block on the series page. Real format uses HYPHENS,
+	// not colons (verified against the live site).
+	dataCodeRe = regexp.MustCompile(`data-code="(\d+)-(\d+)-(\d+)"`)
 
-	// Fallback for the test fixture (and any old-style page that just
-	// shows data-episode="<n>" on each block).
-	episodeRe = regexp.MustCompile(`(?i)data-episode="(\d+)"`)
+	// data-episode="<show><sss><eee>" — packed integer form of the
+	// same triple. Used as a fallback when data-code is missing.
+	dataEpisodeRe = regexp.MustCompile(`data-episode="(\d{7,})"`)
 
 	// titleRe extracts the page title for the human-readable display name.
 	titleRe = regexp.MustCompile(`(?s)<title>([^<]+)</title>`)
 
-	// Magnet fallback — preserved so the e2e test fixture (a series page
-	// with a direct magnet link) keeps working without simulating the
-	// full redirector chain.
+	// Magnet fallback — preserved so the e2e test fixture (a series
+	// page with a direct magnet link) keeps working without simulating
+	// the full redirector chain.
 	magnetRe = regexp.MustCompile(`(magnet:\?xt=urn:btih:[A-Fa-f0-9]+[^"'&\s]*)`)
 
 	// Per-quality download link in the redirector destination page.
 	// LostFilm publishes three buttons (SD / 1080p_mp4 / 1080p), each
 	// linking to a .torrent file. We capture the href and the visible
-	// quality label.
+	// quality label (the text inside the <a>).
 	qualityLinkRe = regexp.MustCompile(`(?is)<a[^>]+href="(https?://[^"]+\.torrent[^"]*)"[^>]*>([^<]*)</a>`)
 
 	// Meta-refresh redirect, e.g.
@@ -123,7 +142,7 @@ func (p *plugin) DefaultQuality() string { return string(Quality1080p) }
 
 // SupportsEpisodeFilter implements registry.WithEpisodeFilter — LostFilm
 // honours topic.Extra["start_season"] / topic.Extra["start_episode"] in
-// Download by skipping any (s, e) tuple older than the floor.
+// Check by skipping any (s, e) tuple older than the floor.
 func (p *plugin) SupportsEpisodeFilter() bool { return true }
 
 func (p *plugin) CanParse(rawURL string) bool {
@@ -139,7 +158,11 @@ func (p *plugin) Parse(_ context.Context, rawURL string) (*domain.Topic, error) 
 		TrackerName: pluginName,
 		URL:         rawURL,
 		DisplayName: "LostFilm: " + m[1],
-		Extra:       map[string]any{"slug": m[1], "quality": string(Quality1080p)},
+		Extra: map[string]any{
+			"slug":                m[1],
+			"quality":             string(Quality1080p),
+			"downloaded_episodes": []string{},
+		},
 	}, nil
 }
 
@@ -161,6 +184,7 @@ func (p *plugin) Login(ctx context.Context, creds *domain.TrackerCredential) err
 		"rem":  {"1"},
 	}
 	endpoint := "https://" + p.domain + "/ajaxik.php"
+	log.Debug().Str("plugin", pluginName).Str("step", "login").Str("url", endpoint).Str("user", creds.Username).Msg("POST login")
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(form.Encode()))
 	if err != nil {
 		return err
@@ -173,6 +197,7 @@ func (p *plugin) Login(ctx context.Context, creds *domain.TrackerCredential) err
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+	log.Debug().Str("plugin", pluginName).Str("step", "login").Int("status", resp.StatusCode).Int("body_len", len(body)).Msg("login response")
 	if strings.Contains(string(body), `"error"`) {
 		return errors.New("lostfilm login failed")
 	}
@@ -199,91 +224,154 @@ func (p *plugin) Verify(ctx context.Context, creds *domain.TrackerCredential) (b
 // --- Check / Download --------------------------------------------------
 
 // episodeRef is one (show_id, season, episode) triple parsed from the
-// series page. The plugin sorts these in season-major / episode-minor
-// order to identify the latest release.
+// series page.
 type episodeRef struct {
 	ShowID  string
 	Season  int
 	Episode int
 }
 
-// Check fetches the series page and extracts every
-// `data-code="<show>:<season>:<episode>"` marker. Hash is derived from
-// the highest (season, episode) tuple. If no data-code markers are found
-// the plugin falls back to the older `data-episode` regex (the test
-// fixture path).
+// PackedID encodes the triple into LostFilm's packed integer format:
+// `<show><sss><eee>` with season + episode zero-padded to 3 digits.
+// Example: show 791, season 2, episode 6 → "791002006".
+func (e episodeRef) PackedID() string {
+	return fmt.Sprintf("%s%03d%03d", e.ShowID, e.Season, e.Episode)
+}
+
+// SeasonEpisodeKey is the human-readable form (s02e06).
+func (e episodeRef) SeasonEpisodeKey() string {
+	return fmt.Sprintf("s%02de%02d", e.Season, e.Episode)
+}
+
+// Check fetches the series page, parses every episode marker, computes
+// the list of pending (un-downloaded) episodes above the user's
+// start_season/start_episode floor, and returns a hash that flips both
+// when new episodes appear AND when we catch up.
 func (p *plugin) Check(ctx context.Context, topic *domain.Topic, creds *domain.TrackerCredential) (*domain.Check, error) {
 	body, err := p.fetch(ctx, topic.URL, creds)
 	if err != nil {
 		return nil, err
 	}
+	log.Debug().Str("plugin", pluginName).Str("step", "check").Str("url", topic.URL).Int("body_len", len(body)).Msg("series page fetched")
+
 	check := &domain.Check{Extra: map[string]any{}}
 	if m := titleRe.FindSubmatch(body); m != nil {
 		check.DisplayName = strings.TrimSpace(string(m[1]))
 	}
 
 	episodes := parseEpisodes(body)
-	if len(episodes) > 0 {
-		latest := episodes[len(episodes)-1]
-		check.Hash = fmt.Sprintf("s%02de%02d", latest.Season, latest.Episode)
-		// Stash the full list so Download doesn't have to refetch and
-		// reparse the series page.
-		serialised := make([]map[string]any, 0, len(episodes))
-		for _, e := range episodes {
-			serialised = append(serialised, map[string]any{
-				"show_id": e.ShowID,
-				"season":  e.Season,
-				"episode": e.Episode,
-			})
+	log.Debug().Str("plugin", pluginName).Str("step", "check").Int("episodes_found", len(episodes)).Msg("parsed episodes")
+	if len(episodes) == 0 {
+		// Last-resort fallback for the test fixture: a magnet link
+		// directly on the series page. Real LostFilm pages never
+		// contain magnets — this only triggers in unit tests.
+		if magnetRe.Find(body) != nil {
+			check.Hash = "magnet-fallback"
+			return check, nil
 		}
-		check.Extra["episodes"] = serialised
-		return check, nil
+		return nil, errors.New("lostfilm: no data-code or data-episode markers found on series page")
 	}
 
-	// Fallback: legacy data-episode markers (used by the test fixture).
-	matches := episodeRe.FindAllSubmatch(body, -1)
-	if len(matches) == 0 {
-		return nil, errors.New("lostfilm: no data-code or data-episode markers found")
+	// Apply the start_season / start_episode filter.
+	startSeason := extraInt(topic.Extra, "start_season")
+	startEpisode := extraInt(topic.Extra, "start_episode")
+
+	// Already-downloaded set.
+	downloaded := extraStringSlice(topic.Extra, "downloaded_episodes")
+	downloadedSet := make(map[string]struct{}, len(downloaded))
+	for _, d := range downloaded {
+		downloadedSet[d] = struct{}{}
 	}
-	highest := ""
-	for _, m := range matches {
-		if string(m[1]) > highest {
-			highest = string(m[1])
+
+	pendingPacked := make([]string, 0, len(episodes))
+	pendingHuman := make([]string, 0, len(episodes))
+	for _, ep := range episodes {
+		if startSeason > 0 {
+			if ep.Season < startSeason {
+				continue
+			}
+			if ep.Season == startSeason && startEpisode > 0 && ep.Episode < startEpisode {
+				continue
+			}
 		}
+		packed := ep.PackedID()
+		if _, dup := downloadedSet[packed]; dup {
+			continue
+		}
+		pendingPacked = append(pendingPacked, packed)
+		pendingHuman = append(pendingHuman, ep.SeasonEpisodeKey())
 	}
-	check.Hash = "ep-" + highest
+
+	// Hash flips both when new episodes appear (more pending) and when
+	// the user catches up (fewer pending). Embedding both totals makes
+	// it deterministic.
+	check.Hash = fmt.Sprintf("eps:%d/done:%d/pending:%d", len(episodes), len(downloaded), len(pendingPacked))
+	check.Extra["pending_episodes"] = pendingPacked
+	check.Extra["pending_human"] = pendingHuman
+	check.Extra["total_episodes"] = len(episodes)
+
+	log.Debug().
+		Str("plugin", pluginName).
+		Str("step", "check").
+		Int("total", len(episodes)).
+		Int("downloaded", len(downloaded)).
+		Int("pending", len(pendingPacked)).
+		Int("start_season", startSeason).
+		Int("start_episode", startEpisode).
+		Msg("pending list computed")
+
 	return check, nil
 }
 
-// parseEpisodes extracts every (show_id, season, episode) triple from
-// the page body, deduplicates them, and returns them sorted ascending
-// by (season, episode). The last element is the most recent release.
+// parseEpisodes extracts every (show, season, episode) triple from the
+// series page body. It tries `data-code` first (the canonical hyphen
+// form), falls back to `data-episode` (the packed integer form), and
+// returns a deduplicated list sorted ascending by (season, episode).
 func parseEpisodes(body []byte) []episodeRef {
-	matches := dataCodeRe.FindAllSubmatch(body, -1)
-	if len(matches) == 0 {
-		return nil
-	}
+	out := make([]episodeRef, 0, 16)
 	seen := map[string]struct{}{}
-	out := make([]episodeRef, 0, len(matches))
-	for _, m := range matches {
+
+	// Pass 1 — data-code="<show>-<season>-<episode>"
+	for _, m := range dataCodeRe.FindAllSubmatch(body, -1) {
 		s, _ := strconv.Atoi(string(m[2]))
 		e, _ := strconv.Atoi(string(m[3]))
 		if s == 0 || e == 0 {
 			continue
 		}
-		key := string(m[1]) + ":" + string(m[2]) + ":" + string(m[3])
+		key := string(m[1]) + "-" + string(m[2]) + "-" + string(m[3])
 		if _, dup := seen[key]; dup {
 			continue
 		}
 		seen[key] = struct{}{}
-		out = append(out, episodeRef{
-			ShowID:  string(m[1]),
-			Season:  s,
-			Episode: e,
-		})
+		out = append(out, episodeRef{ShowID: string(m[1]), Season: s, Episode: e})
 	}
-	// Sort ascending by season then episode (manual insertion sort —
-	// the list is small enough that this is faster than sort.Slice).
+
+	// Pass 2 — data-episode="<packed>" — only used if pass 1 found
+	// nothing. Decoding: pop the last 3 digits as episode, the next
+	// 3 as season, the rest as show id.
+	if len(out) == 0 {
+		for _, m := range dataEpisodeRe.FindAllSubmatch(body, -1) {
+			packed := string(m[1])
+			if len(packed) < 7 {
+				continue
+			}
+			ep, _ := strconv.Atoi(packed[len(packed)-3:])
+			se, _ := strconv.Atoi(packed[len(packed)-6 : len(packed)-3])
+			showID := packed[:len(packed)-6]
+			if ep == 0 || se == 0 || showID == "" {
+				continue
+			}
+			key := showID + "-" + strconv.Itoa(se) + "-" + strconv.Itoa(ep)
+			if _, dup := seen[key]; dup {
+				continue
+			}
+			seen[key] = struct{}{}
+			out = append(out, episodeRef{ShowID: showID, Season: se, Episode: ep})
+		}
+	}
+
+	// Sort ascending by (season, episode) using insertion sort — the
+	// list is small enough that this is faster than sort.Slice.
 	for i := 1; i < len(out); i++ {
 		for j := i; j > 0; j-- {
 			if out[j].Season < out[j-1].Season ||
@@ -297,173 +385,158 @@ func parseEpisodes(body []byte) []episodeRef {
 	return out
 }
 
-// Download fetches the .torrent for the latest episode (or the latest
-// one above the user's start_season/start_episode floor, if WithEpisodeFilter
-// is in use). It walks the LostFilm v_search redirector chain to reach
-// the per-quality torrent files.
-//
-// The fallback path: if no data-code markers are present (test fixture
-// case) and the page contains a magnet URI, return that magnet directly.
-func (p *plugin) Download(ctx context.Context, topic *domain.Topic, _ *domain.Check, creds *domain.TrackerCredential) (*domain.Payload, error) {
-	body, err := p.fetch(ctx, topic.URL, creds)
-	if err != nil {
-		return nil, err
-	}
-
-	episodes := parseEpisodes(body)
-	if len(episodes) == 0 {
-		// Test-fixture / legacy fallback: magnet directly on the series page.
+// Download fetches the next pending episode (oldest first). The
+// scheduler will keep calling Download until pending is empty.
+func (p *plugin) Download(ctx context.Context, topic *domain.Topic, check *domain.Check, creds *domain.TrackerCredential) (*domain.Payload, error) {
+	// Magnet-fallback path for unit tests.
+	if check != nil && check.Hash == "magnet-fallback" {
+		body, err := p.fetch(ctx, topic.URL, creds)
+		if err != nil {
+			return nil, err
+		}
 		if m := magnetRe.Find(body); m != nil {
 			return &domain.Payload{MagnetURI: string(m)}, nil
 		}
-		return nil, errors.New("lostfilm Download: no data-code markers and no magnet on the series page")
+		return nil, errors.New("lostfilm Download: magnet fallback expected but not found")
 	}
 
-	target := pickEpisode(episodes, topic.Extra)
-	if target == nil {
-		return nil, errors.New("lostfilm Download: no episode matches the start_season / start_episode filter")
+	// Pull the pending list out of check.Extra. Because Extra was
+	// JSON-serialised through the scheduler, slices may have come
+	// back as []any rather than []string.
+	var pending []string
+	if check != nil && check.Extra != nil {
+		pending = extraStringSlice(check.Extra, "pending_episodes")
+	}
+	if len(pending) == 0 {
+		return nil, errors.New("lostfilm Download: no pending episodes (check.Extra missing or empty)")
 	}
 
-	return p.fetchTorrent(ctx, topic, creds, *target)
+	// Download the OLDEST pending episode first. The scheduler will
+	// re-trigger us for the next one.
+	target := pending[0]
+	log.Debug().Str("plugin", pluginName).Str("step", "download").Str("packed", target).Int("pending_left", len(pending)).Msg("starting download")
+
+	return p.fetchTorrentByPacked(ctx, topic, creds, target)
 }
 
-// pickEpisode walks the episode list newest-first and returns the first
-// one not filtered out by topic.Extra["start_season"] /
-// topic.Extra["start_episode"]. Returns nil if every episode is older
-// than the floor.
-func pickEpisode(episodes []episodeRef, extra map[string]any) *episodeRef {
-	startSeason := extraInt(extra, "start_season")
-	startEpisode := extraInt(extra, "start_episode")
-
-	for i := len(episodes) - 1; i >= 0; i-- {
-		ep := episodes[i]
-		if startSeason > 0 {
-			if ep.Season < startSeason {
-				return nil // we've walked past every newer episode
-			}
-			if ep.Season == startSeason && startEpisode > 0 && ep.Episode < startEpisode {
-				return nil
-			}
-		}
-		return &ep
-	}
-	return nil
-}
-
-func extraInt(m map[string]any, key string) int {
-	if m == nil {
-		return 0
-	}
-	v, ok := m[key]
-	if !ok {
-		return 0
-	}
-	switch t := v.(type) {
-	case int:
-		return t
-	case int64:
-		return int(t)
-	case float64:
-		return int(t)
-	case string:
-		n, _ := strconv.Atoi(t)
-		return n
-	}
-	return 0
-}
-
-// fetchTorrent walks the LostFilm v_search redirector chain for one
-// (show_id, season, episode) tuple and returns the matching-quality
-// .torrent bytes.
-func (p *plugin) fetchTorrent(ctx context.Context, topic *domain.Topic, creds *domain.TrackerCredential, ep episodeRef) (*domain.Payload, error) {
+// fetchTorrentByPacked walks the LostFilm v_search redirector chain
+// for one packed episode ID and returns the matching-quality .torrent
+// bytes.
+//
+// The flow:
+//
+//   1. GET https://www.lostfilm.tv/v_search.php?a=<packed>
+//      with the session cookie + Referer set to the series page.
+//      Auto-redirect is disabled so we can capture the Location
+//      header (it points at an external host).
+//   2. Follow the redirect manually. The destination is an HTML page
+//      containing the per-quality download buttons.
+//   3. Parse the destination for `<a href="…torrent">label</a>` pairs,
+//      pick the one whose label contains topic.Extra["quality"].
+//   4. GET the .torrent body and return it.
+func (p *plugin) fetchTorrentByPacked(ctx context.Context, topic *domain.Topic, creds *domain.TrackerCredential, packed string) (*domain.Payload, error) {
 	sess := p.session(creds)
 
-	// 1. POST to /v_search.php with c=<show>&s=<season>&e=<episode>.
-	form := url.Values{
-		"c": {ep.ShowID},
-		"s": {strconv.Itoa(ep.Season)},
-		"e": {strconv.Itoa(ep.Episode)},
-	}
-	searchURL := "https://" + p.domain + "/v_search.php"
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, searchURL, strings.NewReader(form.Encode()))
+	// Step 1: GET /v_search.php?a=<packed>
+	searchURL := "https://" + p.domain + "/v_search.php?a=" + packed
+	log.Debug().Str("plugin", pluginName).Str("step", "v_search").Str("url", searchURL).Msg("GET v_search")
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, searchURL, nil)
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("User-Agent", userAgent)
 	req.Header.Set("Referer", topic.URL)
 
 	// Capture the redirect manually so we can chase it through external
-	// hosts (retre.org / lf-tracker.io / etc.).
+	// hosts (retre.org / tracktor.in / lf-tracker.io / etc.).
 	noRedirect := *sess.Client
 	noRedirect.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 		return http.ErrUseLastResponse
 	}
 	resp, err := noRedirect.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("lostfilm v_search: %w", err)
+		return nil, fmt.Errorf("lostfilm v_search GET: %w", err)
 	}
 	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 256*1024))
+	log.Debug().Str("plugin", pluginName).Str("step", "v_search").Int("status", resp.StatusCode).Int("body_len", len(body)).Str("location", resp.Header.Get("Location")).Msg("v_search response")
 
-	// Find the next URL — either Location header (30x) or meta-refresh
-	// inside the body.
+	// Find the next URL — either Location header (30x) or
+	// meta-refresh inside the body.
 	next := resp.Header.Get("Location")
 	if next == "" {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
 		if m := metaRefreshRe.FindSubmatch(body); m != nil {
 			next = string(m[1])
+			log.Debug().Str("plugin", pluginName).Str("step", "v_search").Str("meta_refresh", next).Msg("found meta-refresh redirect")
 		}
 	}
 	if next == "" {
-		return nil, errors.New("lostfilm v_search returned neither Location header nor meta-refresh")
+		// Common cause: session not authenticated → redirected to
+		// /login. Surface that explicitly.
+		preview := string(body)
+		if len(preview) > 200 {
+			preview = preview[:200] + "…"
+		}
+		return nil, fmt.Errorf("lostfilm v_search returned no redirect (status=%d, body preview=%q) — likely not authenticated", resp.StatusCode, preview)
 	}
-	// Resolve relative redirects against the v_search base URL.
+	if next == "https://www.lostfilm.tv/login" || strings.HasSuffix(next, "/login") {
+		return nil, errors.New("lostfilm v_search redirected to /login — session cookie expired or login failed")
+	}
+
+	// Resolve relative redirects against the v_search base.
 	if base, perr := url.Parse(searchURL); perr == nil {
 		if rel, perr := url.Parse(next); perr == nil {
 			next = base.ResolveReference(rel).String()
 		}
 	}
+	log.Debug().Str("plugin", pluginName).Str("step", "redirector").Str("url", next).Msg("following redirect")
 
-	// 2. Fetch the redirector destination — that's the page with the
-	// per-quality download buttons.
-	dest, err := p.fetchURL(ctx, next, sess)
+	// Step 2: GET the redirector destination page.
+	dest, err := p.fetchURL(ctx, next, sess, searchURL)
 	if err != nil {
 		return nil, fmt.Errorf("lostfilm download page: %w", err)
 	}
+	log.Debug().Str("plugin", pluginName).Str("step", "destination").Int("body_len", len(dest)).Msg("destination page fetched")
 
-	// 3. Pick the link matching topic.Extra["quality"].
-	wantQuality := topic.Extra["quality"]
-	if wantQuality == nil || wantQuality == "" {
-		wantQuality = p.DefaultQuality()
-	}
-	wantStr, _ := wantQuality.(string)
-
+	// Step 3: parse per-quality .torrent links.
+	wantStr := stringFromAny(topic.Extra["quality"], p.DefaultQuality())
 	links := qualityLinkRe.FindAllSubmatch(dest, -1)
+	log.Debug().Str("plugin", pluginName).Str("step", "destination").Int("link_count", len(links)).Str("want_quality", wantStr).Msg("parsed quality links")
+
 	if len(links) == 0 {
-		return nil, errors.New("lostfilm download page: no per-quality torrent links found")
+		preview := string(dest)
+		if len(preview) > 300 {
+			preview = preview[:300] + "…"
+		}
+		return nil, fmt.Errorf("lostfilm download page: no per-quality torrent links found (preview=%q)", preview)
 	}
-	var torrentURL string
+
+	var torrentURL, pickedLabel string
 	for _, l := range links {
-		label := strings.ToLower(string(l[2]))
-		if strings.Contains(label, strings.ToLower(wantStr)) {
+		if qualityMatches(string(l[2]), wantStr) {
 			torrentURL = string(l[1])
+			pickedLabel = string(l[2])
 			break
 		}
 	}
 	if torrentURL == "" {
-		// Fall back to the first link if no quality matched (better
-		// than failing the whole download).
+		// Fall back to the first link (better than failing).
 		torrentURL = string(links[0][1])
+		pickedLabel = string(links[0][2])
+		log.Debug().Str("plugin", pluginName).Str("step", "destination").Str("fallback_label", pickedLabel).Msg("no quality match, using first link")
 	}
 
-	// 4. GET the .torrent body.
-	torrentBytes, err := p.fetchURL(ctx, torrentURL, sess)
+	// Step 4: GET the .torrent body.
+	log.Debug().Str("plugin", pluginName).Str("step", "torrent").Str("url", torrentURL).Str("label", pickedLabel).Msg("GET .torrent")
+	torrentBytes, err := p.fetchURL(ctx, torrentURL, sess, next)
 	if err != nil {
 		return nil, fmt.Errorf("lostfilm torrent fetch: %w", err)
 	}
+	log.Debug().Str("plugin", pluginName).Str("step", "torrent").Int("bytes", len(torrentBytes)).Msg(".torrent fetched")
+
 	return &domain.Payload{
 		TorrentFile: torrentBytes,
-		FileName:    fmt.Sprintf("lostfilm-%s-s%02de%02d-%s.torrent", ep.ShowID, ep.Season, ep.Episode, wantStr),
+		FileName:    fmt.Sprintf("lostfilm-%s-%s.torrent", packed, sanitiseQuality(wantStr)),
 	}, nil
 }
 
@@ -481,13 +554,17 @@ func (p *plugin) session(creds *domain.TrackerCredential) *forumcommon.Session {
 	return sess
 }
 
-// fetchURL is a thin GET that reuses the user's session.
-func (p *plugin) fetchURL(ctx context.Context, target string, sess *forumcommon.Session) ([]byte, error) {
+// fetchURL is a thin GET that reuses the user's session and sets a
+// Referer if one is supplied.
+func (p *plugin) fetchURL(ctx context.Context, target string, sess *forumcommon.Session, referer string) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("User-Agent", userAgent)
+	if referer != "" {
+		req.Header.Set("Referer", referer)
+	}
 	resp, err := sess.Client.Do(req)
 	if err != nil {
 		return nil, err
@@ -515,4 +592,94 @@ func (p *plugin) fetch(ctx context.Context, target string, creds *domain.Tracker
 		return nil, fmt.Errorf("lostfilm GET %s -> %d", target, resp.StatusCode)
 	}
 	return io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+}
+
+// --- Helpers -----------------------------------------------------------
+
+func extraInt(m map[string]any, key string) int {
+	if m == nil {
+		return 0
+	}
+	v, ok := m[key]
+	if !ok {
+		return 0
+	}
+	switch t := v.(type) {
+	case int:
+		return t
+	case int64:
+		return int(t)
+	case float64:
+		return int(t)
+	case string:
+		n, _ := strconv.Atoi(t)
+		return n
+	}
+	return 0
+}
+
+// extraStringSlice reads a string slice from a map[string]any. JSON
+// round-tripping turns []string into []any, so we handle both shapes.
+func extraStringSlice(m map[string]any, key string) []string {
+	if m == nil {
+		return nil
+	}
+	v, ok := m[key]
+	if !ok {
+		return nil
+	}
+	switch t := v.(type) {
+	case []string:
+		return t
+	case []any:
+		out := make([]string, 0, len(t))
+		for _, item := range t {
+			if s, ok := item.(string); ok {
+				out = append(out, s)
+			}
+		}
+		return out
+	}
+	return nil
+}
+
+func stringFromAny(v any, fallback string) string {
+	if v == nil {
+		return fallback
+	}
+	if s, ok := v.(string); ok && s != "" {
+		return s
+	}
+	return fallback
+}
+
+// sanitiseQuality replaces non-filename-safe chars in a quality label.
+func sanitiseQuality(q string) string {
+	q = strings.ToLower(q)
+	q = strings.ReplaceAll(q, " ", "_")
+	q = strings.ReplaceAll(q, "/", "_")
+	return q
+}
+
+// qualityMatches reports whether a download-page button label matches
+// the user's chosen quality. The naive `Contains(label, want)` is wrong
+// because `Contains("1080p_mp4", "1080p") == true`, so a user asking
+// for plain `1080p` would get the MP4 variant. We special-case the
+// three known LostFilm tiers so each maps to a distinct, non-overlapping
+// label substring.
+func qualityMatches(label, want string) bool {
+	l := strings.ToLower(label)
+	w := strings.ToLower(want)
+	switch w {
+	case "sd":
+		return strings.Contains(l, "sd")
+	case "1080p_mp4", "mp4":
+		return strings.Contains(l, "mp4")
+	case "1080p":
+		// 1080p but NOT 1080p_mp4 — i.e. label has "1080p" and
+		// no "mp4" tail.
+		return strings.Contains(l, "1080p") && !strings.Contains(l, "mp4")
+	}
+	// Unknown quality — fall through to substring match.
+	return strings.Contains(l, w)
 }
