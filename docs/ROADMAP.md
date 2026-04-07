@@ -233,6 +233,58 @@ has run it for a week without reporting a release-blocker. **Released
       [`docs/trackers.md`](trackers.md) covering required accounts,
       quality options, episode filter usage, and the most common
       selector-drift failure modes (with the regex line to update).
+- [x] **Phase 5 — code-review remediation (parallel-agent refactor)**
+      — a four-agent code review (security, code quality, rules
+      compliance, QA) of the Phase 4 commits found ~25 issues; this
+      sprint fixes all of them across 7 parallel tracks plus an
+      orchestrator. Highlights:
+  - **SSRF hardening** in the LostFilm redirector chain — host
+    allowlist + private/loopback/link-local IP rejection on every
+    hop. The user's authenticated session cookies no longer travel
+    to arbitrary hosts.
+  - **Typed `registry.ErrNoPendingEpisodes` sentinel** replaces the
+    brittle stringly-typed cross-package error contract.
+  - **Shared `internal/extra` package** consolidates the
+    duplicated `extraInt` / `extraStringSlice` / `stringFromAny`
+    helpers that lived in both `lostfilm.go` and `scheduler.go`.
+  - **Atomic `Topics.MarkEpisodeDownloaded`** replaces the
+    read-modify-write `UpdateExtra` for the scheduler's hot path.
+  - **Scheduler split + 10 unit tests** — `runCheck` is now a thin
+    orchestrator over `loadCredentials` + `downloadAllPending` +
+    `recordResult`. The scheduler package previously had zero
+    tests; now has full coverage of the per-episode loop, the
+    backoff curve, and the typed-sentinel matcher.
+  - **Per-episode loop now configurable** via
+    `MARAUDER_SCHEDULER_MAX_EPISODES_PER_TICK` (default 25), with
+    a Prometheus counter that increments on cap-hit so operators
+    can spot runaway trackers.
+  - **C-1 correctness bug fixed**: mid-loop submit failures now
+    record `updated=true` so prior episode progress isn't forgotten
+    by the DB.
+  - **Per-iteration context** in the download loop replaces the
+    single shared deadline that could exhaust mid-loop on long
+    series.
+  - **LostFilm split** into 4 files (~245 lines main + parser +
+    redirector + session) to comply with the file-size ceiling.
+  - **Frontend `lib/queryKeys.ts`** centralises React Query keys
+    so a typo in `invalidateQueries` is now a TypeScript error.
+  - **Frontend hooks** — `useSystemInfo`, `useLogout`,
+    `useDebouncedValue`, `useArmedConfirm` extracted from
+    duplicated inline blocks across AppShell, Settings, Topics,
+    Clients, Credentials, Notifiers.
+  - **Shared `ResourceCard` component** dedupes the list-card
+    chrome across Clients/Credentials/Notifiers.
+  - **Topics.tsx debounce refactor** — the hand-rolled
+    `useEffect`+`setTimeout` debounce on the `/trackers/match`
+    lookup (with an `eslint-disable` smell) replaced with
+    `useDebouncedValue` + `useQuery({ enabled })`.
+  - **Vitest + RTL + jsdom** added to the frontend (previously
+    had zero tests). First test file: `DeleteConfirm.test.tsx`
+    with 7 cases including `vi.useFakeTimers` for the auto-disarm
+    timeout.
+  - **`CLAUDE.md`** (project-level) created — structural snapshot
+    of the repo so future Claude sessions don't waste tokens
+    re-discovering the layout.
 
 ## Post-1.0 — stretch ideas (not committed)
 

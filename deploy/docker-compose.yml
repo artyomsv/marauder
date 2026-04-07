@@ -36,8 +36,8 @@ services:
       context: ../backend
       dockerfile: Dockerfile
       args:
-        VERSION: "0.4.0-alpha"
-    image: marauder-backend:0.4.0-alpha
+        VERSION: "1.1.0-dev"
+    image: marauder-backend:1.1.0-dev
     restart: unless-stopped
     depends_on:
       db:
@@ -57,6 +57,7 @@ services:
       MARAUDER_REFRESH_TOKEN_TTL: ${MARAUDER_REFRESH_TOKEN_TTL:-720h}
       MARAUDER_SCHEDULER_ENABLED: ${MARAUDER_SCHEDULER_ENABLED:-true}
       MARAUDER_SCHEDULER_WORKERS: ${MARAUDER_SCHEDULER_WORKERS:-8}
+      MARAUDER_SCHEDULER_MAX_EPISODES_PER_TICK: ${MARAUDER_SCHEDULER_MAX_EPISODES_PER_TICK:-25}
       MARAUDER_ADMIN_INITIAL_USERNAME: ${MARAUDER_ADMIN_INITIAL_USERNAME:-}
       MARAUDER_ADMIN_INITIAL_PASSWORD: ${MARAUDER_ADMIN_INITIAL_PASSWORD:-}
       MARAUDER_OIDC_ENABLED: ${MARAUDER_OIDC_ENABLED:-false}
@@ -79,7 +80,7 @@ services:
     build:
       context: ../frontend
       dockerfile: Dockerfile
-    image: marauder-frontend:0.4.0-alpha
+    image: marauder-frontend:1.1.0-dev
     restart: unless-stopped
     depends_on:
       - backend
@@ -99,7 +100,7 @@ services:
     build:
       context: ../cfsolver
       dockerfile: Dockerfile
-    image: marauder-cfsolver:0.4.0-alpha
+    image: marauder-cfsolver:1.1.0-dev
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:9244/health"]

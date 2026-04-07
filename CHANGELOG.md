@@ -7,6 +7,290 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Phase 5 — code-review remediation (parallel-agent refactor)
+
+A four-agent code review (security-officer + code-reviewer + rules-
+compliance + qa) of the Phase 4 commits surfaced ~25 findings ranging
+from a real correctness bug (mid-loop submit failure marking
+`updated=false`) to an SSRF in the LostFilm redirector chain to a
+brittle stringly-typed cross-package error contract. This phase fixes
+all of them. Work was split into 8 tracks across 7 parallel agents
+plus an orchestrator, with file ownership designed to avoid edit
+conflicts.
+
+### Added (Phase 5a — typed sentinel + shared extra package)
+- **`backend/internal/plugins/registry/errors.go`** (new) — exports
+  `var ErrNoPendingEpisodes = errors.New("no pending episodes")`. Per-
+  episode trackers (currently only LostFilm) wrap this via `%w` from
+  `Download` when the pending list is empty; the scheduler matches it
+  via `errors.Is`. Replaces the previous `strings.Contains` substring
+  match that was the brittle inter-package contract flagged by every
+  reviewer.
+- **`backend/internal/extra/`** (new package) — exports
+  `extra.Int(m, key)`, `extra.StringSlice(m, key)`,
+  `extra.String(m, key, fallback)`. Reads values out of the untyped
+  `map[string]any` blobs that `domain.Topic.Extra` and
+  `domain.Check.Extra` carry, handling JSON-roundtrip shape drift
+  (`[]string`→`[]any`, `int`→`float64`). Both `lostfilm.go` and
+  `scheduler.go` had near-identical local copies of these helpers
+  before; both now import the shared package and the local copies
+  are deleted.
+
+### Changed (Phase 5b — scheduler refactor + 10 new unit tests)
+- **`runCheck` split** into a thin orchestrator + `loadCredentials` +
+  `downloadAllPending` + `recordResult`. `runCheck` is now ~30 lines
+  (was 125) and each piece is independently testable.
+- **C-1 fix — mid-loop submit failure now records progress.** Previously
+  a submit failure on iteration `i > 0` called `RecordCheckResult` with
+  hardcoded `updated=false`, forgetting the timestamp of the last
+  topic-updated event. Now passes `updated || anySubmitted`.
+- **H-5 fix — per-iteration context.** The download loop previously
+  shared a single `TrackerHTTPTimeout + 5s` deadline across up to 25
+  Download+Check round-trips; a 12-episode series could trip the
+  deadline mid-loop and lose `RecordCheckResult` for the successful
+  hash. Each iteration now gets its own
+  `context.WithTimeout(ctx, TrackerHTTPTimeout)`; persistence calls
+  use the parent ctx so they survive iteration deadline expiry.
+- **H-6 fix — dropped redundant `tr.Check`.** The loop previously
+  refetched the entire LostFilm series page after every single episode
+  download (12 episodes = 13 series-page fetches per tick). Remaining
+  episodes are now derived locally from
+  `check.Extra["pending_episodes"][1:]`.
+- **H-7 fix — atomic persistence.** `markEpisodeDownloaded` no longer
+  silently swallows persistence failures. Uses the new atomic
+  `Topics.MarkEpisodeDownloaded(ctx, id, packed)` repo method (Phase
+  5d) when the topics repo implements the optional interface; bubbles
+  errors out so the next tick retries.
+- **H-8 fix — `maxPerTick` is now configurable** via
+  `cfg.SchedulerMaxEpisodesPerTick` (env
+  `MARAUDER_SCHEDULER_MAX_EPISODES_PER_TICK`, default 25). Cap-hit logs
+  a Warn and increments the new
+  `marauder_scheduler_episodes_per_tick_capped_total{tracker_name}`
+  counter so operators can see when a runaway tracker is losing
+  progress every tick.
+- **R-1 fix — discarded errors.** All seven `_ = s.topics.RecordCheckResult(...)`
+  call sites in `runCheck` go through a new `recordResult` wrapper
+  that logs persistence failures at Warn level. No more silent swallows
+  in the hot path.
+- **Testability seams**: introduced 5 small consumer-side interfaces
+  (`topicsRepo`, `markEpisodeDownloader`, `clientsRepo`,
+  `credentialsRepo`, `decryptor`) plus 2 lookup-fn fields
+  (`trackerLookupFn`, `clientLookupFn`) on `*Scheduler`. The exported
+  `New(...)` constructor signature is unchanged so `cmd/server/main.go`
+  still compiles.
+- **`backend/internal/scheduler/scheduler_test.go`** (new) — 10 test
+  functions covering: hash unchanged, single-payload happy path,
+  3-pending-episodes loop, first-iteration error, mid-loop error
+  preserves progress, persistence failure mid-loop, max-per-tick cap
+  enforcement, fmt-wrapped sentinel matching, table-driven backoff
+  curve (7 cases across 0–20 consecutive errors with cap at 6h), and
+  the typed sentinel matcher itself. The scheduler package previously
+  reported `[no test files]`; this closes
+  `techdebt/2-3-scheduler-no-unit-tests.md` (file removed in this
+  phase).
+
+### Changed (Phase 5c — LostFilm hardening + 4-file split)
+- **HIGH-1 fix — SSRF allowlist.** `fetchTorrentByPacked` previously
+  followed any `Location`/meta-refresh URL through external hosts with
+  the user's authenticated session cookies attached, with no host
+  allowlist. A compromised redirector could have pointed at internal
+  addresses or exfiltrated cookies. New `validateRedirectURL`:
+  - parses the URL and rejects non-`http(s)` schemes,
+  - rejects any host not in `allowedRedirectHosts` (lostfilm.tv +
+    its known redirector chain hosts),
+  - resolves the host via `net.LookupIP` and rejects loopback,
+    private (RFC 1918), link-local, and unspecified addresses.
+  Applied to BOTH the v_search next-hop AND the final `.torrent` URL.
+  A test seam (`plugin.redirectValidator` field) lets unit tests
+  install a permissive validator since httptest uses 127.0.0.1.
+- **H-9 fix — `userAgent` reverted to project convention.** Was
+  `"Mozilla/5.0 (Marauder; +https://marauder.cc) AppleWebKit/537.36"`
+  — the worst of both worlds (still trivially a bot, inconsistent
+  with every other plugin). Now `"Marauder/1.1 (+https://marauder.cc)"`
+  with an explanatory comment.
+- **LOW-4 fix — body preview leakage gone.** The `v_search returned
+  no redirect` error previously embedded up to 200 bytes of upstream
+  HTML in its message, which the scheduler persisted into
+  `topics.last_error` and the UI displayed. If the upstream login
+  page contained a CSRF token, it ended up in the DB. Replaced with
+  a stable string: `"likely not authenticated, please re-add credentials"`.
+- **`Download` returns the typed sentinel** when `pending_episodes`
+  is empty, via `fmt.Errorf("lostfilm Download: %w (...)", registry.ErrNoPendingEpisodes)`.
+- **Adopted shared extra package** — local `extraInt`,
+  `extraStringSlice`, `stringFromAny` deleted; all call sites use
+  `extra.Int` / `extra.StringSlice` / `extra.String`.
+- **4-file split** — `lostfilm.go` was ~685 lines (over the ~300
+  ceiling). Now split across:
+  - `lostfilm.go` (~245 lines) — package doc, plugin struct, registry
+    registration, `CanParse`, `Parse`, `Check`, `Download`
+  - `lostfilm_session.go` — constants, `urlPattern`, `Login`,
+    `Verify`, `session`, `fetch`, `fetchURL`
+  - `lostfilm_parse.go` — episode regexes, `episodeRef`,
+    `parseEpisodes` (now using `sort.Slice`)
+  - `lostfilm_redirector.go` — `allowedRedirectHosts`,
+    `validateRedirectURL`, `fetchTorrentByPacked` orchestrator,
+    `resolveVSearchRedirect`, `pickQualityLink`, `qualityMatches`,
+    `sanitiseQuality`
+- **Read errors no longer silently dropped** — `Login`, `Verify`,
+  `fetch`, and `fetchURL` previously did `body, _ := io.ReadAll(...)`.
+  IO errors now propagate with `%w` wrapping.
+- **`qualityMatches` unknown-quality fallback removed** — previously
+  fell through to `strings.Contains` for unknown tiers, which would
+  re-introduce the 1080p/1080p_mp4 trap for any future quality. Now
+  returns `false` for unknown qualities, forcing callers to add new
+  tiers explicitly.
+- **`parseEpisodes`** now uses `sort.Slice` (clearer for typical
+  100+-episode series) and the `_ = strconv.Atoi(...)` discards have
+  comments noting the regex guarantees digit-only matches.
+- **New tests**: `TestValidateRedirectURL` (table-driven, 7 cases
+  including allowlist + scheme + loopback + private IP rejection),
+  `TestDownloadEmptyPendingReturnsTypedSentinel` (3 subtests asserting
+  `errors.Is(err, registry.ErrNoPendingEpisodes)` for nil-Extra,
+  empty-slice, and missing-key cases), 2 new `TestQualityMatcher`
+  cases for unknown qualities. Existing `TestE2E` and
+  `TestRedirectorFlow` updated to install a permissive validator.
+
+### Added (Phase 5d — atomic topics repo + first repo-package tests)
+- **`Topics.MarkEpisodeDownloaded(ctx, id, packed) error`** — new
+  atomic method that appends a packed episode ID to
+  `extra["downloaded_episodes"]` via a single SQL `jsonb_set` +
+  `||` expression. Unlike `UpdateExtra` (which read-modify-writes
+  the entire blob) this:
+  - cannot wipe other extras keys,
+  - is safe under concurrent updates,
+  - returns `repo.ErrNotFound` if the topic was deleted between
+    Check and the loop iteration.
+- **`UpdateExtra` no longer silently no-ops** when the topic is gone
+  — captures `RowsAffected()` and returns `ErrNotFound`. Marked
+  `// Deprecated:` in the doc comment in favor of the new atomic
+  method.
+- **`scanTopic` no longer swallows malformed JSON** in the `extra`
+  blob. Previously `_ = json.Unmarshal(extraRaw, &t.Extra)` returned
+  an empty map silently; now returns a wrapped error so the row is
+  rejected and the caller can log it.
+- **Testability refactor**: `Topics.pool` field changed from
+  `*pgxpool.Pool` to a small unexported `topicsPool` interface
+  (`Exec` / `Query` / `QueryRow`) so `pgxmock` can slot in. The
+  `NewTopics` constructor still takes `*pgxpool.Pool` so callers
+  don't change.
+- **`backend/internal/db/repo/topics_test.go`** (new) — first tests
+  in the `db/repo` package. 10 test functions covering happy
+  path / not-found / DB error / nil-map serialization for both
+  `UpdateExtra` and `MarkEpisodeDownloaded`, plus a regression
+  test that drives `GetByID` through a row with a malformed
+  `extra` blob and asserts the new error path. Uses `pgxmock/v3` —
+  no Docker Postgres needed.
+
+### Added (Phase 5e — frontend hooks + centralized query keys)
+- **`frontend/src/lib/queryKeys.ts`** (new) — `QK` constant exporting
+  every React Query key used in the codebase as `as const` tuples:
+  `QK.clients`, `QK.client(id)`, `QK.topics`, `QK.credentials`,
+  `QK.notifiers`, `QK.systemInfo`, `QK.trackerMatch(url)`,
+  `QK.audit`, `QK.systemStatus`. Replaces 20+ inline string-literal
+  keys across the page files. A typo in any `invalidateQueries` call
+  is now a TypeScript error instead of a silent no-op.
+- **`frontend/src/lib/hooks/useSystemInfo.ts`** (new) — wraps the
+  `/system/info` query (5-min stale time, no auth) so the AppShell
+  version chip and the Settings About card and the Clients,
+  Credentials, Notifiers pages all share one cache entry instead of
+  five duplicate `useQuery` blocks.
+- **`frontend/src/lib/hooks/useLogout.ts`** (new) — extracts the
+  refresh-token revoke + auth-store clear + navigate-to-login
+  sequence that was duplicated between AppShell and Settings.
+  Standardizes both surfaces on SPA navigation (`useNavigate`) —
+  Settings previously did a hard `window.location.href = "/login"`
+  reload.
+- **`frontend/src/lib/hooks/useDebouncedValue.ts`** (new) — generic
+  `useDebouncedValue<T>(value, delayMs): T` for feeding text-input
+  state into React Query's `enabled` flag without firing a request
+  on every keystroke. Used by Topics' `/trackers/match` lookup.
+- **`AppShell.tsx` and `Settings.tsx`** refactored to use the new
+  hooks, dropping the duplicated query/logout code.
+
+### Added (Phase 5f — shared ResourceCard component)
+- **`frontend/src/components/shared/ResourceCard.tsx`** (new) — slot-
+  based card chrome for list pages. Props: `title`, `icon?`,
+  `badges?`, `actions?`, `children?`, `glow?` (`primary` or
+  `accent`), `onClick?`. Preserves the same `framer-motion`
+  animation, `group-hover:opacity-100` actions reveal, and Tailwind
+  blur/glow background that the three pages used inline.
+- **`Clients.tsx`, `Credentials.tsx`, `Notifiers.tsx`** all migrated
+  to render their list cards via `<ResourceCard>`. Adopted `QK.*`
+  query keys and the `useSystemInfo()` hook from Phase 5e. Per-page
+  Test connection / Edit / DeleteConfirm action rows preserved
+  unchanged.
+
+### Changed (Phase 5g — Topics page refactor + useArmedConfirm)
+- **`frontend/src/lib/hooks/useArmedConfirm.ts`** (new) — extracts
+  the idle⇄armed state machine that `DeleteConfirm` and the Topics
+  `BulkActionBar` had implemented separately. Returns
+  `{ armed, arm, disarm, confirmAndDisarm }` with an auto-disarm
+  timer (default 4000 ms).
+- **`DeleteConfirm.tsx`** internal `useState`+`useEffect`+`useRef`
+  machinery replaced with `useArmedConfirm({ timeoutMs })`. External
+  API unchanged. Hardcoded `aria-label="Delete?"` now derives from
+  the `label` prop (`Delete topic?`, `Delete client?`, etc) for
+  future i18n.
+- **`Topics.tsx` `BulkActionBar`** rewritten to use `useArmedConfirm`
+  instead of its inline `useState(false)` + `setTimeout` clone.
+- **`Topics.tsx` AddTopicCard `/trackers/match` lookup** — the
+  hand-rolled `useEffect` + `setTimeout` debounce (with an
+  `eslint-disable-next-line react-hooks/exhaustive-deps` smell)
+  replaced with `useDebouncedValue(url, 350)` + `useQuery({
+  queryKey: QK.trackerMatch(debounced), enabled: debounced.length >= 8 })`.
+  React Query owns the cache; the local `useState<TrackerMatch | null>`
+  and `useState<string | null>(matchError)` are gone.
+- All `["topics"]` literal query keys in Topics.tsx replaced with
+  `QK.topics`.
+
+### Added (Phase 5h — Vitest + RTL + first frontend test)
+- **`frontend/vitest.config.ts`** (new) — Vitest config with
+  `environment: 'jsdom'`, the `@vitejs/plugin-react` plugin, and
+  the `@/*` path alias.
+- **`frontend/src/test/setup.ts`** (new) — wires
+  `@testing-library/jest-dom/vitest` matchers and runs RTL `cleanup()`
+  after each test.
+- **`frontend/src/components/shared/DeleteConfirm.test.tsx`** (new)
+  — 7 tests against the `DeleteConfirm` public API: idle render,
+  arming, confirm fires `onConfirm`, cancel returns to idle, default
+  4 s auto-disarm via `vi.useFakeTimers({ shouldAdvanceTime: true })`,
+  custom `timeoutSeconds`, `isPending` disables the button. Uses
+  `userEvent` (not `fireEvent`) for higher-fidelity interactions.
+- **`frontend/package.json`** — added `vitest@^2.1.8`,
+  `@testing-library/react@^16.1.0`,
+  `@testing-library/user-event@^14.5.2`,
+  `@testing-library/jest-dom@^6.6.3`, `jsdom@^25.0.1` to
+  devDependencies; added `test` and `test:watch` scripts. The
+  frontend previously had no test runner at all.
+
+### Fixed (Phase 5i — doc drift + transitional cleanup)
+- **`deploy/docker-compose.yml`** dev marker bumped from
+  `0.4.0-alpha` (which was both stale post-v1.0.0 AND inconsistent
+  with the previous commit's CHANGELOG/ROADMAP that already claimed
+  `1.1.0-dev`) to `1.1.0-dev` for backend / frontend / cfsolver.
+  Added the new `MARAUDER_SCHEDULER_MAX_EPISODES_PER_TICK` env var
+  to the backend service block.
+- **Scheduler `isNoPendingError` cleaned up** — the transitional
+  `strings.Contains` fallback that Phase 5b left in place during the
+  cross-track parallel refactor is now deleted, since LostFilm
+  (Phase 5c) wraps the typed sentinel everywhere it returns the
+  empty-pending error. The `strings` import is gone from
+  `scheduler.go`. Test case renamed from `legacy_substring` to
+  `untyped substring no longer matches` (asserting the inverse).
+- **`techdebt/2-3-scheduler-no-unit-tests.md`** removed — the new
+  `scheduler_test.go` (Phase 5b) closes this debt. The
+  `TestRunCheck_NonAtomicFallback` test still exists to cover the
+  graceful-degradation path on the `markEpisodeDownloader` optional
+  interface, in case a future repo implementation lacks the atomic
+  method.
+- **`CLAUDE.md`** (new, project-level) — structural snapshot of the
+  repo for future Claude sessions per
+  `~/.claude/rules/documentation-maintenance.md`. Catalogs the
+  backend package layout, the new `extra` package, the new shared
+  frontend hooks and queryKeys, the scheduler design (post-Phase 5b),
+  the per-episode tracker contract, and the conventional dev
+  commands.
+
 ### Added (Phase 4f — LostFilm real packed-int v_search flow + per-episode state)
 The previous draft of Phase 4f–h posted `c/s/e` form fields to
 `/v_search.php` and "picked the latest episode per Check", which was
