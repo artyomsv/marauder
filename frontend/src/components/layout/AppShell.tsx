@@ -1,11 +1,12 @@
 import { Link, NavLink, Outlet, useNavigate } from "react-router-dom";
-import { LogOut, Radio, LayoutDashboard, Server, Bell, Settings, Moon, Activity, Shield } from "lucide-react";
+import { LogOut, Radio, LayoutDashboard, Server, Bell, Settings, Moon, Sun, Activity, Shield } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { useAuthStore } from "@/lib/auth-store";
 import { api } from "@/lib/api";
 import { useT } from "@/i18n";
+import { usePrefs } from "@/lib/prefs";
 import { LocaleSwitcher } from "@/components/layout/LocaleSwitcher";
 
 type NavItem = {
@@ -31,6 +32,8 @@ export function AppShell() {
   const logout = useAuthStore((s) => s.logout);
   const navigate = useNavigate();
   const t = useT();
+  const theme = usePrefs((s) => s.theme);
+  const setTheme = usePrefs((s) => s.setTheme);
 
   const handleLogout = async () => {
     if (refreshToken) {
@@ -117,8 +120,15 @@ export function AppShell() {
           <div className="ml-auto flex items-center gap-3 text-xs text-muted-foreground">
             <LocaleSwitcher />
             <span className="size-1 rounded-full bg-border" />
-            <Moon className="size-4" />
-            <span>dark</span>
+            <button
+              type="button"
+              onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+              aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+              className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-muted/40 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              {theme === "dark" ? <Moon className="size-3.5" /> : <Sun className="size-3.5" />}
+              <span>{theme}</span>
+            </button>
             <span className="size-1 rounded-full bg-border" />
             <Link to="https://marauder.cc" className="hover:text-foreground">
               marauder.cc

@@ -31,7 +31,7 @@ export const SITE = {
 
   /** Software metadata for SoftwareApplication JSON-LD. */
   software: {
-    version: "1.0.0",
+    version: "0.4.0-alpha",
     license: "MIT",
     operatingSystem: "Linux, Docker, macOS, Windows",
     applicationCategory: "Utility",

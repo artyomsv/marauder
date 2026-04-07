@@ -3,9 +3,9 @@
 /* --------------------------------------------------------------------
    Marauder marketing site — global tokens
    --------------------------------------------------------------------
-   Same palette as the React app: deep violet primary, electric cyan
-   accent, slate base. Dark-first; no light-mode toggle on the site
-   itself (the OS preference would conflict with the launch identity).
+   Same palette as the React app: blue primary, amber accent, slate
+   base. Dark-first; no light-mode toggle on the site itself (the OS
+   preference would conflict with the launch identity).
 */
 
 @layer base {
@@ -16,10 +16,10 @@
     --muted: 240 6% 12%;
     --muted-foreground: 240 5% 64.9%;
 
-    --primary: 265 90% 68%;
+    --primary: 217 91% 65%;
     --primary-foreground: 240 10% 4%;
 
-    --accent: 192 91% 55%;
+    --accent: 38 95% 60%;
     --accent-foreground: 240 10% 4%;
 
     --success: 160 84% 44%;
@@ -27,7 +27,7 @@
     --destructive: 0 75% 60%;
 
     --border: 240 6% 16%;
-    --ring: 265 90% 68%;
+    --ring: 217 91% 65%;
 
     --radius: 0.75rem;
 
@@ -51,7 +51,7 @@
        page; this is closer to a Linear/Vercel feel. */
     background:
       radial-gradient(ellipse 60% 40% at 50% 0%,
-        hsl(265 60% 14% / 0.5),
+        hsl(217 60% 14% / 0.5),
         transparent 70%),
       hsl(var(--background));
     min-height: 100vh;
@@ -171,5 +171,15 @@
     border-color: hsl(var(--warning) / 0.4);
     background: hsl(var(--warning) / 0.12);
     color: hsl(var(--warning));
+  }
+
+  /* Sitewide alpha disclaimer banner. Sits below the sticky header
+     on every page. Warning-tinted but quiet enough to coexist with
+     the rest of the chrome. */
+  .alpha-banner {
+    border-bottom: 1px solid hsl(var(--warning) / 0.25);
+    background: linear-gradient(180deg,
+      hsl(var(--warning) / 0.12),
+      hsl(var(--warning) / 0.06));
   }
 }

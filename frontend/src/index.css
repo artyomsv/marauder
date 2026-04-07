@@ -3,8 +3,9 @@
 /* --------------------------------------------------------------------
    Marauder design tokens
    --------------------------------------------------------------------
-   Dark-first theme with violet primary and electric-cyan highlights.
-   We use HSL components so opacity modifiers work out of the box:
+   Dark-first theme with blue primary and amber highlights on a slate
+   neutral. We use HSL components so opacity modifiers work out of the
+   box:
      bg-primary/60  ->  hsl(var(--primary) / 0.6)
 */
 
@@ -19,7 +20,7 @@
     --popover: 0 0% 100%;
     --popover-foreground: 240 10% 4%;
 
-    --primary: 265 85% 62%;
+    --primary: 217 91% 60%;
     --primary-foreground: 0 0% 100%;
 
     --secondary: 240 4.8% 95.9%;
@@ -28,7 +29,7 @@
     --muted: 240 4.8% 95.9%;
     --muted-foreground: 240 3.8% 46.1%;
 
-    --accent: 192 91% 55%;
+    --accent: 38 92% 50%;
     --accent-foreground: 240 5.9% 10%;
 
     --destructive: 0 84% 60%;
@@ -42,7 +43,7 @@
 
     --border: 240 5.9% 90%;
     --input: 240 5.9% 90%;
-    --ring: 265 85% 62%;
+    --ring: 217 91% 60%;
 
     --radius: 0.75rem;
   }
@@ -57,7 +58,7 @@
     --popover: 240 12% 8%;
     --popover-foreground: 0 0% 98%;
 
-    --primary: 265 90% 68%;
+    --primary: 217 91% 65%;
     --primary-foreground: 240 10% 4%;
 
     --secondary: 240 6% 12%;
@@ -66,7 +67,7 @@
     --muted: 240 6% 12%;
     --muted-foreground: 240 5% 64.9%;
 
-    --accent: 192 91% 55%;
+    --accent: 38 95% 60%;
     --accent-foreground: 240 10% 4%;
 
     --destructive: 0 75% 60%;
@@ -80,7 +81,7 @@
 
     --border: 240 6% 16%;
     --input: 240 6% 16%;
-    --ring: 265 90% 68%;
+    --ring: 217 91% 65%;
   }
 
   html, body, #root { height: 100%; }
@@ -88,12 +89,12 @@
   body {
     background: radial-gradient(
       ellipse 90% 70% at 15% 0%,
-      hsl(265 90% 22% / 0.35),
+      hsl(217 91% 22% / 0.35),
       transparent 60%
     ),
     radial-gradient(
       ellipse 70% 60% at 85% 100%,
-      hsl(192 91% 35% / 0.20),
+      hsl(38 92% 35% / 0.18),
       transparent 60%
     ),
     hsl(var(--background));
@@ -160,6 +161,6 @@
     border: 1px solid hsl(var(--border) / 0.8);
     box-shadow:
       0 1px 0 hsl(0 0% 100% / 0.05) inset,
-      0 30px 80px -30px hsl(265 85% 20% / 0.4);
+      0 30px 80px -30px hsl(220 50% 5% / 0.45);
   }
 }

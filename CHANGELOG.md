@@ -7,6 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (Phase 1 — visual & interaction polish across app + site)
+- **Brand palette switched from violet/cyan to blue/amber/slate.** Only
+  CSS tokens were touched; every component reads
+  `hsl(var(--primary))` so no JSX changes were needed.
+  - `frontend/src/index.css`: `--primary` 265→217 (Tailwind blue),
+    `--accent` 192→38 (Tailwind amber), `--ring` mirrors primary,
+    body radial gradients + glass-card shadow rebalanced.
+  - `site/src/styles/global.css`: same tokens swapped to keep the
+    marketing site brand-consistent with the app.
+- **Dark/light mode toggle now actually works.** Previously
+  `frontend/index.html` hardcoded `class="dark"` on `<html>` and the
+  header showed a static Moon icon labelled "dark" with no handler.
+  - Added `theme: "light" | "dark"` + `setTheme` to the existing
+    `usePrefs` Zustand store at `frontend/src/lib/prefs.ts`. The
+    setter toggles `.dark` on `document.documentElement` and
+    `onRehydrateStorage` re-applies the persisted theme on store
+    rehydrate.
+  - Removed the hardcoded `class="dark"` from `frontend/index.html`
+    and added an inline boot script that reads
+    `localStorage["marauder-prefs"]` synchronously and applies the
+    `.dark` class before React mounts — no FOUC flash.
+  - `AppShell.tsx` header now renders a real Sun/Moon toggle button
+    next to the locale switcher.
+- **Language switcher dropdown rewritten** at
+  `frontend/src/components/layout/LocaleSwitcher.tsx`. The bare native
+  `<select>` (whose `<option>` styling is browser-controlled and
+  ignores Tailwind) is replaced with a small custom popover: trigger
+  button + click-outside handler + Escape-to-close + glass-card panel
+  + Check icon on the active locale. ~85 LOC, no new dependency.
+- **Sitewide alpha disclaimer banner on marauder.cc.** Inserted a
+  warning-tinted banner immediately after `<Header />` in
+  `site/src/layouts/Page.astro` so every page shows it. New
+  `.alpha-banner` rule in `site/src/styles/global.css`. Banner text:
+  *"Alpha release. Marauder is in early alpha. Most plugins are
+  structurally complete but have not been validated against live
+  services yet — expect rough edges. See plugin status →"*
+- **Version label dropped from `1.0.0` to `0.4.0-alpha`** in
+  `site/src/data/seo.ts` (the home hero pill picks this up
+  automatically). Hero pill recoloured from green-pulse to
+  warning-pulse to match the alpha framing. README badges updated
+  from `violet.svg` to `blue.svg`. PRD §9.1 design language paragraph
+  rewritten to describe the new palette.
+
 ### Changed (marauder.cc visual & content polish)
 - **Replaced emoji icons with inline lucide SVG icons** via a new
   `site/src/components/Icon.astro` component. Six feature-card icons

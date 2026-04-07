@@ -666,9 +666,9 @@ All errors follow **RFC 7807** (`application/problem+json`):
 ### 9.1 Design language
 
 - **Theme:** dark-first, with a polished light mode available.
-- **Palette:** neutral slate base, **deep violet** as the primary accent
-  (`hsl(265 85% 62%)`), electric cyan as the secondary accent for "success /
-  updated" highlights, and warm amber for warnings.
+- **Palette:** neutral slate base, **blue** as the primary accent
+  (`hsl(217 91% 60%)`), warm amber as the secondary accent for "highlight /
+  updated" callouts, and red for destructive actions.
 - **Typography:** Inter for UI, JetBrains Mono for hashes, URLs, and technical
   fields.
 - **Shape:** rounded-xl (12 px) for cards and inputs; rounded-2xl (16 px) for

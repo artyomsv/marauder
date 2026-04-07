@@ -34,6 +34,17 @@ const sitewideSchemas = [organizationSchema(), websiteSchema(), ...schemas];
       Skip to content
     </a>
     <Header />
+    <div class="alpha-banner" role="status" aria-label="Alpha release notice">
+      <div class="mx-auto flex max-w-6xl items-center justify-center gap-3 px-6 py-2.5 text-center text-xs sm:text-sm">
+        <span class="inline-flex size-5 shrink-0 items-center justify-center rounded-full border border-warning/40 bg-warning/15 font-bold text-warning">!</span>
+        <span class="text-foreground/90">
+          <strong class="font-semibold text-warning">Alpha release.</strong>
+          Marauder is in early alpha. Most plugins are structurally complete but
+          have not been validated against live services yet — expect rough edges.
+          <a href="/trackers" class="underline decoration-warning/50 underline-offset-4 hover:decoration-warning">See plugin status →</a>
+        </span>
+      </div>
+    </div>
     <main id="main" class="flex-1">
       <slot />
     </main>
