@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (Phase 3 — edit torrent clients + per-plugin URL guidance)
+- **`GET /api/v1/clients/{id}`** in
+  `backend/internal/api/handlers/clients.go` — returns the client row
+  with the **decrypted** config blob, scoped to the calling user.
+  Audit-logged on every read. Used by the frontend Edit Client form
+  so the user can see (and rotate) what they previously saved.
+- **`PUT /api/v1/clients/{id}`** — overwrites the mutable fields
+  (`display_name`, `is_default`, `config`) on an existing client.
+  Calls `plugin.Test()` before persistence, so a bad config never
+  overwrites a good one. Plugin name (`client_name`) cannot be
+  swapped via PUT — delete and re-add to switch from Transmission to
+  qBittorrent. Audit-logged.
+- **`Clients.Update(ctx, id, userID, displayName, isDefault, configEnc, configNonce)`**
+  in `backend/internal/db/repo/clients.go`.
+- **Frontend Edit button** on every client card in
+  `frontend/src/pages/Clients.tsx`. Opens a new `EditClientCard`
+  component that fetches the decrypted config via the new GET, hydrates
+  every field (URL, username, password), and PUTs the result on save.
+- **Inline help text** under every URL field — `Field` type gains an
+  optional `helpText`. Transmission's URL field now reads
+  *"Use the full RPC URL ending in /transmission/rpc. Default
+  Transmission Web UI port is 9091; some packages (e.g.
+  transmission-daemon) use 8083 or 9091. Example:
+  http://192.168.2.65:8083/transmission/rpc"*. Same treatment for
+  qBittorrent, Deluge, µTorrent, and the download-folder plugin.
+- **`docs/clients.md`** — new per-client setup guide. One section per
+  supported client showing the exact URL format, default port,
+  required fields, and the most common gotchas. The Add Client form
+  now links to this doc inline.
+- **`api.put<T>(path, body)`** added to `frontend/src/lib/api.ts` —
+  the wrapper previously only had `get / post / patch / del`.
+
 ### Added (Phase 2 — real Settings page + change-password endpoint)
 - **`frontend/src/pages/Settings.tsx`** replaces the v0.4 placeholder
   with a real Settings page. Three sections, single column:

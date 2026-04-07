@@ -1,7 +1,7 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { motion, AnimatePresence } from "framer-motion";
-import { Plus, Trash2, Loader2, CheckCircle2, Server, AlertCircle } from "lucide-react";
+import { Plus, Trash2, Pencil, Loader2, CheckCircle2, Server, AlertCircle } from "lucide-react";
 
 import { api, type SystemInfo } from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -15,6 +15,7 @@ type ClientView = {
   client_name: string;
   display_name: string;
   is_default: boolean;
+  config?: Record<string, unknown>;
   created_at: string;
   updated_at: string;
 };
@@ -32,6 +33,7 @@ export function ClientsPage() {
     queryFn: () => api.get<SystemInfo>("/system/info", { auth: false }),
   });
   const [showAdd, setShowAdd] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
   const clients = clientsData?.clients ?? [];
   const availablePlugins = systemInfo?.clients ?? [];
 
@@ -69,6 +71,17 @@ export function ClientsPage() {
             onClose={() => setShowAdd(false)}
             onCreated={() => {
               setShowAdd(false);
+              qc.invalidateQueries({ queryKey: ["clients"] });
+            }}
+          />
+        )}
+        {editingId && (
+          <EditClientCard
+            key={editingId}
+            id={editingId}
+            onClose={() => setEditingId(null)}
+            onSaved={() => {
+              setEditingId(null);
               qc.invalidateQueries({ queryKey: ["clients"] });
             }}
           />
@@ -124,15 +137,25 @@ export function ClientsPage() {
                         )}
                       </div>
                     </div>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="text-destructive opacity-0 group-hover:opacity-100"
-                      onClick={() => del.mutate(c.id)}
-                      aria-label="Delete client"
-                    >
-                      <Trash2 className="size-4" />
-                    </Button>
+                    <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => setEditingId(c.id)}
+                        aria-label="Edit client"
+                      >
+                        <Pencil className="size-4" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="text-destructive"
+                        onClick={() => del.mutate(c.id)}
+                        aria-label="Delete client"
+                      >
+                        <Trash2 className="size-4" />
+                      </Button>
+                    </div>
                   </div>
                   <div className="mt-4 flex items-center gap-2">
                     <Button
@@ -264,9 +287,24 @@ function AddClientCard({
                   }
                   placeholder={f.placeholder}
                 />
+                {f.helpText && (
+                  <p className="text-xs text-muted-foreground">{f.helpText}</p>
+                )}
               </div>
             ))}
           </div>
+
+          <p className="text-xs text-muted-foreground">
+            Need help with the URL format?{" "}
+            <a
+              href="https://github.com/artyomsv/marauder/blob/main/docs/clients.md"
+              target="_blank"
+              rel="noreferrer"
+              className="text-primary underline-offset-4 hover:underline"
+            >
+              Read the client setup guide →
+            </a>
+          </p>
 
           <label className="inline-flex items-center gap-2 text-sm">
             <input
@@ -303,36 +341,221 @@ type Field = {
   label: string;
   placeholder?: string;
   password?: boolean;
+  /** Inline help text rendered below the input. Markdown is not supported;
+   *  use plain strings. */
+  helpText?: string;
 };
 
 // Hard-coded field hints. The backend ConfigSchema is the source of truth;
 // this is just a UX shortcut so the form renders without a JSON-Schema
-// renderer for v0.1. v0.2 will derive these from the API response.
+// renderer. v0.5 will switch to schema-driven rendering.
 function fieldsForPlugin(name: string): Field[] {
   switch (name) {
     case "qbittorrent":
       return [
-        { key: "url", label: "URL", placeholder: "http://qbittorrent:6611" },
+        {
+          key: "url",
+          label: "URL",
+          placeholder: "http://qbittorrent:8080",
+          helpText:
+            "Host and port of the qBittorrent Web UI — no path. Default port is 8080. Example: http://192.168.1.10:8080",
+        },
         { key: "username", label: "Username", placeholder: "admin" },
         { key: "password", label: "Password", password: true },
         { key: "category", label: "Category (optional)" },
       ];
     case "downloadfolder":
       return [
-        { key: "path", label: "Folder path", placeholder: "/downloads" },
+        {
+          key: "path",
+          label: "Folder path",
+          placeholder: "/downloads",
+          helpText:
+            "Filesystem path the backend can write to. SABnzbd / NZBGet watch folders work here too.",
+        },
       ];
     case "transmission":
       return [
-        { key: "url", label: "RPC URL", placeholder: "http://transmission:9091/transmission/rpc" },
+        {
+          key: "url",
+          label: "RPC URL",
+          placeholder: "http://192.168.1.10:9091/transmission/rpc",
+          helpText:
+            "Use the full RPC URL ending in /transmission/rpc. Default Transmission Web UI port is 9091; some packages (e.g. transmission-daemon) use 8083 or 9091. Example: http://192.168.2.65:8083/transmission/rpc",
+        },
         { key: "username", label: "Username (optional)" },
         { key: "password", label: "Password (optional)", password: true },
       ];
     case "deluge":
       return [
-        { key: "url", label: "Web URL", placeholder: "http://deluge:8112" },
+        {
+          key: "url",
+          label: "Web URL",
+          placeholder: "http://deluge:8112",
+          helpText:
+            "Host and port of the Deluge Web UI. Default port is 8112. The plugin appends /json automatically.",
+        },
+        { key: "password", label: "Password", password: true },
+      ];
+    case "utorrent":
+      return [
+        {
+          key: "url",
+          label: "Web UI URL",
+          placeholder: "http://192.168.1.10:8080/gui/",
+          helpText:
+            "Full µTorrent Web UI URL ending in /gui/. Default port is 8080.",
+        },
+        { key: "username", label: "Username", placeholder: "admin" },
         { key: "password", label: "Password", password: true },
       ];
     default:
       return [];
   }
+}
+
+// --- EditClientCard ----------------------------------------------------
+
+function EditClientCard({
+  id,
+  onClose,
+  onSaved,
+}: {
+  id: string;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const { data, isLoading, isError } = useQuery({
+    queryKey: ["client", id],
+    queryFn: () => api.get<ClientView>(`/clients/${id}`),
+  });
+
+  const [displayName, setDisplayName] = useState("");
+  const [isDefault, setIsDefault] = useState(false);
+  const [config, setConfig] = useState<Record<string, string>>({});
+  const [error, setError] = useState<string | null>(null);
+
+  // Hydrate form once the GET completes.
+  useEffect(() => {
+    if (!data) return;
+    setDisplayName(data.display_name);
+    setIsDefault(data.is_default);
+    const cfg = (data.config ?? {}) as Record<string, unknown>;
+    const flat: Record<string, string> = {};
+    for (const [k, v] of Object.entries(cfg)) {
+      flat[k] = typeof v === "string" ? v : String(v ?? "");
+    }
+    setConfig(flat);
+  }, [data]);
+
+  const save = useMutation({
+    mutationFn: () =>
+      api.put<ClientView>(`/clients/${id}`, {
+        client_name: data?.client_name,
+        display_name: displayName,
+        is_default: isDefault,
+        config,
+      }),
+    onSuccess: () => onSaved(),
+    onError: (err) => setError(err instanceof Error ? err.message : "Failed"),
+  });
+
+  const fields = data ? fieldsForPlugin(data.client_name) : [];
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: -8, height: 0 }}
+      animate={{ opacity: 1, y: 0, height: "auto" }}
+      exit={{ opacity: 0, y: -8, height: 0 }}
+      transition={{ duration: 0.2 }}
+    >
+      <Card className="overflow-hidden">
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            setError(null);
+            save.mutate();
+          }}
+          className="space-y-4 p-6"
+        >
+          <h3 className="text-base font-semibold">
+            Edit client {data && <span className="font-mono text-xs text-muted-foreground">({data.client_name})</span>}
+          </h3>
+
+          {isLoading && (
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <Loader2 className="size-4 animate-spin" /> Loading current config...
+            </div>
+          )}
+
+          {isError && (
+            <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+              Failed to load client config.
+            </div>
+          )}
+
+          {data && (
+            <>
+              <div className="grid gap-4 sm:grid-cols-1">
+                <div className="space-y-1.5">
+                  <Label htmlFor="edit-display">Display name</Label>
+                  <Input
+                    id="edit-display"
+                    value={displayName}
+                    onChange={(e) => setDisplayName(e.target.value)}
+                    required
+                  />
+                </div>
+              </div>
+
+              <div className="grid gap-4 sm:grid-cols-2">
+                {fields.map((f) => (
+                  <div key={f.key} className="space-y-1.5">
+                    <Label htmlFor={`edit-${f.key}`}>{f.label}</Label>
+                    <Input
+                      id={`edit-${f.key}`}
+                      type={f.password ? "password" : "text"}
+                      value={config[f.key] ?? ""}
+                      onChange={(e) =>
+                        setConfig((c) => ({ ...c, [f.key]: e.target.value }))
+                      }
+                      placeholder={f.placeholder}
+                    />
+                    {f.helpText && (
+                      <p className="text-xs text-muted-foreground">{f.helpText}</p>
+                    )}
+                  </div>
+                ))}
+              </div>
+
+              <label className="inline-flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={isDefault}
+                  onChange={(e) => setIsDefault(e.target.checked)}
+                />
+                Use as default client for new topics
+              </label>
+            </>
+          )}
+
+          {error && (
+            <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+              {error}
+            </div>
+          )}
+
+          <div className="flex justify-end gap-2">
+            <Button type="button" variant="outline" onClick={onClose}>
+              Cancel
+            </Button>
+            <Button type="submit" disabled={save.isPending || !data}>
+              {save.isPending && <Loader2 className="size-4 animate-spin" />}
+              Test &amp; save
+            </Button>
+          </div>
+        </form>
+      </Card>
+    </motion.div>
+  );
 }

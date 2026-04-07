@@ -72,6 +72,28 @@ FROM clients WHERE user_id = $1 ORDER BY display_name ASC`
 	return out, rows.Err()
 }
 
+// Update overwrites the mutable fields of an existing client. Only
+// rows owned by userID can be updated.
+func (r *Clients) Update(ctx context.Context, id uuid.UUID, userID uuid.UUID,
+	displayName string, isDefault bool, configEnc, configNonce []byte) error {
+	const q = `
+UPDATE clients
+SET display_name = $3,
+    is_default   = $4,
+    config_enc   = $5,
+    config_nonce = $6,
+    updated_at   = now()
+WHERE id = $1 AND user_id = $2`
+	ct, err := r.pool.Exec(ctx, q, id, userID, displayName, isDefault, configEnc, configNonce)
+	if err != nil {
+		return err
+	}
+	if ct.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 // Delete removes a client by id.
 func (r *Clients) Delete(ctx context.Context, id uuid.UUID, userID uuid.UUID) error {
 	ct, err := r.pool.Exec(ctx, `DELETE FROM clients WHERE id = $1 AND user_id = $2`, id, userID)

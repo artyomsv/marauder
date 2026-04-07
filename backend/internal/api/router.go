@@ -86,6 +86,7 @@ func NewRouter(d Deps) http.Handler {
 	clientsH := &handlers.Clients{
 		Clients: d.Clients,
 		Master:  d.Master,
+		Audit:   d.AuditLog,
 		BaseURL: d.Cfg.PublicBaseURL,
 	}
 	notifiersH := &handlers.Notifiers{
@@ -123,6 +124,8 @@ func NewRouter(d Deps) http.Handler {
 
 			r.Get("/clients", clientsH.List)
 			r.Post("/clients", clientsH.Create)
+			r.Get("/clients/{id}", clientsH.Get)
+			r.Put("/clients/{id}", clientsH.Update)
 			r.Delete("/clients/{id}", clientsH.Delete)
 			r.Post("/clients/{id}/test", clientsH.Test)
 
