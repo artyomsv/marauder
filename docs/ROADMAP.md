@@ -171,6 +171,43 @@ has run it for a week without reporting a release-blocker. **Released
 - [x] **GitHub Actions CI/CD** — five workflows + Dependabot config +
       PR/Issue templates + golangci-lint config. Per-workflow doc at
       [`docs/ci.md`](ci.md).
+- [x] **Real Settings page** — replaces the v0.4 placeholder. Theme,
+      language, density, change password, sign out, build info.
+      `POST /api/v1/auth/me/password` for local-account password
+      rotation.
+- [x] **Edit torrent client config** — `GET/PUT /api/v1/clients/{id}`
+      with audit-logged config decrypt. Inline help text per plugin
+      (Transmission `/transmission/rpc` gotcha, qBit Web UI port,
+      etc.) plus a new [`docs/clients.md`](clients.md) setup guide.
+- [x] **Tracker capability discovery** — new
+      `GET /api/v1/trackers/match` returns the optional capabilities
+      of the matching plugin (qualities, episode filter, credentials
+      requirement, Cloudflare hint). The AddTopic form uses it to
+      render quality dropdowns and start-from-episode inputs only
+      where the plugin supports them.
+- [x] **`WithEpisodeFilter` capability** — new optional interface in
+      the registry. Plugins implementing it honour
+      `topic.Extra["start_season"]` / `topic.Extra["start_episode"]`
+      in `Check`/`Download`. LostFilm is the first consumer.
+- [x] **Tracker credentials surface end-to-end** — backend repo +
+      handler + scheduler wiring + frontend `/accounts` page. The
+      `tracker_credentials` table existed in the schema since v0.1
+      but was unreachable until this release. Now users can add
+      LostFilm / RuTracker / Kinozal accounts and the scheduler
+      passes the decrypted credential into every `Check`/`Download`.
+- [x] **LostFilm redirector flow live-implemented** — `lostfilm.go`
+      `Check` parses every `data-code="<show>:<season>:<episode>"`
+      marker; `Download` POSTs to `/v_search.php`, follows the
+      redirector chain through `retre.org` / `tracktor.in`, picks
+      the matching-quality `.torrent` and submits it. New
+      `TestRedirectorFlow` exercises the full chain end-to-end via
+      httptest. Live-validation against a real LostFilm account
+      happens the first time a contributor adds a credential and
+      runs a topic check.
+- [x] **Per-tracker setup guide** — new
+      [`docs/trackers.md`](trackers.md) covering required accounts,
+      quality options, episode filter usage, and the most common
+      selector-drift failure modes (with the regex line to update).
 
 ## Post-1.0 — stretch ideas (not committed)
 

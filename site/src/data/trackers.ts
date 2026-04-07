@@ -67,7 +67,7 @@ export const trackers: Tracker[] = [
   {
     slug: "lostfilm",
     name: "LostFilm.tv",
-    description: "Russian-dubbed TV series with quality selection.",
+    description: "Russian-dubbed TV series with quality selection (SD / 1080p_mp4 / 1080p) and start-from-episode filter. Walks the full v_search redirector chain.",
     category: "forum-cis",
     region: "RU",
     auth: "account",

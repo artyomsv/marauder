@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (Phase 4f–h — LostFilm real redirector flow + episode filter + docs)
+- **`lostfilm.go` rewritten** to walk the real LostFilm v_search
+  redirector chain. The plugin now:
+  - Parses every `data-code="<show>:<season>:<episode>"` marker on
+    the series page (the legacy `data-episode` regex is preserved as
+    a fallback for the test fixture).
+  - In `Check`, derives the hash from the highest `(season, episode)`
+    tuple (`s02e02`-style) and stores the full episode list in
+    `check.Extra["episodes"]` for `Download` to consume without
+    refetching.
+  - In `Download`, picks the latest episode (or the latest one above
+    the user's `start_season` / `start_episode` floor), POSTs to
+    `/v_search.php` with `c=<show>&s=<season>&e=<episode>`, captures
+    the redirect Location (or meta-refresh) — relative URLs are
+    resolved against the v_search base — fetches the destination
+    page, parses the per-quality `.torrent` links, picks the one
+    matching `topic.Extra["quality"]` (or `DefaultQuality()`), and
+    GETs the `.torrent` body.
+  - Implements `WithEpisodeFilter` and uses `topic.Extra["start_season"]`
+    / `topic.Extra["start_episode"]` to skip every episode older than
+    the floor. LostFilm is the first plugin to consume this capability.
+- **Selectors as named constants** at the top of `lostfilm.go`
+  (`dataCodeRe`, `qualityLinkRe`, `metaRefreshRe`, etc.). Future drift
+  in the LostFilm HTML is a one-line edit.
+- **`TestRedirectorFlow`** in `lostfilm_e2e_test.go` exercises the
+  full chain via `httptest.Server`: Login → Parse → Check (parses 3
+  `data-code` markers, identifies `s02e02` as latest) → Download
+  (POSTs `c=370&s=2&e=2`, follows the relative redirect, parses the
+  3-button quality page, picks `1080p`, GETs the bencode bytes).
+  Episode filter is verified with `start_season=2 start_episode=5`
+  (no match) and `start_season=2 start_episode=1` (latest s02e02).
+  All 14 existing tracker E2E tests still pass.
+- **`docs/trackers.md`** (new) — per-tracker setup guide. Covers
+  every plugin's auth requirement, quality options, episode filter
+  support, and the most common selector-drift failure modes (with
+  the exact regex line to update for each).
+- **`docs/ROADMAP.md`** Post-1.0 section updated with all of Phase 1–4
+  ticked off as landed.
+- **`site/src/data/trackers.ts`** LostFilm description updated to
+  mention quality selection and the v_search redirector flow.
+
 ### Added (Phase 4e — tracker credentials surface end-to-end)
 The `tracker_credentials` table existed in the schema since v0.1
 but had no REST handler and no frontend UI — it was unreachable.
