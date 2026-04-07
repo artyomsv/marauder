@@ -1,11 +1,11 @@
-import { Link, NavLink, Outlet, useNavigate } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
+import { Link, NavLink, Outlet } from "react-router-dom";
 import { LogOut, Radio, LayoutDashboard, Server, Bell, Settings, KeyRound, Moon, Sun, Activity, Shield } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { useAuthStore } from "@/lib/auth-store";
-import { api, type SystemInfo } from "@/lib/api";
+import { useSystemInfo } from "@/lib/hooks/useSystemInfo";
+import { useLogout } from "@/lib/hooks/useLogout";
 import { useT } from "@/i18n";
 import { usePrefs } from "@/lib/prefs";
 import { LocaleSwitcher } from "@/components/layout/LocaleSwitcher";
@@ -30,30 +30,12 @@ const navItems: NavItem[] = [
 
 export function AppShell() {
   const user = useAuthStore((s) => s.user);
-  const refreshToken = useAuthStore((s) => s.refreshToken);
-  const logout = useAuthStore((s) => s.logout);
-  const navigate = useNavigate();
   const t = useT();
   const theme = usePrefs((s) => s.theme);
   const setTheme = usePrefs((s) => s.setTheme);
-  const { data: systemInfo } = useQuery({
-    queryKey: ["system-info"],
-    queryFn: () => api.get<SystemInfo>("/system/info", { auth: false }),
-    staleTime: 5 * 60_000,
-  });
+  const { data: systemInfo } = useSystemInfo();
   const version = systemInfo?.version?.version ?? "";
-
-  const handleLogout = async () => {
-    if (refreshToken) {
-      try {
-        await api.post("/auth/logout", { refresh_token: refreshToken });
-      } catch {
-        // ignore — we log out locally either way
-      }
-    }
-    logout();
-    navigate("/login");
-  };
+  const handleLogout = useLogout();
 
   return (
     <div className="flex min-h-screen">

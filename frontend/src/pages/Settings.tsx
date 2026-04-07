@@ -1,5 +1,4 @@
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
 import { motion } from "framer-motion";
 import { Check, Moon, Sun } from "lucide-react";
 
@@ -8,7 +7,9 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useAuthStore } from "@/lib/auth-store";
-import { api, ApiError, type SystemInfo } from "@/lib/api";
+import { api, ApiError } from "@/lib/api";
+import { useSystemInfo } from "@/lib/hooks/useSystemInfo";
+import { useLogout } from "@/lib/hooks/useLogout";
 import { useT, useI18n, LOCALES, type Locale } from "@/i18n";
 import { usePrefs, type Density, type Theme } from "@/lib/prefs";
 import { cn } from "@/lib/utils";
@@ -108,8 +109,7 @@ function AppearanceCard() {
 
 function AccountCard({ username, email }: { username: string; email: string }) {
   const t = useT();
-  const refreshToken = useAuthStore((s) => s.refreshToken);
-  const logout = useAuthStore((s) => s.logout);
+  const handleLogout = useLogout();
   const [current, setCurrent] = useState("");
   const [next, setNext] = useState("");
   const [confirm, setConfirm] = useState("");
@@ -140,18 +140,6 @@ function AccountCard({ username, email }: { username: string; email: string }) {
     } finally {
       setSubmitting(false);
     }
-  };
-
-  const handleLogout = async () => {
-    if (refreshToken) {
-      try {
-        await api.post("/auth/logout", { refresh_token: refreshToken });
-      } catch {
-        // ignore — local logout proceeds either way
-      }
-    }
-    logout();
-    window.location.href = "/login";
   };
 
   return (
@@ -245,11 +233,7 @@ function AccountCard({ username, email }: { username: string; email: string }) {
 
 function AboutCard() {
   const t = useT();
-  const { data: systemInfo } = useQuery({
-    queryKey: ["system-info"],
-    queryFn: () => api.get<SystemInfo>("/system/info", { auth: false }),
-    staleTime: 5 * 60_000,
-  });
+  const { data: systemInfo } = useSystemInfo();
   const version = systemInfo?.version?.version ?? "—";
   const commit = systemInfo?.version?.commit ?? "";
   const buildDate = systemInfo?.version?.buildDate ?? "";
