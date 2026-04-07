@@ -17,18 +17,20 @@ import (
 	"github.com/artyomsv/marauder/backend/internal/config"
 	"github.com/artyomsv/marauder/backend/internal/crypto"
 	"github.com/artyomsv/marauder/backend/internal/db/repo"
+	"github.com/artyomsv/marauder/backend/internal/scheduler"
 )
 
 // Deps is the bag of dependencies handed to NewRouter.
 type Deps struct {
-	Cfg     *config.Config
-	Log     zerolog.Logger
-	Pool    *pgxpool.Pool
-	Manager *auth.Manager
-	Master  *crypto.MasterKey
-	Users   *repo.Users
-	Topics  *repo.Topics
-	Clients *repo.Clients
+	Cfg       *config.Config
+	Log       zerolog.Logger
+	Pool      *pgxpool.Pool
+	Manager   *auth.Manager
+	Master    *crypto.MasterKey
+	Users     *repo.Users
+	Topics    *repo.Topics
+	Clients   *repo.Clients
+	Scheduler *scheduler.Scheduler
 }
 
 // NewRouter builds the HTTP handler tree.
@@ -79,7 +81,7 @@ func NewRouter(d Deps) http.Handler {
 		Master:  d.Master,
 		BaseURL: d.Cfg.PublicBaseURL,
 	}
-	sysH := &handlers.System{BaseURL: d.Cfg.PublicBaseURL}
+	sysH := &handlers.System{BaseURL: d.Cfg.PublicBaseURL, Scheduler: d.Scheduler}
 
 	r.Route("/api/v1", func(r chi.Router) {
 		// Public auth endpoints
@@ -95,6 +97,7 @@ func NewRouter(d Deps) http.Handler {
 			r.Use(middleware.RequireAuth(d.Manager, d.Cfg.PublicBaseURL))
 
 			r.Get("/auth/me", authH.Me)
+			r.Get("/system/status", sysH.Status)
 
 			r.Get("/topics", topicsH.List)
 			r.Post("/topics", topicsH.Create)

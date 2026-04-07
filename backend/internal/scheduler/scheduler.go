@@ -31,8 +31,18 @@ import (
 	"github.com/artyomsv/marauder/backend/internal/crypto"
 	"github.com/artyomsv/marauder/backend/internal/db/repo"
 	"github.com/artyomsv/marauder/backend/internal/domain"
+	"github.com/artyomsv/marauder/backend/internal/metrics"
 	"github.com/artyomsv/marauder/backend/internal/plugins/registry"
 )
+
+// RunSummary captures one tick's outcome for the system status endpoint.
+type RunSummary struct {
+	StartedAt time.Time `json:"started_at"`
+	EndedAt   time.Time `json:"ended_at"`
+	Checked   int       `json:"checked"`
+	Updated   int       `json:"updated"`
+	Errors    int       `json:"errors"`
+}
 
 // Scheduler is the running scheduler service.
 type Scheduler struct {
@@ -46,6 +56,14 @@ type Scheduler struct {
 	wg    sync.WaitGroup
 	stop  chan struct{}
 	ready chan struct{}
+
+	// Lightweight in-memory ring buffer of recent run summaries.
+	historyMu sync.Mutex
+	history   []RunSummary
+
+	// Live counters for the in-flight run.
+	currentMu sync.Mutex
+	current   *RunSummary
 }
 
 // New constructs a scheduler.
@@ -106,8 +124,20 @@ func (s *Scheduler) dispatchOnce(ctx context.Context) {
 	due, err := s.topics.DueForCheck(ctx, limit)
 	if err != nil {
 		s.log.Error().Err(err).Msg("DueForCheck failed")
+		metrics.SchedulerRunsTotal.WithLabelValues("error").Inc()
 		return
 	}
+
+	if len(due) == 0 {
+		metrics.SchedulerRunsTotal.WithLabelValues("ok").Inc()
+		return
+	}
+
+	// Open a new run summary that workers will increment.
+	s.beginRun()
+	defer s.endRun()
+	metrics.SchedulerRunsTotal.WithLabelValues("ok").Inc()
+
 	for _, t := range due {
 		select {
 		case s.jobs <- t:
@@ -117,6 +147,62 @@ func (s *Scheduler) dispatchOnce(ctx context.Context) {
 			s.log.Warn().Msg("job queue full; will retry next tick")
 			return
 		}
+	}
+}
+
+func (s *Scheduler) beginRun() {
+	s.currentMu.Lock()
+	defer s.currentMu.Unlock()
+	now := time.Now().UTC()
+	s.current = &RunSummary{StartedAt: now}
+}
+
+func (s *Scheduler) endRun() {
+	s.currentMu.Lock()
+	if s.current == nil {
+		s.currentMu.Unlock()
+		return
+	}
+	s.current.EndedAt = time.Now().UTC()
+	finished := *s.current
+	s.current = nil
+	s.currentMu.Unlock()
+
+	s.historyMu.Lock()
+	defer s.historyMu.Unlock()
+	s.history = append(s.history, finished)
+	const maxHistory = 50
+	if len(s.history) > maxHistory {
+		s.history = s.history[len(s.history)-maxHistory:]
+	}
+}
+
+// History returns a snapshot of the most-recent run summaries (newest last).
+func (s *Scheduler) History() []RunSummary {
+	s.historyMu.Lock()
+	defer s.historyMu.Unlock()
+	out := make([]RunSummary, len(s.history))
+	copy(out, s.history)
+	return out
+}
+
+// Paused reports whether the scheduler is currently paused via config.
+func (s *Scheduler) Paused() bool {
+	return !s.cfg.SchedulerEnabled
+}
+
+func (s *Scheduler) recordChecked(updated bool, errored bool) {
+	s.currentMu.Lock()
+	defer s.currentMu.Unlock()
+	if s.current == nil {
+		return
+	}
+	s.current.Checked++
+	if updated {
+		s.current.Updated++
+	}
+	if errored {
+		s.current.Errors++
 	}
 }
 
@@ -135,10 +221,19 @@ func (s *Scheduler) runCheck(ctx context.Context, log zerolog.Logger, t *domain.
 		Str("url", t.URL).
 		Logger()
 
+	start := time.Now()
+	defer func() {
+		metrics.SchedulerTopicCheckDurationSeconds.
+			WithLabelValues(t.TrackerName).
+			Observe(time.Since(start).Seconds())
+	}()
+
 	tr := registry.GetTracker(t.TrackerName)
 	if tr == nil {
 		log.Error().Msg("no registered tracker")
+		metrics.SchedulerTopicChecksTotal.WithLabelValues(t.TrackerName, "no_plugin").Inc()
 		_ = s.topics.RecordCheckResult(ctx, t.ID, "", false, s.backoff(t, true), "tracker plugin not installed")
+		s.recordChecked(false, true)
 		return
 	}
 
@@ -148,28 +243,37 @@ func (s *Scheduler) runCheck(ctx context.Context, log zerolog.Logger, t *domain.
 	check, err := tr.Check(checkCtx, t, nil)
 	if err != nil {
 		log.Warn().Err(err).Msg("check failed")
+		metrics.SchedulerTopicChecksTotal.WithLabelValues(t.TrackerName, "error").Inc()
 		_ = s.topics.RecordCheckResult(ctx, t.ID, "", false, s.backoff(t, true), err.Error())
+		s.recordChecked(false, true)
 		return
 	}
 
 	updated := check.Hash != "" && check.Hash != t.LastHash
 	if updated {
 		log.Info().Str("old_hash", t.LastHash).Str("new_hash", check.Hash).Msg("topic updated")
+		metrics.TrackerUpdatesTotal.WithLabelValues(t.TrackerName).Inc()
 		payload, derr := tr.Download(checkCtx, t, check, nil)
 		if derr != nil {
 			log.Warn().Err(derr).Msg("download failed")
+			metrics.SchedulerTopicChecksTotal.WithLabelValues(t.TrackerName, "download_error").Inc()
 			_ = s.topics.RecordCheckResult(ctx, t.ID, check.Hash, false, s.backoff(t, true), derr.Error())
+			s.recordChecked(true, true)
 			return
 		}
 
 		if err := s.submitToClient(ctx, log, t, payload); err != nil {
 			log.Warn().Err(err).Msg("submit to client failed")
+			metrics.SchedulerTopicChecksTotal.WithLabelValues(t.TrackerName, "submit_error").Inc()
 			_ = s.topics.RecordCheckResult(ctx, t.ID, check.Hash, false, s.backoff(t, true), err.Error())
+			s.recordChecked(true, true)
 			return
 		}
 	}
 
+	metrics.SchedulerTopicChecksTotal.WithLabelValues(t.TrackerName, "ok").Inc()
 	_ = s.topics.RecordCheckResult(ctx, t.ID, check.Hash, updated, s.backoff(t, false), "")
+	s.recordChecked(updated, false)
 }
 
 func (s *Scheduler) submitToClient(ctx context.Context, log zerolog.Logger, t *domain.Topic, payload *domain.Payload) error {
@@ -193,15 +297,22 @@ func (s *Scheduler) submitToClient(ctx context.Context, log zerolog.Logger, t *d
 func (s *Scheduler) sendViaClient(ctx context.Context, cfg *domain.Client, t *domain.Topic, payload *domain.Payload) error {
 	clientPlugin := registry.GetClient(cfg.ClientName)
 	if clientPlugin == nil {
+		metrics.ClientSubmitTotal.WithLabelValues(cfg.ClientName, "no_plugin").Inc()
 		return fmt.Errorf("client plugin %q not installed", cfg.ClientName)
 	}
 	rawConfig, err := s.master.Decrypt(cfg.ConfigEnc, cfg.ConfigNonce)
 	if err != nil {
+		metrics.ClientSubmitTotal.WithLabelValues(cfg.ClientName, "decrypt_error").Inc()
 		return fmt.Errorf("decrypt client config: %w", err)
 	}
-	return clientPlugin.Add(ctx, rawConfig, payload, domain.AddOptions{
+	if err := clientPlugin.Add(ctx, rawConfig, payload, domain.AddOptions{
 		DownloadDir: t.DownloadDir,
-	})
+	}); err != nil {
+		metrics.ClientSubmitTotal.WithLabelValues(cfg.ClientName, "error").Inc()
+		return err
+	}
+	metrics.ClientSubmitTotal.WithLabelValues(cfg.ClientName, "ok").Inc()
+	return nil
 }
 
 // backoff computes the next_check_at timestamp. On success we use the topic's

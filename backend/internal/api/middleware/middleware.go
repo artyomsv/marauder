@@ -7,11 +7,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 
 	"github.com/artyomsv/marauder/backend/internal/auth"
+	"github.com/artyomsv/marauder/backend/internal/metrics"
 	"github.com/artyomsv/marauder/backend/internal/problem"
 )
 
@@ -38,7 +40,8 @@ func RequestID(next http.Handler) http.Handler {
 	})
 }
 
-// Logger wraps every request in a zerolog event.
+// Logger wraps every request in a zerolog event AND records HTTP
+// metrics into the Prometheus registry.
 func Logger(log zerolog.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -46,13 +49,25 @@ func Logger(log zerolog.Logger) func(http.Handler) http.Handler {
 			ww := middleware.NewWrapResponseWriter(w, r.ProtoMajor)
 
 			defer func() {
+				dur := time.Since(start)
 				reqID, _ := r.Context().Value(CtxRequestID).(string)
+
+				// Use the matched route pattern as the metric label so the
+				// cardinality stays bounded — every UUID in the path
+				// otherwise becomes its own label series.
+				route := chi.RouteContext(r.Context()).RoutePattern()
+				if route == "" {
+					route = "unknown"
+				}
+				metrics.ObserveHTTP(r.Method, route, ww.Status(), dur)
+
 				log.Info().
 					Str("method", r.Method).
 					Str("path", r.URL.Path).
+					Str("route", route).
 					Int("status", ww.Status()).
 					Int("bytes", ww.BytesWritten()).
-					Dur("dur", time.Since(start)).
+					Dur("dur", dur).
 					Str("remote", r.RemoteAddr).
 					Str("req_id", reqID).
 					Msg("request")

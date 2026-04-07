@@ -43,6 +43,28 @@ type TokenPair struct {
 	TokenType             string    `json:"token_type"`
 }
 
+// JWTKeyStore is the persistence interface for signing keys.
+//
+// Production: implemented by *repo.JWTKeys.
+// Tests:      implemented by an in-memory fake.
+type JWTKeyStore interface {
+	GetActive(ctx context.Context) (*repo.JWTKey, error)
+	GetByID(ctx context.Context, id string) (*repo.JWTKey, error)
+	InsertActive(ctx context.Context, k *repo.JWTKey) error
+}
+
+// RefreshTokenStore is the persistence interface for refresh tokens.
+//
+// Production: implemented by *repo.RefreshTokens.
+// Tests:      implemented by an in-memory fake.
+type RefreshTokenStore interface {
+	Insert(ctx context.Context, t *domain.RefreshToken) error
+	GetByHash(ctx context.Context, hash string) (*domain.RefreshToken, error)
+	Rotate(ctx context.Context, oldID uuid.UUID, newTok *domain.RefreshToken) error
+	Revoke(ctx context.Context, id uuid.UUID) error
+	RevokeAllForUser(ctx context.Context, userID uuid.UUID) error
+}
+
 // Manager owns the current signing key and issues/validates tokens.
 type Manager struct {
 	mu sync.RWMutex
@@ -58,8 +80,8 @@ type Manager struct {
 	refreshTTL time.Duration
 
 	master *crypto.MasterKey
-	keys   *repo.JWTKeys
-	tokens *repo.RefreshTokens
+	keys   JWTKeyStore
+	tokens RefreshTokenStore
 }
 
 // ManagerConfig is the settings needed by the manager.
@@ -69,8 +91,8 @@ type ManagerConfig struct {
 	AccessTTL  time.Duration
 	RefreshTTL time.Duration
 	Master     *crypto.MasterKey
-	KeysRepo   *repo.JWTKeys
-	TokensRepo *repo.RefreshTokens
+	KeysRepo   JWTKeyStore
+	TokensRepo RefreshTokenStore
 }
 
 // NewManager loads (or creates) the signing key and returns a Manager ready

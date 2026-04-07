@@ -65,6 +65,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `genericmagnet` plugin no longer double-prefixes "magnet:" in the
   stored `last_hash` field.
 
+### Added (v0.2 work in progress)
+- **`internal/auth` tests:** JWT manager round-trip, key generation +
+  reuse-on-restart, refresh-token rotation, refresh-token reuse
+  detection (which revokes all of the user's tokens), and revoke. The
+  manager now depends on `JWTKeyStore` and `RefreshTokenStore`
+  interfaces so the production repos and test fakes share the same
+  abstraction.
+- **`CONTRIBUTING.md`:** how to lay out a tracker / client / notifier
+  plugin, the testing pattern, and the merge checklist.
+- **Frontend Clients page** (replaces the placeholder): full CRUD with
+  inline add card, per-plugin field hints (qBittorrent / Transmission /
+  Deluge / downloadfolder), Test-connection button per row.
+- **Prometheus metrics:** `marauder_http_requests_total`,
+  `marauder_http_request_duration_seconds`, `marauder_scheduler_runs_total`,
+  `marauder_scheduler_topic_checks_total`, `marauder_scheduler_topic_check_duration_seconds`,
+  `marauder_tracker_updates_total`, `marauder_client_submit_total`. The
+  HTTP middleware uses chi's matched route pattern as the metric label
+  to keep cardinality bounded.
+- **System status endpoint:** `GET /api/v1/system/status` returns
+  scheduler paused state, last run summary (started/ended/checked/
+  updated/errors), the last 50 run summaries, and a runtime snapshot
+  (goroutines, alloc, sys, heap objects, GC cycles).
+- **Scheduler ring buffer:** in-memory history of the last 50 ticks
+  with start/end timestamps and per-tick counters of checked / updated
+  / errored topics, plus mutex-guarded live counters that workers
+  increment as they complete checks.
+
 ### Verified
 - `go build ./...` and `go vet ./...` clean.
 - `go test ./internal/crypto/... ./internal/plugins/registry/...`:

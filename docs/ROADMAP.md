@@ -31,7 +31,8 @@ add a generic magnet URI, and see it land in qBittorrent.
       logged** (see `docs/test-e2e-magnet.md`)
 - [x] Clients CRUD endpoints with master-key config encryption
 - [x] First unit tests for `crypto` and the plugin registry
-- [ ] CONTRIBUTING.md and unit tests for `auth` (JWT round-trip)
+- [x] CONTRIBUTING.md and unit tests for `auth` (JWT round-trip)
+- [x] Frontend Clients CRUD page (replaces placeholder)
 
 **Done when:** the five-minute quick-start from the README actually works on
 a clean Linux host.
@@ -43,13 +44,14 @@ a clean Linux host.
 **Goal:** enough polish, observability, and documentation that an external
 homelab user could reasonably install it.
 
-- [ ] `generictorrentfile` tracker plugin (HTTP URL → `.torrent` file,
+- [x] `generictorrentfile` tracker plugin (HTTP URL → `.torrent` file,
       monitored by SHA-1)
-- [ ] `downloadfolder` client plugin
-- [ ] `telegram` notifier plugin
-- [ ] System status page (scheduler state, last run, per-tracker errors)
-- [ ] Prometheus `/metrics` endpoint (token-gated)
-- [ ] `/health` and `/ready`
+- [x] `downloadfolder` client plugin
+- [x] `telegram` notifier plugin
+- [x] System status backend endpoint (scheduler state, last run, runtime)
+- [x] Prometheus `/metrics` endpoint with HTTP, scheduler, tracker, and
+      client collectors (token-gated)
+- [x] `/health` and `/ready`
 - [ ] Audit log UI (admin-only page)
 - [ ] User management UI (admin-only page)
 - [ ] Topic detail side-sheet with full event history

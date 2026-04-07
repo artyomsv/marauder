@@ -111,14 +111,15 @@ func run() error {
 
 	// HTTP server
 	router := api.NewRouter(api.Deps{
-		Cfg:     cfg,
-		Log:     logger,
-		Pool:    pool,
-		Manager: mgr,
-		Master:  master,
-		Users:   users,
-		Topics:  topicsRepo,
-		Clients: clientsRepo,
+		Cfg:       cfg,
+		Log:       logger,
+		Pool:      pool,
+		Manager:   mgr,
+		Master:    master,
+		Users:     users,
+		Topics:    topicsRepo,
+		Clients:   clientsRepo,
+		Scheduler: sch,
 	})
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,

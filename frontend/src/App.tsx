@@ -12,6 +12,7 @@ import { AppShell } from "@/components/layout/AppShell";
 import { LoginPage } from "@/pages/Login";
 import { DashboardPage } from "@/pages/Dashboard";
 import { TopicsPage } from "@/pages/Topics";
+import { ClientsPage } from "@/pages/Clients";
 import { PlaceholderPage } from "@/pages/Placeholder";
 import { useAuthStore } from "@/lib/auth-store";
 import { api, type Me } from "@/lib/api";
@@ -55,15 +56,7 @@ export default function App() {
             <Route element={<AppShell />}>
               <Route index element={<DashboardPage />} />
               <Route path="topics" element={<TopicsPage />} />
-              <Route
-                path="clients"
-                element={
-                  <PlaceholderPage
-                    title="Clients"
-                    blurb="Configure your torrent clients — qBittorrent, Transmission, Deluge, or a local download folder."
-                  />
-                }
-              />
+              <Route path="clients" element={<ClientsPage />} />
               <Route
                 path="notifiers"
                 element={
