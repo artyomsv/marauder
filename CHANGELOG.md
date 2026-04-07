@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (Phase 4a–d — tracker capability discovery + quality / episode in AddTopic)
+- **`WithEpisodeFilter` capability interface** in
+  `backend/internal/plugins/registry/registry.go`. Tracker plugins
+  that implement `SupportsEpisodeFilter() bool` promise to honour
+  `topic.Extra["start_season"]` / `topic.Extra["start_episode"]`
+  in their `Check`/`Download` methods.
+- **`GET /api/v1/trackers/match?url=<encoded>`** — new endpoint in
+  `backend/internal/api/handlers/trackers.go`. Looks up the tracker
+  plugin that claims a URL via `registry.FindTrackerForURL`, then
+  type-asserts every optional capability and returns the snapshot:
+  `tracker_name`, `display_name`, `qualities`, `default_quality`,
+  `supports_episode_filter`, `requires_credentials`,
+  `uses_cloudflare`. 404 if no plugin matches. Used by the
+  AddTopic form.
+- **`POST /api/v1/topics`** now accepts three optional fields:
+  `quality`, `start_season`, `start_episode`. They are validated
+  against the plugin's `WithQuality.Qualities()` list (where
+  applicable) and overlaid onto the Extra map the plugin's
+  `Parse()` returned, then persisted in the existing `topics.extra`
+  JSONB column. No DB schema change.
+- **AddTopic form is now capability-driven**
+  (`frontend/src/pages/Topics.tsx`). After the user pastes a URL the
+  form debounces 350 ms then calls `/trackers/match`. If the
+  response includes `qualities`, a quality `<select>` appears
+  (defaulting to `default_quality`). If `supports_episode_filter`
+  is true, two number inputs ("Start season", "Start episode") are
+  rendered. If `requires_credentials` is true, a yellow notice
+  invites the user to add a tracker account. The detected tracker
+  display name is shown inline as a green confirmation.
+
 ### Added (Phase 3 — edit torrent clients + per-plugin URL guidance)
 - **`GET /api/v1/clients/{id}`** in
   `backend/internal/api/handlers/clients.go` — returns the client row

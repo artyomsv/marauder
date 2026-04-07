@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { motion, AnimatePresence } from "framer-motion";
 import {
@@ -307,6 +307,16 @@ function EmptyState({ onAdd }: { onAdd: () => void }) {
   );
 }
 
+type TrackerMatch = {
+  tracker_name: string;
+  display_name: string;
+  qualities?: string[];
+  default_quality?: string;
+  supports_episode_filter: boolean;
+  requires_credentials: boolean;
+  uses_cloudflare: boolean;
+};
+
 function AddTopicCard({
   onClose,
   onCreated,
@@ -316,13 +326,48 @@ function AddTopicCard({
 }) {
   const [url, setUrl] = useState("");
   const [displayName, setDisplayName] = useState("");
+  const [quality, setQuality] = useState<string>("");
+  const [startSeason, setStartSeason] = useState<string>("");
+  const [startEpisode, setStartEpisode] = useState<string>("");
+  const [match, setMatch] = useState<TrackerMatch | null>(null);
+  const [matchError, setMatchError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  // Debounce the URL → /trackers/match lookup so we don't hammer the
+  // backend on every keystroke. 350 ms is the conventional sweet spot
+  // between responsive (under 500 ms) and not-spammy.
+  useEffect(() => {
+    setMatchError(null);
+    if (!url || url.length < 8) {
+      setMatch(null);
+      return;
+    }
+    const handle = setTimeout(() => {
+      api
+        .get<TrackerMatch>(`/trackers/match?url=${encodeURIComponent(url)}`)
+        .then((m) => {
+          setMatch(m);
+          if (m.default_quality && !quality) setQuality(m.default_quality);
+        })
+        .catch(() => {
+          setMatch(null);
+          setMatchError("No tracker plugin matches this URL.");
+        });
+    }, 350);
+    return () => clearTimeout(handle);
+    // We intentionally exclude `quality` from the deps so re-typing the
+    // URL doesn't reset the user's quality choice mid-edit.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [url]);
 
   const create = useMutation({
     mutationFn: () =>
       api.post<Topic>("/topics", {
         url,
         display_name: displayName || undefined,
+        quality: quality || undefined,
+        start_season: startSeason ? parseInt(startSeason, 10) : undefined,
+        start_episode: startEpisode ? parseInt(startEpisode, 10) : undefined,
       }),
     onSuccess: () => onCreated(),
     onError: (err) => setError(err instanceof Error ? err.message : "Failed"),
@@ -354,7 +399,16 @@ function AddTopicCard({
               onChange={(e) => setUrl(e.target.value)}
               placeholder="magnet:?xt=urn:btih:... or https://tracker.example.com/.../file.torrent"
             />
+            {match && (
+              <p className="text-xs text-success">
+                ✓ Detected: <span className="font-medium">{match.display_name}</span>
+              </p>
+            )}
+            {matchError && (
+              <p className="text-xs text-muted-foreground">{matchError}</p>
+            )}
           </div>
+
           <div className="space-y-1.5">
             <Label htmlFor="display">Display name (optional)</Label>
             <Input
@@ -364,6 +418,69 @@ function AddTopicCard({
               placeholder="Leave blank to auto-detect"
             />
           </div>
+
+          {match?.qualities && match.qualities.length > 0 && (
+            <div className="space-y-1.5">
+              <Label htmlFor="quality">Quality</Label>
+              <select
+                id="quality"
+                value={quality}
+                onChange={(e) => setQuality(e.target.value)}
+                className="flex h-10 w-full rounded-md border border-input bg-background/50 px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+              >
+                {match.qualities.map((q) => (
+                  <option key={q} value={q}>
+                    {q}
+                  </option>
+                ))}
+              </select>
+              <p className="text-xs text-muted-foreground">
+                Marauder will pick this quality variant when the tracker offers
+                more than one.
+              </p>
+            </div>
+          )}
+
+          {match?.supports_episode_filter && (
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="space-y-1.5">
+                <Label htmlFor="start-season">Start from season (optional)</Label>
+                <Input
+                  id="start-season"
+                  type="number"
+                  min={1}
+                  value={startSeason}
+                  onChange={(e) => setStartSeason(e.target.value)}
+                  placeholder="e.g. 2"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="start-episode">Start from episode (optional)</Label>
+                <Input
+                  id="start-episode"
+                  type="number"
+                  min={1}
+                  value={startEpisode}
+                  onChange={(e) => setStartEpisode(e.target.value)}
+                  placeholder="e.g. 5"
+                />
+              </div>
+              <p className="text-xs text-muted-foreground sm:col-span-2">
+                Episodes before this point will be skipped — only newer
+                episodes are downloaded.
+              </p>
+            </div>
+          )}
+
+          {match?.requires_credentials && (
+            <div className="rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-warning">
+              This tracker requires login credentials.{" "}
+              <a href="/accounts" className="font-semibold underline-offset-4 hover:underline">
+                Add a {match.display_name} account →
+              </a>
+            </div>
+          )}
+
           {error && (
             <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
               {error}

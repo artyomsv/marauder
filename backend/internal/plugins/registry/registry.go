@@ -56,6 +56,17 @@ type WithCloudflare interface {
 	UsesCloudflare() bool
 }
 
+// WithEpisodeFilter is an optional capability for trackers that
+// support skipping ahead to a specific season / episode (LostFilm,
+// Anidub, etc.). Plugins map topic.Extra["start_season"] /
+// topic.Extra["start_episode"] to filtered Check / Download
+// behaviour. Returning true is a contract — the plugin promises to
+// honour those keys when present.
+type WithEpisodeFilter interface {
+	Tracker
+	SupportsEpisodeFilter() bool
+}
+
 // --- Client & Notifier interfaces ---------------------------------------
 
 // Client is a torrent client plugin.

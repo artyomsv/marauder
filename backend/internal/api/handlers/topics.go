@@ -28,6 +28,12 @@ type createTopicReq struct {
 	ClientID         *uuid.UUID `json:"client_id"`
 	DownloadDir      string     `json:"download_dir"`
 	CheckIntervalSec int        `json:"check_interval_sec"`
+	// Optional capability-driven fields. The frontend learns whether a
+	// tracker accepts these via GET /api/v1/trackers/match. Plugins read
+	// them from topic.Extra in Check / Download.
+	Quality      string `json:"quality,omitempty"`
+	StartSeason  *int   `json:"start_season,omitempty"`
+	StartEpisode *int   `json:"start_episode,omitempty"`
 }
 
 // List handles GET /topics.
@@ -89,6 +95,38 @@ func (h *Topics) Create(w http.ResponseWriter, r *http.Request) {
 		displayName = parsed.DisplayName
 	}
 
+	// Overlay any user-supplied capability fields onto the Extra map
+	// the plugin's Parse() returned. The plugin's defaults stay in
+	// place for any field the user didn't specify.
+	extra := parsed.Extra
+	if extra == nil {
+		extra = map[string]any{}
+	}
+	if req.Quality != "" {
+		// Validate against the plugin's declared quality list, if any.
+		if wq, ok := tracker.(registry.WithQuality); ok {
+			allowed := false
+			for _, q := range wq.Qualities() {
+				if q == req.Quality {
+					allowed = true
+					break
+				}
+			}
+			if !allowed {
+				problem.Write(w, r, h.BaseURL,
+					problem.ErrUnprocessable("quality '"+req.Quality+"' not supported by this tracker"))
+				return
+			}
+		}
+		extra["quality"] = req.Quality
+	}
+	if req.StartSeason != nil {
+		extra["start_season"] = *req.StartSeason
+	}
+	if req.StartEpisode != nil {
+		extra["start_episode"] = *req.StartEpisode
+	}
+
 	t := &domain.Topic{
 		UserID:           uid,
 		TrackerName:      tracker.Name(),
@@ -96,7 +134,7 @@ func (h *Topics) Create(w http.ResponseWriter, r *http.Request) {
 		DisplayName:      displayName,
 		ClientID:         req.ClientID,
 		DownloadDir:      req.DownloadDir,
-		Extra:            parsed.Extra,
+		Extra:            extra,
 		CheckIntervalSec: interval,
 		NextCheckAt:      time.Now().UTC(),
 		Status:           domain.TopicStatusActive,

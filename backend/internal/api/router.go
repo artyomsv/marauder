@@ -95,6 +95,7 @@ func NewRouter(d Deps) http.Handler {
 		BaseURL:   d.Cfg.PublicBaseURL,
 	}
 	sysH := &handlers.System{BaseURL: d.Cfg.PublicBaseURL, Scheduler: d.Scheduler, Audit: d.Audit}
+	trackersH := &handlers.Trackers{BaseURL: d.Cfg.PublicBaseURL}
 
 	r.Route("/api/v1", func(r chi.Router) {
 		// Public auth endpoints
@@ -114,6 +115,7 @@ func NewRouter(d Deps) http.Handler {
 			r.Get("/auth/me", authH.Me)
 			r.Post("/auth/me/password", authH.ChangePassword)
 			r.Get("/system/status", sysH.Status)
+			r.Get("/trackers/match", trackersH.Match)
 
 			r.Get("/topics", topicsH.List)
 			r.Post("/topics", topicsH.Create)
