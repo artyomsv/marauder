@@ -48,10 +48,15 @@ homelab user could reasonably install it.
       monitored by SHA-1)
 - [x] `downloadfolder` client plugin
 - [x] `telegram` notifier plugin
-- [x] System status backend endpoint (scheduler state, last run, runtime)
+- [x] System status page (frontend + backend endpoint)
 - [x] Prometheus `/metrics` endpoint with HTTP, scheduler, tracker, and
       client collectors (token-gated)
 - [x] `/health` and `/ready`
+- [x] Audit log UI (admin-only page) + writes from auth handlers
+- [x] Russian (`ru`) translation of the UI (en + ru dictionaries)
+- [x] Notifiers CRUD API + frontend page
+- [x] Plugin unit tests (`generictorrentfile`, `downloadfolder`,
+      `telegram`, `qbittorrent`)
 - [ ] Audit log UI (admin-only page)
 - [ ] User management UI (admin-only page)
 - [ ] Topic detail side-sheet with full event history

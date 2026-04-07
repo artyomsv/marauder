@@ -8,8 +8,10 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { api, type Me, type TokenPair } from "@/lib/api";
 import { useAuthStore } from "@/lib/auth-store";
+import { useT } from "@/i18n";
 
 export function LoginPage() {
+  const t = useT();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -70,24 +72,24 @@ export function LoginPage() {
             </div>
             <div>
               <div className="font-mono text-lg font-semibold tracking-tight">
-                marauder
+                {t("app.name")}
               </div>
               <div className="text-xs text-muted-foreground">
-                self-hosted torrent automation
+                {t("app.tagline")}
               </div>
             </div>
           </div>
 
           <h1 className="mb-2 text-2xl font-semibold tracking-tight">
-            Welcome back
+            {t("login.welcome")}
           </h1>
           <p className="mb-6 text-sm text-muted-foreground">
-            Sign in to your instance to manage your torrent topics.
+            {t("login.subtitle")}
           </p>
 
           <form onSubmit={onSubmit} className="space-y-4">
             <div className="space-y-1.5">
-              <Label htmlFor="username">Username</Label>
+              <Label htmlFor="username">{t("login.username")}</Label>
               <Input
                 id="username"
                 autoComplete="username"
@@ -99,7 +101,7 @@ export function LoginPage() {
             </div>
 
             <div className="space-y-1.5">
-              <Label htmlFor="password">Password</Label>
+              <Label htmlFor="password">{t("login.password")}</Label>
               <div className="relative">
                 <Input
                   id="password"
@@ -139,26 +141,32 @@ export function LoginPage() {
               ) : (
                 <KeyRound className="size-4" />
               )}
-              Sign in
+              {t("login.signIn")}
             </Button>
           </form>
 
           <div className="mt-6 flex items-center gap-4">
             <div className="h-px flex-1 bg-border/60" />
             <span className="text-xs uppercase tracking-wider text-muted-foreground">
-              or
+              {t("login.or")}
             </span>
             <div className="h-px flex-1 bg-border/60" />
           </div>
 
-          <Button variant="outline" className="mt-6 w-full" size="lg" disabled>
-            Sign in with Keycloak (coming in v0.3)
+          <Button
+            variant="outline"
+            className="mt-6 w-full"
+            size="lg"
+            onClick={() => {
+              window.location.href = "/api/v1/auth/oidc/login";
+            }}
+          >
+            {t("login.signInOIDC")}
           </Button>
         </div>
 
         <p className="mt-6 text-center text-xs text-muted-foreground">
-          By signing in you agree that you are solely responsible for the content
-          you monitor. Marauder does not host any content.
+          {t("login.legal")}
         </p>
       </motion.div>
     </div>

@@ -6,10 +6,12 @@ import { api, type Topic } from "@/lib/api";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { formatRelative } from "@/lib/utils";
+import { useT } from "@/i18n";
 
 type TopicsList = { topics: Topic[] | null };
 
 export function DashboardPage() {
+  const t = useT();
   const { data } = useQuery({
     queryKey: ["topics"],
     queryFn: () => api.get<TopicsList>("/topics"),
@@ -27,25 +29,25 @@ export function DashboardPage() {
   const tiles = [
     {
       icon: Radio,
-      label: "Active topics",
+      label: t("dashboard.tile.active"),
       value: active,
       accent: "from-primary/40 to-primary/10",
     },
     {
       icon: Sparkles,
-      label: "Updates in 24h",
+      label: t("dashboard.tile.updates24h"),
       value: updatedLast24h,
       accent: "from-accent/40 to-accent/10",
     },
     {
       icon: AlertTriangle,
-      label: "Errored",
+      label: t("dashboard.tile.errored"),
       value: errored,
       accent: "from-destructive/40 to-destructive/10",
     },
     {
       icon: Clock,
-      label: "Total tracked",
+      label: t("dashboard.tile.totalTracked"),
       value: topics.length,
       accent: "from-success/40 to-success/10",
     },
@@ -60,13 +62,13 @@ export function DashboardPage() {
           transition={{ duration: 0.4 }}
         >
           <div className="mb-1 text-xs font-mono uppercase tracking-wider text-primary">
-            overview
+            {t("dashboard.section")}
           </div>
           <h1 className="text-3xl font-semibold tracking-tight">
-            Good to see you again.
+            {t("dashboard.title")}
           </h1>
           <p className="mt-2 text-sm text-muted-foreground">
-            Here&apos;s what Marauder has been watching while you were away.
+            {t("dashboard.subtitle")}
           </p>
         </motion.div>
       </header>
@@ -104,10 +106,10 @@ export function DashboardPage() {
       <section>
         <div className="mb-4 flex items-baseline justify-between">
           <h2 className="text-lg font-semibold tracking-tight">
-            Recent activity
+            {t("dashboard.recentActivity")}
           </h2>
           <span className="text-xs text-muted-foreground">
-            Last 10 topics updated
+            {t("dashboard.recentActivity.subtitle")}
           </span>
         </div>
         <Card>
@@ -117,11 +119,10 @@ export function DashboardPage() {
                 <Radio className="size-5" />
               </div>
               <div className="text-base font-medium">
-                No topics yet
+                {t("dashboard.empty.title")}
               </div>
               <div className="max-w-sm text-sm text-muted-foreground">
-                Head over to the <span className="font-medium text-foreground">Topics</span>{" "}
-                page and paste a tracker URL or magnet link to start watching.
+                {t("dashboard.empty.body")}
               </div>
             </div>
           ) : (

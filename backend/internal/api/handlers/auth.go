@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/artyomsv/marauder/backend/internal/api/middleware"
+	"github.com/artyomsv/marauder/backend/internal/audit"
 	"github.com/artyomsv/marauder/backend/internal/auth"
 	"github.com/artyomsv/marauder/backend/internal/crypto"
 	"github.com/artyomsv/marauder/backend/internal/db/repo"
@@ -20,6 +21,7 @@ import (
 type Auth struct {
 	Users   *repo.Users
 	Manager *auth.Manager
+	Audit   *audit.Logger
 	BaseURL string
 }
 
@@ -40,33 +42,37 @@ func (h *Auth) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	ip, ua := audit.FromRequest(r)
+
 	u, err := h.Users.GetByUsername(r.Context(), req.Username)
 	if err != nil {
-		// Do not distinguish "user not found" from "wrong password" to
-		// avoid user enumeration.
+		h.Audit.LoginFailure(req.Username, ip, ua)
 		problem.Write(w, r, h.BaseURL, problem.ErrUnauthorized("invalid credentials"))
 		return
 	}
 	if u.IsDisabled {
+		h.Audit.LoginFailure(req.Username, ip, ua)
 		problem.Write(w, r, h.BaseURL, problem.ErrForbidden("account disabled"))
 		return
 	}
 	if u.PasswordHash == "" {
-		// User exists but is OIDC-only — can't log in with password.
+		h.Audit.LoginFailure(req.Username, ip, ua)
 		problem.Write(w, r, h.BaseURL, problem.ErrUnauthorized("invalid credentials"))
 		return
 	}
 	ok, err := crypto.VerifyPassword(req.Password, u.PasswordHash)
 	if err != nil || !ok {
+		h.Audit.LoginFailure(req.Username, ip, ua)
 		problem.Write(w, r, h.BaseURL, problem.ErrUnauthorized("invalid credentials"))
 		return
 	}
 
-	pair, err := h.Manager.Issue(r.Context(), u, r.UserAgent(), clientIP(r))
+	pair, err := h.Manager.Issue(r.Context(), u, ua, ip)
 	if err != nil {
 		problem.Write(w, r, h.BaseURL, problem.ErrInternal("issue token: "+err.Error()))
 		return
 	}
+	h.Audit.LoginSuccess(u.ID, u.Username, ip, ua)
 	writeJSON(w, http.StatusOK, pair)
 }
 
@@ -130,7 +136,6 @@ type tokStub struct {
 func (h *Auth) Logout(w http.ResponseWriter, r *http.Request) {
 	var req refreshReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.RefreshToken == "" {
-		// idempotent — treat as already logged out
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
@@ -138,6 +143,8 @@ func (h *Auth) Logout(w http.ResponseWriter, r *http.Request) {
 		problem.Write(w, r, h.BaseURL, problem.ErrInternal(err.Error()))
 		return
 	}
+	ip, ua := audit.FromRequest(r)
+	h.Audit.Logout(nil, ip, ua)
 	w.WriteHeader(http.StatusNoContent)
 }
 

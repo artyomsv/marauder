@@ -13,6 +13,9 @@ import { LoginPage } from "@/pages/Login";
 import { DashboardPage } from "@/pages/Dashboard";
 import { TopicsPage } from "@/pages/Topics";
 import { ClientsPage } from "@/pages/Clients";
+import { NotifiersPage } from "@/pages/Notifiers";
+import { SystemPage } from "@/pages/System";
+import { AuditPage } from "@/pages/Audit";
 import { PlaceholderPage } from "@/pages/Placeholder";
 import { useAuthStore } from "@/lib/auth-store";
 import { api, type Me } from "@/lib/api";
@@ -57,15 +60,9 @@ export default function App() {
               <Route index element={<DashboardPage />} />
               <Route path="topics" element={<TopicsPage />} />
               <Route path="clients" element={<ClientsPage />} />
-              <Route
-                path="notifiers"
-                element={
-                  <PlaceholderPage
-                    title="Notifiers"
-                    blurb="Decide how Marauder tells you when a topic updates — Telegram, email, webhooks."
-                  />
-                }
-              />
+              <Route path="notifiers" element={<NotifiersPage />} />
+              <Route path="system" element={<SystemPage />} />
+              <Route path="audit" element={<AuditPage />} />
               <Route
                 path="settings"
                 element={

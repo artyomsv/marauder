@@ -3,7 +3,9 @@ package handlers
 import (
 	"net/http"
 	"runtime"
+	"strconv"
 
+	"github.com/artyomsv/marauder/backend/internal/db/repo"
 	"github.com/artyomsv/marauder/backend/internal/plugins/registry"
 	"github.com/artyomsv/marauder/backend/internal/scheduler"
 	"github.com/artyomsv/marauder/backend/internal/version"
@@ -13,6 +15,7 @@ import (
 type System struct {
 	BaseURL   string
 	Scheduler *scheduler.Scheduler
+	Audit     *repo.Audit
 }
 
 // Info handles GET /system/info.
@@ -58,6 +61,22 @@ func (h *System) Status(w http.ResponseWriter, _ *http.Request) {
 		},
 		"version": version.Current(),
 	})
+}
+
+// Audit list endpoint (admin only).
+func (h *System) AuditList(w http.ResponseWriter, r *http.Request) {
+	limit := 100
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			limit = n
+		}
+	}
+	entries, err := h.Audit.List(r.Context(), limit)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"entries": entries})
 }
 
 type namedPlugin interface {

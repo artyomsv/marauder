@@ -1,17 +1,28 @@
 import { Link, NavLink, Outlet, useNavigate } from "react-router-dom";
-import { LogOut, Radio, LayoutDashboard, Server, Bell, Settings, Moon } from "lucide-react";
+import { LogOut, Radio, LayoutDashboard, Server, Bell, Settings, Moon, Activity, Shield } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { useAuthStore } from "@/lib/auth-store";
 import { api } from "@/lib/api";
+import { useT } from "@/i18n";
+import { LocaleSwitcher } from "@/components/layout/LocaleSwitcher";
 
-const nav = [
-  { to: "/", label: "Dashboard", icon: LayoutDashboard },
-  { to: "/topics", label: "Topics", icon: Radio },
-  { to: "/clients", label: "Clients", icon: Server },
-  { to: "/notifiers", label: "Notifiers", icon: Bell },
-  { to: "/settings", label: "Settings", icon: Settings },
+type NavItem = {
+  to: string;
+  labelKey: string;
+  icon: typeof LayoutDashboard;
+  adminOnly?: boolean;
+};
+
+const navItems: NavItem[] = [
+  { to: "/", labelKey: "nav.dashboard", icon: LayoutDashboard },
+  { to: "/topics", labelKey: "nav.topics", icon: Radio },
+  { to: "/clients", labelKey: "nav.clients", icon: Server },
+  { to: "/notifiers", labelKey: "nav.notifiers", icon: Bell },
+  { to: "/system", labelKey: "nav.system", icon: Activity },
+  { to: "/audit", labelKey: "nav.audit", icon: Shield, adminOnly: true },
+  { to: "/settings", labelKey: "nav.settings", icon: Settings },
 ];
 
 export function AppShell() {
@@ -19,6 +30,7 @@ export function AppShell() {
   const refreshToken = useAuthStore((s) => s.refreshToken);
   const logout = useAuthStore((s) => s.logout);
   const navigate = useNavigate();
+  const t = useT();
 
   const handleLogout = async () => {
     if (refreshToken) {
@@ -47,24 +59,26 @@ export function AppShell() {
         </div>
 
         <nav className="flex-1 space-y-1 p-3">
-          {nav.map(({ to, label, icon: Icon }) => (
-            <NavLink
-              key={to}
-              to={to}
-              end={to === "/"}
-              className={({ isActive }) =>
-                cn(
-                  "group relative flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
-                  isActive
-                    ? "bg-primary/10 text-foreground shadow-[inset_0_0_0_1px_hsl(var(--primary)/0.25)]"
-                    : "text-muted-foreground hover:bg-accent/5 hover:text-foreground",
-                )
-              }
-            >
-              <Icon className="size-4" />
-              <span>{label}</span>
-            </NavLink>
-          ))}
+          {navItems
+            .filter((item) => !item.adminOnly || user?.role === "admin")
+            .map(({ to, labelKey, icon: Icon }) => (
+              <NavLink
+                key={to}
+                to={to}
+                end={to === "/"}
+                className={({ isActive }) =>
+                  cn(
+                    "group relative flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
+                    isActive
+                      ? "bg-primary/10 text-foreground shadow-[inset_0_0_0_1px_hsl(var(--primary)/0.25)]"
+                      : "text-muted-foreground hover:bg-accent/5 hover:text-foreground",
+                  )
+                }
+              >
+                <Icon className="size-4" />
+                <span>{t(labelKey)}</span>
+              </NavLink>
+            ))}
         </nav>
 
         <div className="border-t border-border/60 p-4">
@@ -88,7 +102,7 @@ export function AppShell() {
             onClick={handleLogout}
           >
             <LogOut className="size-4" />
-            Sign out
+            {t("login.signOut")}
           </Button>
         </div>
       </aside>
@@ -100,10 +114,12 @@ export function AppShell() {
             <Logo />
             <span className="font-mono text-sm font-semibold">marauder</span>
           </div>
-          <div className="ml-auto flex items-center gap-2 text-xs text-muted-foreground">
+          <div className="ml-auto flex items-center gap-3 text-xs text-muted-foreground">
+            <LocaleSwitcher />
+            <span className="size-1 rounded-full bg-border" />
             <Moon className="size-4" />
             <span>dark</span>
-            <span className="mx-2 size-1 rounded-full bg-border" />
+            <span className="size-1 rounded-full bg-border" />
             <Link to="https://marauder.cc" className="hover:text-foreground">
               marauder.cc
             </Link>

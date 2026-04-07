@@ -13,6 +13,7 @@ import (
 
 	"github.com/artyomsv/marauder/backend/internal/api/handlers"
 	"github.com/artyomsv/marauder/backend/internal/api/middleware"
+	"github.com/artyomsv/marauder/backend/internal/audit"
 	"github.com/artyomsv/marauder/backend/internal/auth"
 	"github.com/artyomsv/marauder/backend/internal/config"
 	"github.com/artyomsv/marauder/backend/internal/crypto"
@@ -30,6 +31,9 @@ type Deps struct {
 	Users     *repo.Users
 	Topics    *repo.Topics
 	Clients   *repo.Clients
+	Notifiers *repo.Notifiers
+	Audit     *repo.Audit
+	AuditLog  *audit.Logger
 	Scheduler *scheduler.Scheduler
 }
 
@@ -70,6 +74,7 @@ func NewRouter(d Deps) http.Handler {
 	authH := &handlers.Auth{
 		Users:   d.Users,
 		Manager: d.Manager,
+		Audit:   d.AuditLog,
 		BaseURL: d.Cfg.PublicBaseURL,
 	}
 	topicsH := &handlers.Topics{
@@ -81,7 +86,12 @@ func NewRouter(d Deps) http.Handler {
 		Master:  d.Master,
 		BaseURL: d.Cfg.PublicBaseURL,
 	}
-	sysH := &handlers.System{BaseURL: d.Cfg.PublicBaseURL, Scheduler: d.Scheduler}
+	notifiersH := &handlers.Notifiers{
+		Notifiers: d.Notifiers,
+		Master:    d.Master,
+		BaseURL:   d.Cfg.PublicBaseURL,
+	}
+	sysH := &handlers.System{BaseURL: d.Cfg.PublicBaseURL, Scheduler: d.Scheduler, Audit: d.Audit}
 
 	r.Route("/api/v1", func(r chi.Router) {
 		// Public auth endpoints
@@ -110,6 +120,17 @@ func NewRouter(d Deps) http.Handler {
 			r.Post("/clients", clientsH.Create)
 			r.Delete("/clients/{id}", clientsH.Delete)
 			r.Post("/clients/{id}/test", clientsH.Test)
+
+			r.Get("/notifiers", notifiersH.List)
+			r.Post("/notifiers", notifiersH.Create)
+			r.Delete("/notifiers/{id}", notifiersH.Delete)
+			r.Post("/notifiers/{id}/test", notifiersH.Test)
+
+			// Admin-only
+			r.Group(func(r chi.Router) {
+				r.Use(middleware.RequireAdmin(d.Cfg.PublicBaseURL))
+				r.Get("/system/audit", sysH.AuditList)
+			})
 		})
 	})
 

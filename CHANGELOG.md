@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (v0.2 work in progress, batch 2)
+- **Audit log:** `internal/audit` package with an async logger backed
+  by a 256-deep buffered channel — handlers Record() entries and the
+  background goroutine drains into Postgres so the request path is
+  never blocked. Login success / failure / logout all write entries
+  with IP and User-Agent. Admin-only `GET /api/v1/system/audit` lists
+  the most recent N entries.
+- **Notifiers CRUD:** `repo.Notifiers`, `handlers.Notifiers`,
+  routes `GET/POST/DELETE/POST-test /api/v1/notifiers`. Same
+  encrypt-on-write/validate-via-Test-on-create pattern as Clients.
+- **Frontend Notifiers page:** matches the Clients page UX with
+  per-plugin field hints (telegram, email, webhook, pushover) and a
+  Send-test button per row.
+- **Frontend Audit log page** (admin-only): infinite-refresh table
+  styled like the topics list, shows action / actor / target / IP /
+  user-agent / timestamp.
+- **Frontend System page:** live status tiles (scheduler running/
+  paused, goroutines, heap, GC cycles), last-run summary card with
+  checked/updated/errors counters, run history list, build info card.
+  Auto-refreshes every 5 seconds via React Query.
+- **i18n:** tiny zustand-backed module with `en` and `ru`
+  dictionaries, a `useT()` hook, and a header-bar locale switcher.
+  Login screen, dashboard tiles, navigation, and primary section
+  headings translated.
+- **Plugin tests:** unit tests for `generictorrentfile` (httptest
+  fixture-based hash detection), `downloadfolder` (temp-dir add),
+  `telegram` (mocked Bot API via custom RoundTripper), and
+  `qbittorrent` (login + add via a stand-in WebUI v2 server).
+
 ### Added
 - Initial project documentation set: `VISION.md`, `COMPETITORS.md`, `PRD.md`,
   `ROADMAP.md`, `README.md`, MIT `LICENSE`, and this `CHANGELOG.md`.

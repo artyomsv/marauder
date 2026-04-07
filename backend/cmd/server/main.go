@@ -14,6 +14,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/artyomsv/marauder/backend/internal/api"
+	"github.com/artyomsv/marauder/backend/internal/audit"
 	"github.com/artyomsv/marauder/backend/internal/auth"
 	"github.com/artyomsv/marauder/backend/internal/config"
 	"github.com/artyomsv/marauder/backend/internal/crypto"
@@ -79,6 +80,9 @@ func run() error {
 	keys := repo.NewJWTKeys(pool)
 	topicsRepo := repo.NewTopics(pool)
 	clientsRepo := repo.NewClients(pool)
+	notifiersRepo := repo.NewNotifiers(pool)
+	auditRepo := repo.NewAudit(pool)
+	auditLogger := audit.NewLogger(rootCtx, auditRepo, logger)
 
 	// Auth manager (issues/validates JWTs)
 	mgr, err := auth.NewManager(rootCtx, auth.ManagerConfig{
@@ -119,6 +123,9 @@ func run() error {
 		Users:     users,
 		Topics:    topicsRepo,
 		Clients:   clientsRepo,
+		Notifiers: notifiersRepo,
+		Audit:     auditRepo,
+		AuditLog:  auditLogger,
 		Scheduler: sch,
 	})
 	srv := &http.Server{
