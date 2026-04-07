@@ -44,11 +44,13 @@ import (
 	_ "github.com/artyomsv/marauder/backend/internal/plugins/trackers/hdclub"
 	_ "github.com/artyomsv/marauder/backend/internal/plugins/trackers/kinozal"
 	_ "github.com/artyomsv/marauder/backend/internal/plugins/trackers/lostfilm"
+	_ "github.com/artyomsv/marauder/backend/internal/plugins/trackers/newznab"
 	_ "github.com/artyomsv/marauder/backend/internal/plugins/trackers/nnmclub"
 	_ "github.com/artyomsv/marauder/backend/internal/plugins/trackers/rutor"
 	_ "github.com/artyomsv/marauder/backend/internal/plugins/trackers/rutracker"
 	_ "github.com/artyomsv/marauder/backend/internal/plugins/trackers/tapochek"
 	_ "github.com/artyomsv/marauder/backend/internal/plugins/trackers/toloka"
+	_ "github.com/artyomsv/marauder/backend/internal/plugins/trackers/torznab"
 	_ "github.com/artyomsv/marauder/backend/internal/plugins/trackers/unionpeer"
 )
 

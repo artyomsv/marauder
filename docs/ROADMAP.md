@@ -157,6 +157,13 @@ has run it for a week without reporting a release-blocker. **Released
 
 ---
 
+## Post-1.0 — landed
+
+- [x] **Torznab + Newznab indexer plugins** (v1.0.x patch) — Marauder
+      now speaks both protocols and reaches every indexer that
+      Sonarr / Radarr / Prowlarr / Jackett / NZBHydra2 collectively
+      support (500+). See [`docs/torznab-newznab.md`](torznab-newznab.md).
+
 ## Post-1.0 — stretch ideas (not committed)
 
 - **FlareSolverr integration** as an alternative Cloudflare solver.
@@ -165,7 +172,6 @@ has run it for a week without reporting a release-blocker. **Released
 - **iCal feed** of upcoming/expected topic updates.
 - **Per-user bandwidth / concurrency limits** on scheduler work.
 - **Optional browser extension** ("send this page to Marauder").
-- **Prowlarr bridge** — consume Prowlarr as one more "tracker" source.
 - **Mobile-first responsive layout** (v1.x is desktop/tablet-first).
 - **Grafana dashboard JSON** shipped with the repo.
 - **Helm chart** for Kubernetes users.

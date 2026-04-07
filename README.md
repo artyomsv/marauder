@@ -11,9 +11,10 @@
 [![Go](https://img.shields.io/badge/backend-Go%201.23-00ADD8.svg)](backend/)
 [![React 19](https://img.shields.io/badge/frontend-React%2019.2-61DAFB.svg)](frontend/)
 [![Postgres 18](https://img.shields.io/badge/database-Postgres%2018-336791.svg)](deploy/)
-[![11 trackers](https://img.shields.io/badge/trackers-11-violet.svg)](docs/plugin-development.md)
+[![16 trackers](https://img.shields.io/badge/trackers-16-violet.svg)](docs/plugin-development.md)
 [![5 clients](https://img.shields.io/badge/clients-5-violet.svg)](docs/plugin-development.md)
 [![4 notifiers](https://img.shields.io/badge/notifiers-4-violet.svg)](docs/plugin-development.md)
+[![Torznab+Newznab](https://img.shields.io/badge/Torznab%2BNewznab-supported-success.svg)](docs/torznab-newznab.md)
 
 [Vision](docs/VISION.md) · [Competitors](docs/COMPETITORS.md) · [PRD](docs/PRD.md) · [Roadmap](docs/ROADMAP.md) · [Changelog](CHANGELOG.md)
 

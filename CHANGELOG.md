@@ -7,7 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
+### Added (Torznab + Newznab support)
+- **Torznab and Newznab indexer plugins** — opens Marauder up to
+  several hundred indexers without writing scrapers. Sonarr, Radarr,
+  Prowlarr, Jackett, and NZBHydra2 collectively cover 500+ indexers
+  via these two protocols, and Marauder now speaks both.
+  - `torznab` — for any Torznab indexer (Jackett, Prowlarr,
+    NZBHydra2 in torrent mode, or a direct Torznab feed). Uses the
+    explicit `torznab+https://...` URL prefix so CanParse never
+    collides with forum-tracker plugins. The hash is the newest
+    item's `infohash` (or `guid` fallback). New releases at the top
+    of the feed trigger a Marauder "update" the same way a forum-
+    thread re-upload does. Enclosure magnet URIs route directly to
+    the user's torrent client.
+  - `newznab` — for any Usenet indexer (NZBGeek, NZBPlanet,
+    DOGnzb, NZBHydra2). Uses `newznab+https://...` prefix. Marauder
+    downloads the `.nzb` and hands the bytes to a `downloadfolder`
+    client pointed at a SABnzbd / NZBGet watch directory — the
+    Usenet handoff is unchanged from the *arr stack workflow.
+  - Shared `torznabcommon` parser package handles the common
+    RSS+attr XML shape (both protocols share it). 4 parser unit
+    tests cover the Torznab feed, the Newznab feed, empty input,
+    and malformed XML.
+- **Per-plugin tests** for both new plugins:
+  - `torznab`: 7 tests (CanParse, Parse, Check happy path with
+    infohash, Check fallback to GUID when no infohash, Check on
+    empty feed, Check on HTTP 500, safeFilename helper) plus an
+    E2E test that runs the full pipeline against a fake indexer
+    and submits to a fake qBittorrent.
+  - `newznab`: 4 tests (CanParse, Parse, Parse rejects bad scheme)
+    plus an E2E test that runs the full pipeline through a fake
+    NZB indexer that serves both the RSS feed and the .nzb bytes.
+- **Bundled tracker count: 16** (was 14).
+- **`docs/torznab-newznab.md`** — full integration guide explaining
+  the model fit, the URL prefix scheme, step-by-step Prowlarr and
+  NZBGeek walkthroughs, category numbers, and the validation
+  procedure.
+
+### Added (previous push — full tracker E2E coverage)
 - **Two new tracker plugins** completing the original monitorrent
   catalog:
   - `freetorrents` — phpBB-derived Free-Torrents.org. Login form,
