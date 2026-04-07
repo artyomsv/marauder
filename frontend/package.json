@@ -20,7 +20,7 @@
     "@tanstack/react-table": "^8.20.5",
     "class-variance-authority": "^0.7.0",
     "clsx": "^2.1.1",
-    "framer-motion": "^11.11.0",
+    "framer-motion": "^12.38.0",
     "lucide-react": "^0.452.0",
     "react": "19.2.0",
     "react-dom": "19.2.0",
