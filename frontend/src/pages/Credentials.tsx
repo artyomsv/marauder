@@ -8,7 +8,6 @@ import {
   Loader2,
   Pencil,
   Plus,
-  Trash2,
 } from "lucide-react";
 
 import { api, ApiError, type SystemInfo } from "@/lib/api";
@@ -17,6 +16,7 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import { DeleteConfirm } from "@/components/shared/DeleteConfirm";
 
 /**
  * Tracker accounts page (route: /accounts).
@@ -166,15 +166,11 @@ export function CredentialsPage() {
                       >
                         <Pencil className="size-4" />
                       </Button>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="text-destructive"
-                        onClick={() => del.mutate(c.id)}
-                        aria-label="Delete credential"
-                      >
-                        <Trash2 className="size-4" />
-                      </Button>
+                      <DeleteConfirm
+                        onConfirm={() => del.mutate(c.id)}
+                        isPending={del.isPending && del.variables === c.id}
+                        label="Delete credential"
+                      />
                     </div>
                   </div>
                   <div className="mt-4 flex items-center gap-2">

@@ -10,6 +10,8 @@ import {
   Play,
   Rows3,
   Rows4,
+  Check,
+  X,
 } from "lucide-react";
 
 import { api, type Topic } from "@/lib/api";
@@ -20,6 +22,7 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { cn, formatRelative } from "@/lib/utils";
 import { usePrefs } from "@/lib/prefs";
+import { DeleteConfirm } from "@/components/shared/DeleteConfirm";
 
 type TopicsList = { topics: Topic[] | null };
 
@@ -190,15 +193,13 @@ export function TopicsPage() {
                       </div>
                     </div>
                   )}
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="opacity-0 group-hover:opacity-100 text-destructive"
-                    onClick={() => del.mutate(t.ID)}
-                    aria-label="Delete topic"
-                  >
-                    <Trash2 className="size-4" />
-                  </Button>
+                  <div className="opacity-0 group-hover:opacity-100">
+                    <DeleteConfirm
+                      onConfirm={() => del.mutate(t.ID)}
+                      isPending={del.isPending && del.variables === t.ID}
+                      label="Delete topic"
+                    />
+                  </div>
                 </motion.div>
               ))}
             </div>
@@ -261,6 +262,15 @@ function BulkActionBar({
   onDelete: () => void;
   onClear: () => void;
 }) {
+  const [armed, setArmed] = useState(false);
+
+  // Auto-disarm after 4 seconds.
+  useEffect(() => {
+    if (!armed) return;
+    const handle = window.setTimeout(() => setArmed(false), 4000);
+    return () => window.clearTimeout(handle);
+  }, [armed]);
+
   return (
     <motion.div
       initial={{ opacity: 0, y: -8 }}
@@ -268,7 +278,7 @@ function BulkActionBar({
       className="flex items-center gap-3 rounded-lg border border-primary/30 bg-primary/10 px-4 py-3 text-sm"
     >
       <span className="font-medium">{count} selected</span>
-      <span className="ml-auto flex gap-2">
+      <span className="ml-auto flex items-center gap-2">
         <Button variant="outline" size="sm" onClick={onPause}>
           <Pause className="size-4" />
           Pause
@@ -277,10 +287,41 @@ function BulkActionBar({
           <Play className="size-4" />
           Resume
         </Button>
-        <Button variant="destructive" size="sm" onClick={onDelete}>
-          <Trash2 className="size-4" />
-          Delete
-        </Button>
+        {armed ? (
+          <span
+            role="group"
+            aria-label="Confirm bulk delete"
+            className="inline-flex items-center gap-1 rounded-md border border-destructive/40 bg-destructive/15 px-2 py-1 text-xs font-medium text-destructive"
+          >
+            <span>Delete {count}?</span>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 gap-1 px-2 text-destructive hover:bg-destructive/15 hover:text-destructive"
+              onClick={() => {
+                setArmed(false);
+                onDelete();
+              }}
+            >
+              <Check className="size-3.5" />
+              Yes
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 gap-1 px-2 text-muted-foreground hover:text-foreground"
+              onClick={() => setArmed(false)}
+            >
+              <X className="size-3.5" />
+              No
+            </Button>
+          </span>
+        ) : (
+          <Button variant="destructive" size="sm" onClick={() => setArmed(true)}>
+            <Trash2 className="size-4" />
+            Delete
+          </Button>
+        )}
         <Button variant="ghost" size="sm" onClick={onClear}>
           Clear
         </Button>

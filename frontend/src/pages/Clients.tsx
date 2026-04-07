@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { motion, AnimatePresence } from "framer-motion";
-import { Plus, Trash2, Pencil, Loader2, CheckCircle2, Server, AlertCircle } from "lucide-react";
+import { Plus, Pencil, Loader2, CheckCircle2, Server, AlertCircle } from "lucide-react";
 
 import { api, type SystemInfo } from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -9,6 +9,7 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import { DeleteConfirm } from "@/components/shared/DeleteConfirm";
 
 type ClientView = {
   id: string;
@@ -146,15 +147,11 @@ export function ClientsPage() {
                       >
                         <Pencil className="size-4" />
                       </Button>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="text-destructive"
-                        onClick={() => del.mutate(c.id)}
-                        aria-label="Delete client"
-                      >
-                        <Trash2 className="size-4" />
-                      </Button>
+                      <DeleteConfirm
+                        onConfirm={() => del.mutate(c.id)}
+                        isPending={del.isPending && del.variables === c.id}
+                        label="Delete client"
+                      />
                     </div>
                   </div>
                   <div className="mt-4 flex items-center gap-2">

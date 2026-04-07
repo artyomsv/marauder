@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { motion, AnimatePresence } from "framer-motion";
-import { Plus, Trash2, Loader2, CheckCircle2, Bell, AlertCircle } from "lucide-react";
+import { Plus, Loader2, CheckCircle2, Bell, AlertCircle } from "lucide-react";
 
 import { api, type SystemInfo } from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -9,6 +9,7 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import { DeleteConfirm } from "@/components/shared/DeleteConfirm";
 
 type NotifierView = {
   id: string;
@@ -122,15 +123,13 @@ export function NotifiersPage() {
                         ))}
                       </div>
                     </div>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="text-destructive opacity-0 group-hover:opacity-100"
-                      onClick={() => del.mutate(n.id)}
-                      aria-label="Delete notifier"
-                    >
-                      <Trash2 className="size-4" />
-                    </Button>
+                    <div className="opacity-0 group-hover:opacity-100">
+                      <DeleteConfirm
+                        onConfirm={() => del.mutate(n.id)}
+                        isPending={del.isPending && del.variables === n.id}
+                        label="Delete notifier"
+                      />
+                    </div>
                   </div>
                   <div className="mt-4">
                     <Button
