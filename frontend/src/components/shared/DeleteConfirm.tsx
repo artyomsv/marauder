@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState } from "react";
 import { Check, Loader2, Trash2, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { useArmedConfirm } from "@/lib/hooks/useArmedConfirm";
 
 interface Props {
   /** Called once the user clicks the inner "yes" button. */
@@ -12,7 +12,8 @@ interface Props {
   /** Auto-cancel after this many seconds if the user neither confirms
    *  nor cancels. Defaults to 4. */
   timeoutSeconds?: number;
-  /** Accessible label for the initial trash button. */
+  /** Accessible label for the initial trash button. Also used as the
+   *  prompt text in the inline confirmation row (e.g. "Delete topic?"). */
   label?: string;
 }
 
@@ -37,16 +38,9 @@ export function DeleteConfirm({
   timeoutSeconds = 4,
   label = "Delete",
 }: Props) {
-  const [armed, setArmed] = useState(false);
-  const timer = useRef<number | null>(null);
-
-  useEffect(() => {
-    if (!armed) return;
-    timer.current = window.setTimeout(() => setArmed(false), timeoutSeconds * 1000);
-    return () => {
-      if (timer.current !== null) window.clearTimeout(timer.current);
-    };
-  }, [armed, timeoutSeconds]);
+  const { armed, arm, disarm, confirmAndDisarm } = useArmedConfirm({
+    timeoutMs: timeoutSeconds * 1000,
+  });
 
   if (!armed) {
     return (
@@ -57,7 +51,7 @@ export function DeleteConfirm({
         className="text-destructive hover:text-destructive"
         onClick={(e) => {
           e.stopPropagation();
-          setArmed(true);
+          arm();
         }}
         aria-label={label}
         disabled={isPending}
@@ -71,13 +65,15 @@ export function DeleteConfirm({
     );
   }
 
+  const promptText = `${label}?`;
+
   return (
     <div
       role="group"
-      aria-label="Confirm delete"
+      aria-label={promptText}
       className="inline-flex items-center gap-0.5 rounded-md border border-destructive/40 bg-destructive/10 px-1 py-0.5"
     >
-      <span className="px-1 text-[11px] font-medium text-destructive">Delete?</span>
+      <span className="px-1 text-[11px] font-medium text-destructive">{promptText}</span>
       <Button
         type="button"
         variant="ghost"
@@ -85,10 +81,9 @@ export function DeleteConfirm({
         className="h-7 gap-1 px-1.5 text-destructive hover:bg-destructive/15 hover:text-destructive"
         onClick={(e) => {
           e.stopPropagation();
-          setArmed(false);
-          onConfirm();
+          confirmAndDisarm(onConfirm);
         }}
-        aria-label="Confirm delete"
+        aria-label={`Confirm ${label.toLowerCase()}`}
       >
         <Check className="size-3.5" />
       </Button>
@@ -99,9 +94,9 @@ export function DeleteConfirm({
         className="h-7 gap-1 px-1.5 text-muted-foreground hover:text-foreground"
         onClick={(e) => {
           e.stopPropagation();
-          setArmed(false);
+          disarm();
         }}
-        aria-label="Cancel delete"
+        aria-label={`Cancel ${label.toLowerCase()}`}
       >
         <X className="size-3.5" />
       </Button>

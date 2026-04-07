@@ -23,13 +23,16 @@ import { Badge } from "@/components/ui/badge";
 import { cn, formatRelative } from "@/lib/utils";
 import { usePrefs } from "@/lib/prefs";
 import { DeleteConfirm } from "@/components/shared/DeleteConfirm";
+import { QK } from "@/lib/queryKeys";
+import { useDebouncedValue } from "@/lib/hooks/useDebouncedValue";
+import { useArmedConfirm } from "@/lib/hooks/useArmedConfirm";
 
 type TopicsList = { topics: Topic[] | null };
 
 export function TopicsPage() {
   const qc = useQueryClient();
   const { data, isLoading } = useQuery({
-    queryKey: ["topics"],
+    queryKey: QK.topics,
     queryFn: () => api.get<TopicsList>("/topics"),
   });
   const density = usePrefs((s) => s.density);
@@ -39,15 +42,15 @@ export function TopicsPage() {
 
   const del = useMutation({
     mutationFn: (id: string) => api.del<void>(`/topics/${id}`),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["topics"] }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: QK.topics }),
   });
   const pause = useMutation({
     mutationFn: (id: string) => api.post<void>(`/topics/${id}/pause`),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["topics"] }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: QK.topics }),
   });
   const resume = useMutation({
     mutationFn: (id: string) => api.post<void>(`/topics/${id}/resume`),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["topics"] }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: QK.topics }),
   });
 
   const topics = data?.topics ?? [];
@@ -102,7 +105,7 @@ export function TopicsPage() {
             onClose={() => setShowAdd(false)}
             onCreated={() => {
               setShowAdd(false);
-              qc.invalidateQueries({ queryKey: ["topics"] });
+              qc.invalidateQueries({ queryKey: QK.topics });
             }}
           />
         )}
@@ -249,27 +252,22 @@ function DensityToggle({
   );
 }
 
+interface BulkActionBarProps {
+  count: number;
+  onPause: () => void;
+  onResume: () => void;
+  onDelete: () => void;
+  onClear: () => void;
+}
+
 function BulkActionBar({
   count,
   onPause,
   onResume,
   onDelete,
   onClear,
-}: {
-  count: number;
-  onPause: () => void;
-  onResume: () => void;
-  onDelete: () => void;
-  onClear: () => void;
-}) {
-  const [armed, setArmed] = useState(false);
-
-  // Auto-disarm after 4 seconds.
-  useEffect(() => {
-    if (!armed) return;
-    const handle = window.setTimeout(() => setArmed(false), 4000);
-    return () => window.clearTimeout(handle);
-  }, [armed]);
+}: BulkActionBarProps) {
+  const { armed, arm, disarm, confirmAndDisarm } = useArmedConfirm({ timeoutMs: 4000 });
 
   return (
     <motion.div
@@ -298,10 +296,7 @@ function BulkActionBar({
               variant="ghost"
               size="sm"
               className="h-7 gap-1 px-2 text-destructive hover:bg-destructive/15 hover:text-destructive"
-              onClick={() => {
-                setArmed(false);
-                onDelete();
-              }}
+              onClick={() => confirmAndDisarm(onDelete)}
             >
               <Check className="size-3.5" />
               Yes
@@ -310,14 +305,14 @@ function BulkActionBar({
               variant="ghost"
               size="sm"
               className="h-7 gap-1 px-2 text-muted-foreground hover:text-foreground"
-              onClick={() => setArmed(false)}
+              onClick={disarm}
             >
               <X className="size-3.5" />
               No
             </Button>
           </span>
         ) : (
-          <Button variant="destructive" size="sm" onClick={() => setArmed(true)}>
+          <Button variant="destructive" size="sm" onClick={arm}>
             <Trash2 className="size-4" />
             Delete
           </Button>
@@ -348,7 +343,7 @@ function EmptyState({ onAdd }: { onAdd: () => void }) {
   );
 }
 
-type TrackerMatch = {
+interface TrackerMatch {
   tracker_name: string;
   display_name: string;
   qualities?: string[];
@@ -356,50 +351,45 @@ type TrackerMatch = {
   supports_episode_filter: boolean;
   requires_credentials: boolean;
   uses_cloudflare: boolean;
-};
+}
 
-function AddTopicCard({
-  onClose,
-  onCreated,
-}: {
+interface AddTopicCardProps {
   onClose: () => void;
   onCreated: () => void;
-}) {
+}
+
+function AddTopicCard({ onClose, onCreated }: AddTopicCardProps) {
   const [url, setUrl] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [quality, setQuality] = useState<string>("");
   const [startSeason, setStartSeason] = useState<string>("");
   const [startEpisode, setStartEpisode] = useState<string>("");
-  const [match, setMatch] = useState<TrackerMatch | null>(null);
-  const [matchError, setMatchError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   // Debounce the URL → /trackers/match lookup so we don't hammer the
   // backend on every keystroke. 350 ms is the conventional sweet spot
   // between responsive (under 500 ms) and not-spammy.
+  const debouncedUrl = useDebouncedValue(url, 350);
+  const trackerMatchQuery = useQuery({
+    queryKey: QK.trackerMatch(debouncedUrl),
+    queryFn: () =>
+      api.get<TrackerMatch>(`/trackers/match?url=${encodeURIComponent(debouncedUrl)}`),
+    enabled: debouncedUrl.length >= 8,
+    staleTime: 60_000,
+    retry: false,
+  });
+  const match = trackerMatchQuery.data ?? null;
+  const matchError = trackerMatchQuery.isError
+    ? "No tracker plugin matches this URL."
+    : null;
+
+  // Auto-populate `quality` once a default arrives from a fresh match,
+  // but never overwrite a value the user already picked.
   useEffect(() => {
-    setMatchError(null);
-    if (!url || url.length < 8) {
-      setMatch(null);
-      return;
+    if (match?.default_quality && !quality) {
+      setQuality(match.default_quality);
     }
-    const handle = setTimeout(() => {
-      api
-        .get<TrackerMatch>(`/trackers/match?url=${encodeURIComponent(url)}`)
-        .then((m) => {
-          setMatch(m);
-          if (m.default_quality && !quality) setQuality(m.default_quality);
-        })
-        .catch(() => {
-          setMatch(null);
-          setMatchError("No tracker plugin matches this URL.");
-        });
-    }, 350);
-    return () => clearTimeout(handle);
-    // We intentionally exclude `quality` from the deps so re-typing the
-    // URL doesn't reset the user's quality choice mid-edit.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [url]);
+  }, [match, quality]);
 
   const create = useMutation({
     mutationFn: () =>
