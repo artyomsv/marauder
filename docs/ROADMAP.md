@@ -118,31 +118,38 @@ touching config files.
 - [x] `webhook` notifier — POST JSON, httptest-based tests
 - [x] `pushover` notifier — form POST, httptest-based tests
 - [ ] Per-user theme + density preferences persisted server-side
-- [ ] Compact topic table density for 200+ topics
-- [ ] Bulk-edit: pause/resume/delete multiple topics
+      (currently localStorage; v0.5)
+- [x] Compact topic table density for 200+ topics — toggle in Topics page
+- [x] Bulk-edit: pause/resume/delete multiple topics via checkboxes +
+      bulk action bar
 
 **Done when:** at least 8 of the original 12 monitorrent trackers and all
 4 legacy clients have working Marauder equivalents.
 
 ---
 
-## v1.0.0 — "Stable release"
+## v1.0.0 — "Stable release" ✅
 
-**Goal:** a release we are willing to recommend to strangers.
+**Goal:** a release we are willing to recommend to strangers. **Tagged.**
 
-- [ ] All v1.0 Definition of Done criteria from the PRD are met
-- [ ] `marauder.cc` docs site published (static, from `docs/`)
-- [ ] CONTRIBUTING.md + "How to write a tracker plugin" guide
-- [ ] Sample GitHub Actions workflow for contributors to test their plugin
-      against recorded fixtures
-- [ ] Security review self-check against OWASP ASVS L2
-- [ ] GHCR images signed with cosign
-- [ ] SBOM published with every release
-- [ ] CHANGELOG.md with full 1.0.0 notes
-- [ ] Migration guide from monitorrent (how to import topics + credentials)
+- [x] All v1.0 Definition of Done criteria from the PRD are met
+      (auth, scheduler, plugin architecture, observability, docker
+      stack, end-to-end magnet pipeline, multi-user data isolation)
+- [ ] `marauder.cc` docs site published (static, from `docs/`) — DNS
+      and hosting are user-side, post-tag
+- [x] CONTRIBUTING.md + plugin development guide
+      ([`docs/plugin-development.md`](plugin-development.md))
+- [ ] Sample GitHub Actions workflow for contributors — v1.1
+- [ ] Security review self-check against OWASP ASVS L2 — v1.1
+- [ ] GHCR images signed with cosign — v1.1 (requires CI)
+- [ ] SBOM published with every release — v1.1 (requires CI)
+- [x] CHANGELOG.md with full 1.0.0 notes
+- [x] Migration guide from monitorrent
+      ([`docs/migrating-from-monitorrent.md`](migrating-from-monitorrent.md))
 
 **Done when:** we have shipped and a small group of external beta testers
-has run it for a week without reporting a release-blocker.
+has run it for a week without reporting a release-blocker. **Released
+2026-04-07.**
 
 ---
 

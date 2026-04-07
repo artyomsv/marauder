@@ -7,205 +7,216 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added (v0.4 work in progress)
-- **Long-tail tracker plugins** (all alpha — structurally complete with
-  fixture-based tests where applicable, validation against live sites
-  pending):
-  - `lostfilm` — series tracking with `WithQuality` capability (SD,
-    1080p_mp4, 1080p), AJAX-based login, episode-marker hash detection
-  - `anilibria` — uses the public Anilibria v3 JSON API; no
-    authentication needed
-  - `anidub` — phpBB-derived; `WithQuality` (HDTVRip, HDTVRip-AVC, BDRip)
-  - `rutor` — public no-account tracker, magnet-only
-  - `toloka` — Ukrainian phpBB tracker
-  - `unionpeer` — phpBB tracker
-  - `tapochek` — phpBB-derived cartoons tracker
-- **`utorrent` client plugin:** token-based WebUI flow (GET
-  `/gui/token.html`, then `/gui/?token=&action=add-url|add-file`),
-  basic-auth, mocked-server tests for Test/Add-magnet/Add-file/auth-fail
-- **`email` notifier:** SMTP via `net/smtp` with PLAIN auth.
-  `sender` field is overridable so tests can substitute a fake instead
-  of hitting a real mailserver.
-- **`webhook` notifier:** POSTs JSON `{source, title, body, link}` to
-  any URL. httptest-based tests for happy path, non-2xx, and empty URL.
-- **`pushover` notifier:** form POST to api.pushover.net/1/messages.json.
-  httptest-based tests verify all form fields are sent.
-- All eight new trackers and four new client/notifier plugins are wired
-  into `cmd/server/main.go` via blank imports. **Total bundled: 11
-  trackers, 5 clients, 4 notifiers.**
+Nothing yet — see the [v1.0.0](#100--2026-04-07) section below for the
+most recent release.
 
-### Added (v0.3 work in progress, batch 2)
-- **`forumcommon` helper:** tiny shared `SessionStore` that holds an
-  `http.Client` with its own cookie jar per `(tracker_name, user_id)`
-  pair. Forum-style tracker plugins use it to keep login cookies hot
-  across concurrent topic checks without each plugin reimplementing
-  the wheel.
-- **`rutracker` plugin** (`internal/plugins/trackers/rutracker`):
-  parses `/forum/viewtopic.php?t=NNN`, posts the login form to
-  `login.php`, scrapes the magnet URI and infohash from the topic
-  page, falls back to the `dl.php?t=NNN` endpoint when the magnet is
-  missing. Fixture-based unit tests cover Parse / Check / Download /
-  Login / Verify. Marked alpha — needs validation against a real
-  account.
-- **`kinozal` plugin** (`internal/plugins/trackers/kinozal`): same
-  shape, targeting `details.php?id=NNN` with the `Инфо хэш` regex and
-  the dl.kinozal.tv subdomain. Fixture-tested.
-- **`nnmclub` plugin** (`internal/plugins/trackers/nnmclub`): same
-  shape, with `WithCloudflare` opt-in so the scheduler will route
-  through the cfsolver sidecar when the site returns a Cloudflare
-  challenge. Fixture-tested.
-- All three plugins are wired into `cmd/server/main.go` via blank
-  imports so they self-register on process start.
+## [1.0.0] — 2026-04-07
 
-### Added (v0.3 work in progress)
-- **Keycloak / OIDC end-to-end:** `auth.OIDCProvider` is wired into the
-  router. New handlers `OIDCLogin` (begin auth-code flow with state
-  cookie) and `OIDCCallback` (exchange + verify ID token + provision
-  user + issue Marauder JWT pair). Frontend `OIDCCallbackPage` parses
-  the access/refresh tokens out of the URL fragment and lands on the
-  dashboard. New `deploy/docker-compose.sso.yml` overlay starts
-  Keycloak 26.0 with a pre-imported `marauder` realm and an
-  `alice/marauder` test user. `docs/oidc.md` walks through the full
-  E2E flow plus troubleshooting.
-- **Transmission client plugin** (`internal/plugins/clients/transmission`):
-  full RPC client with the `X-Transmission-Session-Id` 409-retry dance,
-  basic auth support, magnet + base64 .torrent submission, and mocked
-  test server.
-- **Deluge client plugin** (`internal/plugins/clients/deluge`): Web
-  JSON-RPC client (`/json` endpoint), auth.login + web.connected +
-  web.connect handshake, magnet + base64 .torrent submission, and
-  mocked test server.
-- **Cloudflare solver sidecar** (`cfsolver/`): standalone Go service
-  using `chromedp` + Debian-slim chromium. Exposes
-  `POST /solve {url}` returning `{user_agent, cookies}`. Built as a
-  separate Docker image and started via the `cfsolver` compose
-  profile. The main backend talks to it via `internal/cfsolver/client.go`.
+The initial production release. The full feature set landed across the
+v0.1 → v0.4 development branches and is collected here.
 
-### Added (v0.2 work in progress, batch 2)
-- **Audit log:** `internal/audit` package with an async logger backed
-  by a 256-deep buffered channel — handlers Record() entries and the
-  background goroutine drains into Postgres so the request path is
-  never blocked. Login success / failure / logout all write entries
-  with IP and User-Agent. Admin-only `GET /api/v1/system/audit` lists
-  the most recent N entries.
-- **Notifiers CRUD:** `repo.Notifiers`, `handlers.Notifiers`,
-  routes `GET/POST/DELETE/POST-test /api/v1/notifiers`. Same
-  encrypt-on-write/validate-via-Test-on-create pattern as Clients.
-- **Frontend Notifiers page:** matches the Clients page UX with
-  per-plugin field hints (telegram, email, webhook, pushover) and a
-  Send-test button per row.
-- **Frontend Audit log page** (admin-only): infinite-refresh table
-  styled like the topics list, shows action / actor / target / IP /
-  user-agent / timestamp.
-- **Frontend System page:** live status tiles (scheduler running/
-  paused, goroutines, heap, GC cycles), last-run summary card with
-  checked/updated/errors counters, run history list, build info card.
-  Auto-refreshes every 5 seconds via React Query.
-- **i18n:** tiny zustand-backed module with `en` and `ru`
-  dictionaries, a `useT()` hook, and a header-bar locale switcher.
-  Login screen, dashboard tiles, navigation, and primary section
-  headings translated.
-- **Plugin tests:** unit tests for `generictorrentfile` (httptest
-  fixture-based hash detection), `downloadfolder` (temp-dir add),
-  `telegram` (mocked Bot API via custom RoundTripper), and
-  `qbittorrent` (login + add via a stand-in WebUI v2 server).
+### Architecture
 
-### Added
-- Initial project documentation set: `VISION.md`, `COMPETITORS.md`, `PRD.md`,
-  `ROADMAP.md`, `README.md`, MIT `LICENSE`, and this `CHANGELOG.md`.
-- Decision recorded: Go chosen as the backend language (see PRD §2 rationale).
-- Target tech stack locked: Go 1.23+, React 19.2, Vite 8, Tailwind 4.2,
-  shadcn/ui 4.1.2, PostgreSQL 18.
-- Target deployment: Docker + docker-compose, with an optional Cloudflare
-  solver sidecar and an optional Keycloak profile for SSO.
-- Target public URL: `https://marauder.cc`.
-- **Backend (Go):** `chi` HTTP router, `pgx` connection pool,
-  `goose`-managed migrations, zerolog structured logging, RFC 7807 error
-  responses, security-headers middleware, request-id middleware.
-- **Auth:** Argon2id password hashing, ES256 JWT access tokens, opaque
-  refresh tokens with reuse-detection rotation, AES-256-GCM secret
-  encryption keyed by `MARAUDER_MASTER_KEY`, optional OIDC via
-  `coreos/go-oidc` (Keycloak / Authentik / any OIDC provider).
-- **Plugin registry:** `Tracker`, `Client`, and `Notifier` interfaces with
-  `init()`-based self-registration.
-- **Bundled plugins:** `genericmagnet` and `generictorrentfile` trackers,
-  `qbittorrent` (WebUI v2) and `downloadfolder` clients, `telegram`
-  notifier.
-- **Scheduler:** bounded worker pool, exponential backoff with a 6-hour cap,
-  end-to-end pipeline from Check -> Download -> client submission.
-- **Frontend (React 19.2 + Vite 8 + Tailwind 4 + shadcn/ui):** dark-first
-  design language with glass cards, animated login, dashboard with live
-  status tiles, topics list with inline add-topic card, placeholder screens
-  for Clients / Notifiers / Settings, zustand auth store, TanStack Query
-  wiring, API client with RFC 7807 error mapping.
-- **Deployment:** multi-stage Dockerfiles (backend + frontend) running as
-  non-root users with healthchecks, `deploy/docker-compose.yml` with nginx
-  gateway + postgres + backend + frontend, `deploy/docker-compose.dev.yml`
-  overlay that adds real qBittorrent and Transmission containers for
-  integration testing, `deploy/.env.example` with safe defaults.
-- **Port scheme:** all host-exposed ports are non-standard
-  (`6688` gateway, `8679` backend, `8680` frontend dev, `55432` postgres dev)
-  to avoid colliding with other services on the developer box.
+- **Backend:** Go 1.23, `chi` HTTP router, `pgx` v5 connection pool,
+  `goose`-managed embedded migrations, `zerolog` structured JSON logging,
+  RFC 7807 problem-details error responses, security-headers middleware,
+  request-id middleware, recovery middleware that turns panics into
+  500s with trace IDs.
+- **Frontend:** React 19.2 + Vite 8 + Tailwind CSS 4.2 + shadcn/ui 4.1.2,
+  TanStack Query for server state, zustand for local UI state,
+  framer-motion for entry animations, lucide-react for icons. Dark-first
+  design language with deep-violet primary, electric-cyan accent, glass
+  cards, and radial gradients.
+- **Database:** PostgreSQL 18 (currently 18.3 alpine; rolls forward
+  automatically when 18.4 publishes).
+- **Deployment:** Docker + docker-compose, four-service production stack
+  (postgres + backend + frontend + nginx gateway), `cfsolver` profile
+  for the optional Cloudflare-bypass sidecar, `sso` profile for the
+  optional Keycloak realm, `dev` overlay for end-to-end testing with
+  real qBittorrent and Transmission containers.
 
-### Added (continued)
-- **Clients API:** `GET /api/v1/clients`, `POST /api/v1/clients`,
-  `DELETE /api/v1/clients/{id}`, and `POST /api/v1/clients/{id}/test`.
-  Config JSON is validated by the plugin's `Test()` before being
-  encrypted (AES-256-GCM) and persisted; list view never returns
-  the decrypted config.
-- **Scheduler wired to master key:** the scheduler now decrypts the
-  stored client config on each submission so the plugin receives plain
-  JSON. Falls back to the user's default client when a topic has no
-  explicit `client_id`.
-- **Tests:** table-driven `internal/crypto` tests for AES-GCM round-trip,
-  Argon2id hash+verify, random-token generation, and SHA-256
-  token-hash. Registry tests for register/list/find-for-url/duplicate-
-  panic/get-not-found.
-- **Docs:** `docs/test-e2e-magnet.md` — a step-by-step reproducer for
-  the full magnet → qBittorrent pipeline using the dev compose overlay.
+### Auth
 
-### Fixed
-- `genericmagnet` plugin no longer double-prefixes "magnet:" in the
-  stored `last_hash` field.
+- **Local accounts:** Argon2id password hashing
+  (`time=3, memory=64 MiB, parallelism=4`), ES256-signed JWT access
+  tokens, opaque refresh tokens stored as SHA-256 hashes server-side,
+  refresh-token rotation with reuse detection that revokes the entire
+  token family on misuse.
+- **OIDC:** auth-code flow via `coreos/go-oidc/v3`. Provisions new
+  users on first sign-in. Pre-built `docker-compose.sso.yml` overlay
+  brings up Keycloak 26.0 with a `marauder` realm and an
+  `alice/marauder` test user. Documented in `docs/oidc.md`.
+- **Master key:** AES-256-GCM at-rest encryption for tracker
+  credentials, client configs, notifier configs, and JWT signing
+  keys, all keyed by `MARAUDER_MASTER_KEY` (32-byte base64).
+- **Audit log:** async logger (256-buffered channel + background
+  drainer) that records login success/failure/logout to a
+  Postgres-backed audit_log table. Admin-only `GET /api/v1/system/audit`
+  + frontend page exposes recent entries.
 
-### Added (v0.2 work in progress)
-- **`internal/auth` tests:** JWT manager round-trip, key generation +
-  reuse-on-restart, refresh-token rotation, refresh-token reuse
-  detection (which revokes all of the user's tokens), and revoke. The
-  manager now depends on `JWTKeyStore` and `RefreshTokenStore`
-  interfaces so the production repos and test fakes share the same
-  abstraction.
-- **`CONTRIBUTING.md`:** how to lay out a tracker / client / notifier
-  plugin, the testing pattern, and the merge checklist.
-- **Frontend Clients page** (replaces the placeholder): full CRUD with
-  inline add card, per-plugin field hints (qBittorrent / Transmission /
-  Deluge / downloadfolder), Test-connection button per row.
-- **Prometheus metrics:** `marauder_http_requests_total`,
-  `marauder_http_request_duration_seconds`, `marauder_scheduler_runs_total`,
-  `marauder_scheduler_topic_checks_total`, `marauder_scheduler_topic_check_duration_seconds`,
-  `marauder_tracker_updates_total`, `marauder_client_submit_total`. The
-  HTTP middleware uses chi's matched route pattern as the metric label
-  to keep cardinality bounded.
-- **System status endpoint:** `GET /api/v1/system/status` returns
-  scheduler paused state, last run summary (started/ended/checked/
-  updated/errors), the last 50 run summaries, and a runtime snapshot
-  (goroutines, alloc, sys, heap objects, GC cycles).
-- **Scheduler ring buffer:** in-memory history of the last 50 ticks
-  with start/end timestamps and per-tick counters of checked / updated
-  / errored topics, plus mutex-guarded live counters that workers
-  increment as they complete checks.
+### Plugin architecture
 
-### Verified
-- `go build ./...` and `go vet ./...` clean.
-- `go test ./internal/crypto/... ./internal/plugins/registry/...`:
-  **11 subtests pass**.
-- `npm run build` produces a 437 KB / 139 KB gzipped bundle.
-- Full `docker compose up -d` brings the stack healthy end-to-end.
-- **Complete E2E verified:** login as admin -> create qBittorrent client
-  (Test passes) -> add magnet topic -> wait 1 scheduler tick -> torrent
-  appears in qBittorrent with correct `name`, `hash`, `magnet_uri`,
-  and `state: metaDL`. Backend logs confirm
-  `"message":"topic updated"`. This closes the last open item in the
-  v0.1 Definition of Done.
+A plugin is one Go file plus its tests. `init()` self-registers with
+the global `registry` package on process start. Three kinds of plugin:
 
-[Unreleased]: https://github.com/artyomsv/marauder/commits/main
+| Kind | Interface | Optional capabilities |
+|---|---|---|
+| Tracker | `Tracker` | `WithCredentials`, `WithQuality`, `WithCloudflare` |
+| Client  | `Client`  | — |
+| Notifier | `Notifier` | — |
+
+See [`docs/plugin-development.md`](docs/plugin-development.md) for the
+full guide.
+
+**Total bundled in v1.0:** 11 trackers, 5 clients, 4 notifiers.
+
+#### Trackers (11)
+
+| Plugin | Site | Status |
+|---|---|---|
+| `genericmagnet` | any magnet URI | ✅ E2E validated |
+| `generictorrentfile` | any HTTP(S) `.torrent` URL | ✅ unit-tested |
+| `rutracker` | RuTracker.org | 🟡 alpha (fixture-tested, needs live validation) |
+| `kinozal` | Kinozal.tv | 🟡 alpha |
+| `nnmclub` | NNM-Club.to (with `WithCloudflare`) | 🟡 alpha |
+| `lostfilm` | LostFilm.tv (with `WithQuality`) | 🟡 alpha |
+| `anilibria` | Anilibria.tv (uses public v3 API) | 🟡 alpha |
+| `anidub` | tr.anidub.com (with `WithQuality`) | 🟡 alpha |
+| `rutor` | Rutor.org | 🟡 alpha |
+| `toloka` | Toloka.to | 🟡 alpha |
+| `unionpeer` | Unionpeer.org | 🟡 alpha |
+| `tapochek` | Tapochek.net | 🟡 alpha |
+
+> **Alpha** means the plugin is structurally complete with fixture-based
+> unit tests and follows the same patterns as the validated plugins, but
+> has not been validated against a live site by the maintainer because
+> doing so requires a real account on each site. The next release moves
+> any plugin that a community member validates to "stable".
+
+#### Clients (5)
+
+| Plugin | Status |
+|---|---|
+| `downloadfolder` | ✅ unit-tested |
+| `qbittorrent` (WebUI v2) | ✅ E2E validated against real qBittorrent docker container |
+| `transmission` (RPC) | ✅ unit-tested with mocked-server |
+| `deluge` (Web JSON-RPC) | ✅ unit-tested with mocked-server |
+| `utorrent` (token-based WebUI) | 🟡 unit-tested with mocked-server, no live µTorrent docker image to validate against |
+
+#### Notifiers (4)
+
+| Plugin | Status |
+|---|---|
+| `telegram` (Bot API) | ✅ unit-tested via custom RoundTripper |
+| `email` (SMTP, PLAIN auth) | ✅ unit-tested with injected sender |
+| `webhook` (POST JSON) | ✅ unit-tested with httptest |
+| `pushover` (form POST) | ✅ unit-tested with httptest |
+
+### Cloudflare bypass
+
+A separate `cfsolver/` Go service uses `chromedp` + Debian-slim
+chromium to drive a target URL through any Cloudflare interstitial
+and return the resulting cookies + user-agent. Runs as its own Docker
+image and is gated behind the `cfsolver` compose profile so it doesn't
+start unless the user opts in. Tracker plugins that opt into the
+`WithCloudflare` capability automatically route through it via the
+`internal/cfsolver` client package.
+
+### Scheduler
+
+- Single dispatch goroutine on a configurable tick (default 60s)
+- Bounded worker pool (default 8) draining a buffered job channel
+- Per-topic check pipeline: load → call tracker `Check` → compare hash
+  → if changed, call `Download` → decrypt client config with master
+  key → call client `Add`
+- Exponential backoff on errors, capped at 6 hours
+- Falls back to the user's default client if a topic has no explicit
+  `client_id`
+- In-memory ring buffer of the last 50 run summaries, exposed via
+  `GET /api/v1/system/status` for the live System page
+- Records detailed Prometheus metrics for every check, update, and
+  client submit
+
+### Observability
+
+- **`/health`** — always 200 if the process is up
+- **`/ready`** — 200 only when the database is reachable
+- **`/metrics`** — Prometheus exposition, gated by a static bearer
+  token (`MARAUDER_METRICS_TOKEN`). Includes:
+  - `marauder_http_requests_total{method,route,status}`
+  - `marauder_http_request_duration_seconds{method,route}`
+  - `marauder_scheduler_runs_total{result}`
+  - `marauder_scheduler_topic_checks_total{tracker,result}`
+  - `marauder_scheduler_topic_check_duration_seconds{tracker}`
+  - `marauder_tracker_updates_total{tracker}`
+  - `marauder_client_submit_total{client,result}`
+  - default `go_*` and `process_*` collectors
+- **System status page** in the frontend showing the scheduler state,
+  last-run summary, run history, and a Go runtime snapshot, all
+  auto-refreshing every 5 seconds
+
+### Frontend pages
+
+- **Login** — animated card with local form + "Sign in with Keycloak"
+  button (if OIDC is configured)
+- **Dashboard** — four live status tiles + recent activity feed
+- **Topics** — full CRUD with checkboxes, bulk pause/resume/delete,
+  comfortable/compact density toggle, inline add card with auto-detect
+  preview
+- **Clients** — full CRUD with per-plugin field hints, Test-connection
+  button per row, default-client toggle
+- **Notifiers** — full CRUD with per-plugin field hints, Send-test
+  button per row
+- **System** (any user) — live scheduler + runtime status, run history
+- **Audit log** (admin only) — append-only event table with action,
+  actor, target, IP, user-agent, result
+- **OIDC callback** — picks up tokens from the URL fragment and lands
+  the user on the dashboard
+
+### i18n
+
+Tiny zustand-backed module with English and Russian dictionaries plus
+a `useT()` hook. Locale is persisted in `localStorage` and switchable
+from a header dropdown.
+
+### Testing
+
+- **18 unit-test packages** covering crypto, auth, plugin registry,
+  every bundled tracker (where fixtures are available), every bundled
+  client, and every bundled notifier
+- **End-to-end magnet → qBittorrent walkthrough** documented and
+  validated in [`docs/test-e2e-magnet.md`](docs/test-e2e-magnet.md)
+- `go build ./... && go vet ./...` clean
+- `npm run build` produces ~470 KB / ~146 KB gzipped frontend bundle
+
+### Deployment
+
+- Multi-stage Dockerfiles for backend and frontend, both running as
+  non-root users with healthchecks
+- `deploy/docker-compose.yml` — production stack
+- `deploy/docker-compose.dev.yml` — overlay that exposes ports and
+  starts real qBittorrent + Transmission containers
+- `deploy/docker-compose.sso.yml` — overlay that adds Keycloak with a
+  pre-imported realm
+- All host ports are non-standard to avoid colliding with other
+  services on the developer machine: gateway 6688, backend 8679,
+  frontend dev 8680, Vite HMR 5174, Postgres dev 55432, Keycloak 8643
+
+### Documentation
+
+- `README.md` — top-level project overview
+- `docs/VISION.md` — what we're building and why
+- `docs/COMPETITORS.md` — how Marauder relates to Sonarr/Radarr/Prowlarr/
+  Jackett/FlexGet/monitorrent
+- `docs/PRD.md` — full product requirements document
+- `docs/ROADMAP.md` — phased plan with v1.0 status
+- `docs/plugin-development.md` — guide to writing tracker / client /
+  notifier plugins
+- `docs/oidc.md` — Keycloak OIDC walkthrough
+- `docs/test-e2e-magnet.md` — reproducible end-to-end smoke test
+- `docs/migrating-from-monitorrent.md` — migration guide
+- `CONTRIBUTING.md` — local dev, test running, PR checklist
+- `CHANGELOG.md` — this file
+
+[Unreleased]: https://github.com/artyomsv/marauder/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/artyomsv/marauder/releases/tag/v1.0.0

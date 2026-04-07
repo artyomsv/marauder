@@ -1,7 +1,16 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { motion, AnimatePresence } from "framer-motion";
-import { Plus, Trash2, Loader2, AlertTriangle } from "lucide-react";
+import {
+  Plus,
+  Trash2,
+  Loader2,
+  AlertTriangle,
+  Pause,
+  Play,
+  Rows3,
+  Rows4,
+} from "lucide-react";
 
 import { api, type Topic } from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -9,7 +18,8 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { formatRelative } from "@/lib/utils";
+import { cn, formatRelative } from "@/lib/utils";
+import { usePrefs } from "@/lib/prefs";
 
 type TopicsList = { topics: Topic[] | null };
 
@@ -19,14 +29,48 @@ export function TopicsPage() {
     queryKey: ["topics"],
     queryFn: () => api.get<TopicsList>("/topics"),
   });
+  const density = usePrefs((s) => s.density);
+  const setDensity = usePrefs((s) => s.setDensity);
   const [showAdd, setShowAdd] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
 
   const del = useMutation({
     mutationFn: (id: string) => api.del<void>(`/topics/${id}`),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["topics"] }),
   });
+  const pause = useMutation({
+    mutationFn: (id: string) => api.post<void>(`/topics/${id}/pause`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["topics"] }),
+  });
+  const resume = useMutation({
+    mutationFn: (id: string) => api.post<void>(`/topics/${id}/resume`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["topics"] }),
+  });
 
   const topics = data?.topics ?? [];
+  const allSelected = topics.length > 0 && selected.size === topics.length;
+
+  const toggleAll = () => {
+    if (allSelected) {
+      setSelected(new Set());
+    } else {
+      setSelected(new Set(topics.map((t) => t.ID)));
+    }
+  };
+  const toggleOne = (id: string) => {
+    const next = new Set(selected);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    setSelected(next);
+  };
+  const bulk = async (op: "pause" | "resume" | "delete") => {
+    const ids = Array.from(selected);
+    const fn = op === "pause" ? pause : op === "resume" ? resume : del;
+    await Promise.all(ids.map((id) => fn.mutateAsync(id)));
+    setSelected(new Set());
+  };
+
+  const compact = density === "compact";
 
   return (
     <div className="space-y-8">
@@ -40,10 +84,13 @@ export function TopicsPage() {
             Every URL Marauder is actively monitoring for you.
           </p>
         </div>
-        <Button onClick={() => setShowAdd(true)}>
-          <Plus className="size-4" />
-          Add topic
-        </Button>
+        <div className="flex items-center gap-2">
+          <DensityToggle density={density} setDensity={setDensity} />
+          <Button onClick={() => setShowAdd(true)}>
+            <Plus className="size-4" />
+            Add topic
+          </Button>
+        </div>
       </header>
 
       <AnimatePresence>
@@ -58,6 +105,16 @@ export function TopicsPage() {
         )}
       </AnimatePresence>
 
+      {selected.size > 0 && (
+        <BulkActionBar
+          count={selected.size}
+          onPause={() => bulk("pause")}
+          onResume={() => bulk("resume")}
+          onDelete={() => bulk("delete")}
+          onClear={() => setSelected(new Set())}
+        />
+      )}
+
       <Card>
         {isLoading ? (
           <div className="flex items-center justify-center gap-2 p-12 text-sm text-muted-foreground">
@@ -67,59 +124,168 @@ export function TopicsPage() {
         ) : topics.length === 0 ? (
           <EmptyState onAdd={() => setShowAdd(true)} />
         ) : (
-          <div className="divide-y divide-border/60">
-            {topics.map((t) => (
-              <motion.div
-                key={t.ID}
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                className="group flex items-center gap-4 p-4 hover:bg-accent/5"
-              >
-                <StatusIndicator status={t.Status} />
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    <span className="truncate font-medium">{t.DisplayName}</span>
-                    <Badge variant="outline" className="font-mono">
-                      {t.TrackerName}
-                    </Badge>
+          <>
+            <div className="flex items-center gap-3 border-b border-border/60 px-4 py-2 text-xs text-muted-foreground">
+              <input
+                type="checkbox"
+                checked={allSelected}
+                onChange={toggleAll}
+                className="size-4 cursor-pointer"
+                aria-label="Select all"
+              />
+              <span>{topics.length} topics</span>
+            </div>
+            <div className="divide-y divide-border/60">
+              {topics.map((t) => (
+                <motion.div
+                  key={t.ID}
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  className={cn(
+                    "group flex items-center gap-4 hover:bg-accent/5",
+                    compact ? "p-2" : "p-4",
+                    selected.has(t.ID) && "bg-primary/5",
+                  )}
+                >
+                  <input
+                    type="checkbox"
+                    checked={selected.has(t.ID)}
+                    onChange={() => toggleOne(t.ID)}
+                    className="size-4 cursor-pointer"
+                    aria-label="Select topic"
+                  />
+                  <StatusIndicator status={t.Status} />
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className="truncate font-medium">{t.DisplayName}</span>
+                      <Badge variant="outline" className="font-mono">
+                        {t.TrackerName}
+                      </Badge>
+                    </div>
+                    {!compact && (
+                      <div className="truncate font-mono text-xs text-muted-foreground">
+                        {t.URL}
+                      </div>
+                    )}
+                    {t.LastError && (
+                      <div className="mt-1 flex items-center gap-1.5 text-xs text-destructive">
+                        <AlertTriangle className="size-3" />
+                        {t.LastError}
+                      </div>
+                    )}
                   </div>
-                  <div className="truncate font-mono text-xs text-muted-foreground">
-                    {t.URL}
-                  </div>
-                  {t.LastError && (
-                    <div className="mt-1 flex items-center gap-1.5 text-xs text-destructive">
-                      <AlertTriangle className="size-3" />
-                      {t.LastError}
+                  {!compact && (
+                    <div className="hidden lg:block text-right">
+                      <div className="text-xs text-muted-foreground">checked</div>
+                      <div className="text-sm">
+                        {formatRelative(t.LastCheckedAt)}
+                      </div>
                     </div>
                   )}
-                </div>
-                <div className="hidden lg:block text-right">
-                  <div className="text-xs text-muted-foreground">checked</div>
-                  <div className="text-sm">
-                    {formatRelative(t.LastCheckedAt)}
-                  </div>
-                </div>
-                <div className="hidden xl:block text-right">
-                  <div className="text-xs text-muted-foreground">updated</div>
-                  <div className="text-sm">
-                    {formatRelative(t.LastUpdatedAt)}
-                  </div>
-                </div>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="opacity-0 group-hover:opacity-100 text-destructive"
-                  onClick={() => del.mutate(t.ID)}
-                  aria-label="Delete topic"
-                >
-                  <Trash2 className="size-4" />
-                </Button>
-              </motion.div>
-            ))}
-          </div>
+                  {!compact && (
+                    <div className="hidden xl:block text-right">
+                      <div className="text-xs text-muted-foreground">updated</div>
+                      <div className="text-sm">
+                        {formatRelative(t.LastUpdatedAt)}
+                      </div>
+                    </div>
+                  )}
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="opacity-0 group-hover:opacity-100 text-destructive"
+                    onClick={() => del.mutate(t.ID)}
+                    aria-label="Delete topic"
+                  >
+                    <Trash2 className="size-4" />
+                  </Button>
+                </motion.div>
+              ))}
+            </div>
+          </>
         )}
       </Card>
     </div>
+  );
+}
+
+function DensityToggle({
+  density,
+  setDensity,
+}: {
+  density: "comfortable" | "compact";
+  setDensity: (d: "comfortable" | "compact") => void;
+}) {
+  return (
+    <div className="inline-flex rounded-md border border-border/60 bg-background/40 p-0.5">
+      <button
+        type="button"
+        aria-label="Comfortable density"
+        onClick={() => setDensity("comfortable")}
+        className={cn(
+          "flex size-8 items-center justify-center rounded-sm transition-colors",
+          density === "comfortable"
+            ? "bg-primary/15 text-primary"
+            : "text-muted-foreground hover:text-foreground",
+        )}
+      >
+        <Rows3 className="size-4" />
+      </button>
+      <button
+        type="button"
+        aria-label="Compact density"
+        onClick={() => setDensity("compact")}
+        className={cn(
+          "flex size-8 items-center justify-center rounded-sm transition-colors",
+          density === "compact"
+            ? "bg-primary/15 text-primary"
+            : "text-muted-foreground hover:text-foreground",
+        )}
+      >
+        <Rows4 className="size-4" />
+      </button>
+    </div>
+  );
+}
+
+function BulkActionBar({
+  count,
+  onPause,
+  onResume,
+  onDelete,
+  onClear,
+}: {
+  count: number;
+  onPause: () => void;
+  onResume: () => void;
+  onDelete: () => void;
+  onClear: () => void;
+}) {
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: -8 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="flex items-center gap-3 rounded-lg border border-primary/30 bg-primary/10 px-4 py-3 text-sm"
+    >
+      <span className="font-medium">{count} selected</span>
+      <span className="ml-auto flex gap-2">
+        <Button variant="outline" size="sm" onClick={onPause}>
+          <Pause className="size-4" />
+          Pause
+        </Button>
+        <Button variant="outline" size="sm" onClick={onResume}>
+          <Play className="size-4" />
+          Resume
+        </Button>
+        <Button variant="destructive" size="sm" onClick={onDelete}>
+          <Trash2 className="size-4" />
+          Delete
+        </Button>
+        <Button variant="ghost" size="sm" onClick={onClear}>
+          Clear
+        </Button>
+      </span>
+    </motion.div>
   );
 }
 

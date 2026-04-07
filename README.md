@@ -7,10 +7,13 @@
 **A modern, self-hosted torrent topic monitor — successor to monitorrent.**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Status: alpha](https://img.shields.io/badge/status-alpha-orange.svg)](#project-status)
-[![Go](https://img.shields.io/badge/backend-Go-00ADD8.svg)](backend/)
-[![React 19](https://img.shields.io/badge/frontend-React%2019-61DAFB.svg)](frontend/)
+[![Release: v1.0.0](https://img.shields.io/badge/release-v1.0.0-success.svg)](CHANGELOG.md)
+[![Go](https://img.shields.io/badge/backend-Go%201.23-00ADD8.svg)](backend/)
+[![React 19](https://img.shields.io/badge/frontend-React%2019.2-61DAFB.svg)](frontend/)
 [![Postgres 18](https://img.shields.io/badge/database-Postgres%2018-336791.svg)](deploy/)
+[![11 trackers](https://img.shields.io/badge/trackers-11-violet.svg)](docs/plugin-development.md)
+[![5 clients](https://img.shields.io/badge/clients-5-violet.svg)](docs/plugin-development.md)
+[![4 notifiers](https://img.shields.io/badge/notifiers-4-violet.svg)](docs/plugin-development.md)
 
 [Vision](docs/VISION.md) · [Competitors](docs/COMPETITORS.md) · [PRD](docs/PRD.md) · [Roadmap](docs/ROADMAP.md) · [Changelog](CHANGELOG.md)
 
@@ -57,10 +60,34 @@ Read the full rationale: [VISION.md](docs/VISION.md) ·
 
 ## Project status
 
-> ⚠️ **Alpha.** Marauder is under active development. The vision, PRD, and
-> roadmap are stable; the code is not yet. Expect breaking changes until
-> **v1.0.0** is tagged. See [ROADMAP.md](docs/ROADMAP.md) for the current
-> milestone.
+**v1.0.0** — initial production release.
+
+What works **today**:
+
+- Full stack comes up with `docker compose up -d` and four healthy
+  containers (db + backend + frontend + nginx gateway).
+- Local username/password login with Argon2id, ES256 JWT, refresh-token
+  rotation, master-key-encrypted secrets at rest.
+- OIDC sign-in via Keycloak (or any OIDC provider). Bring up the
+  bundled Keycloak realm with the `sso` compose profile.
+- 11 tracker plugins, 5 torrent-client plugins, 4 notifier plugins.
+- Generic-magnet → qBittorrent end-to-end pipeline validated against
+  a real qBittorrent docker container — see
+  [`docs/test-e2e-magnet.md`](docs/test-e2e-magnet.md).
+- Cloudflare-bypass sidecar (`cfsolver` profile) for trackers wrapped
+  in CF interstitials.
+- Audit log, Prometheus metrics, structured JSON logs, system status
+  page.
+- English + Russian UI.
+
+What's still **alpha**: the seven CIS forum-tracker plugins
+(RuTracker, Kinozal, NNM-Club, LostFilm, Anidub, Toloka, Unionpeer,
+Tapochek) are structurally complete with fixture-based tests but have
+not been validated against live sites in this development cycle —
+that requires real account credentials and is the first thing
+community contributors will help with. Anilibria and Rutor use public
+APIs and should validate cleanly. See [CHANGELOG.md](CHANGELOG.md) for
+the per-plugin status table.
 
 ---
 
