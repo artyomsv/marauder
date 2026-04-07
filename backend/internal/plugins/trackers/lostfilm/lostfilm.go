@@ -168,12 +168,27 @@ func (p *plugin) Check(ctx context.Context, topic *domain.Topic, creds *domain.T
 	return check, nil
 }
 
-// Download is a placeholder. The real LostFilm flow requires extracting
-// a redirector URL keyed off the chosen quality and current cookies, which
-// can only be exercised against a live account. Returning an error makes
-// the failure visible in the UI rather than silently producing junk.
-func (p *plugin) Download(_ context.Context, _ *domain.Topic, _ *domain.Check, _ *domain.TrackerCredential) (*domain.Payload, error) {
-	return nil, errors.New("lostfilm Download path needs live-account validation: tracked in techdebt/")
+// magnetRe matches a magnet URI in the page body.
+var magnetRe = regexp.MustCompile(`(magnet:\?xt=urn:btih:[A-Fa-f0-9]+[^"'&\s]*)`)
+
+// Download fetches the series page and extracts a magnet URI if one is
+// present. If the page only exposes a redirector flow (which the real
+// LostFilm site uses for paid users), we return a clear error so the
+// failure is visible in the UI.
+//
+// The redirector flow is intentionally not implemented in v1.0 — it
+// requires a live LostFilm account to validate, and the redirector
+// changes shape periodically. CONTRIBUTING.md explains how a contributor
+// with an account can flesh it out.
+func (p *plugin) Download(ctx context.Context, topic *domain.Topic, _ *domain.Check, creds *domain.TrackerCredential) (*domain.Payload, error) {
+	body, err := p.fetch(ctx, topic.URL, creds)
+	if err != nil {
+		return nil, err
+	}
+	if m := magnetRe.Find(body); m != nil {
+		return &domain.Payload{MagnetURI: string(m)}, nil
+	}
+	return nil, errors.New("lostfilm Download: no magnet on the series page (the real redirector flow needs live-account validation)")
 }
 
 func (p *plugin) fetch(ctx context.Context, target string, creds *domain.TrackerCredential) ([]byte, error) {

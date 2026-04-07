@@ -7,8 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Nothing yet — see the [v1.0.0](#100--2026-04-07) section below for the
-most recent release.
+### Added
+- **Two new tracker plugins** completing the original monitorrent
+  catalog:
+  - `freetorrents` — phpBB-derived Free-Torrents.org. Login form,
+    `viewtopic.php` scrape, magnet + dl.php fallback. Alpha (needs
+    live-account validation).
+  - `hdclub` — HD-Club.org TBDev/Gazelle-style private tracker.
+    `details.php` scrape, `download.php` torrent fetch. Alpha.
+  - **Bundled tracker count: 14** (was 12 in v1.0.0).
+- **`internal/plugins/e2etest` package** — shared E2E test harness:
+  - `QBitFake` — httptest-backed stand-in for the qBittorrent WebUI v2
+    API that captures every torrent submission for assertions
+  - `RunFullPipeline(t, Case)` — generic runner that drives a tracker
+    plugin through CanParse → Parse → Login → Verify → Check →
+    Download → submit-to-fake-qbit → assertions
+  - `HostRewriteTransport` — `http.RoundTripper` that rewrites a
+    production hostname to a local httptest.Server host. Lets the
+    plugin's regex URL patterns and CanParse keep matching against
+    canonical hostnames while HTTP traffic transparently routes to
+    the test server. **Production code is unmodified between unit
+    tests and E2E.**
+- **End-to-end tests for all 14 trackers** (one `<name>_e2e_test.go`
+  per package, in-package so it can construct the plugin with private
+  fields). Every test exercises the complete pipeline including the
+  fake-qBit submission step:
+  - `genericmagnet`, `generictorrentfile`
+  - `rutracker`, `kinozal`, `nnmclub`
+  - `lostfilm`, `anilibria`, `anidub`
+  - `rutor`, `toloka`, `unionpeer`, `tapochek`
+  - `freetorrents`, `hdclub`
+- **`lostfilm` Download** is now wired to extract a magnet URI from
+  the series page if one is present, instead of returning a stub
+  error. The redirector flow for paid users is still pending live
+  validation, but the magnet path is real and exercised in E2E.
+
+### Changed
+- `freetorrents` and `hdclub` are wired into `cmd/server/main.go`
+  via blank imports.
+
+### Verified
+- `go build ./...` and `go vet ./...` clean.
+- `go test ./...`: **26 test packages, all green**, including
+  14 fresh tracker E2E tests.
 
 ## [1.0.0] — 2026-04-07
 

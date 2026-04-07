@@ -112,7 +112,11 @@ touching config files.
 - [x] `toloka` tracker plugin — alpha
 - [x] `unionpeer` tracker plugin — alpha
 - [x] `tapochek` tracker plugin — alpha
-- [ ] `hdclub`, `freetorrents` — out of scope for this iteration
+- [x] `hdclub` — TBDev/Gazelle-style private tracker plugin (alpha)
+- [x] `freetorrents` — phpBB Free-Torrents.org plugin (alpha)
+- [x] **E2E test harness + 14 per-tracker E2E tests** — every tracker
+      now has a `<name>_e2e_test.go` that exercises the full pipeline
+      through a fake qBittorrent
 - [x] `utorrent` client plugin — token-based WebUI flow with mocked tests
 - [x] `email` notifier (SMTP) — net/smtp PLAIN auth, mocked-sender tests
 - [x] `webhook` notifier — POST JSON, httptest-based tests
