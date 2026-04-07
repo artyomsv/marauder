@@ -17,7 +17,7 @@ import { NotifiersPage } from "@/pages/Notifiers";
 import { SystemPage } from "@/pages/System";
 import { AuditPage } from "@/pages/Audit";
 import { OIDCCallbackPage } from "@/pages/OIDCCallback";
-import { PlaceholderPage } from "@/pages/Placeholder";
+import { SettingsPage } from "@/pages/Settings";
 import { useAuthStore } from "@/lib/auth-store";
 import { api, type Me } from "@/lib/api";
 
@@ -65,15 +65,7 @@ export default function App() {
               <Route path="notifiers" element={<NotifiersPage />} />
               <Route path="system" element={<SystemPage />} />
               <Route path="audit" element={<AuditPage />} />
-              <Route
-                path="settings"
-                element={
-                  <PlaceholderPage
-                    title="Settings"
-                    blurb="Global preferences, scheduler interval, OIDC configuration, theme."
-                  />
-                }
-              />
+              <Route path="settings" element={<SettingsPage />} />
             </Route>
           </Route>
           <Route path="*" element={<Navigate to="/" replace />} />

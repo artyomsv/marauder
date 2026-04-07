@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (Phase 2 — real Settings page + change-password endpoint)
+- **`frontend/src/pages/Settings.tsx`** replaces the v0.4 placeholder
+  with a real Settings page. Three sections, single column:
+  - **Appearance** — segmented controls for theme (light/dark),
+    language (English/Русский), and table density
+    (comfortable/compact). All three are persisted in
+    `marauder-prefs` localStorage via the existing `usePrefs` Zustand
+    store. Server-side persistence is deferred.
+  - **Account** — username + email read-only, plus a three-field
+    change-password form (current / new / confirm) wired to the new
+    backend endpoint. Sign-out button revokes the refresh token and
+    clears the auth store.
+  - **About** — version (`v0.4.0-alpha`), license, links to
+    marauder.cc, GitHub, CHANGELOG, ROADMAP.
+- **`POST /api/v1/auth/me/password`** in
+  `backend/internal/api/handlers/auth.go` — change-password handler
+  for local accounts. Verifies the current password with Argon2id,
+  enforces an 8-char minimum on the new password, hashes with
+  Argon2id, persists via the new
+  `Users.UpdatePasswordHash(ctx, id, hash)` repo method, audit-logs
+  every attempt (success and failure). OIDC-only accounts are
+  rejected with 400 because they have no local password to change.
+- The route registration in `frontend/src/App.tsx` now points
+  `/settings` at `<SettingsPage>` instead of the generic placeholder.
+- New i18n keys under `settings.*` in both `en.ts` and `ru.ts`.
+
 ### Changed (Phase 1 — visual & interaction polish across app + site)
 - **Brand palette switched from violet/cyan to blue/amber/slate.** Only
   CSS tokens were touched; every component reads

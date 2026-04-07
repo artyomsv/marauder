@@ -247,6 +247,77 @@ func (h *Auth) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, h.BaseURL+"/oidc-callback#"+frag, http.StatusFound)
 }
 
+type changePasswordReq struct {
+	CurrentPassword string `json:"current_password"`
+	NewPassword     string `json:"new_password"`
+}
+
+// ChangePassword handles POST /auth/me/password.
+//
+// Verifies the caller's current password (Argon2id), rejects with 401
+// on mismatch, then writes a fresh Argon2id hash. Local accounts only —
+// OIDC-provisioned users get a 400 because they have no local password.
+func (h *Auth) ChangePassword(w http.ResponseWriter, r *http.Request) {
+	claims := middleware.ClaimsFromContext(r.Context())
+	if claims == nil {
+		problem.Write(w, r, h.BaseURL, problem.ErrUnauthorized("no claims"))
+		return
+	}
+	id, err := uuid.Parse(claims.UserID)
+	if err != nil {
+		problem.Write(w, r, h.BaseURL, problem.ErrUnauthorized("bad claims"))
+		return
+	}
+
+	var req changePasswordReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		problem.Write(w, r, h.BaseURL, problem.ErrBadRequest("invalid JSON"))
+		return
+	}
+	if req.CurrentPassword == "" || req.NewPassword == "" {
+		problem.Write(w, r, h.BaseURL, problem.ErrBadRequest("current_password and new_password required"))
+		return
+	}
+	if len(req.NewPassword) < 8 {
+		problem.Write(w, r, h.BaseURL, problem.ErrBadRequest("new password must be at least 8 characters"))
+		return
+	}
+
+	u, err := h.Users.GetByID(r.Context(), id)
+	if err != nil {
+		problem.Write(w, r, h.BaseURL, problem.ErrInternal(err.Error()))
+		return
+	}
+	if u.PasswordHash == "" {
+		problem.Write(w, r, h.BaseURL, problem.ErrBadRequest("this account has no local password (OIDC-only)"))
+		return
+	}
+
+	ok, err := crypto.VerifyPassword(req.CurrentPassword, u.PasswordHash)
+	if err != nil || !ok {
+		ip, ua := audit.FromRequest(r)
+		h.Audit.Generic(&u.ID, "password_change", "user", u.ID.String(), "failure",
+			map[string]any{"reason": "wrong current password", "ip": ip, "ua": ua})
+		problem.Write(w, r, h.BaseURL, problem.ErrUnauthorized("current password is incorrect"))
+		return
+	}
+
+	newHash, err := crypto.HashPassword(req.NewPassword)
+	if err != nil {
+		problem.Write(w, r, h.BaseURL, problem.ErrInternal("hash password: "+err.Error()))
+		return
+	}
+	if err := h.Users.UpdatePasswordHash(r.Context(), u.ID, newHash); err != nil {
+		problem.Write(w, r, h.BaseURL, problem.ErrInternal("save password: "+err.Error()))
+		return
+	}
+
+	ip, ua := audit.FromRequest(r)
+	h.Audit.Generic(&u.ID, "password_change", "user", u.ID.String(), "success",
+		map[string]any{"ip": ip, "ua": ua})
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // Me handles GET /auth/me.
 func (h *Auth) Me(w http.ResponseWriter, r *http.Request) {
 	claims := middleware.ClaimsFromContext(r.Context())

@@ -111,6 +111,7 @@ func NewRouter(d Deps) http.Handler {
 			r.Use(middleware.RequireAuth(d.Manager, d.Cfg.PublicBaseURL))
 
 			r.Get("/auth/me", authH.Me)
+			r.Post("/auth/me/password", authH.ChangePassword)
 			r.Get("/system/status", sysH.Status)
 
 			r.Get("/topics", topicsH.List)

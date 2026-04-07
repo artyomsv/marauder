@@ -97,3 +97,11 @@ func (r *Users) UpdateLastLogin(ctx context.Context, id uuid.UUID, t time.Time) 
 	_, err := r.pool.Exec(ctx, `UPDATE users SET last_login_at = $2, updated_at = now() WHERE id = $1`, id, t)
 	return err
 }
+
+// UpdatePasswordHash rotates the user's password hash. Used by the
+// "change password" flow in the Settings page. Caller is responsible
+// for verifying the current password before calling this.
+func (r *Users) UpdatePasswordHash(ctx context.Context, id uuid.UUID, hash string) error {
+	_, err := r.pool.Exec(ctx, `UPDATE users SET password_hash = $2, updated_at = now() WHERE id = $1`, id, hash)
+	return err
+}
