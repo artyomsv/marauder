@@ -1,0 +1,90 @@
+---
+import { SITE } from "@/data/seo";
+
+const sections = [
+  {
+    title: "Product",
+    links: [
+      { href: "/features", text: "Features" },
+      { href: "/trackers", text: "Trackers" },
+      { href: "/integrations", text: "Integrations" },
+      { href: "/install", text: "Install" },
+    ],
+  },
+  {
+    title: "Compare",
+    links: [
+      { href: "/vs/sonarr", text: "vs Sonarr / Radarr" },
+      { href: "/vs/monitorrent", text: "vs monitorrent" },
+    ],
+  },
+  {
+    title: "Documentation",
+    links: [
+      { href: "/docs", text: "Documentation" },
+      { href: SITE.github + "/blob/main/docs/PRD.md", text: "PRD", external: true },
+      { href: SITE.github + "/blob/main/docs/plugin-development.md", text: "Plugin guide", external: true },
+      { href: SITE.github + "/blob/main/docs/oidc.md", text: "Keycloak / OIDC", external: true },
+      { href: SITE.github + "/blob/main/docs/torznab-newznab.md", text: "Torznab / Newznab", external: true },
+      { href: SITE.github + "/blob/main/docs/migrating-from-monitorrent.md", text: "Migrate from monitorrent", external: true },
+      { href: SITE.github + "/blob/main/CHANGELOG.md", text: "Changelog", external: true },
+    ],
+  },
+  {
+    title: "Project",
+    links: [
+      { href: SITE.github, text: "GitHub", external: true },
+      { href: SITE.github + "/issues", text: "Issues", external: true },
+      { href: SITE.github + "/blob/main/CONTRIBUTING.md", text: "Contributing", external: true },
+      { href: SITE.github + "/blob/main/LICENSE", text: "MIT License", external: true },
+      { href: "/legal", text: "Disclaimer" },
+    ],
+  },
+];
+
+const year = new Date().getFullYear();
+---
+<footer class="mt-32 border-t border-border/60 bg-background/40">
+  <div class="mx-auto max-w-6xl px-6 py-14">
+    <div class="grid grid-cols-2 gap-10 md:grid-cols-4">
+      {sections.map((section) => (
+        <nav aria-labelledby={`footer-${section.title.toLowerCase()}`}>
+          <h2 id={`footer-${section.title.toLowerCase()}`} class="mb-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+            {section.title}
+          </h2>
+          <ul class="space-y-2 text-sm">
+            {section.links.map((link) => (
+              <li>
+                <a href={link.href}
+                   rel={link.external ? "noopener external" : undefined}
+                   class="text-muted-foreground transition-colors hover:text-foreground">
+                  {link.text}
+                </a>
+              </li>
+            ))}
+          </ul>
+        </nav>
+      ))}
+    </div>
+
+    <div class="mt-12 flex flex-col items-start justify-between gap-3 border-t border-border/60 pt-8 sm:flex-row sm:items-center">
+      <div class="flex items-center gap-3">
+        <span class="relative inline-flex size-7 items-center justify-center">
+          <span class="absolute inset-0 rounded-md bg-gradient-to-br from-primary to-accent opacity-90 blur-[1px]"></span>
+          <svg viewBox="0 0 64 64" class="relative size-5 text-primary-foreground" aria-hidden="true">
+            <path d="M16 44 L16 20 L28 36 L32 30 L36 36 L48 20 L48 44"
+                  fill="none" stroke="currentColor" stroke-width="5"
+                  stroke-linejoin="round" stroke-linecap="round" />
+          </svg>
+        </span>
+        <p class="text-xs text-muted-foreground">
+          © {year} Marauder &middot; Released under the
+          <a href={SITE.github + "/blob/main/LICENSE"} class="underline hover:text-foreground" rel="noopener external">MIT License</a>
+        </p>
+      </div>
+      <p class="text-xs text-muted-foreground">
+        Built with <a href="https://astro.build" class="underline hover:text-foreground" rel="noopener external">Astro</a> &middot; Hosted on GitHub Pages
+      </p>
+    </div>
+  </div>
+</footer>

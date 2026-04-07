@@ -32,6 +32,12 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 
+# Astro marketing site
+/site/node_modules/
+/site/dist/
+/site/.astro/
+/site/.vite/
+
 # Build artifacts
 *.log
 *.pid

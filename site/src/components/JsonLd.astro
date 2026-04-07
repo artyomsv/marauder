@@ -1,0 +1,27 @@
+---
+// JsonLd emits one or more <script type="application/ld+json"> blocks.
+//
+// Why this is its own component:
+//   - Centralised JSON serialization with the </script> escape
+//   - Easy to add new schema types per page
+//   - Tested visually by inspecting the rendered HTML
+//
+// XSS guard: JSON.stringify is safe for normal data, but a literal
+// "</script>" inside a string would close the surrounding script tag.
+// We replace it with the standard escape "<\/script>" before injection.
+
+interface Props {
+  /** One or more JSON-LD documents. Each renders as its own <script>. */
+  data: Record<string, unknown> | Record<string, unknown>[];
+}
+
+const { data } = Astro.props;
+const docs = Array.isArray(data) ? data : [data];
+
+function safeJson(d: Record<string, unknown>): string {
+  return JSON.stringify(d).replace(/<\/script/gi, "<\\/script");
+}
+---
+{docs.map((doc) => (
+  <script is:inline type="application/ld+json" set:html={safeJson(doc)} />
+))}

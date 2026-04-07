@@ -1,0 +1,278 @@
+---
+import Page from "@/layouts/Page.astro";
+import { SITE } from "@/data/seo";
+import { trackers, trackerCount } from "@/data/trackers";
+import { clients } from "@/data/clients";
+import { notifiers } from "@/data/notifiers";
+import { homeFaq } from "@/data/faq";
+import { softwareApplicationSchema, faqSchema } from "@/data/schemas";
+
+const seo = {
+  title: "Self-hosted torrent topic monitor",
+  description:
+    "Marauder is an open-source, self-hosted application that watches torrent forum-tracker topics for updates and automatically delivers torrents to qBittorrent, Transmission, Deluge, or a watch folder. The modern monitorrent successor.",
+  path: "/",
+  keywords: [
+    "marauder torrent",
+    "self-hosted torrent monitor",
+    "monitorrent alternative",
+    "rutracker auto download",
+    "torrent topic monitor",
+    "sonarr forum tracker",
+    "torznab newznab self-hosted",
+  ],
+};
+
+const schemas = [softwareApplicationSchema(), faqSchema(homeFaq)];
+
+const featureCards = [
+  {
+    icon: "📡",
+    title: "Watch any forum tracker",
+    body: "Drop in a RuTracker, Kinozal, NNM-Club, LostFilm, Anidub, Anilibria, Toloka, or generic .torrent URL. Marauder logs in, scrapes the topic page, and detects when an uploader replaces the file.",
+  },
+  {
+    icon: "🌍",
+    title: "500+ indexers via Torznab and Newznab",
+    body: "First-class plugins for both protocols mean every Jackett, Prowlarr, NZBHydra2, NZBGeek, and DOGnzb indexer becomes a Marauder topic with one URL paste.",
+  },
+  {
+    icon: "🚀",
+    title: "Hands off the moment it ships",
+    body: "When a topic updates, Marauder hands the torrent or NZB straight to qBittorrent, Transmission, Deluge, µTorrent, or a SABnzbd watch folder — no clicking, no copy-paste.",
+  },
+  {
+    icon: "🔐",
+    title: "Secure by default",
+    body: "Argon2id passwords, ES256 JWTs with refresh-token rotation, AES-256-GCM at-rest encryption for stored credentials, optional OIDC sign-in via Keycloak, audit log out of the box.",
+  },
+  {
+    icon: "📊",
+    title: "Observable from day one",
+    body: "Prometheus /metrics endpoint, structured JSON logs, /health and /ready, a live System status page, and per-topic event history. Monitor your monitor.",
+  },
+  {
+    icon: "🧩",
+    title: "One-file plugin model",
+    body: "A new tracker is one Go file implementing one interface. Twelve linters, 29 test packages, in-process E2E test harness. Adding a tracker is a weekend project, not an archaeology dig.",
+  },
+];
+
+const stats = [
+  { label: "Bundled trackers", value: trackerCount.toString() },
+  { label: "Torrent clients", value: clients.length.toString() },
+  { label: "Notification targets", value: notifiers.length.toString() },
+  { label: "Test packages", value: "29" },
+];
+
+const installCmd = `git clone https://github.com/artyomsv/marauder.git
+cd marauder/deploy
+cp .env.example .env
+
+# generate a master encryption key
+sed -i "s|MARAUDER_MASTER_KEY=.*|MARAUDER_MASTER_KEY=$(openssl rand -base64 32)|" .env
+
+# bring the stack up
+docker compose --env-file .env up -d
+open http://localhost:6688`;
+---
+<Page {...seo} schemas={schemas}>
+  <!-- ============================================================ HERO -->
+  <section class="relative overflow-hidden">
+    <!-- Background grid + radial glow -->
+    <div class="pointer-events-none absolute inset-0 -z-10" aria-hidden="true">
+      <div class="absolute inset-0 opacity-[0.07]"
+           style="background-image: linear-gradient(hsl(var(--foreground)) 1px, transparent 1px), linear-gradient(90deg, hsl(var(--foreground)) 1px, transparent 1px); background-size: 56px 56px; mask-image: radial-gradient(ellipse 60% 50% at 50% 30%, black 30%, transparent 80%);">
+      </div>
+      <div class="absolute left-1/2 top-1/3 size-[700px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-primary/15 blur-[140px]"></div>
+      <div class="absolute right-0 bottom-0 size-[500px] rounded-full bg-accent/15 blur-[140px]"></div>
+    </div>
+
+    <div class="mx-auto max-w-6xl px-6 pt-20 pb-24 text-center sm:pt-28 sm:pb-32">
+      <p class="mb-4 inline-flex items-center gap-2 rounded-full border border-border/60 bg-background/40 px-3 py-1 text-xs font-medium text-muted-foreground">
+        <span class="size-1.5 rounded-full bg-success animate-pulse"></span>
+        v{SITE.software.version} · MIT licensed · Self-hosted
+      </p>
+      <h1 class="mx-auto max-w-3xl text-4xl font-bold tracking-tight text-foreground sm:text-6xl">
+        Watch every torrent thread.
+        <span class="block bg-gradient-to-r from-primary to-accent bg-clip-text text-transparent">
+          Skip the boring part.
+        </span>
+      </h1>
+      <p class="mx-auto mt-6 max-w-2xl text-lg text-muted-foreground sm:text-xl">
+        Marauder is the self-hosted torrent topic monitor for forum-style trackers
+        the <em>arr stack can't reach. The modern, secure, observable successor to
+        <a href="https://github.com/werwolfby/monitorrent" class="text-foreground underline decoration-primary/60 underline-offset-4 hover:decoration-primary" rel="noopener external">monitorrent</a>.
+      </p>
+
+      <div class="mt-10 flex flex-wrap items-center justify-center gap-3">
+        <a href="/install" class="btn-primary">
+          Install in 5 minutes
+          <svg class="size-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M5 12h14M13 5l7 7-7 7"/>
+          </svg>
+        </a>
+        <a href={SITE.github} rel="noopener external" class="btn-outline">
+          <svg viewBox="0 0 24 24" class="size-4" aria-hidden="true" fill="currentColor">
+            <path d="M12 .3a12 12 0 0 0-3.8 23.4c.6.1.8-.3.8-.6v-2c-3.3.7-4-1.6-4-1.6-.6-1.4-1.4-1.8-1.4-1.8-1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1 1.8 2.8 1.3 3.5 1 .1-.8.4-1.3.7-1.6-2.7-.3-5.5-1.3-5.5-6 0-1.3.5-2.4 1.2-3.2-.1-.3-.5-1.5.1-3.2 0 0 1-.3 3.3 1.2a11.5 11.5 0 0 1 6 0c2.3-1.5 3.3-1.2 3.3-1.2.6 1.7.2 2.9.1 3.2.8.8 1.2 1.9 1.2 3.2 0 4.6-2.8 5.6-5.5 5.9.4.4.8 1.1.8 2.2v3.3c0 .3.2.7.8.6A12 12 0 0 0 12 .3"/>
+          </svg>
+          Source on GitHub
+        </a>
+      </div>
+
+      <!-- Stat strip -->
+      <dl class="mx-auto mt-16 grid max-w-3xl grid-cols-2 gap-6 text-center sm:grid-cols-4">
+        {stats.map((s) => (
+          <div>
+            <dt class="text-xs uppercase tracking-wider text-muted-foreground">{s.label}</dt>
+            <dd class="mt-1 font-mono text-2xl font-semibold text-foreground sm:text-3xl">{s.value}</dd>
+          </div>
+        ))}
+      </dl>
+    </div>
+  </section>
+
+  <!-- ============================================================ FEATURES -->
+  <section class="mx-auto max-w-6xl px-6 py-20" aria-labelledby="features-heading">
+    <div class="mb-14 text-center">
+      <p class="mb-2 text-xs font-mono uppercase tracking-wider text-primary">what it does</p>
+      <h2 id="features-heading" class="text-3xl font-bold tracking-tight sm:text-4xl">
+        Everything monitorrent did, plus the things it didn't.
+      </h2>
+      <p class="mx-auto mt-3 max-w-2xl text-muted-foreground">
+        Marauder is built around a single idea: paste a URL, walk away, never miss a release.
+        Everything else exists to make that one thing reliable, secure, and observable.
+      </p>
+    </div>
+
+    <div class="grid gap-5 md:grid-cols-2 lg:grid-cols-3">
+      {featureCards.map((card) => (
+        <article class="glass-card rounded-xl p-6">
+          <div class="mb-4 inline-flex size-11 items-center justify-center rounded-lg bg-primary/15 text-2xl ring-1 ring-primary/25" aria-hidden="true">
+            {card.icon}
+          </div>
+          <h3 class="text-lg font-semibold text-foreground">{card.title}</h3>
+          <p class="mt-2 text-sm text-muted-foreground">{card.body}</p>
+        </article>
+      ))}
+    </div>
+  </section>
+
+  <!-- ============================================================ QUICK START -->
+  <section class="mx-auto max-w-6xl px-6 py-20" aria-labelledby="quickstart-heading">
+    <div class="grid gap-12 lg:grid-cols-2 lg:items-center">
+      <div>
+        <p class="mb-2 text-xs font-mono uppercase tracking-wider text-primary">quick start</p>
+        <h2 id="quickstart-heading" class="text-3xl font-bold tracking-tight sm:text-4xl">
+          From zero to your first torrent in five minutes.
+        </h2>
+        <p class="mt-4 text-muted-foreground">
+          Marauder ships as a four-container Docker compose stack: PostgreSQL,
+          backend, frontend, and an nginx gateway. The only thing you need on the
+          host is Docker — no Go, no Node, no Postgres toolchain.
+        </p>
+        <ol class="mt-6 space-y-3 text-sm text-muted-foreground">
+          <li class="flex items-start gap-3">
+            <span class="mt-0.5 inline-flex size-6 shrink-0 items-center justify-center rounded-full bg-primary/15 text-xs font-semibold text-primary ring-1 ring-primary/25">1</span>
+            <span><strong class="text-foreground">Clone the repo</strong> and copy the example env file.</span>
+          </li>
+          <li class="flex items-start gap-3">
+            <span class="mt-0.5 inline-flex size-6 shrink-0 items-center justify-center rounded-full bg-primary/15 text-xs font-semibold text-primary ring-1 ring-primary/25">2</span>
+            <span><strong class="text-foreground">Generate a master key</strong> with <code>openssl rand -base64 32</code>.</span>
+          </li>
+          <li class="flex items-start gap-3">
+            <span class="mt-0.5 inline-flex size-6 shrink-0 items-center justify-center rounded-full bg-primary/15 text-xs font-semibold text-primary ring-1 ring-primary/25">3</span>
+            <span><strong class="text-foreground">docker compose up -d</strong> — open <code>http://localhost:6688</code>.</span>
+          </li>
+        </ol>
+        <div class="mt-8 flex flex-wrap gap-3">
+          <a href="/install" class="btn-primary">Full install guide</a>
+          <a href="/integrations" class="btn-outline">See integrations</a>
+        </div>
+      </div>
+
+      <div class="glass-card rounded-xl overflow-hidden">
+        <div class="flex items-center gap-2 border-b border-border/60 px-4 py-2.5 bg-background/40">
+          <span class="size-2.5 rounded-full bg-destructive/70"></span>
+          <span class="size-2.5 rounded-full bg-warning/70"></span>
+          <span class="size-2.5 rounded-full bg-success/70"></span>
+          <span class="ml-3 font-mono text-xs text-muted-foreground">install.sh</span>
+        </div>
+        <pre class="text-xs sm:text-sm leading-relaxed !rounded-none !border-0"><code>{installCmd}</code></pre>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================ TRACKER STRIP -->
+  <section class="mx-auto max-w-6xl px-6 py-20" aria-labelledby="trackers-heading">
+    <div class="mb-10 text-center">
+      <p class="mb-2 text-xs font-mono uppercase tracking-wider text-primary">supported sources</p>
+      <h2 id="trackers-heading" class="text-3xl font-bold tracking-tight sm:text-4xl">
+        16 trackers in v1.0. 500+ indexers via Torznab and Newznab.
+      </h2>
+      <p class="mx-auto mt-3 max-w-2xl text-muted-foreground">
+        From CIS forum trackers to the entire English-speaking *arr-stack indexer ecosystem,
+        Marauder reaches every corner of the self-hosted torrent world from a single dashboard.
+      </p>
+    </div>
+
+    <div class="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4">
+      {trackers.map((t) => (
+        <a href={`/trackers#${t.slug}`} class="glass-card rounded-lg p-4 transition-transform hover:-translate-y-0.5 hover:border-primary/50">
+          <div class="flex items-center justify-between gap-2">
+            <span class="font-mono text-sm font-semibold text-foreground">{t.name}</span>
+            {t.status === "validated"
+              ? <span class="pill pill-success !text-[10px]">stable</span>
+              : <span class="pill pill-warning !text-[10px]">alpha</span>}
+          </div>
+          <p class="mt-1 text-xs text-muted-foreground">{t.region}</p>
+        </a>
+      ))}
+    </div>
+
+    <div class="mt-10 text-center">
+      <a href="/trackers" class="btn-outline">See all trackers and statuses</a>
+    </div>
+  </section>
+
+  <!-- ============================================================ FAQ -->
+  <section class="mx-auto max-w-3xl px-6 py-20" aria-labelledby="faq-heading">
+    <div class="mb-10 text-center">
+      <p class="mb-2 text-xs font-mono uppercase tracking-wider text-primary">faq</p>
+      <h2 id="faq-heading" class="text-3xl font-bold tracking-tight sm:text-4xl">Common questions</h2>
+    </div>
+
+    <dl class="space-y-3">
+      {homeFaq.map((item, i) => (
+        <details class="glass-card group rounded-xl overflow-hidden" open={i === 0}>
+          <summary class="flex cursor-pointer items-center justify-between gap-4 p-5 text-left font-medium text-foreground">
+            <span>{item.question}</span>
+            <svg class="size-4 shrink-0 text-muted-foreground transition-transform group-open:rotate-180" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M6 9l6 6 6-6"/>
+            </svg>
+          </summary>
+          <dd class="px-5 pb-5 text-sm text-muted-foreground">{item.answer}</dd>
+        </details>
+      ))}
+    </dl>
+  </section>
+
+  <!-- ============================================================ CTA -->
+  <section class="mx-auto max-w-6xl px-6 py-20" aria-labelledby="cta-heading">
+    <div class="glass-card relative overflow-hidden rounded-2xl px-8 py-16 text-center">
+      <div class="pointer-events-none absolute -right-20 -top-20 size-80 rounded-full bg-primary/20 blur-3xl"></div>
+      <div class="pointer-events-none absolute -left-20 -bottom-20 size-80 rounded-full bg-accent/20 blur-3xl"></div>
+      <h2 id="cta-heading" class="relative text-3xl font-bold tracking-tight sm:text-4xl">
+        Stop copy-pasting magnet links.
+      </h2>
+      <p class="relative mx-auto mt-3 max-w-xl text-muted-foreground">
+        Marauder is open source, MIT-licensed, and runs in a single docker compose stack.
+        Try it tonight.
+      </p>
+      <div class="relative mt-8 flex flex-wrap items-center justify-center gap-3">
+        <a href="/install" class="btn-primary">Get started</a>
+        <a href={SITE.github} rel="noopener external" class="btn-outline">Star on GitHub</a>
+      </div>
+    </div>
+  </section>
+</Page>

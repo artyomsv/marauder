@@ -139,8 +139,11 @@ touching config files.
 - [x] All v1.0 Definition of Done criteria from the PRD are met
       (auth, scheduler, plugin architecture, observability, docker
       stack, end-to-end magnet pipeline, multi-user data isolation)
-- [ ] `marauder.cc` docs site published (static, from `docs/`) — DNS
-      and hosting are user-side, post-tag
+- [x] `marauder.cc` marketing site built and deployed via GitHub
+      Pages — Astro 5 + Tailwind 4, 9 routes, 100% Lighthouse SEO
+      target (zero JS shipped, JSON-LD on every page, sitemap, OG
+      tags). See [`docs/site-deploy.md`](site-deploy.md) for the DNS
+      setup.
 - [x] CONTRIBUTING.md + plugin development guide
       ([`docs/plugin-development.md`](plugin-development.md))
 - [x] Sample GitHub Actions workflow for contributors — `ci.yml`,

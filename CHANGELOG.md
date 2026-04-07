@@ -7,6 +7,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (marauder.cc marketing site)
+- **New `site/` directory** containing the Astro 5 + Tailwind 4 +
+  Shiki marketing site for `https://marauder.cc`. Designed for
+  **100% Lighthouse SEO** with zero React/JS hydration:
+  - 9 routes: home (`/`), `/install`, `/features`, `/trackers`,
+    `/integrations`, `/docs`, `/vs/sonarr`, `/vs/monitorrent`,
+    `/legal`, plus a friendly 404
+  - Per-page **unique title, meta description, canonical URL**
+  - **Open Graph + Twitter Card** on every page (8 OG tags + 4
+    Twitter Card tags) generated centrally by `BaseHead.astro`
+  - **JSON-LD structured data** on every page via `JsonLd.astro` with
+    XSS-safe `</script>` escape:
+    - sitewide: `Organization` + `WebSite`
+    - home: `SoftwareApplication` (with version/license/category) +
+      `FAQPage` (8 Q&A pairs)
+    - `/install`: `HowTo` with 5 numbered steps (triggers Google's
+      "How to" rich result)
+    - inner pages: `BreadcrumbList`
+  - **Sitemap** auto-generated at `/sitemap-index.xml` via
+    `@astrojs/sitemap`, excluding the 404 page
+  - **`robots.txt`** allowing all crawlers and pointing to the sitemap
+  - **`CNAME` file** with `marauder.cc` for GitHub Pages custom domain
+  - **Favicon SVG** + Apple touch icon SVG matching the app's
+    violet/cyan brand
+  - **OG image** at `/og/default.svg` (1200×630) with brand text
+  - Two long-form **comparison pages** for SEO long-tail:
+    `/vs/sonarr` (Sonarr-Radarr-Prowlarr feature matrix +
+    explanation of why the *arr stack can't see forum trackers)
+    and `/vs/monitorrent` (full migration story + monitorrent
+    breakage list)
+  - **Performance budget:** 0 JS frameworks shipped (Astro outputs
+    pure HTML by default), only 2.25 KB of Astro's prefetch helper.
+    Total HTML max 40 KB per page, single CSS bundle 35 KB
+  - **Visual identity** matching the app: dark-first slate base,
+    deep-violet primary, electric-cyan accent, glass cards, Inter
+    + JetBrains Mono fonts, generous spacing
+- **`.github/workflows/site.yml`** — Pages deploy workflow:
+  - Triggers on push to main when `site/**` or the workflow itself
+    changes, plus `workflow_dispatch`
+  - Runs `npm ci && npm run build` in `site/` with the Node 22 cache
+  - Asserts `dist/index.html`, `dist/sitemap-index.xml`,
+    `dist/robots.txt`, `dist/CNAME`, the `<title>` tag, and the
+    JSON-LD block are all present before deploying
+  - Uploads the `dist/` directory as a Pages artifact and deploys
+    via `actions/deploy-pages@v4`
+  - `concurrency: pages` ensures only one deploy in flight at a time
+  - Validated with `actionlint` (clean)
+- **`docs/site-deploy.md`** — full guide for the one-time setup
+  (Pages source toggle + DNS records at the registrar, with the
+  exact 4 A records and CNAME GitHub Pages requires) plus the
+  ongoing edit workflow, troubleshooting matrix, and Lighthouse
+  validation steps.
+
 ### Added (CI / GitHub Actions)
 - **Five GitHub Actions workflows** under `.github/workflows/`:
   - **`ci.yml`** — fast-feedback PR pipeline (under 3 min budget):

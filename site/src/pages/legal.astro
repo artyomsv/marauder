@@ -1,0 +1,79 @@
+---
+import Page from "@/layouts/Page.astro";
+import { breadcrumbSchema } from "@/data/schemas";
+
+const seo = {
+  title: "Legal disclaimer",
+  description:
+    "Marauder is a general-purpose torrent automation tool. It does not host content and ships with no pre-configured tracker URLs. What you choose to monitor and download is your responsibility.",
+  path: "/legal",
+};
+
+const schemas = [
+  breadcrumbSchema([
+    { name: "Marauder", path: "/" },
+    { name: "Legal",    path: "/legal" },
+  ]),
+];
+---
+<Page {...seo} schemas={schemas}>
+  <article class="mx-auto max-w-3xl px-6 py-16 prose prose-invert">
+    <nav aria-label="Breadcrumb" class="mb-4 text-sm text-muted-foreground not-prose">
+      <ol class="flex items-center gap-2">
+        <li><a href="/" class="hover:text-foreground">Marauder</a></li>
+        <li aria-hidden="true">›</li>
+        <li class="text-foreground">Legal</li>
+      </ol>
+    </nav>
+
+    <h1 class="text-4xl font-bold tracking-tight">Legal disclaimer</h1>
+
+    <p class="mt-6 text-muted-foreground">
+      Marauder is a general-purpose automation tool. It does not host content
+      and does not ship with any pre-configured tracker URLs. What you choose
+      to monitor and download is <strong class="text-foreground">your responsibility</strong>
+      and subject to the laws of your jurisdiction and the terms of service
+      of the trackers you use.
+    </p>
+
+    <h2 class="mt-10 text-2xl font-semibold tracking-tight">License</h2>
+    <p class="text-muted-foreground">
+      Marauder is released under the
+      <a href="https://github.com/artyomsv/marauder/blob/main/LICENSE" rel="noopener external" class="text-foreground underline decoration-primary/60 underline-offset-4 hover:decoration-primary">MIT License</a>
+      — the same license as the original monitorrent project.
+    </p>
+
+    <h2 class="mt-10 text-2xl font-semibold tracking-tight">No warranty</h2>
+    <p class="text-muted-foreground">
+      The software is provided "AS IS", without warranty of any kind, express
+      or implied, including but not limited to the warranties of
+      merchantability, fitness for a particular purpose, and noninfringement.
+      In no event shall the authors or copyright holders be liable for any
+      claim, damages, or other liability, whether in an action of contract,
+      tort, or otherwise, arising from, out of, or in connection with the
+      software or the use or other dealings in the software.
+    </p>
+
+    <h2 class="mt-10 text-2xl font-semibold tracking-tight">Privacy</h2>
+    <p class="text-muted-foreground">
+      This website (marauder.cc) is purely informational. It does not set
+      cookies, run analytics, or call out to third-party tracking services.
+      The only outbound resources it loads are from github.com (for the
+      repository links) and from your own browser cache.
+    </p>
+    <p class="text-muted-foreground">
+      Marauder itself, when self-hosted, stores data only on the database
+      you point it at. There is no telemetry, no phone-home, no usage
+      reporting. The audit log is local to your installation and visible
+      only to administrators in the Marauder UI.
+    </p>
+
+    <h2 class="mt-10 text-2xl font-semibold tracking-tight">Trademarks</h2>
+    <p class="text-muted-foreground">
+      All trademarks mentioned on this site (RuTracker, Kinozal, Sonarr,
+      Radarr, Prowlarr, qBittorrent, Transmission, Deluge, µTorrent,
+      Keycloak, etc.) belong to their respective owners. References are for
+      identification only and do not imply endorsement.
+    </p>
+  </article>
+</Page>

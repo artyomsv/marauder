@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0a0a0f"/>
+      <stop offset="1" stop-color="#1a0a2e"/>
+    </linearGradient>
+    <linearGradient id="brand" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#a855f7"/>
+      <stop offset="1" stop-color="#06b6d4"/>
+    </linearGradient>
+    <radialGradient id="glow1" cx="0.2" cy="0.3" r="0.5">
+      <stop offset="0" stop-color="#a855f7" stop-opacity="0.4"/>
+      <stop offset="1" stop-color="#a855f7" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glow2" cx="0.85" cy="0.85" r="0.5">
+      <stop offset="0" stop-color="#06b6d4" stop-opacity="0.35"/>
+      <stop offset="1" stop-color="#06b6d4" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="1200" height="630" fill="url(#bg)"/>
+  <rect width="1200" height="630" fill="url(#glow1)"/>
+  <rect width="1200" height="630" fill="url(#glow2)"/>
+  <g transform="translate(80, 230)">
+    <g transform="translate(0, 0)">
+      <circle cx="60" cy="60" r="56" fill="#0a0a0f" stroke="url(#brand)" stroke-width="6"/>
+      <path d="M30 90 L30 30 L55 70 L60 60 L65 70 L90 30 L90 90"
+            fill="none" stroke="url(#brand)" stroke-width="8" stroke-linejoin="round" stroke-linecap="round"/>
+    </g>
+    <text x="150" y="60" font-family="Inter, sans-serif" font-size="80" font-weight="800" fill="#ffffff" letter-spacing="-2">
+      Marauder
+    </text>
+    <text x="150" y="105" font-family="Inter, sans-serif" font-size="28" font-weight="500" fill="#a855f7">
+      marauder.cc
+    </text>
+  </g>
+  <text x="80" y="430" font-family="Inter, sans-serif" font-size="40" font-weight="600" fill="#e2e8f0">
+    Self-hosted torrent topic monitor.
+  </text>
+  <text x="80" y="478" font-family="Inter, sans-serif" font-size="28" font-weight="400" fill="#94a3b8">
+    Watch RuTracker, LostFilm, Kinozal, Torznab, Newznab and more.
+  </text>
+  <text x="80" y="516" font-family="Inter, sans-serif" font-size="28" font-weight="400" fill="#94a3b8">
+    Auto-deliver to qBittorrent, Transmission, Deluge or a watch folder.
+  </text>
+  <g transform="translate(80, 555)">
+    <rect x="0" y="0" rx="20" ry="20" width="180" height="40" fill="none" stroke="#a855f7" stroke-width="2"/>
+    <text x="90" y="27" text-anchor="middle" font-family="Inter, sans-serif" font-size="20" font-weight="600" fill="#a855f7">
+      Open Source · MIT
+    </text>
+    <rect x="200" y="0" rx="20" ry="20" width="160" height="40" fill="none" stroke="#06b6d4" stroke-width="2"/>
+    <text x="280" y="27" text-anchor="middle" font-family="Inter, sans-serif" font-size="20" font-weight="600" fill="#06b6d4">
+      16 Trackers
+    </text>
+    <rect x="380" y="0" rx="20" ry="20" width="180" height="40" fill="none" stroke="#10b981" stroke-width="2"/>
+    <text x="470" y="27" text-anchor="middle" font-family="Inter, sans-serif" font-size="20" font-weight="600" fill="#10b981">
+      Go · React 19 · PG 18
+    </text>
+  </g>
+</svg>

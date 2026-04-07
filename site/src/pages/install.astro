@@ -1,0 +1,187 @@
+---
+import Page from "@/layouts/Page.astro";
+import { SITE } from "@/data/seo";
+import { breadcrumbSchema, howToSchema } from "@/data/schemas";
+
+const seo = {
+  title: "Install Marauder in 5 minutes (Docker)",
+  description:
+    "Step-by-step guide to install Marauder, the self-hosted torrent topic monitor. Docker compose stack with PostgreSQL, backend, frontend, and nginx gateway. No host toolchain required.",
+  path: "/install",
+  keywords: [
+    "marauder install",
+    "marauder docker compose",
+    "self-hosted torrent monitor install",
+    "rutracker monitor install",
+    "torrent automation docker",
+  ],
+};
+
+const schemas = [
+  breadcrumbSchema([
+    { name: "Marauder", path: "/" },
+    { name: "Install", path: "/install" },
+  ]),
+  howToSchema({
+    name: "Install Marauder via Docker Compose",
+    description: "Bring up the full Marauder stack on a Linux host with Docker installed.",
+    totalTime: "PT5M",
+    steps: [
+      { name: "Clone the repository", text: "git clone https://github.com/artyomsv/marauder.git && cd marauder/deploy" },
+      { name: "Copy the example env file", text: "cp .env.example .env" },
+      { name: "Generate a master encryption key", text: "openssl rand -base64 32 and paste into MARAUDER_MASTER_KEY" },
+      { name: "Bring up the stack", text: "docker compose --env-file .env up -d" },
+      { name: "Open the UI", text: "Open http://localhost:6688 in a browser and sign in as admin" },
+    ],
+  }),
+];
+
+const cmdClone = `git clone https://github.com/artyomsv/marauder.git
+cd marauder/deploy
+cp .env.example .env`;
+
+const cmdSecrets = `# Generate a 32-byte AES-256 master key (REQUIRED)
+MASTER=$(openssl rand -base64 32)
+sed -i "s|MARAUDER_MASTER_KEY=.*|MARAUDER_MASTER_KEY=$MASTER|" .env
+
+# Optional: a token to gate the /metrics endpoint
+METRICS=$(openssl rand -hex 32)
+sed -i "s|MARAUDER_METRICS_TOKEN=.*|MARAUDER_METRICS_TOKEN=$METRICS|" .env`;
+
+const cmdUp = `docker compose --env-file .env up -d`;
+
+const cmdHealth = `curl -fsS http://localhost:6688/health
+# .
+
+curl -sS http://localhost:6688/api/v1/system/info | jq .version
+# {
+#   "version": "1.0.0",
+#   "commit":  "...",
+#   "buildDate": "..."
+# }`;
+
+const cmdLogin = `curl -sS -X POST http://localhost:6688/api/v1/auth/login \\
+  -H "Content-Type: application/json" \\
+  -d '{"username":"admin","password":"pleasechangeme"}'`;
+---
+<Page {...seo} schemas={schemas}>
+  <article class="mx-auto max-w-4xl px-6 py-16">
+    <nav aria-label="Breadcrumb" class="mb-4 text-sm text-muted-foreground">
+      <ol class="flex items-center gap-2">
+        <li><a href="/" class="hover:text-foreground">Marauder</a></li>
+        <li aria-hidden="true">›</li>
+        <li class="text-foreground">Install</li>
+      </ol>
+    </nav>
+
+    <header class="mb-12">
+      <p class="mb-2 text-xs font-mono uppercase tracking-wider text-primary">quick start</p>
+      <h1 class="text-4xl font-bold tracking-tight sm:text-5xl">
+        Install Marauder in 5 minutes
+      </h1>
+      <p class="mt-4 text-lg text-muted-foreground">
+        Marauder runs as a four-container Docker compose stack. The only thing
+        you need on the host is Docker — there is no Go, Node, or Postgres
+        toolchain to install.
+      </p>
+    </header>
+
+    <section class="mb-14" aria-labelledby="prereq">
+      <h2 id="prereq" class="text-2xl font-semibold tracking-tight">Prerequisites</h2>
+      <ul class="mt-4 space-y-2 text-muted-foreground">
+        <li>• A Linux, macOS, or Windows host with <strong class="text-foreground">Docker 24+</strong> and <strong class="text-foreground">docker compose v2</strong></li>
+        <li>• <code>git</code> to clone the repository</li>
+        <li>• <code>openssl</code> for generating the master encryption key</li>
+        <li>• Optional: an existing torrent client (qBittorrent / Transmission / Deluge) running somewhere reachable from the host</li>
+      </ul>
+    </section>
+
+    <section class="mb-14" aria-labelledby="step-1">
+      <h2 id="step-1" class="text-2xl font-semibold tracking-tight">1. Clone and copy env</h2>
+      <p class="mt-3 text-muted-foreground">
+        Clone the GitHub repository and copy the example environment file.
+        Everything you need lives under <code>marauder/deploy/</code>.
+      </p>
+      <pre class="mt-4 text-sm"><code>{cmdClone}</code></pre>
+    </section>
+
+    <section class="mb-14" aria-labelledby="step-2">
+      <h2 id="step-2" class="text-2xl font-semibold tracking-tight">2. Generate the master key</h2>
+      <p class="mt-3 text-muted-foreground">
+        Marauder encrypts every secret it stores (tracker credentials, client
+        configs, JWT signing keys) with AES-256-GCM keyed by a 32-byte master
+        key you supply via the <code>MARAUDER_MASTER_KEY</code> env var.
+      </p>
+      <p class="mt-2 text-sm text-warning">
+        ⚠️ <strong>Save the key somewhere safe.</strong> Losing it means every
+        stored credential is unrecoverable.
+      </p>
+      <pre class="mt-4 text-sm"><code>{cmdSecrets}</code></pre>
+    </section>
+
+    <section class="mb-14" aria-labelledby="step-3">
+      <h2 id="step-3" class="text-2xl font-semibold tracking-tight">3. Start the stack</h2>
+      <p class="mt-3 text-muted-foreground">
+        One command brings up four containers: PostgreSQL 18, the Go backend,
+        the React frontend, and an nginx gateway exposed on port 6688.
+      </p>
+      <pre class="mt-4 text-sm"><code>{cmdUp}</code></pre>
+      <p class="mt-3 text-muted-foreground">
+        The first start runs database migrations and bootstraps the initial
+        admin user from <code>MARAUDER_ADMIN_INITIAL_USERNAME</code> and
+        <code>MARAUDER_ADMIN_INITIAL_PASSWORD</code> in the env file. Both
+        default to <code>admin</code> / <code>pleasechangeme</code>.
+      </p>
+      <p class="mt-2 text-sm text-warning">
+        ⚠️ <strong>Change the admin password</strong> from the UI on first
+        login, then unset both env vars and restart the backend.
+      </p>
+    </section>
+
+    <section class="mb-14" aria-labelledby="step-4">
+      <h2 id="step-4" class="text-2xl font-semibold tracking-tight">4. Verify it's healthy</h2>
+      <p class="mt-3 text-muted-foreground">
+        The stack is ready when <code>/health</code> returns 200 and
+        <code>/api/v1/system/info</code> reports the version.
+      </p>
+      <pre class="mt-4 text-sm"><code>{cmdHealth}</code></pre>
+    </section>
+
+    <section class="mb-14" aria-labelledby="step-5">
+      <h2 id="step-5" class="text-2xl font-semibold tracking-tight">5. Sign in and add your first topic</h2>
+      <p class="mt-3 text-muted-foreground">
+        Open <a href="http://localhost:6688" class="text-foreground underline decoration-primary/60 underline-offset-4 hover:decoration-primary">http://localhost:6688</a>
+        in a browser, sign in as <code>admin</code>, and use the <strong>Add topic</strong>
+        button to paste a magnet link or tracker URL. Configure a torrent
+        client under <strong>Clients</strong>, set it as default, and Marauder
+        will hand future updates straight to it.
+      </p>
+      <p class="mt-3 text-muted-foreground">
+        Or, from the command line:
+      </p>
+      <pre class="mt-4 text-sm"><code>{cmdLogin}</code></pre>
+    </section>
+
+    <section class="mb-14" aria-labelledby="next">
+      <h2 id="next" class="text-2xl font-semibold tracking-tight">Next steps</h2>
+      <div class="mt-6 grid gap-4 sm:grid-cols-2">
+        <a href="/integrations" class="glass-card rounded-xl p-5 hover:border-primary/50">
+          <h3 class="font-semibold text-foreground">Configure a torrent client</h3>
+          <p class="mt-1 text-sm text-muted-foreground">qBittorrent, Transmission, Deluge, µTorrent, or a watch folder.</p>
+        </a>
+        <a href="/trackers" class="glass-card rounded-xl p-5 hover:border-primary/50">
+          <h3 class="font-semibold text-foreground">Add tracker credentials</h3>
+          <p class="mt-1 text-sm text-muted-foreground">Configure logins for the 16 supported trackers.</p>
+        </a>
+        <a href={SITE.github + "/blob/main/docs/oidc.md"} rel="noopener external" class="glass-card rounded-xl p-5 hover:border-primary/50">
+          <h3 class="font-semibold text-foreground">Enable OIDC sign-in</h3>
+          <p class="mt-1 text-sm text-muted-foreground">Drop in Keycloak via the bundled SSO compose profile.</p>
+        </a>
+        <a href={SITE.github + "/blob/main/docs/torznab-newznab.md"} rel="noopener external" class="glass-card rounded-xl p-5 hover:border-primary/50">
+          <h3 class="font-semibold text-foreground">Connect Torznab / Newznab</h3>
+          <p class="mt-1 text-sm text-muted-foreground">Reach 500+ indexers via Jackett, Prowlarr, or NZBHydra2.</p>
+        </a>
+      </div>
+    </section>
+  </article>
+</Page>

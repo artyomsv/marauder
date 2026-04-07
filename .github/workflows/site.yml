@@ -1,0 +1,90 @@
+name: Deploy site (marauder.cc)
+
+# Builds the Astro project at site/ and deploys to GitHub Pages.
+#
+# Triggers:
+#   - push to main when site/** changes (the common case)
+#   - workflow_dispatch (manual rebuild from the Actions tab)
+#
+# Pages source must be set to "GitHub Actions" in repo settings:
+#   Settings → Pages → Source → GitHub Actions.
+# The first run will fail until that is flipped. After that, it just
+# works on every push.
+#
+# Custom domain: site/public/CNAME contains "marauder.cc" which gets
+# copied to dist/CNAME at build time. GitHub Pages reads it on deploy.
+# DNS records (added at the registrar by the operator) are documented
+# in docs/site-deploy.md.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "site/**"
+      - ".github/workflows/site.yml"
+  workflow_dispatch:
+
+# Pages requires only one in-flight deploy per environment. Cancel a
+# previous run if a new push comes in while it's still building.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  build:
+    name: Build with Astro
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: site
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: site/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Build site
+        run: npm run build
+        env:
+          NODE_ENV: production
+
+      - name: Confirm SEO assets are in dist/
+        run: |
+          test -f dist/index.html || (echo "missing dist/index.html" && exit 1)
+          test -f dist/sitemap-index.xml || (echo "missing dist/sitemap-index.xml" && exit 1)
+          test -f dist/robots.txt || (echo "missing dist/robots.txt" && exit 1)
+          test -f dist/CNAME || (echo "missing dist/CNAME" && exit 1)
+          grep -q "marauder.cc" dist/CNAME || (echo "CNAME does not contain marauder.cc" && exit 1)
+          grep -q "<title>" dist/index.html || (echo "no <title> in dist/index.html" && exit 1)
+          grep -q 'application/ld+json' dist/index.html || (echo "no JSON-LD in dist/index.html" && exit 1)
+          echo "all SEO assets present"
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site/dist
+
+  deploy:
+    name: Deploy to GitHub Pages
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

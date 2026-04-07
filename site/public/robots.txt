@@ -1,0 +1,8 @@
+# Marauder — robots.txt
+# https://marauder.cc
+
+User-agent: *
+Allow: /
+
+# Pointers for crawlers
+Sitemap: https://marauder.cc/sitemap-index.xml

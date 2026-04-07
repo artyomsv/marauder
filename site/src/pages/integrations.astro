@@ -1,0 +1,187 @@
+---
+import Page from "@/layouts/Page.astro";
+import { clients } from "@/data/clients";
+import { notifiers } from "@/data/notifiers";
+import { breadcrumbSchema } from "@/data/schemas";
+
+const seo = {
+  title: "Integrations — qBittorrent, Transmission, Deluge, Telegram, more",
+  description:
+    "Marauder integrates with qBittorrent, Transmission, Deluge, µTorrent, SABnzbd / NZBGet via watch folder, Telegram, email, webhooks, Pushover, Keycloak / OIDC, Prowlarr, Jackett, NZBHydra2, and Prometheus.",
+  path: "/integrations",
+  keywords: [
+    "marauder integrations",
+    "qbittorrent watch tracker",
+    "transmission topic monitor",
+    "deluge auto download",
+    "telegram torrent notifier",
+  ],
+};
+
+const schemas = [
+  breadcrumbSchema([
+    { name: "Marauder", path: "/" },
+    { name: "Integrations", path: "/integrations" },
+  ]),
+];
+---
+<Page {...seo} schemas={schemas}>
+  <article class="mx-auto max-w-5xl px-6 py-16">
+    <nav aria-label="Breadcrumb" class="mb-4 text-sm text-muted-foreground">
+      <ol class="flex items-center gap-2">
+        <li><a href="/" class="hover:text-foreground">Marauder</a></li>
+        <li aria-hidden="true">›</li>
+        <li class="text-foreground">Integrations</li>
+      </ol>
+    </nav>
+
+    <header class="mb-12">
+      <p class="mb-2 text-xs font-mono uppercase tracking-wider text-primary">connect everything</p>
+      <h1 class="text-4xl font-bold tracking-tight sm:text-5xl">
+        Plays nicely with the rest of your stack
+      </h1>
+      <p class="mt-4 max-w-3xl text-lg text-muted-foreground">
+        Marauder doesn't try to replace your torrent client, your notification
+        system, your identity provider, or your indexer. It plugs into them.
+        Here's the integration matrix.
+      </p>
+    </header>
+
+    <!-- Torrent clients -->
+    <section class="mb-16" aria-labelledby="clients-heading">
+      <h2 id="clients-heading" class="mb-2 text-2xl font-semibold tracking-tight">Torrent clients</h2>
+      <p class="mb-6 text-muted-foreground">
+        When a topic updates, Marauder hands the magnet URI or .torrent bytes
+        to one of these clients. The qBittorrent integration is the
+        end-to-end-validated reference path.
+      </p>
+      <div class="grid gap-4 md:grid-cols-2">
+        {clients.map((c) => (
+          <article class="glass-card rounded-xl p-6">
+            <div class="flex items-start justify-between gap-3">
+              <h3 class="text-lg font-semibold text-foreground">{c.name}</h3>
+              {c.status === "validated"
+                ? <span class="pill pill-success">stable</span>
+                : <span class="pill pill-warning">alpha</span>}
+            </div>
+            <p class="mt-2 text-sm text-muted-foreground">{c.description}</p>
+          </article>
+        ))}
+      </div>
+    </section>
+
+    <!-- Notifiers -->
+    <section class="mb-16" aria-labelledby="notifiers-heading">
+      <h2 id="notifiers-heading" class="mb-2 text-2xl font-semibold tracking-tight">Notifications</h2>
+      <p class="mb-6 text-muted-foreground">
+        Pick which events fire a notification (topic updated, topic errored,
+        all failures) and which channels they fire on. Mix and match.
+      </p>
+      <div class="grid gap-4 md:grid-cols-2">
+        {notifiers.map((n) => (
+          <article class="glass-card rounded-xl p-6">
+            <h3 class="text-lg font-semibold text-foreground">{n.name}</h3>
+            <p class="mt-2 text-sm text-muted-foreground">{n.description}</p>
+          </article>
+        ))}
+      </div>
+    </section>
+
+    <!-- Identity -->
+    <section class="mb-16" aria-labelledby="identity-heading">
+      <h2 id="identity-heading" class="mb-2 text-2xl font-semibold tracking-tight">Identity / SSO</h2>
+      <p class="mb-6 text-muted-foreground">
+        Marauder ships with first-class OpenID Connect support. Bring your
+        own provider — Keycloak, Authentik, Authelia, Auth0, Okta, Google,
+        Microsoft Entra, anything that speaks OIDC discovery.
+      </p>
+      <div class="glass-card rounded-xl p-6">
+        <h3 class="text-lg font-semibold text-foreground">Keycloak (bundled in dev compose)</h3>
+        <p class="mt-2 text-sm text-muted-foreground">
+          The <code>docker-compose.sso.yml</code> overlay starts Keycloak 26
+          with a pre-imported <code>marauder</code> realm and an
+          <code>alice / marauder</code> test user. Click "Sign in with Keycloak"
+          on the login page and you're in.
+        </p>
+        <p class="mt-3 text-sm">
+          Full guide: <a href="https://github.com/artyomsv/marauder/blob/main/docs/oidc.md" rel="noopener external" class="text-foreground underline decoration-primary/60 underline-offset-4 hover:decoration-primary">docs/oidc.md</a>
+        </p>
+      </div>
+    </section>
+
+    <!-- Indexers -->
+    <section class="mb-16" aria-labelledby="indexers-heading">
+      <h2 id="indexers-heading" class="mb-2 text-2xl font-semibold tracking-tight">Indexer aggregators</h2>
+      <p class="mb-6 text-muted-foreground">
+        Marauder speaks Torznab and Newznab natively, which means everything
+        in the *arr ecosystem is reachable from a single Marauder instance.
+      </p>
+      <div class="grid gap-4 md:grid-cols-2">
+        <article class="glass-card rounded-xl p-6">
+          <h3 class="text-lg font-semibold text-foreground">Jackett</h3>
+          <p class="mt-2 text-sm text-muted-foreground">
+            ~500 tracker definitions wrapped as Torznab. Copy the indexer URL
+            from Jackett and paste it as <code>torznab+https://...</code> in Marauder.
+          </p>
+        </article>
+        <article class="glass-card rounded-xl p-6">
+          <h3 class="text-lg font-semibold text-foreground">Prowlarr</h3>
+          <p class="mt-2 text-sm text-muted-foreground">
+            Indexer manager for the *arr stack. Same flow: copy the Torznab feed
+            URL from any indexer, prefix with <code>torznab+</code>, paste in Marauder.
+          </p>
+        </article>
+        <article class="glass-card rounded-xl p-6">
+          <h3 class="text-lg font-semibold text-foreground">NZBHydra2</h3>
+          <p class="mt-2 text-sm text-muted-foreground">
+            Aggregates Usenet (Newznab) and torrent (Torznab) sources behind one URL.
+            Marauder talks to whichever side you point it at via the <code>newznab+</code>
+            or <code>torznab+</code> prefix.
+          </p>
+        </article>
+        <article class="glass-card rounded-xl p-6">
+          <h3 class="text-lg font-semibold text-foreground">NZBGeek, NZBPlanet, DOGnzb</h3>
+          <p class="mt-2 text-sm text-muted-foreground">
+            Direct Newznab indexers. Use the <code>newznab+</code> prefix and a
+            <code>downloadfolder</code> client pointed at your SABnzbd / NZBGet
+            watch directory.
+          </p>
+        </article>
+      </div>
+      <p class="mt-6 text-sm text-muted-foreground">
+        Full guide: <a href="https://github.com/artyomsv/marauder/blob/main/docs/torznab-newznab.md" rel="noopener external" class="text-foreground underline decoration-primary/60 underline-offset-4 hover:decoration-primary">docs/torznab-newznab.md</a>
+      </p>
+    </section>
+
+    <!-- Observability -->
+    <section class="mb-16" aria-labelledby="obs-heading">
+      <h2 id="obs-heading" class="mb-2 text-2xl font-semibold tracking-tight">Observability</h2>
+      <p class="mb-6 text-muted-foreground">
+        Drop Marauder into your existing monitoring stack with zero changes.
+      </p>
+      <div class="grid gap-4 md:grid-cols-3">
+        <article class="glass-card rounded-xl p-6">
+          <h3 class="text-lg font-semibold text-foreground">Prometheus</h3>
+          <p class="mt-2 text-sm text-muted-foreground">
+            <code>/metrics</code> with HTTP, scheduler, tracker, and client
+            collectors. Token-gated for safety.
+          </p>
+        </article>
+        <article class="glass-card rounded-xl p-6">
+          <h3 class="text-lg font-semibold text-foreground">Loki / Vector</h3>
+          <p class="mt-2 text-sm text-muted-foreground">
+            Structured JSON logs via zerolog. Every request gets a
+            <code>request_id</code> for trace correlation.
+          </p>
+        </article>
+        <article class="glass-card rounded-xl p-6">
+          <h3 class="text-lg font-semibold text-foreground">Health checks</h3>
+          <p class="mt-2 text-sm text-muted-foreground">
+            <code>/health</code> and <code>/ready</code> with standard
+            semantics. Both safe for k8s probes and load balancers.
+          </p>
+        </article>
+      </div>
+    </section>
+  </article>
+</Page>

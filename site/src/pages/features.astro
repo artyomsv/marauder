@@ -1,0 +1,175 @@
+---
+import Page from "@/layouts/Page.astro";
+import { breadcrumbSchema } from "@/data/schemas";
+
+const seo = {
+  title: "Features — auth, scheduler, plugins, observability",
+  description:
+    "A deep dive into Marauder's architecture: 16 trackers, 5 torrent clients, 4 notifiers, OIDC sign-in, AES-256-GCM secrets, Argon2id passwords, ES256 JWTs, scheduler with bounded worker pool, Prometheus metrics, audit log, en + ru i18n.",
+  path: "/features",
+  keywords: [
+    "marauder features",
+    "self-hosted torrent monitor features",
+    "torrent automation oidc",
+    "torrent monitor prometheus metrics",
+  ],
+};
+
+const schemas = [
+  breadcrumbSchema([
+    { name: "Marauder", path: "/" },
+    { name: "Features", path: "/features" },
+  ]),
+];
+
+const sections = [
+  {
+    title: "Authentication you can trust",
+    intro:
+      "Security is opt-out, not opt-in. Every secret on disk is encrypted, every JWT is signed with an asymmetric key, every login is audited.",
+    bullets: [
+      "Local accounts with Argon2id password hashing (time=3, memory=64 MiB, parallelism=4)",
+      "ES256 JWT access tokens, opaque refresh tokens stored as SHA-256 hashes server-side",
+      "Refresh-token rotation with reuse-detection — a replayed token revokes the entire token family",
+      "AES-256-GCM encryption at rest for tracker credentials, client configs, and JWT signing keys",
+      "Master key loaded from MARAUDER_MASTER_KEY env var, 32 bytes base64-encoded, never persisted in plain",
+      "OpenID Connect sign-in via coreos/go-oidc — pre-built Keycloak realm in the SSO compose profile",
+      "Async audit log for every login success / failure / logout, visible to admins in the UI",
+      "Multi-user with strict per-user data isolation at the database WHERE-clause level",
+    ],
+  },
+  {
+    title: "Plugin architecture",
+    intro:
+      "A new tracker is one Go file implementing one interface. The init() function self-registers with a global registry; main.go just blank-imports the package.",
+    bullets: [
+      "Tracker interface: CanParse, Parse, Check, Download — plus optional WithCredentials, WithQuality, WithCloudflare capabilities",
+      "Client interface: Test, Add, ConfigSchema — supports magnet URIs, raw .torrent bytes, and watch-folder writes",
+      "Notifier interface: Test, Send — Telegram, Email, Webhook, Pushover bundled",
+      "16 trackers, 5 clients, 4 notifiers shipped in v1.0",
+      "Per-plugin E2E test harness with a fake qBittorrent — every tracker plugin runs through Parse → Login → Verify → Check → Download → submit-to-qbit on every CI run",
+      "Forum-tracker plugins share a common SessionStore that holds a cookie jar per (tracker, user_id) pair so concurrent topic checks reuse the same logged-in client",
+    ],
+  },
+  {
+    title: "Cloudflare bypass — without bundling chromium in the main binary",
+    intro:
+      "NNM-Club and other Cloudflare-protected trackers go through a separate sidecar service. The main backend binary stays small.",
+    bullets: [
+      "Standalone cfsolver Go service using chromedp + Debian-slim chromium",
+      "Exposes POST /solve {url} → { user_agent, cookies[] }",
+      "Built as a separate Docker image, started via the cfsolver compose profile only when needed",
+      "Tracker plugins opt in via the WithCloudflare capability — no global flag, no surprises",
+      "Trivial to swap for FlareSolverr later if chromedp falls behind",
+    ],
+  },
+  {
+    title: "Scheduler with backpressure and observability",
+    intro:
+      "The scheduler is a single dispatch goroutine plus a bounded worker pool. Failures back off exponentially; a busy run never overflows the queue.",
+    bullets: [
+      "Configurable tick interval (default 60 s) and worker pool size (default 8)",
+      "Per-topic check pipeline: load → call tracker Check → compare hash → call Download if changed → decrypt client config → call client Add",
+      "Exponential backoff on errors, capped at 6 hours; success resets to the topic's configured interval",
+      "Falls back to the user's default client if a topic has no explicit client_id",
+      "In-memory ring buffer of the last 50 run summaries with checked / updated / errors counters, exposed at /api/v1/system/status and visualised on the System page",
+      "Per-tracker check duration histograms in Prometheus",
+    ],
+  },
+  {
+    title: "Observability from day one",
+    intro:
+      "Structured logs, metrics, health checks, audit log — all of it standard, all of it opt-out, all of it documented.",
+    bullets: [
+      "Prometheus /metrics endpoint, gated by a static bearer token (MARAUDER_METRICS_TOKEN)",
+      "Metrics: HTTP request count + duration histograms (with chi route patterns to keep cardinality bounded), scheduler runs, per-tracker checks + duration histogram, per-tracker updates, per-client submit results",
+      "Structured JSON logs via zerolog, every request gets a request_id, secrets are scrubbed",
+      "/health and /ready endpoints with the standard semantics",
+      "Live System status page in the frontend (auto-refreshes every 5 seconds)",
+      "Admin-only Audit log page",
+    ],
+  },
+  {
+    title: "Frontend that doesn't look like an admin template",
+    intro:
+      "React 19 + Vite 8 + Tailwind 4 + shadcn/ui. Dark-first, glass cards, deep violet primary, electric cyan accent, framer-motion entry animations.",
+    bullets: [
+      "Zustand auth + prefs stores, TanStack Query for server state",
+      "Animated login, dashboard with live status tiles, topics list with bulk-edit + density toggle",
+      "Clients CRUD page with per-plugin field hints and Test-connection buttons",
+      "Notifiers CRUD with Send-test buttons",
+      "System status page (any user) and Audit log page (admin)",
+      "English + Russian UI with a tiny zustand-backed i18n module — the locale switcher lives in the header",
+      "RFC 7807 problem-details error rendering throughout",
+    ],
+  },
+  {
+    title: "Deployment that doesn't surprise you",
+    intro:
+      "Docker compose, three Docker images, three compose overlays, one master key. No hidden state, no host dependencies, no manual cert ops.",
+    bullets: [
+      "Multi-stage Dockerfiles for backend, frontend, and cfsolver — non-root users, healthchecks, alpine/debian-slim bases",
+      "deploy/docker-compose.yml: production stack (db + backend + frontend + nginx gateway)",
+      "deploy/docker-compose.dev.yml: overlay with port publishing + real qBittorrent + Transmission for E2E testing",
+      "deploy/docker-compose.sso.yml: overlay with Keycloak 26 + a pre-imported realm and a test user",
+      "All host-exposed ports are non-standard (gateway 6688) to avoid colliding with other services",
+    ],
+  },
+  {
+    title: "CI / CD that takes itself seriously",
+    intro:
+      "Five GitHub Actions workflows, golangci-lint with 12 rules, Trivy scans, cosign signing, CycloneDX SBOMs, Dependabot.",
+    bullets: [
+      "ci.yml: backend race-tests + golangci-lint + govulncheck, frontend tsc + build, cfsolver build/vet — under 3 minutes per PR",
+      "docker.yml: builds all 3 images on push to main, Trivy scan with HIGH/CRITICAL fail",
+      "e2e.yml: nightly + on-tag full compose-stack walkthrough (magnet → qBittorrent end-to-end)",
+      "release.yml: tag-pushed multi-arch (amd64 + arm64) build, cosign keyless signing via OIDC, CycloneDX SBOM per image, GitHub Release with auto-extracted CHANGELOG",
+      "codeql.yml: GitHub CodeQL SAST for Go and TypeScript with the security-extended query pack",
+      "dependabot.yml: weekly grouped updates for gomod, npm, github-actions, docker base images",
+    ],
+  },
+];
+---
+<Page {...seo} schemas={schemas}>
+  <article class="mx-auto max-w-4xl px-6 py-16">
+    <nav aria-label="Breadcrumb" class="mb-4 text-sm text-muted-foreground">
+      <ol class="flex items-center gap-2">
+        <li><a href="/" class="hover:text-foreground">Marauder</a></li>
+        <li aria-hidden="true">›</li>
+        <li class="text-foreground">Features</li>
+      </ol>
+    </nav>
+
+    <header class="mb-12">
+      <p class="mb-2 text-xs font-mono uppercase tracking-wider text-primary">deep dive</p>
+      <h1 class="text-4xl font-bold tracking-tight sm:text-5xl">
+        What's inside Marauder
+      </h1>
+      <p class="mt-4 text-lg text-muted-foreground">
+        A tour of every system that makes Marauder feel boring to operate:
+        the auth model, the plugin architecture, the scheduler, the
+        observability stack, the frontend, the deployment story, and the
+        CI pipeline.
+      </p>
+    </header>
+
+    <div class="space-y-14">
+      {sections.map((section) => (
+        <section class="glass-card rounded-2xl p-8" aria-labelledby={section.title.toLowerCase().replace(/\W+/g, "-")}>
+          <h2 id={section.title.toLowerCase().replace(/\W+/g, "-")} class="text-2xl font-semibold tracking-tight">
+            {section.title}
+          </h2>
+          <p class="mt-3 text-muted-foreground">{section.intro}</p>
+          <ul class="mt-5 space-y-2 text-sm text-muted-foreground">
+            {section.bullets.map((b) => (
+              <li class="flex items-start gap-3">
+                <span class="mt-1.5 size-1.5 shrink-0 rounded-full bg-primary"></span>
+                <span>{b}</span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ))}
+    </div>
+  </article>
+</Page>

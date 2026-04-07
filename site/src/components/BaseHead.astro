@@ -1,0 +1,65 @@
+---
+// BaseHead emits the per-page <head>: title, meta description, canonical,
+// Open Graph, Twitter Card, and the JSON-LD blocks. Every page imports
+// this via the Layout component.
+//
+// Anything that affects SEO on every page lives here.
+
+import { SITE, canonical, type Page } from "@/data/seo";
+
+interface Props extends Page {}
+
+const { title, description, path, ogImage, keywords } = Astro.props;
+
+const fullTitle = `${title} | ${SITE.name}`;
+const url = canonical(path);
+const og = ogImage ? `${SITE.url}${ogImage}` : `${SITE.url}${SITE.defaultOgImage}`;
+---
+<!-- Charset + viewport -->
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+
+<!-- Title + description -->
+<title>{fullTitle}</title>
+<meta name="description" content={description} />
+{keywords && <meta name="keywords" content={keywords.join(", ")} />}
+
+<!-- Canonical -->
+<link rel="canonical" href={url} />
+
+<!-- Robots: index, follow, allow large image previews -->
+<meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1" />
+<meta name="googlebot" content="index, follow" />
+
+<!-- Theme -->
+<meta name="theme-color" content="#0a0a0f" media="(prefers-color-scheme: dark)" />
+<meta name="color-scheme" content="dark" />
+
+<!-- Favicons -->
+<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+<link rel="apple-touch-icon" href="/apple-touch-icon.svg" />
+
+<!-- Open Graph -->
+<meta property="og:type" content="website" />
+<meta property="og:url" content={url} />
+<meta property="og:title" content={fullTitle} />
+<meta property="og:description" content={description} />
+<meta property="og:image" content={og} />
+<meta property="og:image:width" content="1200" />
+<meta property="og:image:height" content="630" />
+<meta property="og:site_name" content={SITE.name} />
+<meta property="og:locale" content={SITE.locale} />
+
+<!-- Twitter / X -->
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:title" content={fullTitle} />
+<meta name="twitter:description" content={description} />
+<meta name="twitter:image" content={og} />
+
+<!-- Performance hints -->
+<link rel="preconnect" href="https://github.com" crossorigin />
+<link rel="dns-prefetch" href="https://github.com" />
+
+<!-- Generator (Astro adds its own; we add ours for transparency) -->
+<meta name="generator" content="Astro" />
+<meta name="author" content={SITE.author.name} />

@@ -1,0 +1,172 @@
+---
+import Page from "@/layouts/Page.astro";
+import { breadcrumbSchema } from "@/data/schemas";
+
+const seo = {
+  title: "Marauder vs Sonarr / Radarr / Prowlarr — when to use which",
+  description:
+    "Sonarr, Radarr, and Prowlarr dominate the Torznab/Newznab world. Marauder fills the gap they never could: monitoring forum-style trackers like RuTracker, LostFilm, and NNM-Club. They are complementary, not competitive.",
+  path: "/vs/sonarr",
+  keywords: [
+    "sonarr alternative",
+    "sonarr forum tracker",
+    "sonarr rutracker",
+    "radarr alternative",
+    "prowlarr forum tracker",
+    "marauder vs sonarr",
+  ],
+};
+
+const schemas = [
+  breadcrumbSchema([
+    { name: "Marauder",   path: "/" },
+    { name: "Compare",    path: "/" },
+    { name: "vs Sonarr",  path: "/vs/sonarr" },
+  ]),
+];
+
+const matrix = [
+  { feature: "Torznab indexer support",            sonarr: "yes (native)",        marauder: "yes (torznab plugin)" },
+  { feature: "Newznab Usenet indexer support",     sonarr: "yes (native)",        marauder: "yes (newznab plugin)" },
+  { feature: "Forum-tracker scraping (RuTracker)", sonarr: "no",                  marauder: "yes (rutracker plugin)" },
+  { feature: "Forum-tracker scraping (LostFilm)",  sonarr: "no",                  marauder: "yes (lostfilm plugin, with quality)" },
+  { feature: "Forum-tracker scraping (Kinozal)",   sonarr: "no",                  marauder: "yes (kinozal plugin)" },
+  { feature: "Forum-tracker scraping (NNM-Club)",  sonarr: "no",                  marauder: "yes (nnmclub plugin, w/ Cloudflare bypass)" },
+  { feature: "Quality profiles + library tracking",sonarr: "yes (best in class)", marauder: "no (out of scope)" },
+  { feature: "Metadata scraping (TVDB / TMDB)",    sonarr: "yes",                 marauder: "no (out of scope)" },
+  { feature: "File renaming + Plex/Jellyfin paths",sonarr: "yes",                 marauder: "no (hand off to client)" },
+  { feature: "Native OIDC / SSO",                  sonarr: "no (Authelia in front)", marauder: "yes (Keycloak bundled)" },
+  { feature: "Multi-user with isolation",          sonarr: "no",                  marauder: "yes" },
+  { feature: "Audit log out of the box",           sonarr: "no",                  marauder: "yes" },
+  { feature: "Prometheus /metrics",                sonarr: "third-party exporter", marauder: "yes (built-in)" },
+  { feature: "Memory footprint (200 topics)",      sonarr: "~300-500 MB",         marauder: "<150 MB" },
+];
+---
+<Page {...seo} schemas={schemas}>
+  <article class="mx-auto max-w-4xl px-6 py-16">
+    <nav aria-label="Breadcrumb" class="mb-4 text-sm text-muted-foreground">
+      <ol class="flex items-center gap-2">
+        <li><a href="/" class="hover:text-foreground">Marauder</a></li>
+        <li aria-hidden="true">›</li>
+        <li class="text-foreground">vs Sonarr</li>
+      </ol>
+    </nav>
+
+    <header class="mb-12">
+      <p class="mb-2 text-xs font-mono uppercase tracking-wider text-primary">comparison</p>
+      <h1 class="text-4xl font-bold tracking-tight sm:text-5xl">
+        Marauder vs Sonarr / Radarr / Prowlarr
+      </h1>
+      <p class="mt-4 text-lg text-muted-foreground">
+        The short answer: <strong class="text-foreground">use both.</strong> They live in
+        different worlds and they complement each other cleanly. Sonarr and
+        Radarr dominate the Torznab/Newznab indexer ecosystem; Marauder fills
+        the forum-tracker gap they were never built to handle.
+      </p>
+    </header>
+
+    <section class="mb-12" aria-labelledby="tldr">
+      <div class="glass-card rounded-2xl p-8">
+        <h2 id="tldr" class="text-xl font-semibold tracking-tight">TL;DR</h2>
+        <p class="mt-3 text-muted-foreground">
+          If your tracker exposes a Torznab or Newznab API, Sonarr / Radarr /
+          Prowlarr is the canonical answer — they have years of polish on
+          quality profiles, library tracking, metadata scraping, and file
+          organization.
+        </p>
+        <p class="mt-3 text-muted-foreground">
+          If your tracker is a <strong class="text-foreground">forum thread</strong>
+          you log in to, scroll, and click — RuTracker, LostFilm, Kinozal,
+          NNM-Club, Anidub, Anilibria, Toloka, and so on — Sonarr cannot help
+          you. Forum trackers don't expose Torznab. Marauder is built specifically
+          to scrape these sites, and it speaks Torznab and Newznab too so a
+          single Marauder install reaches both worlds at once.
+        </p>
+      </div>
+    </section>
+
+    <section class="mb-12" aria-labelledby="why">
+      <h2 id="why" class="mb-4 text-2xl font-semibold tracking-tight">Why Sonarr can't see RuTracker</h2>
+      <p class="text-muted-foreground">
+        Sonarr / Radarr / Prowlarr are built around the
+        <strong class="text-foreground">Torznab API contract</strong>: a tracker exposes a
+        structured search endpoint that returns JSON or XML, categorised by
+        content type, with a stable field set (title, size, seeders,
+        category, publish date).
+      </p>
+      <p class="mt-3 text-muted-foreground">
+        Forum-style trackers don't work this way. RuTracker is a phpBB-style
+        forum. LostFilm is a bespoke per-series CMS. NNM-Club is a phpBB
+        variant wrapped in Cloudflare. Kinozal is yet another phpBB skin.
+        What they share is:
+      </p>
+      <ul class="mt-4 space-y-2 text-muted-foreground">
+        <li>• Authentication by <strong class="text-foreground">session cookie</strong> obtained via an HTML login form</li>
+        <li>• Content discovery by <strong class="text-foreground">browsing topic threads</strong>, not by querying an API</li>
+        <li>• Updates <strong class="text-foreground">in place</strong> — the same topic URL gets a new <code>.torrent</code> attachment when a new episode drops</li>
+        <li>• <strong class="text-foreground">Cloudflare interstitials</strong> that need to be solved before you can even reach the login page</li>
+      </ul>
+      <p class="mt-3 text-muted-foreground">
+        Jackett bolts a Torznab shim onto these sites for the *arr stack, but
+        the shim only does <strong class="text-foreground">search</strong>, not
+        <strong class="text-foreground">topic monitoring</strong>. You cannot use Jackett +
+        Sonarr to watch a specific RuTracker thread for in-place updates —
+        that's not what the contract supports.
+      </p>
+      <p class="mt-3 text-muted-foreground">
+        Marauder is built for that case. <strong class="text-foreground">It is a complement
+        to Sonarr / Radarr / Prowlarr, not a replacement.</strong>
+      </p>
+    </section>
+
+    <section class="mb-12" aria-labelledby="matrix">
+      <h2 id="matrix" class="mb-4 text-2xl font-semibold tracking-tight">Feature matrix</h2>
+      <div class="overflow-x-auto rounded-xl border border-border/60">
+        <table class="w-full text-sm">
+          <thead class="bg-muted/40 text-xs uppercase tracking-wider text-muted-foreground">
+            <tr>
+              <th scope="col" class="px-4 py-3 text-left">Feature</th>
+              <th scope="col" class="px-4 py-3 text-left">Sonarr / Radarr</th>
+              <th scope="col" class="px-4 py-3 text-left">Marauder</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-border/60">
+            {matrix.map((row) => (
+              <tr class="hover:bg-muted/20">
+                <td class="px-4 py-3 font-medium text-foreground">{row.feature}</td>
+                <td class="px-4 py-3 text-muted-foreground">{row.sonarr}</td>
+                <td class="px-4 py-3 text-muted-foreground">{row.marauder}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="mb-12" aria-labelledby="coexist">
+      <h2 id="coexist" class="mb-4 text-2xl font-semibold tracking-tight">How they coexist</h2>
+      <p class="text-muted-foreground">
+        The same qBittorrent instance happily accepts torrents from Sonarr,
+        Radarr, and Marauder simultaneously. Tag the categories so you can
+        tell them apart in the UI:
+      </p>
+      <ul class="mt-4 space-y-2 text-muted-foreground">
+        <li>• Sonarr drops things into <code>tv-sonarr</code></li>
+        <li>• Radarr drops things into <code>movies-radarr</code></li>
+        <li>• Marauder drops things into <code>tv-marauder</code> or <code>movies-marauder</code> — set per-client in the Marauder UI</li>
+      </ul>
+      <p class="mt-4 text-muted-foreground">
+        That's the entire integration. There is nothing else to wire up.
+      </p>
+    </section>
+
+    <section class="glass-card rounded-2xl p-8 text-center" aria-labelledby="cta">
+      <h2 id="cta" class="text-2xl font-semibold tracking-tight">Try Marauder alongside your Sonarr</h2>
+      <p class="mt-3 text-muted-foreground">It runs in the same docker compose stack and uses the same qBittorrent.</p>
+      <div class="mt-6 flex flex-wrap justify-center gap-3">
+        <a href="/install" class="btn-primary">Install in 5 minutes</a>
+        <a href="/trackers" class="btn-outline">See supported trackers</a>
+      </div>
+    </section>
+  </article>
+</Page>

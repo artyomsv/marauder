@@ -1,0 +1,165 @@
+---
+import Page from "@/layouts/Page.astro";
+import { trackers, validatedCount, alphaCount, trackerCount } from "@/data/trackers";
+import { breadcrumbSchema } from "@/data/schemas";
+
+const seo = {
+  title: "Supported trackers — RuTracker, Kinozal, LostFilm, Torznab, more",
+  description:
+    "Marauder supports 16 trackers in v1.0: RuTracker, Kinozal, NNM-Club, LostFilm, Anilibria, Anidub, Rutor, Toloka, Unionpeer, Tapochek, Free-Torrents, HD-Club, generic magnet/.torrent URLs, plus Torznab and Newznab indexers.",
+  path: "/trackers",
+  keywords: [
+    "rutracker monitor",
+    "kinozal auto download",
+    "lostfilm tracker",
+    "nnmclub",
+    "torznab plugin",
+    "newznab plugin",
+  ],
+};
+
+const schemas = [
+  breadcrumbSchema([
+    { name: "Marauder", path: "/" },
+    { name: "Trackers", path: "/trackers" },
+  ]),
+];
+
+const generic = trackers.filter((t) => t.category === "generic");
+const cis = trackers.filter((t) => t.category === "forum-cis");
+const indexers = trackers.filter((t) => t.category === "indexer");
+---
+<Page {...seo} schemas={schemas}>
+  <article class="mx-auto max-w-5xl px-6 py-16">
+    <nav aria-label="Breadcrumb" class="mb-4 text-sm text-muted-foreground">
+      <ol class="flex items-center gap-2">
+        <li><a href="/" class="hover:text-foreground">Marauder</a></li>
+        <li aria-hidden="true">›</li>
+        <li class="text-foreground">Trackers</li>
+      </ol>
+    </nav>
+
+    <header class="mb-12">
+      <p class="mb-2 text-xs font-mono uppercase tracking-wider text-primary">tracker catalogue</p>
+      <h1 class="text-4xl font-bold tracking-tight sm:text-5xl">
+        {trackerCount} trackers in v1.0
+      </h1>
+      <p class="mt-4 max-w-3xl text-lg text-muted-foreground">
+        Marauder ships with plugins for every tracker the original monitorrent
+        supported, plus Torznab and Newznab to reach the entire <em>arr-stack
+        ecosystem. {validatedCount} are E2E-validated against real services.
+        {alphaCount} are alpha — structurally complete with fixture-based tests
+        and awaiting live-account validation by community members.
+      </p>
+    </header>
+
+    <!-- Generic -->
+    <section class="mb-16" aria-labelledby="cat-generic">
+      <h2 id="cat-generic" class="mb-2 text-2xl font-semibold tracking-tight">Generic plugins</h2>
+      <p class="mb-6 text-muted-foreground">
+        Catch-all plugins that work without account credentials.
+      </p>
+      <div class="grid gap-4 md:grid-cols-2">
+        {generic.map((t) => (
+          <article id={t.slug} class="glass-card rounded-xl p-5">
+            <div class="flex items-start justify-between gap-3">
+              <h3 class="text-lg font-semibold text-foreground">{t.name}</h3>
+              {t.status === "validated"
+                ? <span class="pill pill-success">stable</span>
+                : <span class="pill pill-warning">alpha</span>}
+            </div>
+            <p class="mt-2 text-sm text-muted-foreground">{t.description}</p>
+          </article>
+        ))}
+      </div>
+    </section>
+
+    <!-- CIS forum -->
+    <section class="mb-16" aria-labelledby="cat-forum">
+      <h2 id="cat-forum" class="mb-2 text-2xl font-semibold tracking-tight">CIS forum trackers</h2>
+      <p class="mb-6 text-muted-foreground">
+        The Russian-speaking forum trackers that the *arr stack cannot reach.
+        Marauder logs in with your account, scrapes the topic page, and detects
+        when the uploader replaces the .torrent attachment.
+      </p>
+      <div class="overflow-hidden rounded-xl border border-border/60">
+        <table class="w-full text-sm">
+          <thead class="bg-muted/40 text-xs uppercase tracking-wider text-muted-foreground">
+            <tr>
+              <th scope="col" class="px-4 py-3 text-left">Tracker</th>
+              <th scope="col" class="px-4 py-3 text-left">Region</th>
+              <th scope="col" class="px-4 py-3 text-left">Auth</th>
+              <th scope="col" class="px-4 py-3 text-left">Status</th>
+              <th scope="col" class="px-4 py-3 text-left">Notes</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-border/60">
+            {cis.map((t) => (
+              <tr id={t.slug} class="hover:bg-muted/20">
+                <td class="px-4 py-3 font-mono text-foreground">{t.name}</td>
+                <td class="px-4 py-3 text-muted-foreground">{t.region}</td>
+                <td class="px-4 py-3 text-muted-foreground capitalize">{t.auth}</td>
+                <td class="px-4 py-3">
+                  {t.status === "validated"
+                    ? <span class="pill pill-success">stable</span>
+                    : <span class="pill pill-warning">alpha</span>}
+                </td>
+                <td class="px-4 py-3 text-xs text-muted-foreground">
+                  {t.cloudflare && <span class="pill pill-primary mr-1">CF bypass</span>}
+                  {t.quality && <span class="pill pill-primary">quality select</span>}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Indexers -->
+    <section class="mb-16" aria-labelledby="cat-indexer">
+      <h2 id="cat-indexer" class="mb-2 text-2xl font-semibold tracking-tight">Torznab and Newznab indexers</h2>
+      <p class="mb-6 text-muted-foreground">
+        Two plugins that reach the entire English-speaking self-hosted scene.
+        Sonarr, Radarr, Prowlarr, Jackett, NZBHydra2, NZBGeek, NZBPlanet,
+        DOGnzb — all of them speak Torznab or Newznab, and Marauder talks to
+        them with the same one-URL-per-show UX as Sonarr's wanted list.
+      </p>
+      <div class="grid gap-4 md:grid-cols-2">
+        {indexers.map((t) => (
+          <article id={t.slug} class="glass-card rounded-xl p-6">
+            <div class="flex items-start justify-between gap-3">
+              <h3 class="text-xl font-semibold text-foreground">{t.name}</h3>
+              <span class="pill pill-success">stable</span>
+            </div>
+            <p class="mt-2 text-sm text-muted-foreground">{t.description}</p>
+            <p class="mt-3 text-xs font-mono text-muted-foreground">
+              URL prefix: <code>{t.slug}+https://...</code>
+            </p>
+          </article>
+        ))}
+      </div>
+      <p class="mt-6 text-sm text-muted-foreground">
+        Full guide: <a href="https://github.com/artyomsv/marauder/blob/main/docs/torznab-newznab.md" rel="noopener external" class="text-foreground underline decoration-primary/60 underline-offset-4 hover:decoration-primary">docs/torznab-newznab.md</a>
+      </p>
+    </section>
+
+    <section aria-labelledby="alpha-heading" class="glass-card rounded-xl p-8">
+      <h2 id="alpha-heading" class="text-xl font-semibold tracking-tight">
+        What does "alpha" mean?
+      </h2>
+      <p class="mt-3 text-muted-foreground">
+        An alpha tracker plugin is structurally complete: the URL pattern,
+        login form, page scraper, and download path are all implemented and
+        unit-tested against fixture HTML. What it lacks is end-to-end
+        validation against the live site, because that requires a real account
+        on the tracker. The plugin will work if the live HTML matches the
+        fixture; it may need a regex tweak if the site has changed selectors.
+      </p>
+      <p class="mt-3 text-muted-foreground">
+        If you have a real account on one of the alpha trackers, the
+        <a href="https://github.com/artyomsv/marauder/blob/main/docs/plugin-development.md" rel="noopener external" class="text-foreground underline decoration-primary/60 underline-offset-4 hover:decoration-primary">plugin development guide</a>
+        explains how to validate and graduate it to stable in a single PR.
+      </p>
+    </section>
+  </article>
+</Page>
