@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (Phase 4e — tracker credentials surface end-to-end)
+The `tracker_credentials` table existed in the schema since v0.1
+but had no REST handler and no frontend UI — it was unreachable.
+This phase wires the entire surface end-to-end so users can finally
+add LostFilm / RuTracker / Kinozal accounts.
+
+- **`backend/internal/db/repo/tracker_credentials.go`** (new) —
+  Create / GetByID / GetForTracker / ListForUser / Update / Delete
+  methods. Mirrors the existing Clients repo pattern with a unique
+  `(user_id, tracker_name)` constraint enforced at the DB layer.
+- **`backend/internal/api/handlers/credentials.go`** (new) — REST
+  handler exposing five endpoints under `/api/v1/credentials`:
+  `GET /` (list, no secrets), `POST /` (validates by calling the
+  plugin's `Login` before saving), `PUT /{id}` (rotate username and
+  optionally password), `DELETE /{id}`, `POST /{id}/test` (decrypts
+  the secret and re-runs `Login` + `Verify`).
+- **`Credentials` handler struct** wired into `router.go` Deps and
+  constructed in `cmd/server/main.go` with the existing master key
+  + audit logger. Every create / update / delete is audit-logged.
+- **Scheduler now passes credentials into `Check`/`Download`.** The
+  scheduler at `backend/internal/scheduler/scheduler.go` gains a
+  `creds *repo.TrackerCredentials` field. Before each topic check,
+  if the tracker implements `WithCredentials` and the user has a
+  stored credential, the scheduler decrypts the secret, calls
+  `Login`, and passes the in-memory credential into both `Check`
+  and `Download`. Login failures are recorded as `auth_error` in
+  the metric and as a backoff-retry on the topic.
+- **`frontend/src/pages/Credentials.tsx`** (new) — `/accounts` page.
+  Lists existing accounts grouped by tracker (display name, username,
+  test/edit/delete buttons). Add form filters out trackers that
+  already have a credential to honour the unique constraint.
+  Validates by attempting Login on submit; if Login fails the
+  credential is not stored.
+- **New nav entry** "Accounts" in `AppShell.tsx` and corresponding
+  i18n keys in `en.ts` / `ru.ts`.
+- **Plugin contract clarified**: `WithCredentials.Login` receives
+  a `*TrackerCredential` whose `SecretEnc` field carries the
+  **plaintext** password in-memory after decryption. The persisted
+  blob is the AES-256-GCM ciphertext.
+
 ### Added (Phase 4a–d — tracker capability discovery + quality / episode in AddTopic)
 - **`WithEpisodeFilter` capability interface** in
   `backend/internal/plugins/registry/registry.go`. Tracker plugins

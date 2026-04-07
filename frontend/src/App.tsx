@@ -18,6 +18,7 @@ import { SystemPage } from "@/pages/System";
 import { AuditPage } from "@/pages/Audit";
 import { OIDCCallbackPage } from "@/pages/OIDCCallback";
 import { SettingsPage } from "@/pages/Settings";
+import { CredentialsPage } from "@/pages/Credentials";
 import { useAuthStore } from "@/lib/auth-store";
 import { api, type Me } from "@/lib/api";
 
@@ -63,6 +64,7 @@ export default function App() {
               <Route path="topics" element={<TopicsPage />} />
               <Route path="clients" element={<ClientsPage />} />
               <Route path="notifiers" element={<NotifiersPage />} />
+              <Route path="accounts" element={<CredentialsPage />} />
               <Route path="system" element={<SystemPage />} />
               <Route path="audit" element={<AuditPage />} />
               <Route path="settings" element={<SettingsPage />} />

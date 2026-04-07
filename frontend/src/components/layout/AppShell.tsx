@@ -1,5 +1,5 @@
 import { Link, NavLink, Outlet, useNavigate } from "react-router-dom";
-import { LogOut, Radio, LayoutDashboard, Server, Bell, Settings, Moon, Sun, Activity, Shield } from "lucide-react";
+import { LogOut, Radio, LayoutDashboard, Server, Bell, Settings, KeyRound, Moon, Sun, Activity, Shield } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -20,6 +20,7 @@ const navItems: NavItem[] = [
   { to: "/", labelKey: "nav.dashboard", icon: LayoutDashboard },
   { to: "/topics", labelKey: "nav.topics", icon: Radio },
   { to: "/clients", labelKey: "nav.clients", icon: Server },
+  { to: "/accounts", labelKey: "nav.accounts", icon: KeyRound },
   { to: "/notifiers", labelKey: "nav.notifiers", icon: Bell },
   { to: "/system", labelKey: "nav.system", icon: Activity },
   { to: "/audit", labelKey: "nav.audit", icon: Shield, adminOnly: true },

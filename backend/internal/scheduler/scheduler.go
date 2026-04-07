@@ -50,6 +50,7 @@ type Scheduler struct {
 	log     zerolog.Logger
 	topics  *repo.Topics
 	clients *repo.Clients
+	creds   *repo.TrackerCredentials
 	master  *crypto.MasterKey
 
 	jobs  chan *domain.Topic
@@ -67,12 +68,13 @@ type Scheduler struct {
 }
 
 // New constructs a scheduler.
-func New(cfg *config.Config, log zerolog.Logger, topics *repo.Topics, clients *repo.Clients, master *crypto.MasterKey) *Scheduler {
+func New(cfg *config.Config, log zerolog.Logger, topics *repo.Topics, clients *repo.Clients, creds *repo.TrackerCredentials, master *crypto.MasterKey) *Scheduler {
 	return &Scheduler{
 		cfg:     cfg,
 		log:     log.With().Str("component", "scheduler").Logger(),
 		topics:  topics,
 		clients: clients,
+		creds:   creds,
 		master:  master,
 		jobs:    make(chan *domain.Topic, cfg.SchedulerWorkers*4),
 		stop:    make(chan struct{}),
@@ -240,7 +242,32 @@ func (s *Scheduler) runCheck(ctx context.Context, log zerolog.Logger, t *domain.
 	checkCtx, cancel := context.WithTimeout(ctx, s.cfg.TrackerHTTPTimeout+5*time.Second)
 	defer cancel()
 
-	check, err := tr.Check(checkCtx, t, nil)
+	// Look up the per-user credential for this tracker (if any) and
+	// perform Login first. The credential's SecretEnc field carries
+	// the plaintext password in-memory after decryption — that's the
+	// contract WithCredentials plugins expect.
+	var creds *domain.TrackerCredential
+	if wc, ok := tr.(registry.WithCredentials); ok && s.creds != nil {
+		stored, lerr := s.creds.GetForTracker(ctx, t.UserID, t.TrackerName)
+		if lerr == nil && stored != nil {
+			plain, derr := s.master.Decrypt(stored.SecretEnc, stored.SecretNonce)
+			if derr != nil {
+				log.Warn().Err(derr).Msg("decrypt credential failed")
+			} else {
+				stored.SecretEnc = plain
+				if loginErr := wc.Login(checkCtx, stored); loginErr != nil {
+					log.Warn().Err(loginErr).Msg("tracker login failed")
+					metrics.SchedulerTopicChecksTotal.WithLabelValues(t.TrackerName, "auth_error").Inc()
+					_ = s.topics.RecordCheckResult(ctx, t.ID, "", false, s.backoff(t, true), "auth failed: "+loginErr.Error())
+					s.recordChecked(false, true)
+					return
+				}
+				creds = stored
+			}
+		}
+	}
+
+	check, err := tr.Check(checkCtx, t, creds)
 	if err != nil {
 		log.Warn().Err(err).Msg("check failed")
 		metrics.SchedulerTopicChecksTotal.WithLabelValues(t.TrackerName, "error").Inc()
@@ -253,7 +280,7 @@ func (s *Scheduler) runCheck(ctx context.Context, log zerolog.Logger, t *domain.
 	if updated {
 		log.Info().Str("old_hash", t.LastHash).Str("new_hash", check.Hash).Msg("topic updated")
 		metrics.TrackerUpdatesTotal.WithLabelValues(t.TrackerName).Inc()
-		payload, derr := tr.Download(checkCtx, t, check, nil)
+		payload, derr := tr.Download(checkCtx, t, check, creds)
 		if derr != nil {
 			log.Warn().Err(derr).Msg("download failed")
 			metrics.SchedulerTopicChecksTotal.WithLabelValues(t.TrackerName, "download_error").Inc()

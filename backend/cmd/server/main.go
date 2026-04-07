@@ -101,6 +101,7 @@ func run() error {
 	topicsRepo := repo.NewTopics(pool)
 	clientsRepo := repo.NewClients(pool)
 	notifiersRepo := repo.NewNotifiers(pool)
+	credsRepo := repo.NewTrackerCredentials(pool)
 	auditRepo := repo.NewAudit(pool)
 	auditLogger := audit.NewLogger(rootCtx, auditRepo, logger)
 
@@ -135,7 +136,7 @@ func run() error {
 	}
 
 	// Scheduler
-	sch := scheduler.New(cfg, logger, topicsRepo, clientsRepo, master)
+	sch := scheduler.New(cfg, logger, topicsRepo, clientsRepo, credsRepo, master)
 	go func() {
 		if err := sch.Start(rootCtx); err != nil {
 			logger.Error().Err(err).Msg("scheduler exited with error")
@@ -153,6 +154,7 @@ func run() error {
 		Topics:    topicsRepo,
 		Clients:   clientsRepo,
 		Notifiers: notifiersRepo,
+		Creds:     credsRepo,
 		Audit:     auditRepo,
 		AuditLog:  auditLogger,
 		OIDC:      oidcProvider,

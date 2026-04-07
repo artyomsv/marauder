@@ -20,6 +20,7 @@ const ru: Record<string, string> = {
   "nav.dashboard": "Главная",
   "nav.topics": "Темы",
   "nav.clients": "Клиенты",
+  "nav.accounts": "Аккаунты",
   "nav.notifiers": "Уведомления",
   "nav.system": "Система",
   "nav.audit": "Журнал аудита",

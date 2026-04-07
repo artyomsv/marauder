@@ -32,6 +32,7 @@ type Deps struct {
 	Topics    *repo.Topics
 	Clients   *repo.Clients
 	Notifiers *repo.Notifiers
+	Creds     *repo.TrackerCredentials
 	Audit     *repo.Audit
 	AuditLog  *audit.Logger
 	OIDC      *auth.OIDCProvider
@@ -96,6 +97,12 @@ func NewRouter(d Deps) http.Handler {
 	}
 	sysH := &handlers.System{BaseURL: d.Cfg.PublicBaseURL, Scheduler: d.Scheduler, Audit: d.Audit}
 	trackersH := &handlers.Trackers{BaseURL: d.Cfg.PublicBaseURL}
+	credsH := &handlers.Credentials{
+		Creds:   d.Creds,
+		Master:  d.Master,
+		Audit:   d.AuditLog,
+		BaseURL: d.Cfg.PublicBaseURL,
+	}
 
 	r.Route("/api/v1", func(r chi.Router) {
 		// Public auth endpoints
@@ -135,6 +142,12 @@ func NewRouter(d Deps) http.Handler {
 			r.Post("/notifiers", notifiersH.Create)
 			r.Delete("/notifiers/{id}", notifiersH.Delete)
 			r.Post("/notifiers/{id}/test", notifiersH.Test)
+
+			r.Get("/credentials", credsH.List)
+			r.Post("/credentials", credsH.Create)
+			r.Put("/credentials/{id}", credsH.Update)
+			r.Delete("/credentials/{id}", credsH.Delete)
+			r.Post("/credentials/{id}/test", credsH.Test)
 
 			// Admin-only
 			r.Group(func(r chi.Router) {
