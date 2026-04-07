@@ -4,9 +4,9 @@ import { SITE } from "@/data/seo";
 import { breadcrumbSchema } from "@/data/schemas";
 
 const seo = {
-  title: "Documentation — PRD, plugin guide, OIDC, migration",
+  title: "Documentation — PRD, plugin guide, OIDC, Torznab",
   description:
-    "Marauder's full documentation set: vision, competitors, PRD, roadmap, plugin development guide, Keycloak / OIDC walkthrough, Torznab / Newznab guide, end-to-end test reproducer, monitorrent migration guide, and CI documentation.",
+    "Marauder's full documentation set: vision, competitors, PRD, roadmap, plugin development guide, Keycloak / OIDC walkthrough, Torznab / Newznab guide, end-to-end test reproducer, and CI documentation.",
   path: "/docs",
   keywords: [
     "marauder docs",
@@ -27,7 +27,7 @@ const sections = [
     title: "Project context",
     items: [
       { name: "Vision",      path: "docs/VISION.md",      desc: "Why Marauder exists, who it's for, what it's not." },
-      { name: "Competitors", path: "docs/COMPETITORS.md", desc: "Marauder's place next to Sonarr, Radarr, Prowlarr, Jackett, FlexGet, monitorrent." },
+      { name: "Competitors", path: "docs/COMPETITORS.md", desc: "Marauder's place next to Sonarr, Radarr, Prowlarr, Jackett, and FlexGet." },
       { name: "PRD",         path: "docs/PRD.md",         desc: "Full product requirements: personas, user stories, data model, API surface, security model, deployment topology." },
       { name: "Roadmap",     path: "docs/ROADMAP.md",     desc: "Milestone-by-milestone status with v1.0 ticked." },
       { name: "Changelog",   path: "CHANGELOG.md",        desc: "Keep-a-Changelog formatted history of every release." },
@@ -39,7 +39,6 @@ const sections = [
       { name: "End-to-end magnet test",     path: "docs/test-e2e-magnet.md",          desc: "Step-by-step reproducer for the magnet → qBittorrent walkthrough using the dev compose overlay." },
       { name: "Keycloak / OIDC",            path: "docs/oidc.md",                     desc: "How to enable OpenID Connect sign-in via the bundled Keycloak realm or any OIDC provider." },
       { name: "Torznab / Newznab",          path: "docs/torznab-newznab.md",          desc: "Connect Jackett, Prowlarr, NZBHydra2, NZBGeek, and any indexer that speaks Torznab or Newznab." },
-      { name: "Migrate from monitorrent",   path: "docs/migrating-from-monitorrent.md", desc: "Step-by-step migration guide for users coming from werwolfby/monitorrent." },
     ],
   },
   {
@@ -64,7 +63,7 @@ const sections = [
     </nav>
 
     <header class="mb-12">
-      <p class="mb-2 text-xs font-mono uppercase tracking-wider text-primary">technical documentation</p>
+      <p class="mb-2 text-xs font-mono uppercase tracking-wider text-muted-foreground">technical documentation</p>
       <h1 class="text-4xl font-bold tracking-tight sm:text-5xl">Documentation</h1>
       <p class="mt-4 max-w-3xl text-lg text-muted-foreground">
         Every document Marauder ships lives in the GitHub repo, in plain
@@ -83,7 +82,7 @@ const sections = [
             {section.items.map((item) => (
               <li>
                 <a href={`${SITE.github}/blob/main/${item.path}`} rel="noopener external"
-                   class="glass-card block h-full rounded-xl p-5 transition-colors hover:border-primary/60">
+                   class="glass-card block h-full rounded-xl p-5 transition-colors hover:border-foreground/30">
                   <h3 class="font-semibold text-foreground">{item.name}</h3>
                   <p class="mt-1 text-sm text-muted-foreground">{item.desc}</p>
                   <p class="mt-2 font-mono text-xs text-muted-foreground">{item.path}</p>
@@ -99,11 +98,11 @@ const sections = [
       <h2 id="repo-heading" class="text-xl font-semibold tracking-tight">Reading the source</h2>
       <p class="mt-3 text-muted-foreground">
         Most of what you'll want is in two folders. The Go backend lives at
-        <a href={`${SITE.github}/tree/main/backend`} rel="noopener external" class="text-foreground underline decoration-primary/60 underline-offset-4 hover:decoration-primary">backend/</a>
+        <a href={`${SITE.github}/tree/main/backend`} rel="noopener external" class="text-foreground underline decoration-foreground/40 underline-offset-4 hover:decoration-foreground">backend/</a>
         and the React frontend at
-        <a href={`${SITE.github}/tree/main/frontend`} rel="noopener external" class="text-foreground underline decoration-primary/60 underline-offset-4 hover:decoration-primary">frontend/</a>.
+        <a href={`${SITE.github}/tree/main/frontend`} rel="noopener external" class="text-foreground underline decoration-foreground/40 underline-offset-4 hover:decoration-foreground">frontend/</a>.
         Plugins are under
-        <a href={`${SITE.github}/tree/main/backend/internal/plugins`} rel="noopener external" class="text-foreground underline decoration-primary/60 underline-offset-4 hover:decoration-primary">backend/internal/plugins/</a> —
+        <a href={`${SITE.github}/tree/main/backend/internal/plugins`} rel="noopener external" class="text-foreground underline decoration-foreground/40 underline-offset-4 hover:decoration-foreground">backend/internal/plugins/</a> —
         each tracker, client, and notifier is one self-contained Go file plus its tests.
       </p>
     </section>

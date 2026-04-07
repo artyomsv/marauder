@@ -6,9 +6,8 @@
 //	    registry.RegisterTracker(&plugin{})
 //	}
 //
-// This pattern is the Go equivalent of monitorrent's Python "import this
-// module to install the plugin" behaviour. A single blank import line in
-// cmd/server/main.go activates all bundled plugins.
+// A single blank import of each plugin package in cmd/server/main.go
+// activates all bundled plugins via these init() functions.
 package registry
 
 import (

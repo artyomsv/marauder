@@ -5,36 +5,26 @@
 ## The one-sentence pitch
 
 **Marauder** is a self-hosted application that watches torrent-tracker topics for
-new releases and hands them off to your torrent client automatically — a spiritual
-successor to the now-unmaintained [monitorrent](https://github.com/werwolfby/monitorrent),
-rebuilt from the ground up in Go with a modern React 19 interface, first-class
-security, and a plugin architecture that makes it easy to keep adding new trackers,
-clients, and notification targets as the ecosystem evolves.
+new releases and hands them off to your torrent client automatically — built from
+the ground up in Go with a modern React 19 interface, first-class security, and a
+plugin architecture that makes it easy to keep adding new trackers, clients, and
+notification targets as the ecosystem evolves.
 
 ## The problem
 
-For roughly a decade, `monitorrent` filled a very specific niche: monitoring
-**forum-style torrent trackers** (RuTracker, Kinozal, NNM-Club, LostFilm, Anilibria,
-Toloka, and similar CIS-oriented trackers) for updates, and automatically
-re-downloading torrents whose content had changed — a new episode, a new quality
-re-encode, a re-seed with extra languages. It was the tool of choice for
-Russian-speaking users who wanted the same automation that English-speaking users
-got from Sonarr and Radarr.
+There is a very specific niche the *arr stack does not cover: monitoring
+**forum-style torrent trackers** (RuTracker, Kinozal, NNM-Club, LostFilm,
+Anilibria, Toloka, and similar CIS-oriented trackers) for updates, and
+automatically re-downloading torrents whose content has changed — a new episode,
+a new quality re-encode, a re-seed with extra languages. These trackers are
+*forum threads*, not API-driven indexers, so Sonarr / Radarr / Prowlarr cannot
+reach them.
 
-That niche has not gone away. **The tool has.**
-
-Since mid-2024 the project has effectively stalled:
-
-- **LostFilm** stopped updating for most users (issues #415, #412, #411, #403).
-- **RuTracker** updates began silently failing (#399).
-- **NNM-Club** is now wrapped in Cloudflare; the built-in bypass is outdated (#407).
-- **qBittorrent ≥ 4.5** introduced a new Web API shape that monitorrent does not
-  speak (#402).
-- The container **leaks memory and crashes** after a few hours (#393, #397).
-- **Proxy + Cloudflare cannot coexist** (#363, #401).
-- The Python 2/3 codebase has **Unicode issues with Cyrillic paths**, marked
-  *wontfix* because of library constraints.
-- There has been **no release since 1.4.0 in July 2023**.
+Tools that historically filled this niche have stalled. The community trackers
+keep moving — Cloudflare interstitials get tougher, qBittorrent's Web API
+changes shape between releases, NNM-Club moves behind a CDN, LostFilm rotates
+its CMS — and the Python-era tools haven't kept up. Users who relied on them are
+now **copy-pasting magnet links by hand**.
 
 Meanwhile, the ecosystem Marauder targets has kept moving:
 
@@ -45,8 +35,7 @@ Meanwhile, the ecosystem Marauder targets has kept moving:
 - React, the frontend ecosystem, and CSS tooling have been through two major
   paradigm shifts (React 19, Tailwind 4, shadcn/ui).
 
-Users who relied on monitorrent are now **copy-pasting magnet links by hand**.
-That is the problem Marauder is built to solve.
+That is the gap Marauder is built to fill.
 
 ## The users
 
@@ -77,7 +66,7 @@ Marauder is built primarily for a **single persona**, with two secondary ones:
 
 ## The change we want to make
 
-1. **Revive the forum-tracker niche.** Sonarr/Radarr/Prowlarr are excellent for
+1. **Own the forum-tracker niche.** Sonarr/Radarr/Prowlarr are excellent for
    Torznab/Newznab indexers, but they cannot monitor RuTracker, LostFilm, or
    NNM-Club — those trackers are *forum threads*, not API-driven indexers. Marauder
    is the dedicated tool for that world, done right.
@@ -125,7 +114,8 @@ At 12 months post-MVP, Marauder is successful if:
 - A new user can go from `git clone` to *"the first episode of the show I was
   waiting for just appeared in qBittorrent"* in **under 10 minutes**.
 - The container's RSS memory stays **under 150 MB** for a user tracking 200 topics.
-- **At least 8** of monitorrent's 12 trackers have a working Marauder equivalent.
+- Marauder ships **at least 12 forum-tracker plugins** covering the major CIS
+  community trackers, plus Torznab and Newznab adapters for everything else.
 - **All four** legacy clients (qBittorrent, Transmission, Deluge, uTorrent) are
   supported, plus a "download-to-folder" fallback.
 - The project has accepted at least **5 external contributors** — the plugin

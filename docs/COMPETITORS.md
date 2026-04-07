@@ -7,8 +7,8 @@ stops, where it competes, and where it complements.
 The short version: **nothing currently in active development does what Marauder
 does well**. Sonarr/Radarr/Prowlarr dominate the Torznab/Newznab world, but have
 never supported forum-style trackers with login. FlexGet can technically do it,
-but requires users to write YAML. Monitorrent *was* the right shape — it is no
-longer maintained.
+but requires users to write YAML. The historic Python-era forum-tracker
+monitors have stalled.
 
 ---
 
@@ -17,14 +17,12 @@ longer maintained.
 | Project | Focus | Covers forum trackers (RuTracker, LostFilm, NNM-Club)? | Actively maintained? | License | UI |
 |---|---|---|---|---|---|
 | **Marauder** *(this project)* | Forum-tracker monitoring + client delivery | ✅ Yes, first-class | ✅ | MIT | Modern React 19 |
-| [monitorrent](https://github.com/werwolfby/monitorrent) | Forum-tracker monitoring + client delivery | ✅ (historically) | ❌ Stalled since mid-2024 | MIT | Legacy Aurelia |
 | [Sonarr](https://sonarr.tv/) | TV show automation | ❌ Torznab only | ✅ | GPLv3 | Good |
 | [Radarr](https://radarr.video/) | Movie automation | ❌ Torznab only | ✅ | GPLv3 | Good |
 | [Lidarr](https://lidarr.audio/) | Music automation | ❌ Torznab only | ✅ | GPLv3 | Good |
 | [Prowlarr](https://prowlarr.com/) | Indexer aggregation for *arr stack | ❌ Torznab/Newznab only | ✅ | GPLv3 | Good |
 | [Jackett](https://github.com/Jackett/Jackett) | Tracker → Torznab shim | ⚠️ Partial (search only, no monitoring) | ✅ | GPLv2 | Basic |
 | [FlexGet](https://flexget.com/) | General content automation | ⚠️ Via YAML + community plugins | ✅ | MIT | Minimal webui |
-| [TorrentMonitor](https://hub.docker.com/r/alfonder/torrentmonitor) | monitorrent-lite fork | ✅ partial | ⚠️ Sporadic | Unclear | Legacy |
 
 ---
 
@@ -178,59 +176,13 @@ multi-user story. Troubleshooting means reading Python stack traces.
 
 ---
 
-## monitorrent (the incumbent)
-
-### What it is
-
-The project Marauder is built to replace. A Python 3 / Aurelia application that
-monitors forum trackers and hands torrents to clients. MIT-licensed. 12 tracker
-plugins, 5 client plugins, 5 notification backends.
-
-### Why it no longer solves the problem
-
-- **Stalled.** No release since 1.4.0 (July 2023). No active maintainer.
-- **Broken trackers.** LostFilm, RuTracker, NNM-Club all have months-old open
-  issues about broken scraping.
-- **Broken clients.** qBittorrent ≥ 4.5 API changes are not handled (#402).
-- **Cloudflare bypass is outdated.** The built-in solver uses old Playwright
-  heuristics that Cloudflare now detects (#363, #407).
-- **Memory leaks and crashes** (#393, #397).
-- **Unicode issues** with Cyrillic paths — marked *wontfix* because of a library
-  dependency.
-- **Aurelia frontend** is a paradigm most front-end developers have never touched,
-  making contribution difficult. The build toolchain is frozen in ~2019.
-- **No SSO story.** Single hard-coded login, plain password, no MFA.
-
-### Where it still wins (today)
-
-- **Works for users whose trackers still work.** Inertia has value.
-- **Familiar UI** for existing users.
-
-### Why Marauder is a clean rewrite, not a fork
-
-- The underlying libraries (old Aurelia, old Python scraping stack, outdated
-  Cloudflare bypass) are a dead end, not a foundation.
-- The plugin architecture (mixins, abstract classes) is tangled with the ORM
-  and hard to modernize incrementally.
-- A Go rewrite gives us a single static binary per platform, a tenth of the
-  memory footprint, and a plugin model that is actually pleasant to extend.
-- Starting clean lets us get **security, OIDC, observability, and multi-user
-  support right from day one**, rather than bolting them onto a codebase that
-  didn't anticipate them.
-
----
-
 ## Other / smaller / archived
 
-- **[TorrentMonitor](https://hub.docker.com/r/alfonder/torrentmonitor)** — a
-  stripped-down monitorrent-adjacent project focused on RuTracker, RuTor, and
-  LostFilm. Updates are irregular and documentation is thin.
 - **pyMediaManager** — Django-based personal project, not maintained as a
   product; effectively abandonware.
 - **Custom shell scripts** (`curl` + `cron` + `rtorrent` watch folder) — the
-  "zero-dependency" approach many power users fall back to when monitorrent
-  breaks. It works, but there is no UI, no state, no error reporting, no
-  updates-when-the-HTML-changes.
+  "zero-dependency" approach many power users fall back to. It works, but there
+  is no UI, no state, no error reporting, no updates-when-the-HTML-changes.
 - **[Sonarr Profilarr](https://corelab.tech/sonarr-radarr-profilarr-native-hunting-protocol/)**
   — a 2026 tool for managing quality profiles across Sonarr/Radarr. Complementary,
   not competitive.

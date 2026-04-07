@@ -1,5 +1,6 @@
 ---
 import Page from "@/layouts/Page.astro";
+import Icon from "@/components/Icon.astro";
 import { SITE } from "@/data/seo";
 import { trackers, trackerCount } from "@/data/trackers";
 import { clients } from "@/data/clients";
@@ -10,12 +11,11 @@ import { softwareApplicationSchema, faqSchema } from "@/data/schemas";
 const seo = {
   title: "Self-hosted torrent topic monitor",
   description:
-    "Marauder is an open-source, self-hosted application that watches torrent forum-tracker topics for updates and automatically delivers torrents to qBittorrent, Transmission, Deluge, or a watch folder. The modern monitorrent successor.",
+    "Marauder is an open-source, self-hosted application that watches torrent forum-tracker topics for updates and automatically delivers torrents to qBittorrent, Transmission, Deluge, or a watch folder.",
   path: "/",
   keywords: [
     "marauder torrent",
     "self-hosted torrent monitor",
-    "monitorrent alternative",
     "rutracker auto download",
     "torrent topic monitor",
     "sonarr forum tracker",
@@ -25,36 +25,44 @@ const seo = {
 
 const schemas = [softwareApplicationSchema(), faqSchema(homeFaq)];
 
-const featureCards = [
+type IconName =
+  | "radio-tower"
+  | "globe"
+  | "send"
+  | "shield-check"
+  | "activity"
+  | "blocks";
+
+const featureCards: { icon: IconName; title: string; body: string }[] = [
   {
-    icon: "📡",
+    icon: "radio-tower",
     title: "Watch any forum tracker",
     body: "Drop in a RuTracker, Kinozal, NNM-Club, LostFilm, Anidub, Anilibria, Toloka, or generic .torrent URL. Marauder logs in, scrapes the topic page, and detects when an uploader replaces the file.",
   },
   {
-    icon: "🌍",
+    icon: "globe",
     title: "500+ indexers via Torznab and Newznab",
     body: "First-class plugins for both protocols mean every Jackett, Prowlarr, NZBHydra2, NZBGeek, and DOGnzb indexer becomes a Marauder topic with one URL paste.",
   },
   {
-    icon: "🚀",
+    icon: "send",
     title: "Hands off the moment it ships",
     body: "When a topic updates, Marauder hands the torrent or NZB straight to qBittorrent, Transmission, Deluge, µTorrent, or a SABnzbd watch folder — no clicking, no copy-paste.",
   },
   {
-    icon: "🔐",
+    icon: "shield-check",
     title: "Secure by default",
     body: "Argon2id passwords, ES256 JWTs with refresh-token rotation, AES-256-GCM at-rest encryption for stored credentials, optional OIDC sign-in via Keycloak, audit log out of the box.",
   },
   {
-    icon: "📊",
+    icon: "activity",
     title: "Observable from day one",
     body: "Prometheus /metrics endpoint, structured JSON logs, /health and /ready, a live System status page, and per-topic event history. Monitor your monitor.",
   },
   {
-    icon: "🧩",
+    icon: "blocks",
     title: "One-file plugin model",
-    body: "A new tracker is one Go file implementing one interface. Twelve linters, 29 test packages, in-process E2E test harness. Adding a tracker is a weekend project, not an archaeology dig.",
+    body: "A new tracker is one Go file implementing one interface. Twelve linters, 29 test packages, in-process E2E test harness. Adding a tracker is a weekend project.",
   },
 ];
 
@@ -79,13 +87,11 @@ open http://localhost:6688`;
 <Page {...seo} schemas={schemas}>
   <!-- ============================================================ HERO -->
   <section class="relative overflow-hidden">
-    <!-- Background grid + radial glow -->
+    <!-- Background grid (very subtle, masked to a centred ellipse) -->
     <div class="pointer-events-none absolute inset-0 -z-10" aria-hidden="true">
-      <div class="absolute inset-0 opacity-[0.07]"
+      <div class="absolute inset-0 opacity-[0.06]"
            style="background-image: linear-gradient(hsl(var(--foreground)) 1px, transparent 1px), linear-gradient(90deg, hsl(var(--foreground)) 1px, transparent 1px); background-size: 56px 56px; mask-image: radial-gradient(ellipse 60% 50% at 50% 30%, black 30%, transparent 80%);">
       </div>
-      <div class="absolute left-1/2 top-1/3 size-[700px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-primary/15 blur-[140px]"></div>
-      <div class="absolute right-0 bottom-0 size-[500px] rounded-full bg-accent/15 blur-[140px]"></div>
     </div>
 
     <div class="mx-auto max-w-6xl px-6 pt-20 pb-24 text-center sm:pt-28 sm:pb-32">
@@ -95,27 +101,23 @@ open http://localhost:6688`;
       </p>
       <h1 class="mx-auto max-w-3xl text-4xl font-bold tracking-tight text-foreground sm:text-6xl">
         Watch every torrent thread.
-        <span class="block bg-gradient-to-r from-primary to-accent bg-clip-text text-transparent">
+        <span class="block text-foreground/70">
           Skip the boring part.
         </span>
       </h1>
       <p class="mx-auto mt-6 max-w-2xl text-lg text-muted-foreground sm:text-xl">
         Marauder is the self-hosted torrent topic monitor for forum-style trackers
-        the <em>arr stack can't reach. The modern, secure, observable successor to
-        <a href="https://github.com/werwolfby/monitorrent" class="text-foreground underline decoration-primary/60 underline-offset-4 hover:decoration-primary" rel="noopener external">monitorrent</a>.
+        the *arr stack can't reach. Modern, secure, observable, and built for
+        2026 — Go on the backend, React 19 on the frontend, PostgreSQL 18 for state.
       </p>
 
       <div class="mt-10 flex flex-wrap items-center justify-center gap-3">
         <a href="/install" class="btn-primary">
           Install in 5 minutes
-          <svg class="size-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <path d="M5 12h14M13 5l7 7-7 7"/>
-          </svg>
+          <Icon name="arrow-right" size={16} />
         </a>
         <a href={SITE.github} rel="noopener external" class="btn-outline">
-          <svg viewBox="0 0 24 24" class="size-4" aria-hidden="true" fill="currentColor">
-            <path d="M12 .3a12 12 0 0 0-3.8 23.4c.6.1.8-.3.8-.6v-2c-3.3.7-4-1.6-4-1.6-.6-1.4-1.4-1.8-1.4-1.8-1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1 1.8 2.8 1.3 3.5 1 .1-.8.4-1.3.7-1.6-2.7-.3-5.5-1.3-5.5-6 0-1.3.5-2.4 1.2-3.2-.1-.3-.5-1.5.1-3.2 0 0 1-.3 3.3 1.2a11.5 11.5 0 0 1 6 0c2.3-1.5 3.3-1.2 3.3-1.2.6 1.7.2 2.9.1 3.2.8.8 1.2 1.9 1.2 3.2 0 4.6-2.8 5.6-5.5 5.9.4.4.8 1.1.8 2.2v3.3c0 .3.2.7.8.6A12 12 0 0 0 12 .3"/>
-          </svg>
+          <Icon name="github" size={16} />
           Source on GitHub
         </a>
       </div>
@@ -135,9 +137,9 @@ open http://localhost:6688`;
   <!-- ============================================================ FEATURES -->
   <section class="mx-auto max-w-6xl px-6 py-20" aria-labelledby="features-heading">
     <div class="mb-14 text-center">
-      <p class="mb-2 text-xs font-mono uppercase tracking-wider text-primary">what it does</p>
+      <p class="mb-2 text-xs font-mono uppercase tracking-wider text-muted-foreground">what it does</p>
       <h2 id="features-heading" class="text-3xl font-bold tracking-tight sm:text-4xl">
-        Everything monitorrent did, plus the things it didn't.
+        Built for the trackers that nothing else can reach.
       </h2>
       <p class="mx-auto mt-3 max-w-2xl text-muted-foreground">
         Marauder is built around a single idea: paste a URL, walk away, never miss a release.
@@ -148,8 +150,8 @@ open http://localhost:6688`;
     <div class="grid gap-5 md:grid-cols-2 lg:grid-cols-3">
       {featureCards.map((card) => (
         <article class="glass-card rounded-xl p-6">
-          <div class="mb-4 inline-flex size-11 items-center justify-center rounded-lg bg-primary/15 text-2xl ring-1 ring-primary/25" aria-hidden="true">
-            {card.icon}
+          <div class="mb-4 inline-flex size-11 items-center justify-center rounded-lg bg-foreground/[0.04] text-foreground/85 ring-1 ring-foreground/10">
+            <Icon name={card.icon} size={22} />
           </div>
           <h3 class="text-lg font-semibold text-foreground">{card.title}</h3>
           <p class="mt-2 text-sm text-muted-foreground">{card.body}</p>
@@ -162,7 +164,7 @@ open http://localhost:6688`;
   <section class="mx-auto max-w-6xl px-6 py-20" aria-labelledby="quickstart-heading">
     <div class="grid gap-12 lg:grid-cols-2 lg:items-center">
       <div>
-        <p class="mb-2 text-xs font-mono uppercase tracking-wider text-primary">quick start</p>
+        <p class="mb-2 text-xs font-mono uppercase tracking-wider text-muted-foreground">quick start</p>
         <h2 id="quickstart-heading" class="text-3xl font-bold tracking-tight sm:text-4xl">
           From zero to your first torrent in five minutes.
         </h2>
@@ -173,15 +175,15 @@ open http://localhost:6688`;
         </p>
         <ol class="mt-6 space-y-3 text-sm text-muted-foreground">
           <li class="flex items-start gap-3">
-            <span class="mt-0.5 inline-flex size-6 shrink-0 items-center justify-center rounded-full bg-primary/15 text-xs font-semibold text-primary ring-1 ring-primary/25">1</span>
+            <span class="mt-0.5 inline-flex size-6 shrink-0 items-center justify-center rounded-full bg-foreground/[0.06] text-xs font-semibold text-foreground ring-1 ring-foreground/15">1</span>
             <span><strong class="text-foreground">Clone the repo</strong> and copy the example env file.</span>
           </li>
           <li class="flex items-start gap-3">
-            <span class="mt-0.5 inline-flex size-6 shrink-0 items-center justify-center rounded-full bg-primary/15 text-xs font-semibold text-primary ring-1 ring-primary/25">2</span>
+            <span class="mt-0.5 inline-flex size-6 shrink-0 items-center justify-center rounded-full bg-foreground/[0.06] text-xs font-semibold text-foreground ring-1 ring-foreground/15">2</span>
             <span><strong class="text-foreground">Generate a master key</strong> with <code>openssl rand -base64 32</code>.</span>
           </li>
           <li class="flex items-start gap-3">
-            <span class="mt-0.5 inline-flex size-6 shrink-0 items-center justify-center rounded-full bg-primary/15 text-xs font-semibold text-primary ring-1 ring-primary/25">3</span>
+            <span class="mt-0.5 inline-flex size-6 shrink-0 items-center justify-center rounded-full bg-foreground/[0.06] text-xs font-semibold text-foreground ring-1 ring-foreground/15">3</span>
             <span><strong class="text-foreground">docker compose up -d</strong> — open <code>http://localhost:6688</code>.</span>
           </li>
         </ol>
@@ -206,7 +208,7 @@ open http://localhost:6688`;
   <!-- ============================================================ TRACKER STRIP -->
   <section class="mx-auto max-w-6xl px-6 py-20" aria-labelledby="trackers-heading">
     <div class="mb-10 text-center">
-      <p class="mb-2 text-xs font-mono uppercase tracking-wider text-primary">supported sources</p>
+      <p class="mb-2 text-xs font-mono uppercase tracking-wider text-muted-foreground">supported sources</p>
       <h2 id="trackers-heading" class="text-3xl font-bold tracking-tight sm:text-4xl">
         16 trackers in v1.0. 500+ indexers via Torznab and Newznab.
       </h2>
@@ -218,7 +220,7 @@ open http://localhost:6688`;
 
     <div class="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4">
       {trackers.map((t) => (
-        <a href={`/trackers#${t.slug}`} class="glass-card rounded-lg p-4 transition-transform hover:-translate-y-0.5 hover:border-primary/50">
+        <a href={`/trackers#${t.slug}`} class="glass-card rounded-lg p-4 transition-all hover:-translate-y-0.5 hover:border-foreground/30">
           <div class="flex items-center justify-between gap-2">
             <span class="font-mono text-sm font-semibold text-foreground">{t.name}</span>
             {t.status === "validated"
@@ -238,7 +240,7 @@ open http://localhost:6688`;
   <!-- ============================================================ FAQ -->
   <section class="mx-auto max-w-3xl px-6 py-20" aria-labelledby="faq-heading">
     <div class="mb-10 text-center">
-      <p class="mb-2 text-xs font-mono uppercase tracking-wider text-primary">faq</p>
+      <p class="mb-2 text-xs font-mono uppercase tracking-wider text-muted-foreground">faq</p>
       <h2 id="faq-heading" class="text-3xl font-bold tracking-tight sm:text-4xl">Common questions</h2>
     </div>
 
@@ -260,8 +262,6 @@ open http://localhost:6688`;
   <!-- ============================================================ CTA -->
   <section class="mx-auto max-w-6xl px-6 py-20" aria-labelledby="cta-heading">
     <div class="glass-card relative overflow-hidden rounded-2xl px-8 py-16 text-center">
-      <div class="pointer-events-none absolute -right-20 -top-20 size-80 rounded-full bg-primary/20 blur-3xl"></div>
-      <div class="pointer-events-none absolute -left-20 -bottom-20 size-80 rounded-full bg-accent/20 blur-3xl"></div>
       <h2 id="cta-heading" class="relative text-3xl font-bold tracking-tight sm:text-4xl">
         Stop copy-pasting magnet links.
       </h2>

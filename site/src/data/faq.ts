@@ -7,7 +7,7 @@ export const homeFaq: FaqItem[] = [
   {
     question: "What is Marauder?",
     answer:
-      "Marauder is a self-hosted application that monitors torrent forum-tracker topics for updates and automatically delivers the resulting torrent or magnet link to your torrent client. It is a modern Go + React rewrite of the abandoned monitorrent project.",
+      "Marauder is a self-hosted application that monitors torrent forum-tracker topics for updates and automatically delivers the resulting torrent or magnet link to your torrent client. It is built with Go on the backend and React on the frontend, and runs as a four-container Docker compose stack.",
   },
   {
     question: "How is Marauder different from Sonarr or Radarr?",

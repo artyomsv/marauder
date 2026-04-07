@@ -69,8 +69,9 @@ interval shows no memory growth and no unhandled errors.
 
 ## v0.3.0 — "Real trackers, real users"
 
-**Goal:** monitorrent feature parity starts here — this is the milestone that
-makes Marauder a credible replacement.
+**Goal:** the first batch of real CIS forum-tracker plugins, plus a credible
+multi-user / SSO story. This is the milestone that turns Marauder from a
+scaffold into a usable product.
 
 - [x] `rutracker` tracker plugin (login + topic page scraping) — alpha,
       structurally complete with fixture-based tests
@@ -102,7 +103,7 @@ touching config files.
 
 ## v0.4.0 — "The long tail"
 
-**Goal:** close the gap on the remaining monitorrent trackers and clients.
+**Goal:** close the gap on the remaining CIS forum trackers and legacy clients.
 
 - [x] `lostfilm` tracker plugin (with quality selection via WithQuality
       capability) — alpha, structurally complete
@@ -127,8 +128,8 @@ touching config files.
 - [x] Bulk-edit: pause/resume/delete multiple topics via checkboxes +
       bulk action bar
 
-**Done when:** at least 8 of the original 12 monitorrent trackers and all
-4 legacy clients have working Marauder equivalents.
+**Done when:** Marauder ships at least 12 forum-tracker plugins and all
+4 legacy clients (qBittorrent, Transmission, Deluge, µTorrent) work end-to-end.
 
 ---
 
@@ -154,8 +155,6 @@ touching config files.
 - [x] SBOM published with every release — CycloneDX per image via
       `anchore/sbom-action`
 - [x] CHANGELOG.md with full 1.0.0 notes
-- [x] Migration guide from monitorrent
-      ([`docs/migrating-from-monitorrent.md`](migrating-from-monitorrent.md))
 
 **Done when:** we have shipped and a small group of external beta testers
 has run it for a week without reporting a release-blocker. **Released
@@ -185,5 +184,3 @@ has run it for a week without reporting a release-blocker. **Released
 - **Grafana dashboard JSON** shipped with the repo.
 - **Helm chart** for Kubernetes users.
 - **Backup/restore CLI** (`marauder backup > dump.tar.gz`).
-- **Import from monitorrent** — one-click migration from an existing
-  monitorrent SQLite database.

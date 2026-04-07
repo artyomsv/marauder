@@ -141,7 +141,7 @@ const sections = [
     </nav>
 
     <header class="mb-12">
-      <p class="mb-2 text-xs font-mono uppercase tracking-wider text-primary">deep dive</p>
+      <p class="mb-2 text-xs font-mono uppercase tracking-wider text-muted-foreground">deep dive</p>
       <h1 class="text-4xl font-bold tracking-tight sm:text-5xl">
         What's inside Marauder
       </h1>
@@ -163,7 +163,7 @@ const sections = [
           <ul class="mt-5 space-y-2 text-sm text-muted-foreground">
             {section.bullets.map((b) => (
               <li class="flex items-start gap-3">
-                <span class="mt-1.5 size-1.5 shrink-0 rounded-full bg-primary"></span>
+                <span class="mt-1.5 size-1.5 shrink-0 rounded-full bg-foreground/40"></span>
                 <span>{b}</span>
               </li>
             ))}

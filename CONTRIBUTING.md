@@ -227,9 +227,10 @@ We will merge:
 We will not merge:
 
 - Hard-coded lists of tracker URLs that point at copyrighted content.
-- Code that tries to defeat tracker site protections in ways that go
-  beyond what monitorrent already did (this is a personal-use automation
-  tool, not a circumvention library).
+- Code that tries to defeat tracker site protections beyond standard
+  cookie-based authentication and the existing Cloudflare interstitial
+  handling (this is a personal-use automation tool, not a circumvention
+  library).
 - Removal of the MIT license header from any file.
 
 ---

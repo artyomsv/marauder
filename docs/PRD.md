@@ -16,10 +16,9 @@
 
 Marauder is a self-hosted application that monitors torrent forum-tracker topics
 for updates and automatically delivers the resulting `.torrent` files or magnet
-links to the user's torrent client(s). It is a ground-up rewrite of the abandoned
-[monitorrent](https://github.com/werwolfby/monitorrent) project, using a Go
-backend, a React 19 + Tailwind 4 + shadcn/ui frontend, PostgreSQL 18.4, and a
-plugin architecture designed to be easy to extend.
+links to the user's torrent client(s). It is built with a Go backend, a React 19
++ Tailwind 4 + shadcn/ui frontend, PostgreSQL 18.4, and a plugin architecture
+designed to be easy to extend.
 
 Public URL: **`https://marauder.cc`**
 License: **MIT**
@@ -31,8 +30,10 @@ Repository: **[artyomsv/marauder](https://github.com/artyomsv/marauder)**
 
 ### 2.1 Goals
 
-1. **Feature parity with monitorrent** for the most-used trackers and clients,
-   ported to a modern, maintainable codebase.
+1. **Broad coverage of CIS forum trackers and English-speaking indexers** —
+   the most-used forum trackers (RuTracker, Kinozal, NNM-Club, LostFilm,
+   Anilibria, etc.) plus Torznab/Newznab adapters for everything else, all on
+   a modern, maintainable codebase.
 2. **Security by default** — password hashing with Argon2id, refresh-token
    rotation, OIDC/Keycloak as a first-class login mode, per-user data isolation,
    encrypted tracker credentials at rest, CSRF protection on state-changing

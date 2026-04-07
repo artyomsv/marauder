@@ -1,6 +1,6 @@
 // Package lostfilm implements a tracker plugin for lostfilm.tv.
 //
-// LostFilm is the show-tracking site monitorrent users miss the most:
+// LostFilm is one of the most-requested forum trackers in the CIS scene:
 // it's where Russian-dubbed TV episodes are released. The site exposes
 // per-show pages at /series/<slug> and per-episode download pages with
 // quality buttons (SD, MP4, 1080p).

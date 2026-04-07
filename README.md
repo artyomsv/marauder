@@ -4,7 +4,7 @@
 
 ### *The forum-tracker monitor that stayed up to date.*
 
-**A modern, self-hosted torrent topic monitor — successor to monitorrent.**
+**A modern, self-hosted torrent topic monitor for the trackers the *arr stack can't reach.**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Release: v1.0.0](https://img.shields.io/badge/release-v1.0.0-success.svg)](CHANGELOG.md)
@@ -30,9 +30,7 @@ Anilibria, and friends) for updates and **automatically hands the new
 `.torrent` file or magnet link to your torrent client** — qBittorrent,
 Transmission, Deluge, uTorrent, or a simple download folder.
 
-It is a ground-up rewrite of the abandoned
-[monitorrent](https://github.com/werwolfby/monitorrent) project, built in 2026
-with the tools and practices that monitorrent couldn't have had in 2015:
+It is built in 2026 with a tightly focused set of modern tools:
 
 - **Go** backend — single static binary, ~50 MB image, bounded memory.
 - **React 19 + Vite 8 + Tailwind 4 + shadcn/ui** frontend — genuinely modern,
@@ -51,9 +49,10 @@ The short version:
 
 > Sonarr, Radarr, and Prowlarr dominate the Torznab/Newznab world. None of
 > them can monitor a RuTracker forum thread, because RuTracker isn't a
-> Torznab indexer — it's a forum. That's the niche monitorrent filled, and
-> since mid-2024 **it stopped working** for most users. Marauder picks up
-> where monitorrent left off.
+> Torznab indexer — it's a forum. The Python-era tools that historically
+> filled this niche have stalled. Marauder picks up where they left off,
+> built on a modern stack with first-class security, observability, and a
+> plugin model designed to be easy to extend.
 
 Read the full rationale: [VISION.md](docs/VISION.md) ·
 [COMPETITORS.md](docs/COMPETITORS.md).
@@ -218,9 +217,14 @@ For now:
 
 ---
 
-## License
+## License & credits
 
-Marauder is released under the [MIT License](LICENSE) — same as monitorrent.
+Marauder is released under the [MIT License](LICENSE).
+
+Built inspired by [monitorrent](https://github.com/werwolfby/monitorrent) — the
+project that pioneered the forum-tracker monitoring niche. Marauder is an
+independent, ground-up implementation, but the problem statement and the user
+experience it targets are owed to that earlier work.
 
 ---
 

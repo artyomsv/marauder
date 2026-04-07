@@ -1,5 +1,6 @@
 ---
 import Page from "@/layouts/Page.astro";
+import Icon from "@/components/Icon.astro";
 import { SITE } from "@/data/seo";
 import { breadcrumbSchema, howToSchema } from "@/data/schemas";
 
@@ -75,7 +76,7 @@ const cmdLogin = `curl -sS -X POST http://localhost:6688/api/v1/auth/login \\
     </nav>
 
     <header class="mb-12">
-      <p class="mb-2 text-xs font-mono uppercase tracking-wider text-primary">quick start</p>
+      <p class="mb-2 text-xs font-mono uppercase tracking-wider text-muted-foreground">quick start</p>
       <h1 class="text-4xl font-bold tracking-tight sm:text-5xl">
         Install Marauder in 5 minutes
       </h1>
@@ -112,9 +113,10 @@ const cmdLogin = `curl -sS -X POST http://localhost:6688/api/v1/auth/login \\
         configs, JWT signing keys) with AES-256-GCM keyed by a 32-byte master
         key you supply via the <code>MARAUDER_MASTER_KEY</code> env var.
       </p>
-      <p class="mt-2 text-sm text-warning">
-        ⚠️ <strong>Save the key somewhere safe.</strong> Losing it means every
-        stored credential is unrecoverable.
+      <p class="mt-3 flex items-start gap-2 text-sm text-warning">
+        <Icon name="triangle-alert" size={18} class="mt-0.5 shrink-0" aria-label="Warning" />
+        <span><strong>Save the key somewhere safe.</strong> Losing it means every
+        stored credential is unrecoverable.</span>
       </p>
       <pre class="mt-4 text-sm"><code>{cmdSecrets}</code></pre>
     </section>
@@ -132,9 +134,10 @@ const cmdLogin = `curl -sS -X POST http://localhost:6688/api/v1/auth/login \\
         <code>MARAUDER_ADMIN_INITIAL_PASSWORD</code> in the env file. Both
         default to <code>admin</code> / <code>pleasechangeme</code>.
       </p>
-      <p class="mt-2 text-sm text-warning">
-        ⚠️ <strong>Change the admin password</strong> from the UI on first
-        login, then unset both env vars and restart the backend.
+      <p class="mt-3 flex items-start gap-2 text-sm text-warning">
+        <Icon name="triangle-alert" size={18} class="mt-0.5 shrink-0" aria-label="Warning" />
+        <span><strong>Change the admin password</strong> from the UI on first
+        login, then unset both env vars and restart the backend.</span>
       </p>
     </section>
 
@@ -150,7 +153,7 @@ const cmdLogin = `curl -sS -X POST http://localhost:6688/api/v1/auth/login \\
     <section class="mb-14" aria-labelledby="step-5">
       <h2 id="step-5" class="text-2xl font-semibold tracking-tight">5. Sign in and add your first topic</h2>
       <p class="mt-3 text-muted-foreground">
-        Open <a href="http://localhost:6688" class="text-foreground underline decoration-primary/60 underline-offset-4 hover:decoration-primary">http://localhost:6688</a>
+        Open <a href="http://localhost:6688" class="text-foreground underline decoration-foreground/40 underline-offset-4 hover:decoration-foreground">http://localhost:6688</a>
         in a browser, sign in as <code>admin</code>, and use the <strong>Add topic</strong>
         button to paste a magnet link or tracker URL. Configure a torrent
         client under <strong>Clients</strong>, set it as default, and Marauder
@@ -165,19 +168,19 @@ const cmdLogin = `curl -sS -X POST http://localhost:6688/api/v1/auth/login \\
     <section class="mb-14" aria-labelledby="next">
       <h2 id="next" class="text-2xl font-semibold tracking-tight">Next steps</h2>
       <div class="mt-6 grid gap-4 sm:grid-cols-2">
-        <a href="/integrations" class="glass-card rounded-xl p-5 hover:border-primary/50">
+        <a href="/integrations" class="glass-card rounded-xl p-5 transition-colors hover:border-foreground/30">
           <h3 class="font-semibold text-foreground">Configure a torrent client</h3>
           <p class="mt-1 text-sm text-muted-foreground">qBittorrent, Transmission, Deluge, µTorrent, or a watch folder.</p>
         </a>
-        <a href="/trackers" class="glass-card rounded-xl p-5 hover:border-primary/50">
+        <a href="/trackers" class="glass-card rounded-xl p-5 transition-colors hover:border-foreground/30">
           <h3 class="font-semibold text-foreground">Add tracker credentials</h3>
           <p class="mt-1 text-sm text-muted-foreground">Configure logins for the 16 supported trackers.</p>
         </a>
-        <a href={SITE.github + "/blob/main/docs/oidc.md"} rel="noopener external" class="glass-card rounded-xl p-5 hover:border-primary/50">
+        <a href={SITE.github + "/blob/main/docs/oidc.md"} rel="noopener external" class="glass-card rounded-xl p-5 transition-colors hover:border-foreground/30">
           <h3 class="font-semibold text-foreground">Enable OIDC sign-in</h3>
           <p class="mt-1 text-sm text-muted-foreground">Drop in Keycloak via the bundled SSO compose profile.</p>
         </a>
-        <a href={SITE.github + "/blob/main/docs/torznab-newznab.md"} rel="noopener external" class="glass-card rounded-xl p-5 hover:border-primary/50">
+        <a href={SITE.github + "/blob/main/docs/torznab-newznab.md"} rel="noopener external" class="glass-card rounded-xl p-5 transition-colors hover:border-foreground/30">
           <h3 class="font-semibold text-foreground">Connect Torznab / Newznab</h3>
           <p class="mt-1 text-sm text-muted-foreground">Reach 500+ indexers via Jackett, Prowlarr, or NZBHydra2.</p>
         </a>

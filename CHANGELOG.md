@@ -7,13 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (marauder.cc visual & content polish)
+- **Replaced emoji icons with inline lucide SVG icons** via a new
+  `site/src/components/Icon.astro` component. Six feature-card icons
+  on the home page (radio-tower, globe, send, shield-check, activity,
+  blocks), the install warning callout (triangle-alert), and inline
+  arrow-right / github icons all render as zero-JS inline `<svg>` —
+  no `astro-icon` or `@iconify-json/lucide` dependency added.
+- **Dialled back the violet color usage** across the site. The
+  brand violet remains on the primary CTA buttons and the Marauder
+  logo gradient, but is no longer used for section header labels,
+  hover borders, link underlines, step number circles, or
+  background radial glows. Section labels now use
+  `text-muted-foreground`, hover borders use `foreground/30`, and
+  link underlines use `foreground/40`. The body background is a
+  single subtle violet ellipse instead of two stacked violet/cyan
+  glows.
+- **Removed all `monitorrent` mentions from the marketing site and
+  internal documentation** except for one credits line in the
+  README. Deleted `site/src/pages/vs/monitorrent.astro` and
+  `docs/migrating-from-monitorrent.md`. Reworded copy in
+  `docs/VISION.md`, `docs/COMPETITORS.md`, `docs/PRD.md`,
+  `docs/ROADMAP.md`, and `CONTRIBUTING.md` to describe the
+  forum-tracker monitoring niche on its own terms. Cleaned up the
+  same comments in `backend/internal/plugins/trackers/lostfilm/lostfilm.go`
+  and `backend/internal/plugins/registry/registry.go`. The single
+  remaining mention is in `README.md` under "License & credits".
+
 ### Added (marauder.cc marketing site)
 - **New `site/` directory** containing the Astro 5 + Tailwind 4 +
   Shiki marketing site for `https://marauder.cc`. Designed for
   **100% Lighthouse SEO** with zero React/JS hydration:
-  - 9 routes: home (`/`), `/install`, `/features`, `/trackers`,
-    `/integrations`, `/docs`, `/vs/sonarr`, `/vs/monitorrent`,
-    `/legal`, plus a friendly 404
+  - 8 routes: home (`/`), `/install`, `/features`, `/trackers`,
+    `/integrations`, `/docs`, `/vs/sonarr`, `/legal`, plus a friendly 404
   - Per-page **unique title, meta description, canonical URL**
   - **Open Graph + Twitter Card** on every page (8 OG tags + 4
     Twitter Card tags) generated centrally by `BaseHead.astro`
@@ -32,11 +58,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **Favicon SVG** + Apple touch icon SVG matching the app's
     violet/cyan brand
   - **OG image** at `/og/default.svg` (1200×630) with brand text
-  - Two long-form **comparison pages** for SEO long-tail:
+  - One long-form **comparison page** for SEO long-tail:
     `/vs/sonarr` (Sonarr-Radarr-Prowlarr feature matrix +
     explanation of why the *arr stack can't see forum trackers)
-    and `/vs/monitorrent` (full migration story + monitorrent
-    breakage list)
   - **Performance budget:** 0 JS frameworks shipped (Astro outputs
     pure HTML by default), only 2.25 KB of Astro's prefetch helper.
     Total HTML max 40 KB per page, single CSS bundle 35 KB
