@@ -72,9 +72,11 @@ interval shows no memory growth and no unhandled errors.
 **Goal:** monitorrent feature parity starts here — this is the milestone that
 makes Marauder a credible replacement.
 
-- [ ] `rutracker` tracker plugin (login + topic page scraping)
-- [ ] `kinozal` tracker plugin
-- [ ] `nnmclub` tracker plugin
+- [x] `rutracker` tracker plugin (login + topic page scraping) — alpha,
+      structurally complete with fixture-based tests
+- [x] `kinozal` tracker plugin — alpha, fixture-tested
+- [x] `nnmclub` tracker plugin — alpha, fixture-tested, opts into
+      `WithCloudflare`
 - [x] Cloudflare solver sidecar (`chromedp`-based) — separate Go service
       `cfsolver/`, Debian-slim image with chromium, exposed via the
       `cfsolver` compose profile, in-process client at

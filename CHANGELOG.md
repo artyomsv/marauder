@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (v0.3 work in progress, batch 2)
+- **`forumcommon` helper:** tiny shared `SessionStore` that holds an
+  `http.Client` with its own cookie jar per `(tracker_name, user_id)`
+  pair. Forum-style tracker plugins use it to keep login cookies hot
+  across concurrent topic checks without each plugin reimplementing
+  the wheel.
+- **`rutracker` plugin** (`internal/plugins/trackers/rutracker`):
+  parses `/forum/viewtopic.php?t=NNN`, posts the login form to
+  `login.php`, scrapes the magnet URI and infohash from the topic
+  page, falls back to the `dl.php?t=NNN` endpoint when the magnet is
+  missing. Fixture-based unit tests cover Parse / Check / Download /
+  Login / Verify. Marked alpha — needs validation against a real
+  account.
+- **`kinozal` plugin** (`internal/plugins/trackers/kinozal`): same
+  shape, targeting `details.php?id=NNN` with the `Инфо хэш` regex and
+  the dl.kinozal.tv subdomain. Fixture-tested.
+- **`nnmclub` plugin** (`internal/plugins/trackers/nnmclub`): same
+  shape, with `WithCloudflare` opt-in so the scheduler will route
+  through the cfsolver sidecar when the site returns a Cloudflare
+  challenge. Fixture-tested.
+- All three plugins are wired into `cmd/server/main.go` via blank
+  imports so they self-register on process start.
+
 ### Added (v0.3 work in progress)
 - **Keycloak / OIDC end-to-end:** `auth.OIDCProvider` is wired into the
   router. New handlers `OIDCLogin` (begin auth-code flow with state
