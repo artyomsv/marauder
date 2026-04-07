@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (v0.4 work in progress)
+- **Long-tail tracker plugins** (all alpha — structurally complete with
+  fixture-based tests where applicable, validation against live sites
+  pending):
+  - `lostfilm` — series tracking with `WithQuality` capability (SD,
+    1080p_mp4, 1080p), AJAX-based login, episode-marker hash detection
+  - `anilibria` — uses the public Anilibria v3 JSON API; no
+    authentication needed
+  - `anidub` — phpBB-derived; `WithQuality` (HDTVRip, HDTVRip-AVC, BDRip)
+  - `rutor` — public no-account tracker, magnet-only
+  - `toloka` — Ukrainian phpBB tracker
+  - `unionpeer` — phpBB tracker
+  - `tapochek` — phpBB-derived cartoons tracker
+- **`utorrent` client plugin:** token-based WebUI flow (GET
+  `/gui/token.html`, then `/gui/?token=&action=add-url|add-file`),
+  basic-auth, mocked-server tests for Test/Add-magnet/Add-file/auth-fail
+- **`email` notifier:** SMTP via `net/smtp` with PLAIN auth.
+  `sender` field is overridable so tests can substitute a fake instead
+  of hitting a real mailserver.
+- **`webhook` notifier:** POSTs JSON `{source, title, body, link}` to
+  any URL. httptest-based tests for happy path, non-2xx, and empty URL.
+- **`pushover` notifier:** form POST to api.pushover.net/1/messages.json.
+  httptest-based tests verify all form fields are sent.
+- All eight new trackers and four new client/notifier plugins are wired
+  into `cmd/server/main.go` via blank imports. **Total bundled: 11
+  trackers, 5 clients, 4 notifiers.**
+
 ### Added (v0.3 work in progress, batch 2)
 - **`forumcommon` helper:** tiny shared `SessionStore` that holds an
   `http.Client` with its own cookie jar per `(tracker_name, user_id)`
