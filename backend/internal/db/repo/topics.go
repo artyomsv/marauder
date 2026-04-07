@@ -4,18 +4,30 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/artyomsv/marauder/backend/internal/domain"
 )
 
+// topicsPool is the minimal subset of *pgxpool.Pool used by Topics.
+// Defined as an unexported interface so tests can substitute a mock
+// (e.g. pgxmock) without changing the public constructor signature.
+// The concrete *pgxpool.Pool type still satisfies this interface.
+type topicsPool interface {
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
 // Topics repository.
 type Topics struct {
-	pool *pgxpool.Pool
+	pool topicsPool
 }
 
 // NewTopics constructs the repository.
@@ -50,7 +62,13 @@ func scanTopic(row pgx.Row) (*domain.Topic, error) {
 	t.LastUpdatedAt = lastUpdated
 	t.Status = domain.TopicStatus(status)
 	if len(extraRaw) > 0 {
-		_ = json.Unmarshal(extraRaw, &t.Extra)
+		// Surface malformed JSON rather than silently treating a
+		// corrupted blob as an empty map. The caller logs and skips
+		// the row; a corrupt extra column is a data-integrity issue
+		// that must not masquerade as "no extras".
+		if err := json.Unmarshal(extraRaw, &t.Extra); err != nil {
+			return nil, fmt.Errorf("topics: scan extra blob (id=%s): %w", t.ID, err)
+		}
 	}
 	if t.Extra == nil {
 		t.Extra = map[string]any{}
@@ -150,23 +168,73 @@ WHERE id = $1`
 }
 
 // UpdateExtra overwrites the topic.extra JSONB blob with the supplied
-// map. Used by the scheduler when a plugin reports per-episode
-// download progress (e.g. LostFilm tracks the list of already-downloaded
-// packed episode IDs in extra["downloaded_episodes"] so the next check
-// only fetches what's missing).
+// map. Used by the scheduler's fallback path when a plugin reports
+// per-episode download progress (e.g. LostFilm tracks the list of
+// already-downloaded packed episode IDs in extra["downloaded_episodes"]
+// so the next check only fetches what's missing).
+//
+// Deprecated: this method overwrites the entire JSONB blob and is
+// unsafe under concurrent updates — a partially populated map will
+// wipe server-side fields (quality, start_season, etc.). Prefer
+// MarkEpisodeDownloaded for the episode-tracking hot path. Kept in
+// place for backward compatibility with the scheduler's
+// non-atomic fallback branch.
 func (r *Topics) UpdateExtra(ctx context.Context, id uuid.UUID, extra map[string]any) error {
 	raw, err := json.Marshal(extra)
 	if err != nil {
-		return err
+		return fmt.Errorf("topics: marshal extra: %w", err)
 	}
 	if len(raw) == 0 {
 		raw = []byte("{}")
 	}
-	_, err = r.pool.Exec(ctx,
+	ct, err := r.pool.Exec(ctx,
 		`UPDATE topics SET extra = $2, updated_at = now() WHERE id = $1`,
 		id, raw,
 	)
-	return err
+	if err != nil {
+		return fmt.Errorf("topics: update extra: %w", err)
+	}
+	if ct.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// MarkEpisodeDownloaded atomically appends the supplied packed episode
+// ID to the topic's extra["downloaded_episodes"] array using a Postgres
+// JSONB SET expression. Unlike UpdateExtra (which overwrites the whole
+// blob), this:
+//
+//   - cannot wipe other extras keys,
+//   - is safe under concurrent updates because the SQL is a single
+//     atomic statement,
+//   - returns ErrNotFound if the topic was deleted.
+//
+// The packed ID is appended exactly once per call; the scheduler is
+// responsible for de-duplication on its side (it works from a pending
+// list that's already filtered).
+func (r *Topics) MarkEpisodeDownloaded(ctx context.Context, id uuid.UUID, packed string) error {
+	// Atomic JSONB array append. jsonb_set requires the target path
+	// to exist so we COALESCE both the column (NULL -> '{}') and the
+	// inner downloaded_episodes key (missing -> '[]') before appending.
+	const query = `
+UPDATE topics
+SET    extra = jsonb_set(
+           COALESCE(extra, '{}'::jsonb),
+           '{downloaded_episodes}',
+           (COALESCE(extra->'downloaded_episodes', '[]'::jsonb) || to_jsonb($2::text)),
+           true
+       ),
+       updated_at = now()
+WHERE  id = $1`
+	ct, err := r.pool.Exec(ctx, query, id, packed)
+	if err != nil {
+		return fmt.Errorf("topics: mark episode downloaded: %w", err)
+	}
+	if ct.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 // DueForCheck returns up to `limit` topics whose next_check_at is in the past
