@@ -53,11 +53,11 @@ func (h *System) Status(w http.ResponseWriter, _ *http.Request) {
 			"history":  hist,
 		},
 		"runtime": map[string]any{
-			"goroutines":     runtime.NumGoroutine(),
-			"alloc_bytes":    ms.Alloc,
-			"sys_bytes":      ms.Sys,
-			"heap_objects":   ms.HeapObjects,
-			"gc_cycles":      ms.NumGC,
+			"goroutines":   runtime.NumGoroutine(),
+			"alloc_bytes":  ms.Alloc,
+			"sys_bytes":    ms.Sys,
+			"heap_objects": ms.HeapObjects,
+			"gc_cycles":    ms.NumGC,
 		},
 		"version": version.Current(),
 	})

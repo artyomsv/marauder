@@ -20,8 +20,8 @@ func TestCanParse(t *testing.T) {
 		"https://example.com/api?apikey=K&t=search":               false,
 		"magnet:?xt=urn:btih:abc":                                 false,
 		"https://rutracker.org/forum/viewtopic.php?t=1":           false,
-		"":                                                         false,
-		"torznab+ftp://example.com/api":                           false,
+		"":                              false,
+		"torznab+ftp://example.com/api": false,
 	}
 	for url, want := range cases {
 		if got := p.CanParse(url); got != want {

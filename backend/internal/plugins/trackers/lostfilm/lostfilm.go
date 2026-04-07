@@ -55,13 +55,15 @@ func (p *plugin) DisplayName() string { return displayName }
 type Quality string
 
 const (
-	QualitySD     Quality = "SD"
-	QualityMP4    Quality = "1080p_mp4"
-	Quality1080p  Quality = "1080p"
+	QualitySD    Quality = "SD"
+	QualityMP4   Quality = "1080p_mp4"
+	Quality1080p Quality = "1080p"
 )
 
 // Qualities implements registry.WithQuality.
-func (p *plugin) Qualities() []string { return []string{string(QualitySD), string(QualityMP4), string(Quality1080p)} }
+func (p *plugin) Qualities() []string {
+	return []string{string(QualitySD), string(QualityMP4), string(Quality1080p)}
+}
 
 // DefaultQuality implements registry.WithQuality.
 func (p *plugin) DefaultQuality() string { return string(Quality1080p) }
@@ -94,11 +96,11 @@ func (p *plugin) Login(ctx context.Context, creds *domain.TrackerCredential) err
 		sess.Client.Transport = p.transport
 	}
 	form := url.Values{
-		"act":    {"users"},
-		"type":   {"login"},
-		"mail":   {creds.Username},
-		"pass":   {string(creds.SecretEnc)},
-		"rem":    {"1"},
+		"act":  {"users"},
+		"type": {"login"},
+		"mail": {creds.Username},
+		"pass": {string(creds.SecretEnc)},
+		"rem":  {"1"},
 	}
 	endpoint := "https://" + p.domain + "/ajaxik.php"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(form.Encode()))

@@ -96,9 +96,9 @@ func (p *plugin) Verify(_ context.Context, _ *domain.TrackerCredential) (bool, e
 }
 
 var (
-	titleRe   = regexp.MustCompile(`(?s)<title>([^<]+)</title>`)
-	hashRe    = regexp.MustCompile(`(?i)Info hash[^A-Z0-9]+([A-Fa-f0-9]{40})`)
-	dlHrefRe  = regexp.MustCompile(`href="(download\.php\?id=\d+)"`)
+	titleRe  = regexp.MustCompile(`(?s)<title>([^<]+)</title>`)
+	hashRe   = regexp.MustCompile(`(?i)Info hash[^A-Z0-9]+([A-Fa-f0-9]{40})`)
+	dlHrefRe = regexp.MustCompile(`href="(download\.php\?id=\d+)"`)
 )
 
 func (p *plugin) Check(ctx context.Context, topic *domain.Topic, creds *domain.TrackerCredential) (*domain.Check, error) {

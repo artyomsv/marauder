@@ -9,11 +9,11 @@ import (
 func TestCanParse(t *testing.T) {
 	p := New(nil)
 	cases := map[string]bool{
-		"newznab+https://nzbgeek.info/api?apikey=K&t=search":     true,
-		"newznab+http://localhost:5076/api":                       true,
-		"torznab+https://example.com/api":                         false,
-		"https://nzbgeek.info/api?apikey=K&t=search":              false,
-		"":                                                         false,
+		"newznab+https://nzbgeek.info/api?apikey=K&t=search": true,
+		"newznab+http://localhost:5076/api":                  true,
+		"torznab+https://example.com/api":                    false,
+		"https://nzbgeek.info/api?apikey=K&t=search":         false,
+		"": false,
 	}
 	for url, want := range cases {
 		if got := p.CanParse(url); got != want {

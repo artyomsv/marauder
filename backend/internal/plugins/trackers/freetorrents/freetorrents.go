@@ -134,10 +134,10 @@ func (p *Plugin) Verify(ctx context.Context, creds *domain.TrackerCredential) (b
 // --- Check / Download --------------------------------------------------
 
 var (
-	titleRe   = regexp.MustCompile(`(?s)<title>([^<]+)</title>`)
-	hashRe    = regexp.MustCompile(`(?i)Info[\s_-]?hash[^A-Z0-9]+([A-Fa-f0-9]{40})`)
-	magnetRe  = regexp.MustCompile(`(magnet:\?xt=urn:btih:[A-Fa-f0-9]+[^"'&\s]*)`)
-	dlHrefRe  = regexp.MustCompile(`href="(dl\.php\?id=\d+)"`)
+	titleRe  = regexp.MustCompile(`(?s)<title>([^<]+)</title>`)
+	hashRe   = regexp.MustCompile(`(?i)Info[\s_-]?hash[^A-Z0-9]+([A-Fa-f0-9]{40})`)
+	magnetRe = regexp.MustCompile(`(magnet:\?xt=urn:btih:[A-Fa-f0-9]+[^"'&\s]*)`)
+	dlHrefRe = regexp.MustCompile(`href="(dl\.php\?id=\d+)"`)
 )
 
 func (p *Plugin) Check(ctx context.Context, topic *domain.Topic, creds *domain.TrackerCredential) (*domain.Check, error) {

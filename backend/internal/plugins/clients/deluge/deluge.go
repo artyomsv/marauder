@@ -2,16 +2,16 @@
 //
 // Deluge has two RPC surfaces:
 //
-//   1. The "deluged" daemon over a custom TCP RPC protocol on port 58846.
-//      We do NOT use this — it requires a TLS handshake and a custom
-//      length-prefixed protocol.
+//  1. The "deluged" daemon over a custom TCP RPC protocol on port 58846.
+//     We do NOT use this — it requires a TLS handshake and a custom
+//     length-prefixed protocol.
 //
-//   2. The Deluge Web UI ("deluge-web") which exposes a *JSON-RPC* layer
-//      at `/json` on port 8112. This is what we target. The flow is:
-//        a) POST {"method":"auth.login","params":["password"],"id":1}
-//        b) Cookie: _session_id=...   (set by the response)
-//        c) POST {"method":"web.connect","params":["<host_id>"],"id":2}
-//        d) POST {"method":"core.add_torrent_magnet","params":[uri,opts],"id":3}
+//  2. The Deluge Web UI ("deluge-web") which exposes a *JSON-RPC* layer
+//     at `/json` on port 8112. This is what we target. The flow is:
+//     a) POST {"method":"auth.login","params":["password"],"id":1}
+//     b) Cookie: _session_id=...   (set by the response)
+//     c) POST {"method":"web.connect","params":["<host_id>"],"id":2}
+//     d) POST {"method":"core.add_torrent_magnet","params":[uri,opts],"id":3}
 //
 // Reference: https://deluge.readthedocs.io/en/latest/reference/web.html
 package deluge
@@ -36,7 +36,7 @@ import (
 
 // Config is the user-supplied config for a Deluge web UI client.
 type Config struct {
-	URL      string `json:"url"`      // e.g. http://deluge:8112
+	URL      string `json:"url"` // e.g. http://deluge:8112
 	Password string `json:"password"`
 }
 

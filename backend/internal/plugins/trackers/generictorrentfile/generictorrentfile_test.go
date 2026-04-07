@@ -19,13 +19,13 @@ func newPlugin() *plugin {
 func TestCanParse(t *testing.T) {
 	p := newPlugin()
 	cases := map[string]bool{
-		"https://example.com/file.torrent":        true,
-		"http://example.com/foo/bar.torrent":      true,
-		"https://example.com/file.TORRENT":        true,
-		"https://example.com/file.zip":            false,
-		"magnet:?xt=urn:btih:abc":                 false,
-		"ftp://example.com/file.torrent":          false,
-		"":                                        false,
+		"https://example.com/file.torrent":   true,
+		"http://example.com/foo/bar.torrent": true,
+		"https://example.com/file.TORRENT":   true,
+		"https://example.com/file.zip":       false,
+		"magnet:?xt=urn:btih:abc":            false,
+		"ftp://example.com/file.torrent":     false,
+		"":                                   false,
 	}
 	for url, want := range cases {
 		if got := p.CanParse(url); got != want {

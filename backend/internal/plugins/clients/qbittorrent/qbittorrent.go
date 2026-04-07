@@ -27,7 +27,7 @@ import (
 
 // Config is the user-provided config for a qBittorrent client.
 type Config struct {
-	URL      string `json:"url"`       // e.g. http://qbittorrent:8080
+	URL      string `json:"url"` // e.g. http://qbittorrent:8080
 	Username string `json:"username"`
 	Password string `json:"password"`
 	Category string `json:"category"`

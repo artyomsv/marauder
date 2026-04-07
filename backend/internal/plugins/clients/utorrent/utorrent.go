@@ -4,12 +4,12 @@
 // command endpoint at /gui/?token=...&action=add-url&s=<magnet>. The flow
 // is:
 //
-//   1. GET /gui/token.html with HTTP basic auth.
-//      The token is the only text content of a <div id="token">.
-//   2. GET /gui/?token=...&list=1 to verify.
-//   3. GET /gui/?token=...&action=add-url&s=<magnet> to add a magnet, or
-//      POST /gui/?token=...&action=add-file to add a .torrent file
-//      (multipart form).
+//  1. GET /gui/token.html with HTTP basic auth.
+//     The token is the only text content of a <div id="token">.
+//  2. GET /gui/?token=...&list=1 to verify.
+//  3. GET /gui/?token=...&action=add-url&s=<magnet> to add a magnet, or
+//     POST /gui/?token=...&action=add-file to add a .torrent file
+//     (multipart form).
 //
 // **Validation status:** structurally complete; needs validation against
 // a real µTorrent install. The host machine doesn't run a uTorrent

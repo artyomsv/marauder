@@ -1,0 +1,161 @@
+name: Release
+
+# Release pipeline. Triggered by a v* tag push.
+#
+# What it does:
+#   1. Re-runs CI on the tagged commit (paranoia)
+#   2. Builds backend, frontend, cfsolver as multi-arch images
+#      (linux/amd64, linux/arm64) and pushes to ghcr.io
+#   3. Signs each image with cosign (keyless via OIDC)
+#   4. Generates a CycloneDX SBOM per image with anchore/sbom-action
+#   5. Creates a GitHub Release with the matching CHANGELOG section
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to release (e.g. v1.1.0)'
+        required: true
+
+permissions:
+  contents: write       # to create the GitHub Release
+  packages: write       # to push to GHCR
+  id-token: write       # for cosign keyless signing
+  attestations: write   # for build provenance
+
+env:
+  REGISTRY: ghcr.io
+  OWNER: ${{ github.repository_owner }}
+
+jobs:
+  # ------------------------------------------------------------------ build
+  build:
+    name: Build ${{ matrix.image.name }}
+    runs-on: ubuntu-latest
+    outputs:
+      backend-digest: ${{ steps.export.outputs.backend-digest }}
+      frontend-digest: ${{ steps.export.outputs.frontend-digest }}
+      cfsolver-digest: ${{ steps.export.outputs.cfsolver-digest }}
+    strategy:
+      fail-fast: true
+      matrix:
+        image:
+          - name: backend
+            context: ./backend
+          - name: frontend
+            context: ./frontend
+          - name: cfsolver
+            context: ./cfsolver
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.OWNER }}/marauder-${{ matrix.image.name }}
+          tags: |
+            type=ref,event=tag
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest
+
+      - name: Build and push
+        id: push
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.image.context }}
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          provenance: true
+          sbom: true
+          cache-from: type=gha,scope=release-${{ matrix.image.name }}
+          cache-to: type=gha,scope=release-${{ matrix.image.name }},mode=max
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign image with cosign (keyless)
+        env:
+          IMG: ${{ env.REGISTRY }}/${{ env.OWNER }}/marauder-${{ matrix.image.name }}@${{ steps.push.outputs.digest }}
+        run: cosign sign --yes "$IMG"
+
+      - name: Generate SBOM (CycloneDX)
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ env.REGISTRY }}/${{ env.OWNER }}/marauder-${{ matrix.image.name }}@${{ steps.push.outputs.digest }}
+          format: cyclonedx-json
+          artifact-name: sbom-${{ matrix.image.name }}.cdx.json
+          output-file: sbom-${{ matrix.image.name }}.cdx.json
+
+      - name: Upload SBOM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-${{ matrix.image.name }}
+          path: sbom-${{ matrix.image.name }}.cdx.json
+
+      - name: Export digest
+        id: export
+        run: echo "${{ matrix.image.name }}-digest=${{ steps.push.outputs.digest }}" >> "$GITHUB_OUTPUT"
+
+  # --------------------------------------------------------- github release
+  release:
+    name: GitHub Release
+    needs: [build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download SBOMs
+        uses: actions/download-artifact@v4
+        with:
+          path: sboms
+          pattern: sbom-*
+
+      - name: Extract changelog section for this tag
+        id: changelog
+        run: |
+          TAG="${GITHUB_REF_NAME:-${{ github.event.inputs.tag }}}"
+          VER="${TAG#v}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+          # Pull the [VER] block out of CHANGELOG.md, stopping at the next ## heading.
+          awk -v v="[$VER]" '
+            $0 ~ "^## "v {flag=1; next}
+            /^## / && flag {flag=0}
+            flag {print}
+          ' CHANGELOG.md > release-notes.md
+
+          if [ ! -s release-notes.md ]; then
+            echo "No CHANGELOG section for $VER, falling back to a generic note." >&2
+            echo "Marauder $TAG. See CHANGELOG.md for details." > release-notes.md
+          fi
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.changelog.outputs.tag }}
+          name: Marauder ${{ steps.changelog.outputs.tag }}
+          body_path: release-notes.md
+          files: sboms/**/*.cdx.json
+          draft: false
+          prerelease: ${{ contains(steps.changelog.outputs.tag, '-rc') || contains(steps.changelog.outputs.tag, '-alpha') || contains(steps.changelog.outputs.tag, '-beta') }}

@@ -3,13 +3,13 @@
 // RuTracker is a phpBB-derived forum where each "topic" page hosts one
 // torrent attachment. The flow Marauder uses is:
 //
-//   1. Login: POST /forum/login.php with login_username, login_password,
-//      login=Вход. Sets a `bb_session` cookie that we keep in the cookie
-//      jar.
-//   2. Check: GET /forum/viewtopic.php?t=<topic_id>. Parse the topic
-//      title from <title>, the magnet link from the page, and the
-//      `dl_class_magnet-link` href.
-//   3. Download: follow the dl.php link with the same session cookies.
+//  1. Login: POST /forum/login.php with login_username, login_password,
+//     login=Вход. Sets a `bb_session` cookie that we keep in the cookie
+//     jar.
+//  2. Check: GET /forum/viewtopic.php?t=<topic_id>. Parse the topic
+//     title from <title>, the magnet link from the page, and the
+//     `dl_class_magnet-link` href.
+//  3. Download: follow the dl.php link with the same session cookies.
 //
 // **Validation status:** structurally complete and unit-tested with
 // recorded HTML fixtures. The selectors mirror the public RuTracker HTML
@@ -142,9 +142,9 @@ func (p *plugin) Verify(ctx context.Context, creds *domain.TrackerCredential) (b
 // --- Check / Download --------------------------------------------------
 
 var (
-	titleRe   = regexp.MustCompile(`(?s)<title>([^<]+)</title>`)
-	magnetRe  = regexp.MustCompile(`(magnet:\?xt=urn:btih:[A-Fa-f0-9]+[^"'&\s]*)`)
-	dlHrefRe  = regexp.MustCompile(`href="(dl\.php\?t=\d+)"`)
+	titleRe         = regexp.MustCompile(`(?s)<title>([^<]+)</title>`)
+	magnetRe        = regexp.MustCompile(`(magnet:\?xt=urn:btih:[A-Fa-f0-9]+[^"'&\s]*)`)
+	dlHrefRe        = regexp.MustCompile(`href="(dl\.php\?t=\d+)"`)
 	hashLooksLikeRe = regexp.MustCompile(`urn:btih:([A-Fa-f0-9]+)`)
 )
 

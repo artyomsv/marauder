@@ -143,10 +143,13 @@ touching config files.
       and hosting are user-side, post-tag
 - [x] CONTRIBUTING.md + plugin development guide
       ([`docs/plugin-development.md`](plugin-development.md))
-- [ ] Sample GitHub Actions workflow for contributors — v1.1
+- [x] Sample GitHub Actions workflow for contributors — `ci.yml`,
+      `docker.yml`, `e2e.yml`, `release.yml`, `codeql.yml` (see
+      [`docs/ci.md`](ci.md))
 - [ ] Security review self-check against OWASP ASVS L2 — v1.1
-- [ ] GHCR images signed with cosign — v1.1 (requires CI)
-- [ ] SBOM published with every release — v1.1 (requires CI)
+- [x] GHCR images signed with cosign — `release.yml` keyless via OIDC
+- [x] SBOM published with every release — CycloneDX per image via
+      `anchore/sbom-action`
 - [x] CHANGELOG.md with full 1.0.0 notes
 - [x] Migration guide from monitorrent
       ([`docs/migrating-from-monitorrent.md`](migrating-from-monitorrent.md))
@@ -163,6 +166,9 @@ has run it for a week without reporting a release-blocker. **Released
       now speaks both protocols and reaches every indexer that
       Sonarr / Radarr / Prowlarr / Jackett / NZBHydra2 collectively
       support (500+). See [`docs/torznab-newznab.md`](torznab-newznab.md).
+- [x] **GitHub Actions CI/CD** — five workflows + Dependabot config +
+      PR/Issue templates + golangci-lint config. Per-workflow doc at
+      [`docs/ci.md`](ci.md).
 
 ## Post-1.0 — stretch ideas (not committed)
 

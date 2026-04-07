@@ -1,0 +1,138 @@
+version: 2
+
+# Dependabot config for Marauder.
+#
+# We update weekly across every ecosystem in the repo. Minor and patch
+# bumps are grouped to keep PR noise manageable; major bumps are
+# always individual so reviewers can read each one carefully.
+
+updates:
+  # ------------------------------------------------------- Go modules
+  - package-ecosystem: gomod
+    directory: /backend
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 10
+    labels:
+      - dependencies
+      - go
+    commit-message:
+      prefix: "chore(deps)"
+      include: scope
+    groups:
+      go-minor-patch:
+        patterns: ["*"]
+        update-types: [minor, patch]
+
+  - package-ecosystem: gomod
+    directory: /cfsolver
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - go
+      - cfsolver
+    commit-message:
+      prefix: "chore(deps,cfsolver)"
+      include: scope
+    groups:
+      cfsolver-minor-patch:
+        patterns: ["*"]
+        update-types: [minor, patch]
+
+  # ------------------------------------------------------- npm
+  - package-ecosystem: npm
+    directory: /frontend
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 10
+    labels:
+      - dependencies
+      - frontend
+    commit-message:
+      prefix: "chore(deps,frontend)"
+      include: scope
+    groups:
+      frontend-minor-patch:
+        patterns: ["*"]
+        update-types: [minor, patch]
+      frontend-types:
+        patterns:
+          - "@types/*"
+        update-types: [major, minor, patch]
+    ignore:
+      # Pin to React 19 / Vite 8 / Tailwind 4 majors per the
+      # tech-stack lock in CHANGELOG. Dependabot will still propose
+      # patch bumps within the major.
+      - dependency-name: "react"
+        update-types: [version-update:semver-major]
+      - dependency-name: "react-dom"
+        update-types: [version-update:semver-major]
+      - dependency-name: "vite"
+        update-types: [version-update:semver-major]
+      - dependency-name: "tailwindcss"
+        update-types: [version-update:semver-major]
+
+  # ------------------------------------------------------- GitHub Actions
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - github-actions
+    commit-message:
+      prefix: "chore(ci)"
+      include: scope
+    groups:
+      github-actions:
+        patterns: ["*"]
+        update-types: [major, minor, patch]
+
+  # ------------------------------------------------------- Docker base images
+  - package-ecosystem: docker
+    directory: /backend
+    schedule:
+      interval: weekly
+      day: monday
+    labels:
+      - dependencies
+      - docker
+    commit-message:
+      prefix: "chore(deps,docker,backend)"
+
+  - package-ecosystem: docker
+    directory: /frontend
+    schedule:
+      interval: weekly
+      day: monday
+    labels:
+      - dependencies
+      - docker
+    commit-message:
+      prefix: "chore(deps,docker,frontend)"
+
+  - package-ecosystem: docker
+    directory: /cfsolver
+    schedule:
+      interval: weekly
+      day: monday
+    labels:
+      - dependencies
+      - docker
+    commit-message:
+      prefix: "chore(deps,docker,cfsolver)"

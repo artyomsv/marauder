@@ -1,0 +1,81 @@
+name: Bug report
+description: Something in Marauder isn't working the way you expected.
+labels: [bug, triage]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug report. Please include
+        as much detail as you can — the more reproducible the report,
+        the faster the fix.
+
+  - type: input
+    id: version
+    attributes:
+      label: Marauder version
+      description: e.g. v1.0.0, or the short git SHA if you're on main
+      placeholder: v1.0.0
+    validations:
+      required: true
+
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: How are you running Marauder?
+      options:
+        - docker compose (production stack)
+        - docker compose (dev overlay)
+        - docker compose (sso overlay)
+        - docker compose (cfsolver profile)
+        - building from source
+        - other (describe in steps)
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: A clear description of the bug. Include the URL/topic in question if relevant.
+      placeholder: I added a topic for X and Y happened instead of Z.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: Numbered steps a maintainer can follow exactly.
+      placeholder: |
+        1. Bring up the stack with `docker compose up -d`
+        2. Log in as admin
+        3. Click "Add topic" and paste `magnet:?xt=urn:btih:...`
+        4. Wait one scheduler tick
+        5. Observe...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect to happen?
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Backend logs
+      description: |
+        `docker logs deploy-backend-1 2>&1 | tail -200` is usually a good start.
+        Please scrub anything sensitive (API keys, passwords, real account info).
+      render: shell
+    validations:
+      required: false
+
+  - type: textarea
+    id: screenshots
+    attributes:
+      label: Screenshots / network traces (optional)
+    validations:
+      required: false

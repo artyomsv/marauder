@@ -79,7 +79,7 @@ func TestCanParse(t *testing.T) {
 		"https://rutracker.net/forum/viewtopic.php?t=12345":     true,
 		"https://rutracker.org/forum/viewforum.php?t=12345":     false,
 		"https://kinozal.tv/details.php?id=12345":               false,
-		"":                                                       false,
+		"": false,
 	}
 	for u, want := range cases {
 		if got := p.CanParse(u); got != want {

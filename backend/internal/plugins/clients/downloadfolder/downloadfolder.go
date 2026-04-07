@@ -73,6 +73,12 @@ func (p *plugin) Add(_ context.Context, rawConfig []byte, payload *domain.Payloa
 		return err
 	}
 	stamp := time.Now().UTC().Format("20060102-150405")
+	// 0o600: only the user running Marauder can read/write the
+	// dropped file. If the downstream client (SABnzbd, qBittorrent
+	// watch folder) runs as a different user, the operator should
+	// either set up a shared group and chmod the directory, or run
+	// both processes under the same UID.
+	const fileMode os.FileMode = 0o600
 	switch {
 	case len(payload.TorrentFile) > 0:
 		name := payload.FileName
@@ -80,12 +86,12 @@ func (p *plugin) Add(_ context.Context, rawConfig []byte, payload *domain.Payloa
 			name = stamp + ".torrent"
 		}
 		dest := filepath.Join(dir, name)
-		if err := os.WriteFile(dest, payload.TorrentFile, 0o640); err != nil {
+		if err := os.WriteFile(dest, payload.TorrentFile, fileMode); err != nil {
 			return fmt.Errorf("write torrent: %w", err)
 		}
 	case payload.MagnetURI != "":
 		dest := filepath.Join(dir, stamp+".magnet")
-		if err := os.WriteFile(dest, []byte(payload.MagnetURI), 0o640); err != nil {
+		if err := os.WriteFile(dest, []byte(payload.MagnetURI), fileMode); err != nil {
 			return fmt.Errorf("write magnet: %w", err)
 		}
 	default:

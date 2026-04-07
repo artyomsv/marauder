@@ -83,14 +83,14 @@ type rssChannel2 struct {
 }
 
 type rssItem struct {
-	Title         string         `xml:"title"`
-	GUID          string         `xml:"guid"`
-	Link          string         `xml:"link"`
-	PubDate       string         `xml:"pubDate"`
-	Enclosure     rssEnclosure   `xml:"enclosure"`
-	Attrs         []rssAttr      `xml:"attr"`
-	TorznabAttrs  []rssAttr      `xml:"http://torznab.com/schemas/2015/feed attr"`
-	NewznabAttrs  []rssAttr      `xml:"http://www.newznab.com/DTD/2010/feeds/attributes/ attr"`
+	Title        string       `xml:"title"`
+	GUID         string       `xml:"guid"`
+	Link         string       `xml:"link"`
+	PubDate      string       `xml:"pubDate"`
+	Enclosure    rssEnclosure `xml:"enclosure"`
+	Attrs        []rssAttr    `xml:"attr"`
+	TorznabAttrs []rssAttr    `xml:"http://torznab.com/schemas/2015/feed attr"`
+	NewznabAttrs []rssAttr    `xml:"http://www.newznab.com/DTD/2010/feeds/attributes/ attr"`
 }
 
 type rssEnclosure struct {

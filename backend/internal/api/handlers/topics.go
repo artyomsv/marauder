@@ -23,11 +23,11 @@ type Topics struct {
 }
 
 type createTopicReq struct {
-	URL               string     `json:"url"`
-	DisplayName       string     `json:"display_name"`
-	ClientID          *uuid.UUID `json:"client_id"`
-	DownloadDir       string     `json:"download_dir"`
-	CheckIntervalSec  int        `json:"check_interval_sec"`
+	URL              string     `json:"url"`
+	DisplayName      string     `json:"display_name"`
+	ClientID         *uuid.UUID `json:"client_id"`
+	DownloadDir      string     `json:"download_dir"`
+	CheckIntervalSec int        `json:"check_interval_sec"`
 }
 
 // List handles GET /topics.

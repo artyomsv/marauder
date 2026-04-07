@@ -50,11 +50,11 @@ type Config struct {
 	InitialAdminPass string `env:"MARAUDER_ADMIN_INITIAL_PASSWORD" envDefault:""`
 
 	// OIDC (optional)
-	OIDCEnabled      bool   `env:"MARAUDER_OIDC_ENABLED" envDefault:"false"`
-	OIDCIssuer       string `env:"MARAUDER_OIDC_ISSUER" envDefault:""`
-	OIDCClientID     string `env:"MARAUDER_OIDC_CLIENT_ID" envDefault:""`
-	OIDCClientSecret string `env:"MARAUDER_OIDC_CLIENT_SECRET" envDefault:""`
-	OIDCRedirectURL  string `env:"MARAUDER_OIDC_REDIRECT_URL" envDefault:""`
+	OIDCEnabled      bool     `env:"MARAUDER_OIDC_ENABLED" envDefault:"false"`
+	OIDCIssuer       string   `env:"MARAUDER_OIDC_ISSUER" envDefault:""`
+	OIDCClientID     string   `env:"MARAUDER_OIDC_CLIENT_ID" envDefault:""`
+	OIDCClientSecret string   `env:"MARAUDER_OIDC_CLIENT_SECRET" envDefault:""`
+	OIDCRedirectURL  string   `env:"MARAUDER_OIDC_REDIRECT_URL" envDefault:""`
 	OIDCScopes       []string `env:"MARAUDER_OIDC_SCOPES" envDefault:"openid,profile,email"`
 
 	// Scheduler

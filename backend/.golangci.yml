@@ -1,0 +1,106 @@
+version: "2"
+
+# golangci-lint v2 config for the Marauder backend.
+#
+# Philosophy: be strict about correctness and security, lenient about
+# style choices the team has explicitly made (init-based plugin
+# registration, package-private types, doc comment placement,
+# SHA-1 as a content hash for monitoring file changes).
+
+run:
+  timeout: 5m
+  tests: true
+
+linters:
+  default: none
+  enable:
+    # correctness
+    - errcheck         # check for unchecked errors
+    - govet            # standard vet
+    - ineffassign      # detect ineffectual assignments
+    - staticcheck      # SA-class static analysis
+    - unused           # unused identifiers
+    - bodyclose        # net/http response body is closed
+    - rowserrcheck     # database/sql rows.Err() is checked
+    - sqlclosecheck    # database/sql resources are closed
+    - errorlint        # idiomatic error wrapping (errors.Is/As)
+
+    # security
+    - gosec            # SAST rules
+
+    # style and minor footguns
+    - misspell         # spelling
+    - unconvert        # unnecessary type conversions
+
+  settings:
+    gosec:
+      excludes:
+        # G104 (errors unhandled) — duplicates errcheck
+        - G104
+        # G304 (file path provided as taint input) — we read user-supplied
+        # paths in the downloadfolder client by design; the input is
+        # validated at the API edge.
+        - G304
+        # G401, G505 (weak cryptographic primitive: SHA-1) —
+        # generictorrentfile uses SHA-1 as a *content hash* (the same
+        # hash BitTorrent uses internally for piece verification), not
+        # as a cryptographic primitive. The actual security primitives
+        # in the codebase use SHA-256 / Argon2id / AES-256-GCM. Excluded
+        # globally because adding `// nosec` annotations to every call
+        # site is noisier than the warning.
+        - G401
+        - G505
+    errcheck:
+      check-blank: false
+      # The .Close() and .Rollback() methods are idiomatically deferred
+      # without checking the error. There is nothing actionable to do
+      # if a Close on a response body fails after we've already read
+      # everything we need from it.
+      exclude-functions:
+        - (*net/http.Server).Shutdown
+        - (*github.com/jackc/pgx/v5/pgxpool.Pool).Ping
+        - (*github.com/jackc/pgx/v5/pgxpool.Conn).Release
+        - (io.Closer).Close
+        - (io/ioutil).Close
+        - (net/http.Response).Body.Close
+        - (*net/http.Response).Body.Close
+        - (*database/sql.DB).Close
+        - (*database/sql.Tx).Rollback
+        - (github.com/jackc/pgx/v5.Tx).Rollback
+
+  exclusions:
+    rules:
+      # Tests are allowed to be a bit looser.
+      - path: _test\.go
+        linters:
+          - errcheck
+          - bodyclose
+          - prealloc
+          - gosec       # G117 (secret pattern in test fixtures), G120 (test ParseForm)
+          - staticcheck # SA4000 in tautology-style determinism tests
+          - unused      # unused fields in test fakes are common
+
+      # The plugin packages use init() for self-registration. That's an
+      # explicit architectural choice — silence linters that discourage
+      # init().
+      - path: internal/plugins/.+\.go
+        linters:
+          - gochecknoinits
+
+      # Generated files (none today, but reserved for sqlc later).
+      - path: \.gen\.go
+        linters:
+          - all
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/artyomsv/marauder/backend

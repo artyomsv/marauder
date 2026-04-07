@@ -12,13 +12,13 @@
 // Marauder doesn't speak Usenet, so it cannot hand the resulting NZB
 // off to a torrent client. The intended pipeline is:
 //
-//   1. User configures a Newznab topic in Marauder pointing at their
-//      indexer + a search query (`newznab+https://nzb-indexer/api?...`)
-//   2. User configures a `downloadfolder` client pointed at the
-//      SABnzbd or NZBGet watch folder
-//   3. When a new release matches the search, Marauder downloads the
-//      `.nzb` and writes it to the watch folder
-//   4. SABnzbd/NZBGet picks up the file and downloads the actual content
+//  1. User configures a Newznab topic in Marauder pointing at their
+//     indexer + a search query (`newznab+https://nzb-indexer/api?...`)
+//  2. User configures a `downloadfolder` client pointed at the
+//     SABnzbd or NZBGet watch folder
+//  3. When a new release matches the search, Marauder downloads the
+//     `.nzb` and writes it to the watch folder
+//  4. SABnzbd/NZBGet picks up the file and downloads the actual content
 //
 // This is the same workflow Sonarr/Radarr use, just with Marauder's
 // scheduler driving the polling instead of the *arr internal one.

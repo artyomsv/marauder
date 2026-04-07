@@ -6,7 +6,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -14,7 +13,6 @@ import (
 )
 
 type fakeServer struct {
-	mu          sync.Mutex
 	sessionID   string
 	addCalls    int32
 	requireAuth bool

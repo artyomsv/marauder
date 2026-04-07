@@ -64,10 +64,10 @@ func TestSendCallsSMTP(t *testing.T) {
 func TestSendValidationErrors(t *testing.T) {
 	p := &plugin{sender: func(string, smtp.Auth, string, []string, []byte) error { return nil }}
 	bad := []Config{
-		{SMTPPort: 587, From: "f", To: "t"},                  // no host
-		{SMTPHost: "h", From: "f", To: "t"},                  // no port
-		{SMTPHost: "h", SMTPPort: 587, To: "t"},              // no from
-		{SMTPHost: "h", SMTPPort: 587, From: "f"},            // no to
+		{SMTPPort: 587, From: "f", To: "t"},       // no host
+		{SMTPHost: "h", From: "f", To: "t"},       // no port
+		{SMTPHost: "h", SMTPPort: 587, To: "t"},   // no from
+		{SMTPHost: "h", SMTPPort: 587, From: "f"}, // no to
 	}
 	for _, c := range bad {
 		raw, _ := json.Marshal(c)

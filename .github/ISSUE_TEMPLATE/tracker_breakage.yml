@@ -1,0 +1,102 @@
+name: Tracker plugin breakage
+description: A tracker plugin (rutracker, kinozal, lostfilm, etc.) has stopped working against the live site.
+labels: [bug, plugin, triage]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Forum-tracker plugins parse HTML, and that HTML changes
+        without notice. This template captures the minimum information
+        needed to fix a broken plugin without round-trips.
+
+  - type: dropdown
+    id: plugin
+    attributes:
+      label: Which plugin?
+      options:
+        - rutracker
+        - kinozal
+        - nnmclub
+        - lostfilm
+        - anilibria
+        - anidub
+        - rutor
+        - toloka
+        - unionpeer
+        - tapochek
+        - freetorrents
+        - hdclub
+        - torznab
+        - newznab
+        - generictorrentfile
+        - genericmagnet
+        - other (specify in description)
+    validations:
+      required: true
+
+  - type: input
+    id: marauder-version
+    attributes:
+      label: Marauder version
+      placeholder: v1.0.0
+    validations:
+      required: true
+
+  - type: input
+    id: topic-url
+    attributes:
+      label: Example topic URL
+      description: |
+        A real URL where the plugin fails. **Scrub any session cookies
+        or apikeys** before pasting.
+      placeholder: https://rutracker.org/forum/viewtopic.php?t=123456
+    validations:
+      required: true
+
+  - type: textarea
+    id: error
+    attributes:
+      label: Error message from Marauder
+      description: |
+        Visible in the topic list (last_error column) or in the
+        backend logs:
+        `docker logs deploy-backend-1 2>&1 | grep "$TOPIC_ID"`
+      render: shell
+    validations:
+      required: true
+
+  - type: dropdown
+    id: when
+    attributes:
+      label: When did it stop working?
+      options:
+        - Never worked since I configured it
+        - Used to work, broke recently (last 1-7 days)
+        - Used to work, broke a while ago (more than a week)
+        - Intermittent / flaky
+        - Not sure
+    validations:
+      required: false
+
+  - type: textarea
+    id: html-snippet
+    attributes:
+      label: HTML excerpt from the live page (optional but VERY helpful)
+      description: |
+        Open the topic in a browser and View Source. Find the section
+        the plugin is trying to parse (the magnet link, the infohash,
+        the title, etc.) and paste a 10-20 line excerpt here. This is
+        usually enough to update the plugin's regex.
+      render: html
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: legal
+    attributes:
+      label: Confirmations
+      options:
+        - label: I confirm I have legitimate access to this tracker (account, region, etc.)
+          required: true
+        - label: I have scrubbed any session cookies, apikeys, and personal info from my paste
+          required: true

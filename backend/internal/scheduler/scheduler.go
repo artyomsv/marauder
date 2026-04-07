@@ -330,4 +330,3 @@ func (s *Scheduler) backoff(t *domain.Topic, failure bool) time.Time {
 	}
 	return time.Now().UTC().Add(d)
 }
-

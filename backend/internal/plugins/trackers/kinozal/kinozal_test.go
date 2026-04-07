@@ -56,9 +56,7 @@ func (s *schemeRewrite) RoundTrip(req *http.Request) (*http.Response, error) {
 		req.URL.Scheme = "http"
 	}
 	// dl.<host> -> <host>
-	if strings.HasPrefix(req.URL.Host, "dl.") {
-		req.URL.Host = strings.TrimPrefix(req.URL.Host, "dl.")
-	}
+	req.URL.Host = strings.TrimPrefix(req.URL.Host, "dl.")
 	return http.DefaultTransport.RoundTrip(req)
 }
 
@@ -69,7 +67,7 @@ func TestCanParse(t *testing.T) {
 		"https://www.kinozal.tv/details.php?id=12345": true,
 		"https://kinozal.me/details.php?id=12345":     true,
 		"https://kinozal.tv/userlist.php":             false,
-		"":                                             false,
+		"":                                            false,
 	}
 	for u, want := range cases {
 		if got := p.CanParse(u); got != want {

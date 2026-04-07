@@ -7,6 +7,80 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (CI / GitHub Actions)
+- **Five GitHub Actions workflows** under `.github/workflows/`:
+  - **`ci.yml`** — fast-feedback PR pipeline (under 3 min budget):
+    `go vet`, race-detector tests, `golangci-lint`, `govulncheck`,
+    cfsolver build/vet, frontend `tsc --noEmit` and `npm run build`,
+    bundle-size summary. Cancels in-flight runs on the same ref.
+  - **`docker.yml`** — builds backend, frontend, and cfsolver images
+    on every push to main and on every tag. Trivy scan with HIGH/
+    CRITICAL fail-on, SARIF uploaded to the GitHub Code Scanning view.
+    Does NOT push images.
+  - **`e2e.yml`** — heavyweight nightly + on-tag end-to-end test that
+    brings up the full compose stack (db + backend + frontend +
+    gateway + qBittorrent), then runs the magnet → qBittorrent
+    walkthrough from `docs/test-e2e-magnet.md` end-to-end. Includes
+    backend log capture on failure and a clean teardown step.
+  - **`release.yml`** — tag-pushed release pipeline. Multi-arch
+    (amd64 + arm64) build via QEMU + buildx, push to `ghcr.io/
+    artyomsv/marauder-{backend,frontend,cfsolver}` with semver tags,
+    cosign keyless signing via OIDC, CycloneDX SBOM per image, GitHub
+    Release with the auto-extracted CHANGELOG section. Pre-release
+    detection from `-rc`/`-alpha`/`-beta` tag suffixes.
+  - **`codeql.yml`** — GitHub CodeQL SAST for Go and TypeScript with
+    the `security-extended` query pack. Runs on PR + push + weekly.
+- **`.github/dependabot.yml`** — automated dependency updates across
+  Go modules (backend + cfsolver), npm (frontend), GitHub Actions,
+  and Docker base images. Weekly Monday cadence, minor/patch updates
+  grouped per ecosystem to reduce PR noise. React 19 / Vite 8 /
+  Tailwind 4 majors are pinned per the v1.0 tech-stack lock.
+- **PR + Issue templates**:
+  - `.github/PULL_REQUEST_TEMPLATE.md` — checklist mirroring CONTRIBUTING.md
+  - `.github/ISSUE_TEMPLATE/bug.yml` — structured bug report
+  - `.github/ISSUE_TEMPLATE/feature.yml` — structured feature request
+  - `.github/ISSUE_TEMPLATE/tracker_breakage.yml` — special-case
+    template for forum-tracker plugin breakage with HTML excerpt
+    upload, scrubbing checkboxes, and a tracker dropdown
+- **`backend/.golangci.yml`** — golangci-lint v2 config covering 12
+  linters (errcheck, govet, ineffassign, staticcheck, unused,
+  bodyclose, rowserrcheck, sqlclosecheck, errorlint, gosec, misspell,
+  unconvert) plus gofmt + goimports formatters. Includes principled
+  exclusions for test files, init-based plugin registration,
+  `defer .Body.Close()` and `defer tx.Rollback()` patterns, and
+  SHA-1 used as a content hash (G401/G505) which is the same hash
+  BitTorrent uses internally.
+- **`docs/ci.md`** — full CI/CD documentation: per-workflow
+  description, when each runs, what to do when it fails, how to
+  cut a release, how to validate locally with the same Docker
+  commands the workflows use.
+
+### Fixed (lint pass over the existing codebase)
+- `internal/crypto/crypto_test.go`: replace tautological
+  `HashToken("x") != HashToken("x")` comparison with two assigned
+  variables so staticcheck SA4000 stops (correctly) flagging it.
+- `internal/plugins/trackers/kinozal/kinozal_test.go`: replace
+  `if HasPrefix { TrimPrefix }` with the unconditional
+  `TrimPrefix` (S1017).
+- `internal/plugins/clients/transmission/transmission_test.go`:
+  remove the unused `mu sync.Mutex` field on `fakeServer`.
+- `internal/crypto/crypto.go`: bound-check `len(want)` before the
+  uint32 conversion in `VerifyPassword`, with a `#nosec G115`
+  annotation explaining the bound is enforced.
+- `internal/plugins/clients/downloadfolder/downloadfolder.go`: file
+  permissions tightened from `0o640` to `0o600` per gosec G306, with
+  a comment explaining the trade-off for shared-group setups.
+- `internal/plugins/e2etest/qbitfake.go`: bound the test server's
+  form-parsing body size with `http.MaxBytesReader` to satisfy gosec
+  G120 even on a fake server.
+- `gofmt -w` applied across the backend.
+
+### Verified
+- `golangci-lint run --timeout=5m`: **0 issues**.
+- `go build ./...` and `go vet ./...`: clean.
+- `go test ./...`: 29 packages, 0 failures.
+- `actionlint` over all 5 workflow files: clean.
+
 ### Added (Torznab + Newznab support)
 - **Torznab and Newznab indexer plugins** — opens Marauder up to
   several hundred indexers without writing scrapers. Sonarr, Radarr,

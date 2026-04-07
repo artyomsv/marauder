@@ -153,8 +153,14 @@ func VerifyPassword(password, encoded string) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("bad hash: %w", err)
 	}
-
-	got := argon2.IDKey([]byte(password), salt, t, m, p, uint32(len(want)))
+	// Argon2id keys are at most a few KB; len(want) easily fits in
+	// uint32. The bound check is explicit so a future maintainer who
+	// removes the #nosec annotation still has the guard.
+	if len(want) > int(^uint32(0)) {
+		return false, errors.New("hash field is implausibly large")
+	}
+	wantLen := uint32(len(want)) // #nosec G115 -- bounded above
+	got := argon2.IDKey([]byte(password), salt, t, m, p, wantLen)
 	return subtle.ConstantTimeCompare(got, want) == 1, nil
 }
 

@@ -68,6 +68,9 @@ func NewQBitFake(t *testing.T) *QBitFake {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/api/v2/auth/login", func(w http.ResponseWriter, r *http.Request) {
+		// Bound the form size — gosec G120 wants this even on a test
+		// fake server. 64 KiB is plenty for a username + password.
+		r.Body = http.MaxBytesReader(w, r.Body, 64*1024)
 		_ = r.ParseForm()
 		if r.Form.Get("username") == f.Username && r.Form.Get("password") == f.Password {
 			atomic.AddInt32(&f.loginOK, 1)

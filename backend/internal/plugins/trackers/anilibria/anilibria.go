@@ -4,12 +4,12 @@
 // over a JSON API at api.anilibria.tv/v3. We don't need to log in for
 // public content. The flow is:
 //
-//   1. Parse the user-supplied https://anilibria.tv/release/<slug>.html URL
-//      and store the slug.
-//   2. Check: GET https://api.anilibria.tv/v3/title?code=<slug>&include=torrents
-//      and use the highest torrent.id as the hash.
-//   3. Download: GET https://api.anilibria.tv/v3/torrent/download?id=<id>
-//      which returns a .torrent file.
+//  1. Parse the user-supplied https://anilibria.tv/release/<slug>.html URL
+//     and store the slug.
+//  2. Check: GET https://api.anilibria.tv/v3/title?code=<slug>&include=torrents
+//     and use the highest torrent.id as the hash.
+//  3. Download: GET https://api.anilibria.tv/v3/torrent/download?id=<id>
+//     which returns a .torrent file.
 //
 // **Validation status:** structurally complete with httptest fixtures.
 // The Anilibria API is public, so this is one of the easiest plugins to
@@ -80,7 +80,7 @@ type titleResponse struct {
 	} `json:"names"`
 	Torrents struct {
 		List []struct {
-			ID      int    `json:"torrent_id"`
+			ID      int `json:"torrent_id"`
 			Quality struct {
 				String string `json:"string"`
 			} `json:"quality"`

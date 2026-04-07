@@ -93,7 +93,9 @@ func (p *plugin) Login(ctx context.Context, creds *domain.TrackerCredential) err
 	return nil
 }
 
-func (p *plugin) Verify(_ context.Context, _ *domain.TrackerCredential) (bool, error) { return true, nil }
+func (p *plugin) Verify(_ context.Context, _ *domain.TrackerCredential) (bool, error) {
+	return true, nil
+}
 
 var (
 	titleRe  = regexp.MustCompile(`(?s)<title>([^<]+)</title>`)

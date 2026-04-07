@@ -131,7 +131,14 @@ func TestRandomTokenAndHash(t *testing.T) {
 	if len(tok1) != 64 { // hex of 32 bytes
 		t.Fatalf("want 64 hex chars, got %d", len(tok1))
 	}
-	if HashToken("same") != HashToken("same") {
+	// HashToken should be deterministic — calling it twice with the
+	// same input must return the same value. We assign to two
+	// variables (rather than `HashToken("x") != HashToken("x")`) so
+	// staticcheck doesn't (correctly) flag the comparison as a
+	// tautology.
+	first := HashToken("same")
+	second := HashToken("same")
+	if first != second {
 		t.Fatal("hash should be deterministic")
 	}
 	if HashToken("a") == HashToken("b") {

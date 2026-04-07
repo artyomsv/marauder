@@ -23,13 +23,13 @@ type Clients struct {
 }
 
 type clientView struct {
-	ID           string          `json:"id"`
-	ClientName   string          `json:"client_name"`
-	DisplayName  string          `json:"display_name"`
-	IsDefault    bool            `json:"is_default"`
-	Config       json.RawMessage `json:"config,omitempty"`
-	CreatedAt    string          `json:"created_at"`
-	UpdatedAt    string          `json:"updated_at"`
+	ID          string          `json:"id"`
+	ClientName  string          `json:"client_name"`
+	DisplayName string          `json:"display_name"`
+	IsDefault   bool            `json:"is_default"`
+	Config      json.RawMessage `json:"config,omitempty"`
+	CreatedAt   string          `json:"created_at"`
+	UpdatedAt   string          `json:"updated_at"`
 }
 
 func toView(c *domain.Client, cfg json.RawMessage) clientView {

@@ -1,0 +1,139 @@
+name: E2E (full compose stack)
+
+# The heavyweight end-to-end test. Brings up the full Marauder docker
+# compose stack PLUS a real qBittorrent container, then runs the
+# magnet -> qBittorrent walkthrough from docs/test-e2e-magnet.md.
+#
+# Runs nightly + on workflow_dispatch + on tag push (so a release is
+# never tagged without a green E2E). NOT on every PR — that would be
+# too slow and would burn shared minutes.
+
+on:
+  schedule:
+    - cron: '0 4 * * *'   # 04:00 UTC nightly
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+concurrency:
+  group: e2e-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  compose-walkthrough:
+    name: docker compose -> magnet -> qBittorrent
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Generate .env
+        working-directory: deploy
+        run: |
+          cp .env.example .env
+          MASTER=$(openssl rand -base64 32)
+          METRICS=$(openssl rand -hex 32)
+          sed -i "s|MARAUDER_MASTER_KEY=.*|MARAUDER_MASTER_KEY=${MASTER}|" .env
+          sed -i "s|MARAUDER_METRICS_TOKEN=.*|MARAUDER_METRICS_TOKEN=${METRICS}|" .env
+
+      - name: Bring up the dev stack (with qBittorrent)
+        working-directory: deploy
+        run: |
+          docker compose --env-file .env \
+            -f docker-compose.yml \
+            -f docker-compose.dev.yml \
+            up -d --build
+
+      - name: Wait for backend health
+        run: |
+          for _ in $(seq 1 60); do
+            if curl -fsS http://localhost:6688/health >/dev/null; then
+              echo "backend is healthy"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "backend never became healthy"
+          docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.dev.yml logs backend
+          exit 1
+
+      - name: Wait for qBittorrent and grab the temporary password
+        id: qbit
+        run: |
+          for _ in $(seq 1 60); do
+            PW=$(docker logs deploy-qbittorrent-1 2>&1 | grep "temporary password" | awk '{print $NF}' | tail -1 || true)
+            if [ -n "$PW" ]; then
+              echo "qBit temporary password acquired"
+              echo "password=$PW" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "qBit never produced a temporary password"
+          docker logs deploy-qbittorrent-1
+          exit 1
+
+      - name: Run the magnet -> qBittorrent walkthrough
+        env:
+          QBIT_PASSWORD: ${{ steps.qbit.outputs.password }}
+        run: |
+          set -e
+
+          echo "[1] login to Marauder"
+          LOGIN=$(curl -sS -X POST http://localhost:6688/api/v1/auth/login \
+            -H "Content-Type: application/json" \
+            -d '{"username":"admin","password":"pleasechangeme"}')
+          TOK=$(echo "$LOGIN" | awk -F'"access_token":"' '{print $2}' | awk -F'"' '{print $1}')
+          test -n "$TOK"
+
+          echo "[2] create qBittorrent client"
+          CLIENT_JSON=$(curl -sS -X POST http://localhost:6688/api/v1/clients \
+            -H "Authorization: Bearer $TOK" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"client_name\": \"qbittorrent\",
+              \"display_name\": \"E2E qBit\",
+              \"is_default\": true,
+              \"config\": {
+                \"url\": \"http://qbittorrent:6611\",
+                \"username\": \"admin\",
+                \"password\": \"${QBIT_PASSWORD}\"
+              }
+            }")
+          echo "$CLIENT_JSON"
+          CLIENT_ID=$(echo "$CLIENT_JSON" | awk -F'"id":"' '{print $2}' | awk -F'"' '{print $1}')
+          test -n "$CLIENT_ID"
+
+          echo "[3] add magnet topic"
+          MAG='magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567&dn=marauder-e2e'
+          curl -sS -X POST http://localhost:6688/api/v1/topics \
+            -H "Authorization: Bearer $TOK" \
+            -H "Content-Type: application/json" \
+            -d "{\"url\":\"$MAG\",\"client_id\":\"$CLIENT_ID\"}"
+
+          echo "[4] wait for one scheduler tick (75s)"
+          sleep 75
+
+          echo "[5] verify in qBittorrent"
+          COOKIE=$(curl -sS -i -X POST "http://localhost:6611/api/v2/auth/login" \
+            -H "Referer: http://localhost:6611" \
+            --data-urlencode "username=admin" \
+            --data-urlencode "password=${QBIT_PASSWORD}" | \
+            grep -i "^set-cookie:" | sed 's/Set-Cookie: //i' | cut -d';' -f1)
+          BODY=$(curl -sS -H "Cookie: $COOKIE" "http://localhost:6611/api/v2/torrents/info")
+          echo "$BODY"
+          echo "$BODY" | grep -q "0123456789abcdef0123456789abcdef01234567"
+
+      - name: Print backend logs on failure
+        if: failure()
+        working-directory: deploy
+        run: docker compose -f docker-compose.yml -f docker-compose.dev.yml logs backend
+
+      - name: Tear down
+        if: always()
+        working-directory: deploy
+        run: docker compose -f docker-compose.yml -f docker-compose.dev.yml down -v

@@ -1,0 +1,54 @@
+name: Feature request
+description: Suggest a new capability or improvement.
+labels: [enhancement, triage]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for suggesting an improvement! Before filing, please
+        check `docs/ROADMAP.md` to make sure it isn't already planned.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem are you trying to solve?
+      description: |
+        Describe the underlying need, not the solution you have in
+        mind. The more concrete the use case, the better.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Your proposal
+      description: How you think Marauder should handle this. Sketches, mockups, or pseudocode are welcome.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: What else did you try? What's stopping the existing tools from solving this?
+    validations:
+      required: false
+
+  - type: dropdown
+    id: scope
+    attributes:
+      label: Which part of Marauder does this touch?
+      multiple: true
+      options:
+        - tracker plugin
+        - torrent client plugin
+        - notifier plugin
+        - scheduler
+        - auth (local / OIDC)
+        - frontend / UI
+        - docker / deployment
+        - observability (metrics, logs, audit)
+        - documentation
+        - other
+    validations:
+      required: false
