@@ -91,15 +91,22 @@ func (p *plugin) Login(ctx context.Context, creds *domain.TrackerCredential) err
 	return nil
 }
 
-// Verify implements registry.WithCredentials. It hits /my and requires
-// a specific logout link href plus the absence of the login form. Too
-// loose a marker (e.g. the bare word "logout") would false-positive on
-// anonymous pages that happen to mention logout in a meta description
-// or cookie banner.
+// Verify implements registry.WithCredentials.
 //
-// An unauthenticated request to /my on LostFilm returns the login
-// page, which contains the login form but not the authenticated nav's
-// `/logout` anchor.
+// Approach: hit /my and rely on TWO signals:
+//
+//  1. The FINAL request URL after redirect-following. LostFilm
+//     redirects /my to a login page when the session is dead. Go's
+//     http.Client follows redirects by default, so resp.Request.URL
+//     reflects the final destination — if its path contains "login"
+//     we know the session is gone, no body parsing required.
+//  2. As a positive secondary check, the response body should mention
+//     "logout" somewhere (the authenticated nav has a logout
+//     link/button in some form). This is a loose check on purpose:
+//     LostFilm's markup has changed multiple times and a stricter
+//     pattern (`href="/logout"`) was empirically too narrow — the
+//     real anchor varies between `href="//www.lostfilm.tv/logout"`,
+//     `href="/logout/"`, button-style links, JS-driven menus, etc.
 func (p *plugin) Verify(ctx context.Context, creds *domain.TrackerCredential) (bool, error) {
 	sess := p.sessions.GetOrCreate(forumcommon.SessionKey(pluginName, creds.UserID.String()), userAgent)
 	if p.transport != nil {
@@ -115,19 +122,31 @@ func (p *plugin) Verify(ctx context.Context, creds *domain.TrackerCredential) (b
 		return false, fmt.Errorf("lostfilm verify: %w", err)
 	}
 	defer resp.Body.Close()
+
+	// Signal 1: were we redirected to a login page?
+	if resp.Request != nil && resp.Request.URL != nil {
+		finalPath := strings.ToLower(resp.Request.URL.Path)
+		if strings.Contains(finalPath, "login") {
+			log.Debug().Str("plugin", pluginName).Str("step", "verify").
+				Str("final_url", resp.Request.URL.String()).
+				Msg("verify failed: redirected to login")
+			return false, nil
+		}
+	}
+
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 32*1024))
 	if err != nil {
 		return false, fmt.Errorf("lostfilm verify: read body: %w", err)
 	}
-	s := string(body)
-	// Positive indicator: a specific logout link href.
-	hasLogoutLink := strings.Contains(s, `href="/logout"`) ||
-		strings.Contains(s, `href='/logout'`) ||
-		strings.Contains(s, `href="logout"`)
-	// Negative indicator: the login form on this page means we're
-	// definitely not authenticated. Require both signals to align.
-	hasLoginForm := strings.Contains(s, `type="password"`) || strings.Contains(s, `name="mail"`)
-	return hasLogoutLink && !hasLoginForm, nil
+
+	// Signal 2: positive substring. Loose by design.
+	if !strings.Contains(string(body), "logout") {
+		log.Debug().Str("plugin", pluginName).Str("step", "verify").
+			Int("body_len", len(body)).
+			Msg("verify failed: no 'logout' substring in /my body")
+		return false, nil
+	}
+	return true, nil
 }
 
 // session returns the per-user session, falling back to a no-credentials

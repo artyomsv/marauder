@@ -29,11 +29,49 @@ export class ApiError extends Error {
   }
 }
 
+// Singleton in-flight refresh promise. When a 401 races with itself
+// across multiple parallel requests (e.g. dashboard opens 5 queries
+// simultaneously, all 5 see expired access tokens), only ONE refresh
+// call should hit the server — the others wait on this promise.
+let refreshInFlight: Promise<boolean> | null = null;
+
+// Path prefixes that must NEVER trigger the 401 → refresh → retry
+// dance. /auth/refresh would loop on itself, /auth/login should bubble
+// the credentials error up, /auth/logout always 200s anyway.
+const NO_REFRESH_PATHS = ["/auth/refresh", "/auth/login", "/auth/logout"];
+
+async function tryRefresh(): Promise<boolean> {
+  if (refreshInFlight) return refreshInFlight;
+
+  const refreshToken = useAuthStore.getState().refreshToken;
+  if (!refreshToken) return false;
+
+  refreshInFlight = (async () => {
+    try {
+      const resp = await fetch(API_BASE + "/auth/refresh", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ refresh_token: refreshToken }),
+      });
+      if (!resp.ok) return false;
+      const tokens = (await resp.json()) as TokenPair;
+      useAuthStore.getState().setTokens(tokens);
+      return true;
+    } catch {
+      return false;
+    } finally {
+      refreshInFlight = null;
+    }
+  })();
+
+  return refreshInFlight;
+}
+
 async function request<T>(
   method: string,
   path: string,
   body?: unknown,
-  opts: { auth?: boolean } = { auth: true },
+  opts: { auth?: boolean; _retried?: boolean } = { auth: true },
 ): Promise<T> {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
@@ -47,6 +85,28 @@ async function request<T>(
     headers,
     body: body === undefined ? undefined : JSON.stringify(body),
   });
+
+  // 401 on an authed call → try to refresh the access token once,
+  // then replay the original request. If refresh fails (or we're
+  // already in a retry loop), clear the auth store so the route
+  // guard navigates to /login on the next render.
+  const isAuthed = opts.auth !== false;
+  const shouldHandle401 =
+    resp.status === 401 &&
+    isAuthed &&
+    !opts._retried &&
+    !NO_REFRESH_PATHS.some((p) => path.startsWith(p));
+
+  if (shouldHandle401) {
+    const refreshed = await tryRefresh();
+    if (refreshed) {
+      return request<T>(method, path, body, { ...opts, _retried: true });
+    }
+    useAuthStore.getState().logout();
+    // Fall through and surface the original 401 to the caller — the
+    // route guard reacts to the cleared store and navigates away.
+  }
+
   if (resp.status === 204) return undefined as T;
 
   const text = await resp.text();
