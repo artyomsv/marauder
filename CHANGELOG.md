@@ -7,6 +7,89 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (Phase 6 — credential test false-positive hotfix)
+
+A user reported entering an intentionally wrong username, clicking the
+"Test login" button on the Credentials page, and seeing the UI report
+success. Root cause analysis found **three layered bugs** across the
+handler and all 8 forum-tracker plugins:
+
+- **`credentials.go` handler discarded `Verify`'s bool return.** The
+  `Test` handler did `if _, err := wc.Verify(...); err != nil` —
+  `Verify` returns `(bool, error)` where the bool is "is the session
+  still alive". When the user wasn't really logged in, Verify returned
+  `(false, nil)` and the handler treated the missing error as success.
+  The `Create` and `Update` handlers didn't call `Verify` at all,
+  relying on `Login` returning nil as the success signal.
+- **`rutracker.go` Login ALWAYS succeeded** due to an
+  `|| resp.StatusCode == 200` escape hatch in its success check. The
+  login page always returns 200 (with a "wrong password" form on
+  failure), so Login never failed regardless of credentials.
+- **`tapochek.go` Login had no check at all** — it just did the POST,
+  closed the body, and set `sess.LoggedIn = true`. `Verify` returned
+  `(true, nil)` unconditionally. Tapochek was effectively a "trust
+  whatever the user typed" credential sink.
+- **`lostfilm_session.go` Login was fragile** — only checked for the
+  substring `"error"` in the response body, with no HTTP status check
+  and no positive success indicator. `Verify` checked for the literal
+  word `"logout"` which could false-positive on any page that happened
+  to mention it (meta descriptions, cookie banners, etc).
+- **Every other forum tracker** (`kinozal`, `nnmclub`, `anidub`,
+  `toloka`, `unionpeer`, `hdclub`, `freetorrents`) did only
+  negative-indicator detection: "does the response body contain the
+  phrase for 'wrong password' in the target language?". Fragile,
+  dependent on upstream wording staying stable.
+- **11 `body, _ := io.ReadAll(...)` discards** across these 8 plugins
+  violated `~/.claude/rules/go-conventions.md` (never assign to `_`
+  without justification). I caught and fixed this pattern in
+  `scheduler.go` during the Phase 5 refactor but missed the tracker
+  plugins.
+
+### What changed
+
+- **`loginAndVerify` helper** in `credentials.go`: runs Login + Verify
+  and fails if EITHER step fails, explicitly treating
+  `Verify(...) == (false, nil)` as failure with a clear error
+  message. Used uniformly by `Create`, `Update` (password-rotation
+  branch), and `Test`. This is the primary fix — even if a plugin's
+  Login has a false-positive, Verify's positive-indicator check
+  (authenticated page contains a logged-in marker) catches it.
+- **`rutracker.go`**: removed the `|| resp.StatusCode == 200` escape
+  hatch. Login now requires the positive `id="logged-in-username"`
+  marker in the response body.
+- **`tapochek.go`**: `Verify` now hits `/index.php` and looks for a
+  `logout.php?sid=` nav link (phpBB authenticated-only pattern). A
+  permissive "always true" was the worst possible default.
+- **`lostfilm_session.go`**:
+  - `Login` now requires HTTP 200 and a non-empty body in addition to
+    the negative-indicator check. Real LostFilm success returns a
+    JSON user object; empty or non-200 is explicitly rejected.
+  - `Verify` now requires BOTH a specific `href="/logout"` anchor AND
+    the absence of the login form (`type="password"` / `name="mail"`).
+    Belt-and-suspenders — a site redesign would have to flip both
+    signals at once to silently break the check.
+- **`credentials_test.go`** (new): table-driven regression test for
+  `loginAndVerify`. The `verify returns (false, nil) — the
+  regression the user reported` case is pinned closed forever.
+- **All 8 forum plugin bodies** now propagate `io.ReadAll` errors
+  with `%w` wrapping instead of discarding them with `_`.
+- **`tapochek_e2e_test.go`** fake server updated to serve an
+  `/index.php` page with the `logout.php?sid=` marker that the new
+  Verify expects.
+
+### Known limitations
+
+The 7 forum plugins with only-negative-indicator Login checks
+(`kinozal`, `nnmclub`, `anidub`, `toloka`, `unionpeer`, `hdclub`,
+`freetorrents`) are still somewhat fragile in isolation — a wording
+change to the login page would break them. But `loginAndVerify` in
+the handler makes this defense-in-depth: the handler always calls
+Verify after Login, and Verify uses positive indicators. A regression
+would require BOTH the negative-indicator AND the Verify marker to
+drift at the same time. If any plugin's Verify also turns out to be
+too loose, the same helper makes it easy to audit — it's one call
+site for all 8 plugins.
+
 ### Phase 5 — code-review remediation (parallel-agent refactor)
 
 A four-agent code review (security-officer + code-reviewer + rules-

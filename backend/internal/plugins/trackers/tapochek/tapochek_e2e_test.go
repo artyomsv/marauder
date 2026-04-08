@@ -29,6 +29,12 @@ func TestE2E(t *testing.T) {
 				case strings.HasPrefix(r.URL.Path, "/login.php"):
 					w.WriteHeader(200)
 					_, _ = w.Write([]byte(`<div>welcome</div>`))
+				case strings.HasPrefix(r.URL.Path, "/index.php"):
+					// Authenticated tapochek/phpBB index carries a
+					// `logout.php?sid=<hex>` link in the header nav.
+					// Verify looks for this exact marker.
+					w.WriteHeader(200)
+					_, _ = w.Write([]byte(`<nav><a href="logout.php?sid=abc123">Выход</a></nav>`))
 				case strings.HasPrefix(r.URL.Path, "/viewtopic.php"):
 					w.WriteHeader(200)
 					_, _ = w.Write([]byte(e2eTapochekHTML))

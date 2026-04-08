@@ -101,7 +101,10 @@ func (p *Plugin) Login(ctx context.Context, creds *domain.TrackerCredential) err
 		return fmt.Errorf("hdclub login: %w", err)
 	}
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+	if err != nil {
+		return fmt.Errorf("hdclub login: read body: %w", err)
+	}
 	if strings.Contains(string(body), "Login failed") || strings.Contains(string(body), "incorrect") {
 		return errors.New("hdclub login failed")
 	}
@@ -121,7 +124,10 @@ func (p *Plugin) Verify(ctx context.Context, creds *domain.TrackerCredential) (b
 		return false, err
 	}
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 16*1024))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 16*1024))
+	if err != nil {
+		return false, fmt.Errorf("hdclub verify: read body: %w", err)
+	}
 	return strings.Contains(string(body), "logout.php"), nil
 }
 

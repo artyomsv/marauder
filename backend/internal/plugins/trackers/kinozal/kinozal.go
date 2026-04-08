@@ -98,7 +98,10 @@ func (p *plugin) Login(ctx context.Context, creds *domain.TrackerCredential) err
 		return fmt.Errorf("kinozal login: %w", err)
 	}
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+	if err != nil {
+		return fmt.Errorf("kinozal login: read body: %w", err)
+	}
 	// Kinozal returns either a redirect to /index.php or a page with
 	// "Неверный логин или пароль" on failure.
 	if strings.Contains(string(body), "Неверный") {
@@ -120,7 +123,10 @@ func (p *plugin) Verify(ctx context.Context, creds *domain.TrackerCredential) (b
 		return false, err
 	}
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 16*1024))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 16*1024))
+	if err != nil {
+		return false, fmt.Errorf("kinozal verify: read body: %w", err)
+	}
 	// Kinozal shows a "Выход" link in the header when logged in.
 	return strings.Contains(string(body), "logout.php") || strings.Contains(string(body), "Выход"), nil
 }

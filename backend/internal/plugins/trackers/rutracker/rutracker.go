@@ -113,12 +113,19 @@ func (p *plugin) Login(ctx context.Context, creds *domain.TrackerCredential) err
 		return fmt.Errorf("rutracker login: %w", err)
 	}
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
-	if strings.Contains(string(body), "id=\"logged-in-username\"") || resp.StatusCode == 200 {
-		sess.LoggedIn = true
-		return nil
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+	if err != nil {
+		return fmt.Errorf("rutracker login: read body: %w", err)
 	}
-	return errors.New("rutracker login appears to have failed (no logged-in marker in response)")
+	// Positive-indicator check: rutracker.org renders a "logged-in-username"
+	// span ONLY on authenticated pages. The old `|| resp.StatusCode == 200`
+	// escape hatch was a bug — the login form also returns 200 with an
+	// error panel, so Login always succeeded regardless of credentials.
+	if !strings.Contains(string(body), `id="logged-in-username"`) {
+		return errors.New("rutracker login failed: invalid credentials (no logged-in marker in response)")
+	}
+	sess.LoggedIn = true
+	return nil
 }
 
 // Verify quickly checks whether the cached session is still valid by
@@ -135,8 +142,11 @@ func (p *plugin) Verify(ctx context.Context, creds *domain.TrackerCredential) (b
 		return false, err
 	}
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 16*1024))
-	return strings.Contains(string(body), "id=\"logged-in-username\""), nil
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 16*1024))
+	if err != nil {
+		return false, fmt.Errorf("rutracker verify: read body: %w", err)
+	}
+	return strings.Contains(string(body), `id="logged-in-username"`), nil
 }
 
 // --- Check / Download --------------------------------------------------

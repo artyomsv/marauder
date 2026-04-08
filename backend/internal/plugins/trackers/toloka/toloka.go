@@ -83,7 +83,10 @@ func (p *plugin) Login(ctx context.Context, creds *domain.TrackerCredential) err
 		return fmt.Errorf("toloka login: %w", err)
 	}
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+	if err != nil {
+		return fmt.Errorf("toloka login: read body: %w", err)
+	}
 	if strings.Contains(string(body), "помилка") || strings.Contains(string(body), "error") {
 		return errors.New("toloka login failed")
 	}

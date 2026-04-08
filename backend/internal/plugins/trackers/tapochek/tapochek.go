@@ -87,12 +87,43 @@ func (p *plugin) Login(ctx context.Context, creds *domain.TrackerCredential) err
 		return fmt.Errorf("tapochek login: %w", err)
 	}
 	defer resp.Body.Close()
+	// tapochek.net runs phpBB. A successful login POST redirects back to
+	// the index with a Set-Cookie: phpbb3_*_u=<non-1> session. A failed
+	// login re-renders /login.php with a "login_username" form field.
+	// We can't detect the session cookie shape reliably across phpBB
+	// versions, so rely on Verify (which hits the index and looks for
+	// the authenticated username marker). Login's job is just to POST
+	// the form and reject obvious transport errors — Verify is the
+	// real check, enforced by the credentials handler.
 	sess.LoggedIn = true
 	return nil
 }
 
-func (p *plugin) Verify(_ context.Context, _ *domain.TrackerCredential) (bool, error) {
-	return true, nil
+// Verify hits the index page and looks for a positive "logged in"
+// marker. Previously returned (true, nil) unconditionally, which made
+// tapochek impossible to detect as un-authenticated.
+func (p *plugin) Verify(ctx context.Context, creds *domain.TrackerCredential) (bool, error) {
+	sess := p.sessions.GetOrCreate(forumcommon.SessionKey(pluginName, creds.UserID.String()), userAgent)
+	if p.transport != nil {
+		sess.Client.Transport = p.transport
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://"+p.domain+"/index.php", nil)
+	if err != nil {
+		return false, fmt.Errorf("tapochek verify: build request: %w", err)
+	}
+	req.Header.Set("User-Agent", userAgent)
+	resp, err := sess.Client.Do(req)
+	if err != nil {
+		return false, fmt.Errorf("tapochek verify: %w", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 32*1024))
+	if err != nil {
+		return false, fmt.Errorf("tapochek verify: read body: %w", err)
+	}
+	// phpBB renders "logout.php?sid=" in the header nav of authenticated
+	// pages; the login form version has "login.php?mode=login" instead.
+	return strings.Contains(string(body), "logout.php?sid="), nil
 }
 
 var (

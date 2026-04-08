@@ -104,7 +104,10 @@ func (p *plugin) Login(ctx context.Context, creds *domain.TrackerCredential) err
 		return fmt.Errorf("nnm-club login: %w", err)
 	}
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+	if err != nil {
+		return fmt.Errorf("nnm-club login: read body: %w", err)
+	}
 	if strings.Contains(string(body), "incorrect") || strings.Contains(string(body), "Неверный") {
 		return errors.New("nnm-club login failed: invalid credentials")
 	}
@@ -124,7 +127,10 @@ func (p *plugin) Verify(ctx context.Context, creds *domain.TrackerCredential) (b
 		return false, err
 	}
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 16*1024))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 16*1024))
+	if err != nil {
+		return false, fmt.Errorf("nnm-club verify: read body: %w", err)
+	}
 	return strings.Contains(string(body), "logout.php"), nil
 }
 

@@ -71,15 +71,35 @@ func (p *plugin) Login(ctx context.Context, creds *domain.TrackerCredential) err
 		return fmt.Errorf("lostfilm login: read body: %w", err)
 	}
 	log.Debug().Str("plugin", pluginName).Str("step", "login").Int("status", resp.StatusCode).Int("body_len", len(body)).Msg("login response")
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("lostfilm login failed: HTTP %d", resp.StatusCode)
+	}
+	// Negative-indicator check: LostFilm's /ajaxik.php returns
+	// {"error":1,"message":"..."} on failed login. But the real signal
+	// comes from Verify() (called by the credentials handler right after
+	// Login) which hits /my and looks for a positive authenticated
+	// marker. Don't trust this substring check in isolation.
 	if strings.Contains(string(body), `"error"`) {
-		return errors.New("lostfilm login failed")
+		return errors.New("lostfilm login failed: server returned error")
+	}
+	// A truly empty body (0-byte 200) is a strong hint something went
+	// wrong — real logins return a JSON user object.
+	if len(body) == 0 {
+		return errors.New("lostfilm login failed: empty response body")
 	}
 	sess.LoggedIn = true
 	return nil
 }
 
-// Verify implements registry.WithCredentials. It hits /my and looks for
-// the logout link as a cheap "session still alive" probe.
+// Verify implements registry.WithCredentials. It hits /my and requires
+// a specific logout link href plus the absence of the login form. Too
+// loose a marker (e.g. the bare word "logout") would false-positive on
+// anonymous pages that happen to mention logout in a meta description
+// or cookie banner.
+//
+// An unauthenticated request to /my on LostFilm returns the login
+// page, which contains the login form but not the authenticated nav's
+// `/logout` anchor.
 func (p *plugin) Verify(ctx context.Context, creds *domain.TrackerCredential) (bool, error) {
 	sess := p.sessions.GetOrCreate(forumcommon.SessionKey(pluginName, creds.UserID.String()), userAgent)
 	if p.transport != nil {
@@ -95,11 +115,19 @@ func (p *plugin) Verify(ctx context.Context, creds *domain.TrackerCredential) (b
 		return false, fmt.Errorf("lostfilm verify: %w", err)
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 16*1024))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 32*1024))
 	if err != nil {
 		return false, fmt.Errorf("lostfilm verify: read body: %w", err)
 	}
-	return strings.Contains(string(body), "logout"), nil
+	s := string(body)
+	// Positive indicator: a specific logout link href.
+	hasLogoutLink := strings.Contains(s, `href="/logout"`) ||
+		strings.Contains(s, `href='/logout'`) ||
+		strings.Contains(s, `href="logout"`)
+	// Negative indicator: the login form on this page means we're
+	// definitely not authenticated. Require both signals to align.
+	hasLoginForm := strings.Contains(s, `type="password"`) || strings.Contains(s, `name="mail"`)
+	return hasLogoutLink && !hasLoginForm, nil
 }
 
 // session returns the per-user session, falling back to a no-credentials

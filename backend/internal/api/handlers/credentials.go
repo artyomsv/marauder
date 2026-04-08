@@ -1,8 +1,10 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -40,6 +42,34 @@ type credentialView struct {
 	Username    string `json:"username"`
 	CreatedAt   string `json:"created_at"`
 	UpdatedAt   string `json:"updated_at"`
+}
+
+// loginAndVerify runs the plugin's Login + Verify sequence and fails if
+// *either* step fails. The Verify step is critical: many tracker plugins'
+// Login methods do only a negative-indicator check ("does the response
+// body contain the string 'error'?") which gives false positives for
+// bad credentials — the server returns 200 with a fresh login form and
+// no error phrase. Verify hits an authenticated page and looks for a
+// positive marker (logout link, logged-in username), providing the
+// second independent signal.
+//
+// The (bool, error) shape of Verify is intentionally strict: (false, nil)
+// means "request succeeded but the session is NOT logged in" and MUST
+// be treated as failure. Discarding the bool is a bug — the test login
+// endpoint used to do exactly that until a user reported entering a
+// wrong username and seeing "login succeeded".
+func loginAndVerify(ctx context.Context, wc registry.WithCredentials, creds *domain.TrackerCredential) error {
+	if err := wc.Login(ctx, creds); err != nil {
+		return fmt.Errorf("login: %w", err)
+	}
+	ok, err := wc.Verify(ctx, creds)
+	if err != nil {
+		return fmt.Errorf("verify: %w", err)
+	}
+	if !ok {
+		return errors.New("verify: session is not logged in (credentials likely wrong)")
+	}
+	return nil
 }
 
 func toCredView(c *domain.TrackerCredential) credentialView {
@@ -120,8 +150,8 @@ func (h *Credentials) Create(w http.ResponseWriter, r *http.Request) {
 		Username:    req.Username,
 		SecretEnc:   []byte(req.Password),
 	}
-	if err := wc.Login(r.Context(), transient); err != nil {
-		problem.Write(w, r, h.BaseURL, problem.ErrUnprocessable("login failed: "+err.Error()))
+	if err := loginAndVerify(r.Context(), wc, transient); err != nil {
+		problem.Write(w, r, h.BaseURL, problem.ErrUnprocessable(err.Error()))
 		return
 	}
 
@@ -189,7 +219,7 @@ func (h *Credentials) Update(w http.ResponseWriter, r *http.Request) {
 
 	encBlob, encNonce := existing.SecretEnc, existing.SecretNonce
 	if req.Password != "" {
-		// Validate the new password by attempting Login first.
+		// Validate the new password by attempting Login + Verify first.
 		plugin := registry.GetTracker(existing.TrackerName)
 		if wc, ok := plugin.(registry.WithCredentials); ok && plugin != nil {
 			transient := &domain.TrackerCredential{
@@ -198,8 +228,8 @@ func (h *Credentials) Update(w http.ResponseWriter, r *http.Request) {
 				Username:    req.Username,
 				SecretEnc:   []byte(req.Password),
 			}
-			if err := wc.Login(r.Context(), transient); err != nil {
-				problem.Write(w, r, h.BaseURL, problem.ErrUnprocessable("login failed: "+err.Error()))
+			if err := loginAndVerify(r.Context(), wc, transient); err != nil {
+				problem.Write(w, r, h.BaseURL, problem.ErrUnprocessable(err.Error()))
 				return
 			}
 		}
@@ -273,12 +303,8 @@ func (h *Credentials) Test(w http.ResponseWriter, r *http.Request) {
 		Username:    c.Username,
 		SecretEnc:   plain,
 	}
-	if err := wc.Login(r.Context(), transient); err != nil {
-		problem.Write(w, r, h.BaseURL, problem.ErrUnprocessable("login failed: "+err.Error()))
-		return
-	}
-	if _, err := wc.Verify(r.Context(), transient); err != nil {
-		problem.Write(w, r, h.BaseURL, problem.ErrUnprocessable("verify failed: "+err.Error()))
+	if err := loginAndVerify(r.Context(), wc, transient); err != nil {
+		problem.Write(w, r, h.BaseURL, problem.ErrUnprocessable(err.Error()))
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})

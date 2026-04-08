@@ -92,7 +92,10 @@ func (p *plugin) Login(ctx context.Context, creds *domain.TrackerCredential) err
 		return fmt.Errorf("anidub login: %w", err)
 	}
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+	if err != nil {
+		return fmt.Errorf("anidub login: read body: %w", err)
+	}
 	if strings.Contains(string(body), "Доступ запрещён") || strings.Contains(string(body), "не верный") {
 		return errors.New("anidub login failed")
 	}
