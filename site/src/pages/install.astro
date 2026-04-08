@@ -32,7 +32,7 @@ const schemas = [
       { name: "Copy the example env file", text: "cp .env.example .env" },
       { name: "Generate a master encryption key", text: "openssl rand -base64 32 and paste into MARAUDER_MASTER_KEY" },
       { name: "Bring up the stack", text: "docker compose --env-file .env up -d" },
-      { name: "Open the UI", text: "Open http://localhost:6688 in a browser and sign in as admin" },
+      { name: "Open the UI", text: "Open http://localhost:34080 in a browser and sign in as admin" },
     ],
   }),
 ];
@@ -51,17 +51,17 @@ sed -i "s|MARAUDER_METRICS_TOKEN=.*|MARAUDER_METRICS_TOKEN=$METRICS|" .env`;
 
 const cmdUp = `docker compose --env-file .env up -d`;
 
-const cmdHealth = `curl -fsS http://localhost:6688/health
+const cmdHealth = `curl -fsS http://localhost:34080/health
 # .
 
-curl -sS http://localhost:6688/api/v1/system/info | jq .version
+curl -sS http://localhost:34080/api/v1/system/info | jq .version
 # {
 #   "version": "1.0.0",
 #   "commit":  "...",
 #   "buildDate": "..."
 # }`;
 
-const cmdLogin = `curl -sS -X POST http://localhost:6688/api/v1/auth/login \\
+const cmdLogin = `curl -sS -X POST http://localhost:34080/api/v1/auth/login \\
   -H "Content-Type: application/json" \\
   -d '{"username":"admin","password":"pleasechangeme"}'`;
 ---
@@ -125,7 +125,7 @@ const cmdLogin = `curl -sS -X POST http://localhost:6688/api/v1/auth/login \\
       <h2 id="step-3" class="text-2xl font-semibold tracking-tight">3. Start the stack</h2>
       <p class="mt-3 text-muted-foreground">
         One command brings up four containers: PostgreSQL 18, the Go backend,
-        the React frontend, and an nginx gateway exposed on port 6688.
+        the React frontend, and an nginx gateway exposed on host port 34080.
       </p>
       <pre class="mt-4 text-sm"><code>{cmdUp}</code></pre>
       <p class="mt-3 text-muted-foreground">
@@ -153,7 +153,7 @@ const cmdLogin = `curl -sS -X POST http://localhost:6688/api/v1/auth/login \\
     <section class="mb-14" aria-labelledby="step-5">
       <h2 id="step-5" class="text-2xl font-semibold tracking-tight">5. Sign in and add your first topic</h2>
       <p class="mt-3 text-muted-foreground">
-        Open <a href="http://localhost:6688" class="text-foreground underline decoration-foreground/40 underline-offset-4 hover:decoration-foreground">http://localhost:6688</a>
+        Open <a href="http://localhost:34080" class="text-foreground underline decoration-foreground/40 underline-offset-4 hover:decoration-foreground">http://localhost:34080</a>
         in a browser, sign in as <code>admin</code>, and use the <strong>Add topic</strong>
         button to paste a magnet link or tracker URL. Configure a torrent
         client under <strong>Clients</strong>, set it as default, and Marauder

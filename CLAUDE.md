@@ -150,13 +150,28 @@ docker run --rm -v "E:/Projects/Stukans/Prototypes/torrent/frontend:/frontend" -
 docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.dev.yml up -d
 ```
 
-## Ports (non-standard — see `~/.claude/rules` "no 8080/3000/5432 on host")
+## Ports (per `~/.claude/rules/local-port-ranges.md` — host ports must be 30000-49999)
 
-- Gateway (nginx): 6688 (host)
-- Backend HTTP: 8679 (container)
-- Frontend dev: 8081 (container)
-- Postgres: 5432 (container only, NOT published to host)
-- cfsolver: 9244 (container only)
+Host-facing ports — all in the 34xxx range, overrideable via env vars:
+
+| Service | Host port | Env var | Container-internal |
+|---|---|---|---|
+| Gateway (nginx, prod stack) | `34080` | `MARAUDER_HOST_PORT` | 6688 |
+| Vite dev server (`npm run dev`) | `34000` | n/a (vite.config.ts) | n/a |
+| Backend (dev overlay only) | `34081` | `MARAUDER_DEV_BACKEND_PORT` | 8679 |
+| Frontend container (dev overlay only) | `34001` | `MARAUDER_DEV_FRONTEND_PORT` | 8081 |
+| Postgres (dev overlay only) | `34432` | `MARAUDER_DEV_DB_PORT` | 5432 |
+| qBittorrent (dev overlay only) | `34611` | `MARAUDER_DEV_QBIT_PORT` | 6611 |
+| Transmission (dev overlay only) | `34091` | `MARAUDER_DEV_TRANSMISSION_PORT` | 9091 |
+| Keycloak (sso overlay only) | `34643` | `MARAUDER_KEYCLOAK_HOST_PORT` | 8643 |
+
+In the production stack (`docker-compose.yml` only) **only the gateway**
+is published to the host. Everything else stays inside the docker
+network. The dev (`docker-compose.dev.yml`) and sso
+(`docker-compose.sso.yml`) overlays publish additional ports for direct
+access during development. Container-internal ports (right column) keep
+their conventional values — only the host-side mappings (left column)
+must stay in the safe 34xxx range.
 
 ## Key environment variables
 

@@ -18,11 +18,13 @@ type Config struct {
 	HTTPAddr    string        `env:"MARAUDER_HTTP_ADDR" envDefault:":8679"`
 	LogLevel    string        `env:"MARAUDER_LOG_LEVEL" envDefault:"info"`
 	LogJSON     bool          `env:"MARAUDER_LOG_JSON" envDefault:"true"`
-	CORSOrigins []string      `env:"MARAUDER_CORS_ORIGINS" envDefault:"http://localhost:5174,http://localhost:6688"`
+	CORSOrigins []string      `env:"MARAUDER_CORS_ORIGINS" envDefault:"http://localhost:34000,http://localhost:34080"`
 	ShutdownTO  time.Duration `env:"MARAUDER_SHUTDOWN_TIMEOUT" envDefault:"15s"`
 
-	// Public base URL (used in OIDC redirect, RFC7807 type URIs)
-	PublicBaseURL string `env:"MARAUDER_PUBLIC_BASE_URL" envDefault:"http://localhost:6688"`
+	// Public base URL (used in OIDC redirect, RFC7807 type URIs).
+	// Defaults to the gateway host port (34080) per the local-port-ranges
+	// rule — host-exposed ports must be in 30000-49999.
+	PublicBaseURL string `env:"MARAUDER_PUBLIC_BASE_URL" envDefault:"http://localhost:34080"`
 
 	// Database
 	DatabaseURL     string        `env:"MARAUDER_DB_URL,required"`

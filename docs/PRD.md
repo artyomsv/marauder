@@ -767,8 +767,8 @@ button that focuses the URL input in the Add modal.
 | `backend` | `ghcr.io/artyomsv/marauder-backend:<tag>` (multi-stage Go) | 8080 (internal) | Runs migrations on startup. Non-root user. |
 | `cfsolver` | `ghcr.io/artyomsv/marauder-cfsolver:<tag>` (chromium + chromedp) | 9222 (internal) | Optional; only started when `MARAUDER_CFSOLVER_ENABLED=true`. |
 | `frontend` | `ghcr.io/artyomsv/marauder-frontend:<tag>` (nginx + static bundle) | 8081 (internal) | Built with Vite, served by nginx unprivileged image. |
-| `gateway` | `nginx:1.27-alpine` | 6688 (host) | Optional in dev; the user can put their own reverse proxy (Traefik, Caddy) in front. Provides `/api` → backend, `/` → frontend. |
-| `keycloak` | `quay.io/keycloak/keycloak:26.0` | 8443 (host, optional) | `profile: sso`. Not started by default. |
+| `gateway` | `nginx:1.27-alpine` | 34080 (host) | Optional in dev; the user can put their own reverse proxy (Traefik, Caddy) in front. Provides `/api` → backend, `/` → frontend. Container-internal port stays at 6688. |
+| `keycloak` | `quay.io/keycloak/keycloak:26.0` | 34643 (host, optional) | `profile: sso`. Not started by default. Container-internal port stays at 8643. |
 
 ### 10.3 Environment variables
 

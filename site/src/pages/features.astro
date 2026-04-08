@@ -112,7 +112,7 @@ const sections = [
       "deploy/docker-compose.yml: production stack (db + backend + frontend + nginx gateway)",
       "deploy/docker-compose.dev.yml: overlay with port publishing + real qBittorrent + Transmission for E2E testing",
       "deploy/docker-compose.sso.yml: overlay with Keycloak 26 + a pre-imported realm and a test user",
-      "All host-exposed ports are non-standard (gateway 6688) to avoid colliding with other services",
+      "All host-exposed ports live in the safe 34xxx range (gateway 34080) to avoid colliding with other services",
     ],
   },
   {

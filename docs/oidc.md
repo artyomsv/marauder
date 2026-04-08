@@ -26,7 +26,7 @@ This starts:
 - `backend` — Marauder Go backend, with `MARAUDER_OIDC_ENABLED=true`
   and the Keycloak issuer URL injected
 - `frontend` — React static bundle
-- `gateway` — nginx, exposing the stack on `localhost:6688`
+- `gateway` — nginx, exposing the stack on `localhost:34080`
 - `keycloak` — Keycloak 26.0 with the `marauder` realm pre-imported
 
 The first start of Keycloak takes ~30 seconds while it imports the
@@ -45,12 +45,12 @@ The realm import provisions one test user:
 
 ## Try the flow
 
-1. Open <http://localhost:6688> — you should see the Marauder login screen.
+1. Open <http://localhost:34080> — you should see the Marauder login screen.
 2. Click **"Sign in with Keycloak"** at the bottom.
-3. You'll be redirected to Keycloak (`localhost:8643`) where you log
+3. You'll be redirected to Keycloak (`localhost:34643`) where you log
    in as `alice / marauder`.
 4. Keycloak redirects back to
-   `http://localhost:6688/api/v1/auth/oidc/callback?code=...&state=...`.
+   `http://localhost:34080/api/v1/auth/oidc/callback?code=...&state=...`.
 5. Marauder validates the state cookie, exchanges the code for tokens,
    verifies the ID token's signature against Keycloak's JWKS, and
    either finds the existing user (by `(issuer, subject)` pair) or

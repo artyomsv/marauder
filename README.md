@@ -111,7 +111,7 @@ openssl rand -base64 32
 docker compose -f deploy/docker-compose.yml --env-file deploy/.env up -d
 
 # 4. Open the UI
-open http://localhost:6688
+open http://localhost:34080
 ```
 
 On first start, Marauder creates an admin user from

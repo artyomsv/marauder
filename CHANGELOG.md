@@ -7,6 +7,90 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (Phase 7 — host port migration to 34xxx range)
+
+Marauder previously exposed the gateway on host port `6688`, the dev
+overlay used `8679` / `8680` / `55432` / `6611` / `9191`, and the SSO
+overlay used `8643`. All of these violate
+`~/.claude/rules/local-port-ranges.md`, which requires host-exposed
+ports to live in the `30000-49999` range to avoid colliding with
+gcloud emulators, IDE debuggers, framework defaults, and other dev
+tools that compete for low-numbered ports.
+
+This phase migrates every host-exposed port to the `34xxx` namespace
+(Marauder = project number 4 in the `3Xxxx` mnemonic). **Container-
+internal ports stay unchanged** per the rule's scope clarification —
+only the host side of the `ports:` mapping moves.
+
+### New host port allocation
+
+| Service | Old | New | Container-internal |
+|---|---|---|---|
+| Gateway (prod) | `6688` | **`34080`** | 6688 |
+| Vite dev server | `5174` | **`34000`** | n/a |
+| Backend (dev overlay) | `8679` | **`34081`** | 8679 |
+| Frontend container (dev overlay) | `8680` | **`34001`** | 8081 |
+| Postgres (dev overlay) | `55432` | **`34432`** | 5432 |
+| qBittorrent (dev overlay) | `6611` | **`34611`** | 6611 |
+| Transmission (dev overlay) | `9191` | **`34091`** | 9091 |
+| Keycloak (sso overlay) | `8643` | **`34643`** | 8643 |
+
+`55432` was actually the worst offender — completely out of the
+allowed range (above 49999). The old `6611` for qBittorrent and
+`9191` for Transmission were in forbidden 6xxx/9xxx zones.
+
+### Files changed
+
+- **`deploy/docker-compose.yml`** — gateway port mapping now
+  `${MARAUDER_HOST_PORT:-34080}:6688`. Defaults for
+  `MARAUDER_PUBLIC_BASE_URL` and `MARAUDER_CORS_ORIGINS` updated to
+  `http://localhost:34080`.
+- **`deploy/docker-compose.dev.yml`** — every published port wrapped
+  in env vars with `34xxx` defaults: `MARAUDER_DEV_DB_PORT`,
+  `MARAUDER_DEV_BACKEND_PORT`, `MARAUDER_DEV_FRONTEND_PORT`,
+  `MARAUDER_DEV_QBIT_PORT`, `MARAUDER_DEV_TRANSMISSION_PORT`.
+- **`deploy/docker-compose.sso.yml`** — Keycloak host port → `34643`
+  (still listens on 8643 internally so the docker-network DNS link
+  `http://keycloak:8643/realms/marauder` from the backend
+  `MARAUDER_OIDC_ISSUER` still works). `MARAUDER_OIDC_REDIRECT_URL`
+  default is the browser-facing host port `http://localhost:34080/...`.
+- **`deploy/.env.example`** — every `localhost:6688` reference and
+  `MARAUDER_HOST_PORT=34080` documented at the top of the Server
+  section.
+- **`deploy/keycloak/realm-marauder.json`** — `redirectUris`,
+  `webOrigins`, and `post.logout.redirect.uris` all updated to
+  `localhost:34080`.
+- **`backend/internal/config/config.go`** — `CORSOrigins` and
+  `PublicBaseURL` envDefault tags now point at `34000` (Vite dev) and
+  `34080` (gateway).
+- **`frontend/vite.config.ts`** — dev server `port: 34000` (was
+  5174). The `/api` proxy default target is now
+  `http://localhost:34081` (the dev compose backend host port).
+- **`.github/workflows/e2e.yml`** — every `curl` to `localhost:6688`
+  → `localhost:34080`, and `localhost:6611` → `localhost:34611`.
+- **`README.md`, `CONTRIBUTING.md`, `docs/PRD.md`, `docs/oidc.md`,
+  `docs/test-e2e-magnet.md`** — all quick-start instructions, sample
+  curl commands, and infrastructure tables updated.
+- **`site/src/pages/{features,index,install}.astro`** — marketing
+  copy and code blocks updated.
+- **`CLAUDE.md`** — Ports section rewritten with the full new
+  allocation table including the env var override knobs.
+
+### Why this matters
+
+The previous `6688` port worked fine in isolation but was a ticking
+time bomb on a developer machine running multiple services
+simultaneously. The user's `docker ps` showed:
+- `projectr-x` already owns the entire `31xxx` band
+- `test-me-ai` uses `45xxx`
+- `gotenberg` and `clamav` squat on `3100` and `3310`
+- `keycloak-shared-dev` sits on `9080`
+
+Marauder's `6688` happened not to collide but `8679` / `8680` /
+`6611` / `9191` from the dev overlay all could have. Pushing every
+host port into the `34xxx` band gives Marauder its own isolated
+namespace and aligns with the global rule.
+
 ### Fixed (Phase 6 — credential test false-positive hotfix)
 
 A user reported entering an intentionally wrong username, clicking the

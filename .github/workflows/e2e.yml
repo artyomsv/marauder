@@ -51,7 +51,7 @@ jobs:
       - name: Wait for backend health
         run: |
           for _ in $(seq 1 60); do
-            if curl -fsS http://localhost:6688/health >/dev/null; then
+            if curl -fsS http://localhost:34080/health >/dev/null; then
               echo "backend is healthy"
               exit 0
             fi
@@ -84,14 +84,14 @@ jobs:
           set -e
 
           echo "[1] login to Marauder"
-          LOGIN=$(curl -sS -X POST http://localhost:6688/api/v1/auth/login \
+          LOGIN=$(curl -sS -X POST http://localhost:34080/api/v1/auth/login \
             -H "Content-Type: application/json" \
             -d '{"username":"admin","password":"pleasechangeme"}')
           TOK=$(echo "$LOGIN" | awk -F'"access_token":"' '{print $2}' | awk -F'"' '{print $1}')
           test -n "$TOK"
 
           echo "[2] create qBittorrent client"
-          CLIENT_JSON=$(curl -sS -X POST http://localhost:6688/api/v1/clients \
+          CLIENT_JSON=$(curl -sS -X POST http://localhost:34080/api/v1/clients \
             -H "Authorization: Bearer $TOK" \
             -H "Content-Type: application/json" \
             -d "{
@@ -110,7 +110,7 @@ jobs:
 
           echo "[3] add magnet topic"
           MAG='magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567&dn=marauder-e2e'
-          curl -sS -X POST http://localhost:6688/api/v1/topics \
+          curl -sS -X POST http://localhost:34080/api/v1/topics \
             -H "Authorization: Bearer $TOK" \
             -H "Content-Type: application/json" \
             -d "{\"url\":\"$MAG\",\"client_id\":\"$CLIENT_ID\"}"
@@ -119,12 +119,12 @@ jobs:
           sleep 75
 
           echo "[5] verify in qBittorrent"
-          COOKIE=$(curl -sS -i -X POST "http://localhost:6611/api/v2/auth/login" \
-            -H "Referer: http://localhost:6611" \
+          COOKIE=$(curl -sS -i -X POST "http://localhost:34611/api/v2/auth/login" \
+            -H "Referer: http://localhost:34611" \
             --data-urlencode "username=admin" \
             --data-urlencode "password=${QBIT_PASSWORD}" | \
             grep -i "^set-cookie:" | sed 's/Set-Cookie: //i' | cut -d';' -f1)
-          BODY=$(curl -sS -H "Cookie: $COOKIE" "http://localhost:6611/api/v2/torrents/info")
+          BODY=$(curl -sS -H "Cookie: $COOKIE" "http://localhost:34611/api/v2/torrents/info")
           echo "$BODY"
           echo "$BODY" | grep -q "0123456789abcdef0123456789abcdef01234567"
 

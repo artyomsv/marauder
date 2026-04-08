@@ -82,7 +82,7 @@ sed -i "s|MARAUDER_MASTER_KEY=.*|MARAUDER_MASTER_KEY=$(openssl rand -base64 32)|
 
 # bring the stack up
 docker compose --env-file .env up -d
-open http://localhost:6688`;
+open http://localhost:34080`;
 ---
 <Page {...seo} schemas={schemas}>
   <!-- ============================================================ HERO -->
@@ -184,7 +184,7 @@ open http://localhost:6688`;
           </li>
           <li class="flex items-start gap-3">
             <span class="mt-0.5 inline-flex size-6 shrink-0 items-center justify-center rounded-full bg-foreground/[0.06] text-xs font-semibold text-foreground ring-1 ring-foreground/15">3</span>
-            <span><strong class="text-foreground">docker compose up -d</strong> — open <code>http://localhost:6688</code>.</span>
+            <span><strong class="text-foreground">docker compose up -d</strong> — open <code>http://localhost:34080</code>.</span>
           </li>
         </ol>
         <div class="mt-8 flex flex-wrap gap-3">

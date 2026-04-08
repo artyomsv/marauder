@@ -10,22 +10,26 @@
 #     integration tests can run end-to-end against real clients.
 #
 # None of these services are exposed in production.
+#
+# All HOST-side ports stay in the 34xxx range per the local-port-ranges
+# rule (host-exposed ports must be 30000-49999). Container-internal
+# ports (right side of the mapping) keep their conventional values.
 
 services:
   db:
     ports:
-      - "55432:5432"
+      - "${MARAUDER_DEV_DB_PORT:-34432}:5432"
 
   backend:
     ports:
-      - "8679:8679"
+      - "${MARAUDER_DEV_BACKEND_PORT:-34081}:8679"
 
   frontend:
     ports:
-      - "8680:8081"
+      - "${MARAUDER_DEV_FRONTEND_PORT:-34001}:8081"
 
   # Real qBittorrent for integration testing.
-  # Web UI: http://localhost:6611 (default user "admin", password in
+  # Web UI: http://localhost:34611 (default user "admin", password in
   # logs on first start).
   qbittorrent:
     image: lscr.io/linuxserver/qbittorrent:latest
@@ -39,7 +43,7 @@ services:
       - qbit_config:/config
       - qbit_downloads:/downloads
     ports:
-      - "6611:6611"
+      - "${MARAUDER_DEV_QBIT_PORT:-34611}:6611"
     logging:
       driver: json-file
       options:
@@ -58,7 +62,7 @@ services:
       - transmission_config:/config
       - transmission_downloads:/downloads
     ports:
-      - "9191:9091"
+      - "${MARAUDER_DEV_TRANSMISSION_PORT:-34091}:9091"
     logging:
       driver: json-file
       options:

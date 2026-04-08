@@ -56,7 +56,7 @@ docker compose --env-file .env up -d
 docker compose --env-file .env -f docker-compose.yml -f docker-compose.dev.yml up -d
 ```
 
-Open: <http://localhost:6688>
+Open: <http://localhost:34080>
 
 Default credentials are in `.env` (`MARAUDER_ADMIN_INITIAL_USERNAME` /
 `_PASSWORD`). **Change them after first login.**

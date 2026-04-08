@@ -24,18 +24,18 @@
       "publicClient": false,
       "secret": "marauder-dev-secret",
       "redirectUris": [
-        "http://localhost:6688/api/v1/auth/oidc/callback",
+        "http://localhost:34080/api/v1/auth/oidc/callback",
         "https://marauder.cc/api/v1/auth/oidc/callback"
       ],
       "webOrigins": [
-        "http://localhost:6688",
+        "http://localhost:34080",
         "https://marauder.cc"
       ],
       "standardFlowEnabled": true,
       "directAccessGrantsEnabled": false,
       "protocol": "openid-connect",
       "attributes": {
-        "post.logout.redirect.uris": "http://localhost:6688/*"
+        "post.logout.redirect.uris": "http://localhost:34080/*"
       }
     }
   ]

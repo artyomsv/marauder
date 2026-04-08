@@ -11,7 +11,9 @@ host besides Docker and git.
 
 The dev overlay (`deploy/docker-compose.dev.yml`) publishes the database
 and backend ports to the host and starts a real qBittorrent container on
-`http://localhost:6611` for integration testing.
+`http://localhost:34611` for integration testing. (qBittorrent still
+listens on its conventional 6611 inside the container; only the host-
+side mapping uses the safe 34xxx range per local-port-ranges.)
 
 ```bash
 cd deploy
@@ -42,7 +44,7 @@ Copy the password. You'll use it in step 4.
 ## 3. Log in to Marauder
 
 ```bash
-LOGIN=$(curl -sS -X POST http://localhost:6688/api/v1/auth/login \
+LOGIN=$(curl -sS -X POST http://localhost:34080/api/v1/auth/login \
   -H "Content-Type: application/json" \
   -d '{"username":"admin","password":"pleasechangeme"}')
 
@@ -57,7 +59,7 @@ Expected output: `token length: 547` (give or take a few characters).
 Replace `QBIT_PASSWORD` with the temporary password from step 2.
 
 ```bash
-curl -sS -X POST http://localhost:6688/api/v1/clients \
+curl -sS -X POST http://localhost:34080/api/v1/clients \
   -H "Authorization: Bearer $TOK" \
   -H "Content-Type: application/json" \
   -d '{
@@ -83,7 +85,7 @@ Save the `id` field as `CLIENT_ID`.
 ```bash
 MAG='magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567&dn=marauder-test-file'
 
-curl -sS -X POST http://localhost:6688/api/v1/topics \
+curl -sS -X POST http://localhost:34080/api/v1/topics \
   -H "Authorization: Bearer $TOK" \
   -H "Content-Type: application/json" \
   -d "{\"url\":\"$MAG\",\"client_id\":\"$CLIENT_ID\"}"
@@ -106,13 +108,13 @@ UUID and the tracker name.
 ## 7. Verify in qBittorrent
 
 ```bash
-COOKIE=$(curl -sS -i -X POST "http://localhost:6611/api/v2/auth/login" \
-  -H "Referer: http://localhost:6611" \
+COOKIE=$(curl -sS -i -X POST "http://localhost:34611/api/v2/auth/login" \
+  -H "Referer: http://localhost:34611" \
   --data-urlencode "username=admin" \
   --data-urlencode "password=QBIT_PASSWORD" | \
   grep -i "^set-cookie:" | sed 's/Set-Cookie: //i' | cut -d';' -f1)
 
-curl -sS -H "Cookie: $COOKIE" http://localhost:6611/api/v2/torrents/info
+curl -sS -H "Cookie: $COOKIE" http://localhost:34611/api/v2/torrents/info
 ```
 
 Expected: a JSON array containing at least one entry with:
