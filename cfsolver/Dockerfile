@@ -16,7 +16,7 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
 # --- Runtime stage ------------------------------------------------------
 # Chromium and its dependencies are heavy. We use Debian slim because it
 # has reliable chromium packages and Alpine's chromium is hit-or-miss.
-FROM debian:12-slim
+FROM debian:13-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     chromium \
