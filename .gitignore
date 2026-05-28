@@ -50,6 +50,9 @@ coverage/
 # Docker
 **/postgres-data/
 
+# Local torrent client downloads (dev overlay bind mounts)
+/.downloads/
+
 # Local dev scratch
 .scratch/
 

@@ -41,7 +41,7 @@ services:
       WEBUI_PORT: "6611"
     volumes:
       - qbit_config:/config
-      - qbit_downloads:/downloads
+      - ../.downloads/qbittorrent:/downloads
     ports:
       - "${MARAUDER_DEV_QBIT_PORT:-34611}:6611"
     logging:
@@ -60,7 +60,7 @@ services:
       TZ: "Etc/UTC"
     volumes:
       - transmission_config:/config
-      - transmission_downloads:/downloads
+      - ../.downloads/transmission:/downloads
     ports:
       - "${MARAUDER_DEV_TRANSMISSION_PORT:-34091}:9091"
     logging:
@@ -71,6 +71,4 @@ services:
 
 volumes:
   qbit_config:
-  qbit_downloads:
   transmission_config:
-  transmission_downloads:
