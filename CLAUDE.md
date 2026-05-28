@@ -141,10 +141,10 @@ src/
 
 ```bash
 # Backend (Docker — never install Go locally)
-docker run --rm -v "E:/Projects/Stukans/Prototypes/torrent/backend:/backend" -w //backend golang:1.23 sh -c "go build ./... && go vet ./... && go test -race ./..."
+docker run --rm -v "E:/Projects/Stukans/Marauder/backend:/backend" -w //backend golang:1.23 sh -c "go build ./... && go vet ./... && go test -race ./..."
 
 # Frontend
-docker run --rm -v "E:/Projects/Stukans/Prototypes/torrent/frontend:/frontend" -w //frontend node:20-alpine sh -c "npm run typecheck && npm test && npm run build"
+docker run --rm -v "E:/Projects/Stukans/Marauder/frontend:/frontend" -w //frontend node:20-alpine sh -c "npm run typecheck && npm test && npm run build"
 
 # Stack up (compose)
 docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.dev.yml up -d
