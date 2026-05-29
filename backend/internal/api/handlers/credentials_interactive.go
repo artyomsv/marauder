@@ -114,6 +114,16 @@ func (h *Credentials) persistSession(ctx context.Context, uid uuid.UUID, tracker
 	if err != nil {
 		return nil, err
 	}
+	// Upsert: re-authenticating an existing account (the ErrSessionExpired
+	// recovery path) refreshes the stored session in place rather than
+	// violating UNIQUE(user_id, tracker_name) with a second Create.
+	if existing, gerr := h.Creds.GetForTracker(ctx, uid, trackerName); gerr == nil && existing != nil {
+		if serr := h.Creds.SetSession(ctx, existing.ID, uid, enc, nonce); serr != nil {
+			return nil, serr
+		}
+		existing.SessionEnc, existing.SessionNonce = enc, nonce
+		return existing, nil
+	}
 	return h.Creds.Create(ctx, &domain.TrackerCredential{
 		UserID: uid, TrackerName: trackerName, Username: username,
 		SessionEnc: enc, SessionNonce: nonce,

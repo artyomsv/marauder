@@ -161,7 +161,7 @@ func (e *Engine) Complete(ctx context.Context, challengeID, answer string) (regi
 }
 
 func (e *Engine) harvest(sess *forumcommon.Session) registry.SessionCookies {
-	// Auth cookies are assumed to live on the LoginURL host. Trackers whose auth cookie is set on a different host than LoginURL are not supported by this harvest.
+	// Auth cookies are assumed to live on the LoginURL host. Trackers whose auth cookie is set on a different host than LoginURL are not supported by this harvest. LoginURL is trusted plugin config, so the parse error is unreachable.
 	u, _ := url.Parse(e.cfg.LoginURL)
 	return registry.SessionCookies(forumcommon.CookiesByName(sess, u, e.cfg.CookieNames))
 }

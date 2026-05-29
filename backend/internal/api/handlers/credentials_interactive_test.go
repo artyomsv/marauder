@@ -71,8 +71,10 @@ func init() {
 
 // fakeCredStore is an in-memory credentialStore for handler tests.
 type fakeCredStore struct {
-	created   *domain.TrackerCredential
-	createErr error
+	created    *domain.TrackerCredential
+	createErr  error
+	existing   *domain.TrackerCredential // returned by GetForTracker (upsert path)
+	sessionSet bool                      // SetSession was called
 }
 
 func (s *fakeCredStore) Create(_ context.Context, c *domain.TrackerCredential) (*domain.TrackerCredential, error) {
@@ -87,6 +89,13 @@ func (s *fakeCredStore) Create(_ context.Context, c *domain.TrackerCredential) (
 }
 func (s *fakeCredStore) GetByID(context.Context, uuid.UUID, uuid.UUID) (*domain.TrackerCredential, error) {
 	return nil, nil
+}
+func (s *fakeCredStore) GetForTracker(context.Context, uuid.UUID, string) (*domain.TrackerCredential, error) {
+	return s.existing, nil
+}
+func (s *fakeCredStore) SetSession(context.Context, uuid.UUID, uuid.UUID, []byte, []byte) error {
+	s.sessionSet = true
+	return nil
 }
 func (s *fakeCredStore) ListForUser(context.Context, uuid.UUID) ([]*domain.TrackerCredential, error) {
 	return nil, nil
@@ -211,6 +220,30 @@ func TestCompleteInteractive_ForeignUserCannotComplete(t *testing.T) {
 	h.CompleteInteractive(w, authedReq(t, attacker, answerReq{TrackerName: "faketracker", ChallengeID: "chal-1", Answer: "good"}))
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("foreign user got status %d, want 404; body %s", w.Code, w.Body.String())
+	}
+}
+
+func TestCompleteInteractive_ReauthUpsertsExistingSession(t *testing.T) {
+	// A credential already exists for this (user, tracker): re-auth must
+	// refresh the session in place via SetSession, not Create (which would
+	// violate the UNIQUE constraint and 500).
+	store := &fakeCredStore{existing: &domain.TrackerCredential{
+		ID: uuid.New(), TrackerName: fakeCaptchaName, Username: "u",
+		CreatedAt: time.Now(), UpdatedAt: time.Now(),
+	}}
+	h := newCredsHandler(t, store)
+	uid := uuid.New()
+	h.BeginInteractive(httptest.NewRecorder(), authedReq(t, uid, beginReq{TrackerName: fakeCaptchaName, Username: "u", Password: "p"}))
+	w := httptest.NewRecorder()
+	h.CompleteInteractive(w, authedReq(t, uid, answerReq{TrackerName: fakeCaptchaName, ChallengeID: "chal-1", Answer: "good"}))
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status %d, want 201; body %s", w.Code, w.Body.String())
+	}
+	if !store.sessionSet {
+		t.Error("re-auth must call SetSession (upsert)")
+	}
+	if store.created != nil {
+		t.Error("re-auth must not Create a second credential")
 	}
 }
 

@@ -34,8 +34,10 @@ import (
 type credentialStore interface {
 	Create(ctx context.Context, c *domain.TrackerCredential) (*domain.TrackerCredential, error)
 	GetByID(ctx context.Context, id, userID uuid.UUID) (*domain.TrackerCredential, error)
+	GetForTracker(ctx context.Context, userID uuid.UUID, trackerName string) (*domain.TrackerCredential, error)
 	ListForUser(ctx context.Context, userID uuid.UUID) ([]*domain.TrackerCredential, error)
 	Update(ctx context.Context, id, userID uuid.UUID, username string, secretEnc, secretNonce []byte) error
+	SetSession(ctx context.Context, id, userID uuid.UUID, sessionEnc, sessionNonce []byte) error
 	Delete(ctx context.Context, id, userID uuid.UUID) error
 }
 
