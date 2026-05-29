@@ -132,6 +132,7 @@ var (
 	_ registry.Tracker              = (*plugin)(nil)
 	_ registry.WithCredentials      = (*plugin)(nil)
 	_ registry.WithInteractiveLogin = (*plugin)(nil)
+	_ registry.WithSeasonCatalog    = (*plugin)(nil)
 )
 
 func init() {

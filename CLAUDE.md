@@ -45,7 +45,7 @@ techdebt/       Debt-tracking files (one per issue, see global rule)
 | **`extra`** | shared `extra.Int / StringSlice / String` helpers for the untyped `map[string]any` blobs in `Topic.Extra` and `Check.Extra` (added 2026-04-07; **use this instead of writing local helpers**) |
 | `logging` | zerolog setup (JSON in prod, pretty in dev) |
 | `metrics` | Prometheus collectors (HTTP, scheduler, tracker, client) |
-| `plugins/registry` | plugin interfaces + global registry + capability interfaces (`WithQuality`, `WithEpisodeFilter`, `WithCredentials`, `WithCloudflare`, `WithInteractiveLogin`) + typed sentinels **`registry.ErrNoPendingEpisodes`**, `ErrCaptchaRequired`, `ErrSessionExpired` |
+| `plugins/registry` | plugin interfaces + global registry + capability interfaces (`WithQuality`, `WithEpisodeFilter`, `WithCredentials`, `WithCloudflare`, `WithInteractiveLogin`, `WithSeasonCatalog`) + typed sentinels **`registry.ErrNoPendingEpisodes`**, `ErrCaptchaRequired`, `ErrSessionExpired` |
 | **`plugins/captchalogin`** | reusable human-in-the-loop interactive captcha-login engine (`Begin`/`Complete`/`Refresh` + TTL pending-session store). A tracker supplies a `Config` (LoginURL, CaptchaURL, CookieNames, BuildForm, Classify); first consumer is LostFilm. See `WithInteractiveLogin` |
 | `plugins/trackers/<name>` | one package per tracker plugin (16 plugins as of v1.0.0+) |
 | `plugins/clients/<name>` | one package per torrent client (qBittorrent, Transmission, Deluge, µTorrent, downloadfolder) |
@@ -234,11 +234,16 @@ See `docs/plugin-development.md`. The pattern: implement the
 unit test plus an e2e test using `plugins/e2etest.HostRewriteTransport`.
 
 Optional capability interfaces: `WithQuality`, `WithEpisodeFilter`,
-`WithCredentials`, `WithCloudflare`, `WithInteractiveLogin`. The frontend
-AddTopic form discovers most via `GET /api/v1/trackers/match?url=`;
-`supports_interactive_login` is **also** surfaced per-tracker in
-`GET /api/v1/system/info` because the add-credential form selects a
-tracker by name and has no URL.
+`WithCredentials`, `WithCloudflare`, `WithInteractiveLogin`,
+`WithSeasonCatalog`. The frontend AddTopic form discovers most via
+`GET /api/v1/trackers/match?url=`; `supports_interactive_login` is
+**also** surfaced per-tracker in `GET /api/v1/system/info` because the
+add-credential form selects a tracker by name and has no URL.
+`WithSeasonCatalog` (LostFilm) enumerates a series' released
+seasons/episodes from `GET /api/v1/trackers/seasons?url=` (fetches the
+public `/series/<slug>/seasons` page, reuses the episode parser); the
+AddTopic form uses it to constrain the "start from" season/episode
+selectors to released values.
 
 For per-episode trackers (currently only LostFilm), `Download` must
 return `fmt.Errorf("...: %w", registry.ErrNoPendingEpisodes)` when the

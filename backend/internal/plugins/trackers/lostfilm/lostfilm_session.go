@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/rs/zerolog/log"
@@ -258,6 +259,37 @@ func (p *plugin) fetchURL(ctx context.Context, target string, sess *forumcommon.
 		return nil, fmt.Errorf("lostfilm fetchURL read: %w", err)
 	}
 	return body, nil
+}
+
+// SeasonCatalog implements registry.WithSeasonCatalog. It fetches the
+// public /series/<slug>/seasons page and groups the parsed episode
+// triples by season. No credentials needed — the catalog is public; only
+// the .torrent links are gated.
+func (p *plugin) SeasonCatalog(ctx context.Context, rawURL string) ([]registry.Season, error) {
+	m := urlPattern.FindStringSubmatch(rawURL)
+	if m == nil {
+		return nil, fmt.Errorf("lostfilm: not a series URL: %s", rawURL)
+	}
+	body, err := p.fetch(ctx, "https://"+p.domain+"/series/"+m[1]+"/seasons", nil)
+	if err != nil {
+		return nil, err
+	}
+	bySeason := map[int][]int{}
+	var order []int
+	for _, e := range parseEpisodes(body) {
+		if _, ok := bySeason[e.Season]; !ok {
+			order = append(order, e.Season)
+		}
+		bySeason[e.Season] = append(bySeason[e.Season], e.Episode)
+	}
+	sort.Ints(order)
+	out := make([]registry.Season, 0, len(order))
+	for _, s := range order {
+		ep := bySeason[s]
+		sort.Ints(ep)
+		out = append(out, registry.Season{Number: s, Episodes: ep})
+	}
+	return out, nil
 }
 
 // fetch is the simpler GET used by Check to retrieve the series page.

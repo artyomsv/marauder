@@ -14,7 +14,7 @@ import {
   X,
 } from "lucide-react";
 
-import { api, type Topic, type CredentialView } from "@/lib/api";
+import { api, type Topic, type CredentialView, type SeasonInfo } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -349,6 +349,7 @@ interface TrackerMatch {
   qualities?: string[];
   default_quality?: string;
   supports_episode_filter: boolean;
+  supports_season_catalog: boolean;
   requires_credentials: boolean;
   uses_cloudflare: boolean;
 }
@@ -358,7 +359,12 @@ interface AddTopicCardProps {
   onCreated: () => void;
 }
 
-function AddTopicCard({ onClose, onCreated }: AddTopicCardProps) {
+// Native <select> styling, shared with the Quality select above so the
+// catalog dropdowns match the rest of the form chrome.
+const SELECT_CLASS =
+  "flex h-10 w-full rounded-md border border-input bg-background/50 px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2";
+
+export function AddTopicCard({ onClose, onCreated }: AddTopicCardProps) {
   const [url, setUrl] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [quality, setQuality] = useState<string>("");
@@ -379,6 +385,25 @@ function AddTopicCard({ onClose, onCreated }: AddTopicCardProps) {
     retry: false,
   });
   const match = trackerMatchQuery.data ?? null;
+
+  // When the matched tracker exposes a released-season catalog, fetch it so
+  // the season/episode picker can be constrained to released values. Gated
+  // on the match flag so non-catalog trackers never hit the endpoint.
+  const seasonsQuery = useQuery({
+    queryKey: QK.trackerSeasons(debouncedUrl),
+    queryFn: () =>
+      api.get<{ seasons: SeasonInfo[] }>(
+        `/trackers/seasons?url=${encodeURIComponent(debouncedUrl)}`,
+      ),
+    enabled: debouncedUrl.length >= 8 && !!match?.supports_season_catalog,
+    staleTime: 60_000,
+    retry: false,
+  });
+  const seasons = seasonsQuery.data?.seasons ?? [];
+  const catalogReady =
+    !!match?.supports_season_catalog && seasons.length > 0 && !seasonsQuery.isError;
+  const selectedSeasonEpisodes =
+    seasons.find((s) => String(s.number) === startSeason)?.episodes ?? [];
 
   // The user may already have an account for this tracker — don't nag them
   // to add one if they do. Gate the credentials warning on the absence of a
@@ -402,6 +427,15 @@ function AddTopicCard({ onClose, onCreated }: AddTopicCardProps) {
       setQuality(match.default_quality);
     }
   }, [match, quality]);
+
+  // Reset the season/episode selection whenever the series URL changes.
+  // Otherwise a stale value (e.g. Season 2 from a previous series) could
+  // linger as a `<select>` value with no matching `<option>` — and submit
+  // a season the newly-pasted series doesn't actually have.
+  useEffect(() => {
+    setStartSeason("");
+    setStartEpisode("");
+  }, [debouncedUrl]);
 
   const create = useMutation({
     mutationFn: () =>
@@ -469,7 +503,7 @@ function AddTopicCard({ onClose, onCreated }: AddTopicCardProps) {
                 id="quality"
                 value={quality}
                 onChange={(e) => setQuality(e.target.value)}
-                className="flex h-10 w-full rounded-md border border-input bg-background/50 px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                className={SELECT_CLASS}
               >
                 {match.qualities.map((q) => (
                   <option key={q} value={q}>
@@ -485,34 +519,18 @@ function AddTopicCard({ onClose, onCreated }: AddTopicCardProps) {
           )}
 
           {match?.supports_episode_filter && (
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div className="space-y-1.5">
-                <Label htmlFor="start-season">Start from season (optional)</Label>
-                <Input
-                  id="start-season"
-                  type="number"
-                  min={1}
-                  value={startSeason}
-                  onChange={(e) => setStartSeason(e.target.value)}
-                  placeholder="e.g. 2"
-                />
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="start-episode">Start from episode (optional)</Label>
-                <Input
-                  id="start-episode"
-                  type="number"
-                  min={1}
-                  value={startEpisode}
-                  onChange={(e) => setStartEpisode(e.target.value)}
-                  placeholder="e.g. 5"
-                />
-              </div>
-              <p className="text-xs text-muted-foreground sm:col-span-2">
-                Episodes before this point will be skipped — only newer
-                episodes are downloaded.
-              </p>
-            </div>
+            <SeasonEpisodePicker
+              catalogReady={catalogReady}
+              seasons={seasons}
+              selectedSeasonEpisodes={selectedSeasonEpisodes}
+              startSeason={startSeason}
+              startEpisode={startEpisode}
+              onSeasonChange={(v) => {
+                setStartSeason(v);
+                setStartEpisode("");
+              }}
+              onEpisodeChange={setStartEpisode}
+            />
           )}
 
           {match?.requires_credentials && !hasCredential && (
@@ -547,6 +565,111 @@ function AddTopicCard({ onClose, onCreated }: AddTopicCardProps) {
         </form>
       </Card>
     </motion.div>
+  );
+}
+
+interface SeasonEpisodePickerProps {
+  catalogReady: boolean;
+  seasons: SeasonInfo[];
+  selectedSeasonEpisodes: number[];
+  startSeason: string;
+  startEpisode: string;
+  onSeasonChange: (value: string) => void;
+  onEpisodeChange: (value: string) => void;
+}
+
+// Renders the season/episode constraint. When the tracker's released
+// catalog is available we show dependent dropdowns (season → that
+// season's episodes); otherwise we fall back to the original free-text
+// number inputs so non-catalog trackers keep working unchanged.
+function SeasonEpisodePicker({
+  catalogReady,
+  seasons,
+  selectedSeasonEpisodes,
+  startSeason,
+  startEpisode,
+  onSeasonChange,
+  onEpisodeChange,
+}: SeasonEpisodePickerProps) {
+  if (!catalogReady) {
+    return (
+      <div className="grid gap-4 sm:grid-cols-2">
+        <div className="space-y-1.5">
+          <Label htmlFor="start-season">Start from season (optional)</Label>
+          <Input
+            id="start-season"
+            type="number"
+            min={1}
+            value={startSeason}
+            onChange={(e) => onSeasonChange(e.target.value)}
+            placeholder="e.g. 2"
+          />
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor="start-episode">Start from episode (optional)</Label>
+          <Input
+            id="start-episode"
+            type="number"
+            min={1}
+            value={startEpisode}
+            onChange={(e) => onEpisodeChange(e.target.value)}
+            placeholder="e.g. 5"
+          />
+        </div>
+        <p className="text-xs text-muted-foreground sm:col-span-2">
+          Episodes before this point will be skipped — only newer episodes
+          are downloaded.
+        </p>
+      </div>
+    );
+  }
+
+  const firstSeason = seasons[0].number;
+  const lastSeason = seasons[seasons.length - 1].number;
+
+  return (
+    <div className="grid gap-4 sm:grid-cols-2">
+      <p className="text-xs text-muted-foreground sm:col-span-2">
+        {seasons.length} seasons available · S{firstSeason}–S{lastSeason}
+      </p>
+      <div className="space-y-1.5">
+        <Label htmlFor="start-season">Start from season (optional)</Label>
+        <select
+          id="start-season"
+          value={startSeason}
+          onChange={(e) => onSeasonChange(e.target.value)}
+          className={SELECT_CLASS}
+        >
+          <option value="">From the start</option>
+          {seasons.map((s) => (
+            <option key={s.number} value={String(s.number)}>
+              Season {s.number}
+            </option>
+          ))}
+        </select>
+      </div>
+      <div className="space-y-1.5">
+        <Label htmlFor="start-episode">Start from episode (optional)</Label>
+        <select
+          id="start-episode"
+          value={startEpisode}
+          disabled={!startSeason}
+          onChange={(e) => onEpisodeChange(e.target.value)}
+          className={cn(SELECT_CLASS, "disabled:cursor-not-allowed disabled:opacity-50")}
+        >
+          <option value="">From the start</option>
+          {selectedSeasonEpisodes.map((ep) => (
+            <option key={ep} value={String(ep)}>
+              Episode {ep}
+            </option>
+          ))}
+        </select>
+      </div>
+      <p className="text-xs text-muted-foreground sm:col-span-2">
+        Episodes before this point will be skipped — only newer episodes are
+        downloaded.
+      </p>
+    </div>
   );
 }
 

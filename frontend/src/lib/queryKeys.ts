@@ -37,4 +37,8 @@ export const QK = {
   // /trackers/match?url=… lookup. Used by Topics AddTopicCard to
   // detect which plugin handles a pasted URL.
   trackerMatch: (url: string) => ["tracker-match", url] as const,
+
+  // /trackers/seasons?url=… released-season catalog. Used by AddTopicCard
+  // to populate the dependent season → episode dropdowns.
+  trackerSeasons: (url: string) => ["trackerSeasons", url] as const,
 } as const;

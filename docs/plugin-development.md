@@ -98,6 +98,16 @@ type WithCloudflare interface {
     UsesCloudflare() bool
 }
 
+// The tracker can enumerate a series' released seasons/episodes from its
+// URL (powers the AddTopic "start from" dropdowns). Implement it by
+// fetching the catalog page and reusing the episode parser; see LostFilm's
+// SeasonCatalog (fetches /series/<slug>/seasons, groups parseEpisodes by
+// season). Exposed via GET /api/v1/trackers/seasons?url=.
+type WithSeasonCatalog interface {
+    Tracker
+    SeasonCatalog(ctx context.Context, url string) ([]Season, error) // Season{Number int; Episodes []int}
+}
+
 // The tracker gates login behind a captcha the user solves in-app.
 type WithInteractiveLogin interface {
     Tracker
