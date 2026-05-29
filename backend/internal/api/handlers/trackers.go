@@ -18,13 +18,14 @@ type Trackers struct {
 
 // trackerMatch is the response shape for GET /api/v1/trackers/match.
 type trackerMatch struct {
-	TrackerName           string   `json:"tracker_name"`
-	DisplayName           string   `json:"display_name"`
-	Qualities             []string `json:"qualities,omitempty"`
-	DefaultQuality        string   `json:"default_quality,omitempty"`
-	SupportsEpisodeFilter bool     `json:"supports_episode_filter"`
-	RequiresCredentials   bool     `json:"requires_credentials"`
-	UsesCloudflare        bool     `json:"uses_cloudflare"`
+	TrackerName              string   `json:"tracker_name"`
+	DisplayName              string   `json:"display_name"`
+	Qualities                []string `json:"qualities,omitempty"`
+	DefaultQuality           string   `json:"default_quality,omitempty"`
+	SupportsEpisodeFilter    bool     `json:"supports_episode_filter"`
+	RequiresCredentials      bool     `json:"requires_credentials"`
+	SupportsInteractiveLogin bool     `json:"supports_interactive_login"`
+	UsesCloudflare           bool     `json:"uses_cloudflare"`
 }
 
 // Match handles GET /api/v1/trackers/match?url=<encoded>.
@@ -58,6 +59,9 @@ func (h *Trackers) Match(w http.ResponseWriter, r *http.Request) {
 	}
 	if _, ok := t.(registry.WithCredentials); ok {
 		out.RequiresCredentials = true
+	}
+	if _, ok := t.(registry.WithInteractiveLogin); ok {
+		out.SupportsInteractiveLogin = true
 	}
 	if cf, ok := t.(registry.WithCloudflare); ok {
 		out.UsesCloudflare = cf.UsesCloudflare()
