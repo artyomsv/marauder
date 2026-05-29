@@ -93,6 +93,19 @@ var (
 	)
 )
 
+// Notifier metrics --------------------------------------------------------
+
+var (
+	// NotificationsSentTotal counts notifier dispatch attempts by result.
+	NotificationsSentTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "marauder_notifications_sent_total",
+			Help: "Notification dispatch attempts by notifier and result.",
+		},
+		[]string{"notifier", "result"},
+	)
+)
+
 // ObserveHTTP is a convenience helper for the logging middleware.
 func ObserveHTTP(method, route string, status int, dur time.Duration) {
 	s := strconv.Itoa(status)
