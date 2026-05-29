@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/artyomsv/marauder/backend/internal/domain"
+	"github.com/artyomsv/marauder/backend/internal/plugins/captchalogin"
 	"github.com/artyomsv/marauder/backend/internal/plugins/e2etest"
 	"github.com/artyomsv/marauder/backend/internal/plugins/registry"
 	"github.com/artyomsv/marauder/backend/internal/plugins/trackers/forumcommon"
@@ -39,16 +40,27 @@ func interactivePlugin(t *testing.T, h http.HandlerFunc) *plugin {
 }
 
 func TestClassifyLostfilmLogin(t *testing.T) {
-	cases := map[string]int{
-		`{"need_captcha":true,"result":"ok"}`: 1, // NeedCaptcha
-		`{"error":4,"result":"ok"}`:           2, // WrongCaptcha
-		`{"success":true,"name":"x"}`:         0, // Success
-		`{"error":1}`:                         3, // Failed
+	cases := []struct {
+		name string
+		body string
+		want captchalogin.Outcome
+	}{
+		{"need_captcha", `{"need_captcha":true,"result":"ok"}`, captchalogin.OutcomeNeedCaptcha},
+		{"wrong_captcha error 4", `{"error":4,"result":"ok"}`, captchalogin.OutcomeWrongCaptcha},
+		{"success object", `{"success":true,"name":"x"}`, captchalogin.OutcomeSuccess},
+		{"failed error 1", `{"error":1}`, captchalogin.OutcomeFailed},
+		// Regression: a multi-digit error code must NOT collide with the
+		// captcha-specific error 4 (the old substring check matched "error":4
+		// inside "error":40 and looped the user on a captcha).
+		{"failed error 40 not wrong-captcha", `{"error":40,"result":"x"}`, captchalogin.OutcomeFailed},
+		{"failed on malformed json", `not json`, captchalogin.OutcomeFailed},
 	}
-	for body, want := range cases {
-		if got := int(classifyLostfilmLogin([]byte(body))); got != want {
-			t.Errorf("classify(%s) = %d, want %d", body, got, want)
-		}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := classifyLostfilmLogin([]byte(tt.body)); got != tt.want {
+				t.Errorf("classify(%s) = %d, want %d", tt.body, got, tt.want)
+			}
+		})
 	}
 }
 

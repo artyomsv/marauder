@@ -67,6 +67,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
@@ -90,7 +91,10 @@ type plugin struct {
 	// lazily by eng() the first time an interactive login runs, because
 	// it needs p.domain / p.transport — both of which are set on the
 	// struct (production via init, tests via literals) before any login.
-	engine *captchalogin.Engine
+	// engineOnce makes that lazy init race-free; both are zero-value
+	// friendly so test plugin{} literals need no special construction.
+	engineOnce sync.Once
+	engine     *captchalogin.Engine
 
 	// redirectValidator is a test seam for the SSRF allowlist. Production
 	// code leaves it nil; e2e tests that point the plugin at a 127.0.0.1
@@ -112,13 +116,12 @@ func (p *plugin) newInteractiveSession() *forumcommon.Session {
 	return sess
 }
 
-// eng lazily builds the interactive-login engine. Not goroutine-safe on
-// first use, but interactive login is a low-frequency, user-initiated
-// action; the worst case is two engines briefly existing.
+// eng lazily builds the interactive-login engine exactly once, even
+// under concurrent first calls.
 func (p *plugin) eng() *captchalogin.Engine {
-	if p.engine == nil {
+	p.engineOnce.Do(func() {
 		p.engine = captchalogin.New(p.captchaConfig(), p.newInteractiveSession)
-	}
+	})
 	return p.engine
 }
 

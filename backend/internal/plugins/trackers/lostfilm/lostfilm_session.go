@@ -64,15 +64,27 @@ func (p *plugin) captchaConfig() captchalogin.Config {
 	}
 }
 
-// classifyLostfilmLogin maps LostFilm's ajaxik JSON to an Outcome.
+// classifyLostfilmLogin maps LostFilm's ajaxik JSON to an Outcome. It
+// parses the JSON rather than substring-matching so a multi-digit error
+// code (e.g. {"error":40}) is not mistaken for the captcha-specific
+// error 4 — that misclassification would loop the user on a captcha.
+// Success is parsed as `any` because LostFilm returns either
+// {"success":true} or a user object; non-nil means logged in.
 func classifyLostfilmLogin(body []byte) captchalogin.Outcome {
-	s := string(body)
+	var r struct {
+		Success     any  `json:"success"`
+		Error       *int `json:"error"`
+		NeedCaptcha bool `json:"need_captcha"`
+	}
+	if err := json.Unmarshal(body, &r); err != nil {
+		return captchalogin.OutcomeFailed
+	}
 	switch {
-	case strings.Contains(s, `"error":4`):
+	case r.Error != nil && *r.Error == 4:
 		return captchalogin.OutcomeWrongCaptcha
-	case strings.Contains(s, `"need_captcha":true`):
+	case r.NeedCaptcha:
 		return captchalogin.OutcomeNeedCaptcha
-	case strings.Contains(s, `"success"`):
+	case r.Success != nil:
 		return captchalogin.OutcomeSuccess
 	default:
 		return captchalogin.OutcomeFailed
@@ -113,6 +125,7 @@ func (p *plugin) Login(ctx context.Context, creds *domain.TrackerCredential) err
 	if p.transport != nil {
 		sess.Client.Transport = p.transport
 	}
+	// p.domain is a trusted constant; parse cannot fail.
 	u, _ := url.Parse("https://" + p.domain + "/")
 	jarCookies := make([]*http.Cookie, 0, len(cookies))
 	for name, val := range cookies {
