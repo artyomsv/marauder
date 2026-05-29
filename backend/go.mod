@@ -1,6 +1,6 @@
 module github.com/artyomsv/marauder/backend
 
-go 1.24.0
+go 1.25.0
 
 require (
 	github.com/caarlos0/env/v11 v11.2.2
@@ -9,13 +9,13 @@ require (
 	github.com/go-chi/cors v1.2.1
 	github.com/golang-jwt/jwt/v5 v5.2.2
 	github.com/google/uuid v1.6.0
-	github.com/jackc/pgx/v5 v5.7.1
+	github.com/jackc/pgx/v5 v5.9.0
 	github.com/pashagolub/pgxmock/v3 v3.4.0
 	github.com/pressly/goose/v3 v3.22.1
 	github.com/prometheus/client_golang v1.20.5
 	github.com/rs/zerolog v1.33.0
-	golang.org/x/crypto v0.28.0
-	golang.org/x/oauth2 v0.23.0
+	golang.org/x/crypto v0.52.0
+	golang.org/x/oauth2 v0.27.0
 )
 
 require (
@@ -35,8 +35,8 @@ require (
 	github.com/prometheus/procfs v0.15.1 // indirect
 	github.com/sethvargo/go-retry v0.3.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
-	golang.org/x/sync v0.8.0 // indirect
-	golang.org/x/sys v0.26.0 // indirect
-	golang.org/x/text v0.19.0 // indirect
+	golang.org/x/sync v0.20.0 // indirect
+	golang.org/x/sys v0.45.0 // indirect
+	golang.org/x/text v0.37.0 // indirect
 	google.golang.org/protobuf v1.34.2 // indirect
 )

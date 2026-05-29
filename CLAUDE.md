@@ -153,7 +153,7 @@ src/
 
 ```bash
 # Backend (Docker — never install Go locally)
-docker run --rm -v "E:/Projects/Stukans/Marauder/backend:/backend" -w //backend golang:1.24 sh -c "go build ./... && go vet ./... && go test -race ./..."
+docker run --rm -v "E:/Projects/Stukans/Marauder/backend:/backend" -w //backend golang:1.25 sh -c "go build ./... && go vet ./... && go test -race ./..."
 
 # Frontend
 docker run --rm -v "E:/Projects/Stukans/Marauder/frontend:/frontend" -w //frontend node:20-alpine sh -c "npm run typecheck && npm test && npm run build"
