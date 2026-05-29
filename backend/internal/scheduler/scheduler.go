@@ -69,6 +69,15 @@ type clientsRepo interface {
 // scheduler uses.
 type credentialsRepo interface {
 	GetForTracker(ctx context.Context, userID uuid.UUID, trackerName string) (*domain.TrackerCredential, error)
+	MarkSessionExpired(ctx context.Context, id, userID uuid.UUID) error
+}
+
+// sessionNotifier is the subset of *notify.Dispatcher that the scheduler
+// uses to fire a one-time session-expiry alert. Defined as an interface
+// so the scheduler package does not need to import notify (avoiding any
+// potential import cycle).
+type sessionNotifier interface {
+	Send(ctx context.Context, userID uuid.UUID, msg domain.Message) int
 }
 
 // decryptor is the subset of *crypto.MasterKey that the scheduler uses.
@@ -95,12 +104,13 @@ type RunSummary struct {
 
 // Scheduler is the running scheduler service.
 type Scheduler struct {
-	cfg     *config.Config
-	log     zerolog.Logger
-	topics  topicsRepo
-	clients clientsRepo
-	creds   credentialsRepo
-	master  decryptor
+	cfg      *config.Config
+	log      zerolog.Logger
+	topics   topicsRepo
+	clients  clientsRepo
+	creds    credentialsRepo
+	master   decryptor
+	notifier sessionNotifier // nil-safe; fires once per session expiry
 
 	// Test seams (default to registry.GetTracker / registry.GetClient).
 	lookupTracker trackerLookupFn
@@ -121,7 +131,7 @@ type Scheduler struct {
 }
 
 // New constructs a scheduler.
-func New(cfg *config.Config, log zerolog.Logger, topics *repo.Topics, clients *repo.Clients, creds *repo.TrackerCredentials, master *crypto.MasterKey) *Scheduler {
+func New(cfg *config.Config, log zerolog.Logger, topics *repo.Topics, clients *repo.Clients, creds *repo.TrackerCredentials, master *crypto.MasterKey, notifier sessionNotifier) *Scheduler {
 	return &Scheduler{
 		cfg:           cfg,
 		log:           log.With().Str("component", "scheduler").Logger(),
@@ -129,6 +139,7 @@ func New(cfg *config.Config, log zerolog.Logger, topics *repo.Topics, clients *r
 		clients:       clients,
 		creds:         creds,
 		master:        master,
+		notifier:      notifier,
 		lookupTracker: registry.GetTracker,
 		lookupClient:  registry.GetClient,
 		jobs:          make(chan *domain.Topic, cfg.SchedulerWorkers*4),
@@ -392,6 +403,18 @@ func (s *Scheduler) loadCredentials(ctx context.Context, checkCtx context.Contex
 		}
 	}
 	if loginErr := wc.Login(checkCtx, stored); loginErr != nil {
+		if errors.Is(loginErr, registry.ErrSessionExpired) && stored.SessionExpiredAt == nil {
+			if merr := s.creds.MarkSessionExpired(ctx, stored.ID, stored.UserID); merr != nil {
+				log.Warn().Err(merr).Msg("mark session expired failed")
+			}
+			if s.notifier != nil {
+				s.notifier.Send(ctx, stored.UserID, domain.Message{
+					Title: "Tracker session expired",
+					Body:  t.TrackerName + " needs re-authentication — solve the captcha in Marauder.",
+					Link:  s.cfg.PublicBaseURL + "/credentials",
+				})
+			}
+		}
 		log.Warn().Err(loginErr).Msg("tracker login failed")
 		metrics.SchedulerTopicChecksTotal.WithLabelValues(t.TrackerName, "auth_error").Inc()
 		s.recordResult(ctx, log, t.ID, "", false, s.backoff(t, true), "auth failed: "+loginErr.Error())

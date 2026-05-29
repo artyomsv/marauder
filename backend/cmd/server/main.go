@@ -22,6 +22,7 @@ import (
 	"github.com/artyomsv/marauder/backend/internal/db/repo"
 	"github.com/artyomsv/marauder/backend/internal/domain"
 	"github.com/artyomsv/marauder/backend/internal/logging"
+	"github.com/artyomsv/marauder/backend/internal/notify"
 	"github.com/artyomsv/marauder/backend/internal/scheduler"
 	"github.com/artyomsv/marauder/backend/internal/version"
 
@@ -136,7 +137,8 @@ func run() error {
 	}
 
 	// Scheduler
-	sch := scheduler.New(cfg, logger, topicsRepo, clientsRepo, credsRepo, master)
+	disp := notify.New(notifiersRepo, master, logger)
+	sch := scheduler.New(cfg, logger, topicsRepo, clientsRepo, credsRepo, master, disp)
 	go func() {
 		if err := sch.Start(rootCtx); err != nil {
 			logger.Error().Err(err).Msg("scheduler exited with error")
