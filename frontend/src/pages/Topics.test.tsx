@@ -5,7 +5,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { type ReactNode } from "react";
 
 import { AddTopicCard } from "./Topics";
-import { ApiError } from "@/lib/api";
+import { EditTopicCard } from "@/components/topics/EditTopicCard";
+import { ApiError, type Topic } from "@/lib/api";
 
 // AddTopicCard talks to the backend exclusively through the `api` object,
 // so mocking `api.get` is enough to exercise the season/episode catalog
@@ -19,6 +20,7 @@ vi.mock("@/lib/api", async () => {
       post: vi.fn(),
       put: vi.fn(),
       del: vi.fn(),
+      updateTopic: vi.fn(),
     },
   };
 });
@@ -28,6 +30,7 @@ import { api } from "@/lib/api";
 const mockApi = api as unknown as {
   get: ReturnType<typeof vi.fn>;
   post: ReturnType<typeof vi.fn>;
+  updateTopic: ReturnType<typeof vi.fn>;
 };
 
 const LOSTFILM_URL = "https://www.lostfilm.tv/series/Some_Show/seasons";
@@ -60,16 +63,51 @@ function routeGet(seasonsImpl: () => unknown) {
   });
 }
 
-function renderCard() {
+function wrapperWithClient() {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
-  const wrapper = ({ children }: { children: ReactNode }) => (
+  return ({ children }: { children: ReactNode }) => (
     <QueryClientProvider client={client}>{children}</QueryClientProvider>
   );
+}
+
+function renderCard() {
   return render(<AddTopicCard onClose={() => {}} onCreated={() => {}} />, {
-    wrapper,
+    wrapper: wrapperWithClient(),
   });
+}
+
+// A listed topic as the backend serializes domain.Topic: PascalCase
+// top-level fields, lowercase keys inside the Extra blob.
+const EXISTING_TOPIC: Topic = {
+  ID: "t-1",
+  UserID: "u-1",
+  TrackerName: "lostfilm",
+  URL: LOSTFILM_URL,
+  DisplayName: "Some Show",
+  ClientID: "c2",
+  DownloadDir: "/downloads/shows",
+  Category: "series",
+  Extra: { quality: "1080p", start_season: 2, start_episode: 3 },
+  LastHash: "",
+  LastCheckedAt: null,
+  LastUpdatedAt: null,
+  NextCheckAt: "",
+  CheckIntervalSec: 900,
+  ConsecutiveErrors: 0,
+  Status: "active",
+  LastError: "",
+  CreatedAt: "",
+  UpdatedAt: "",
+};
+
+function renderEdit(topic: Topic = EXISTING_TOPIC) {
+  const onSaved = vi.fn();
+  render(<EditTopicCard topic={topic} onClose={() => {}} onSaved={onSaved} />, {
+    wrapper: wrapperWithClient(),
+  });
+  return { onSaved };
 }
 
 describe("AddTopicCard — season/episode catalog dropdowns", () => {
@@ -180,5 +218,109 @@ describe("AddTopicCard — client picker + download folder + category", () => {
         category: "tv",
       }),
     );
+  });
+});
+
+// Match advertising a quality list so the edit form renders the quality
+// <select> and we can assert its prefilled value.
+const qualityCatalogMatch = {
+  ...catalogMatch,
+  qualities: ["720p", "1080p", "2160p"],
+};
+
+function routeGetWithQuality(seasonsImpl: () => unknown) {
+  mockApi.get.mockImplementation((path: string) => {
+    if (path.startsWith("/trackers/match")) return Promise.resolve(qualityCatalogMatch);
+    if (path.startsWith("/trackers/seasons")) return seasonsImpl();
+    if (path.startsWith("/clients")) return Promise.resolve(clientsList);
+    return Promise.resolve({ credentials: [] });
+  });
+}
+
+describe("EditTopicCard — prefill + update", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("prefills the form from the topic's current values", async () => {
+    routeGetWithQuality(() =>
+      Promise.resolve({ seasons: [{ number: 1, episodes: [1, 2] }, { number: 2, episodes: [1, 2, 3] }] }),
+    );
+
+    renderEdit();
+
+    // URL is read-only.
+    const urlInput = screen.getByLabelText(/url or magnet link/i) as HTMLInputElement;
+    expect(urlInput.value).toBe(LOSTFILM_URL);
+    expect(urlInput).toBeDisabled();
+
+    expect((screen.getByLabelText(/display name/i) as HTMLInputElement).value).toBe(
+      "Some Show",
+    );
+
+    // Quality select prefilled once the match (with qualities) resolves.
+    const qualitySelect = (await screen.findByLabelText(/^quality$/i)) as HTMLSelectElement;
+    expect(qualitySelect.value).toBe("1080p");
+
+    expect((screen.getByLabelText(/download folder/i) as HTMLInputElement).value).toBe(
+      "/downloads/shows",
+    );
+    expect(
+      (screen.getByLabelText(/^category \(optional\)$/i) as HTMLInputElement).value,
+    ).toBe("series");
+
+    // Client select prefilled to the topic's client.
+    const clientSelect = (await screen.findByLabelText(
+      /^client \(optional\)$/i,
+    )) as HTMLSelectElement;
+    expect(clientSelect.value).toBe("c2");
+  });
+
+  it("renders the season-catalog dropdowns prefilled from the topic", async () => {
+    routeGetWithQuality(() =>
+      Promise.resolve({ seasons: [{ number: 1, episodes: [1, 2] }, { number: 2, episodes: [1, 2, 3] }] }),
+    );
+
+    renderEdit();
+
+    // Wait for the catalog-specific option to appear — the "Start from
+    // season" label is shared with the free-text fallback, so we key off
+    // the dropdown's option to know the catalog (SELECT) rendered.
+    await screen.findByRole("option", { name: "Season 2" });
+
+    // Catalog dropdown renders (SELECT, not the free-text fallback) and is
+    // prefilled to the topic's start_season / start_episode.
+    const seasonSelect = screen.getByLabelText(/start from season/i) as HTMLSelectElement;
+    expect(seasonSelect.tagName).toBe("SELECT");
+    expect(seasonSelect.value).toBe("2");
+
+    const episodeSelect = screen.getByLabelText(/start from episode/i) as HTMLSelectElement;
+    expect(episodeSelect.value).toBe("3");
+  });
+
+  it("calls updateTopic with the topic id and edited fields", async () => {
+    const user = userEvent.setup();
+    routeGetWithQuality(() => Promise.resolve({ seasons: [] }));
+    mockApi.updateTopic.mockResolvedValue({});
+
+    const { onSaved } = renderEdit();
+
+    const displayInput = await screen.findByLabelText(/display name/i);
+    await user.clear(displayInput);
+    await user.type(displayInput, "Renamed Show");
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    expect(mockApi.updateTopic).toHaveBeenCalledWith(
+      "t-1",
+      expect.objectContaining({
+        display_name: "Renamed Show",
+        client_id: "c2",
+        download_dir: "/downloads/shows",
+        category: "series",
+        quality: "1080p",
+      }),
+    );
+    expect(onSaved).toHaveBeenCalled();
   });
 });

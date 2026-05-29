@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { motion, AnimatePresence } from "framer-motion";
 import {
@@ -8,24 +8,28 @@ import {
   AlertTriangle,
   Pause,
   Play,
+  Pencil,
   Rows3,
   Rows4,
   Check,
   X,
 } from "lucide-react";
 
-import { api, type Topic, type CredentialView, type SeasonInfo } from "@/lib/api";
+import { api, type Topic } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { cn, formatRelative } from "@/lib/utils";
 import { usePrefs } from "@/lib/prefs";
 import { DeleteConfirm } from "@/components/shared/DeleteConfirm";
 import { QK } from "@/lib/queryKeys";
-import { useDebouncedValue } from "@/lib/hooks/useDebouncedValue";
 import { useArmedConfirm } from "@/lib/hooks/useArmedConfirm";
+import { AddTopicCard } from "@/components/topics/AddTopicCard";
+import { EditTopicCard } from "@/components/topics/EditTopicCard";
+
+// Re-exported so existing imports (and tests) that reference AddTopicCard
+// from this page module keep resolving after the extraction.
+export { AddTopicCard } from "@/components/topics/AddTopicCard";
 
 type TopicsList = { topics: Topic[] | null };
 
@@ -38,6 +42,7 @@ export function TopicsPage() {
   const density = usePrefs((s) => s.density);
   const setDensity = usePrefs((s) => s.setDensity);
   const [showAdd, setShowAdd] = useState(false);
+  const [editing, setEditing] = useState<Topic | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
 
   const del = useMutation({
@@ -105,6 +110,17 @@ export function TopicsPage() {
             onClose={() => setShowAdd(false)}
             onCreated={() => {
               setShowAdd(false);
+              qc.invalidateQueries({ queryKey: QK.topics });
+            }}
+          />
+        )}
+        {editing && (
+          <EditTopicCard
+            key={editing.ID}
+            topic={editing}
+            onClose={() => setEditing(null)}
+            onSaved={() => {
+              setEditing(null);
               qc.invalidateQueries({ queryKey: QK.topics });
             }}
           />
@@ -196,7 +212,15 @@ export function TopicsPage() {
                       </div>
                     </div>
                   )}
-                  <div className="opacity-0 group-hover:opacity-100">
+                  <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100">
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      aria-label="Edit topic"
+                      onClick={() => setEditing(t)}
+                    >
+                      <Pencil className="size-4" />
+                    </Button>
                     <DeleteConfirm
                       onConfirm={() => del.mutate(t.ID)}
                       isPending={del.isPending && del.variables === t.ID}
@@ -339,415 +363,6 @@ function EmptyState({ onAdd }: { onAdd: () => void }) {
         <Plus className="size-4" />
         Add your first topic
       </Button>
-    </div>
-  );
-}
-
-interface TrackerMatch {
-  tracker_name: string;
-  display_name: string;
-  qualities?: string[];
-  default_quality?: string;
-  supports_episode_filter: boolean;
-  supports_season_catalog: boolean;
-  requires_credentials: boolean;
-  uses_cloudflare: boolean;
-}
-
-interface AddTopicCardProps {
-  onClose: () => void;
-  onCreated: () => void;
-}
-
-// Minimal shape of a torrent client for the picker. The full ClientView
-// lives in Clients.tsx; AddTopicCard only needs id + display_name.
-interface ClientOption {
-  id: string;
-  display_name: string;
-}
-
-// The three optional delivery overrides for a new topic. Grouped into one
-// object so AddTopicCard stays under the 8-useState component limit.
-interface DeliveryState {
-  clientId: string;
-  downloadDir: string;
-  category: string;
-}
-
-// Native <select> styling, shared with the Quality select above so the
-// catalog dropdowns match the rest of the form chrome.
-const SELECT_CLASS =
-  "flex h-10 w-full rounded-md border border-input bg-background/50 px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2";
-
-export function AddTopicCard({ onClose, onCreated }: AddTopicCardProps) {
-  const [url, setUrl] = useState("");
-  const [displayName, setDisplayName] = useState("");
-  const [quality, setQuality] = useState<string>("");
-  const [startSeason, setStartSeason] = useState<string>("");
-  const [startEpisode, setStartEpisode] = useState<string>("");
-  const [delivery, setDelivery] = useState<DeliveryState>({
-    clientId: "",
-    downloadDir: "",
-    category: "",
-  });
-  const [error, setError] = useState<string | null>(null);
-
-  // Clients available to assign as the topic's delivery target. Mirrors the
-  // query in Clients.tsx so the cache is shared via QK.clients.
-  const clientsQuery = useQuery({
-    queryKey: QK.clients,
-    queryFn: () => api.get<{ clients: ClientOption[] | null }>("/clients"),
-    staleTime: 60_000,
-  });
-  const clients = clientsQuery.data?.clients ?? [];
-
-  // Debounce the URL → /trackers/match lookup so we don't hammer the
-  // backend on every keystroke. 350 ms is the conventional sweet spot
-  // between responsive (under 500 ms) and not-spammy.
-  const debouncedUrl = useDebouncedValue(url, 350);
-  const trackerMatchQuery = useQuery({
-    queryKey: QK.trackerMatch(debouncedUrl),
-    queryFn: () =>
-      api.get<TrackerMatch>(`/trackers/match?url=${encodeURIComponent(debouncedUrl)}`),
-    enabled: debouncedUrl.length >= 8,
-    staleTime: 60_000,
-    retry: false,
-  });
-  const match = trackerMatchQuery.data ?? null;
-
-  // When the matched tracker exposes a released-season catalog, fetch it so
-  // the season/episode picker can be constrained to released values. Gated
-  // on the match flag so non-catalog trackers never hit the endpoint.
-  const seasonsQuery = useQuery({
-    queryKey: QK.trackerSeasons(debouncedUrl),
-    queryFn: () =>
-      api.get<{ seasons: SeasonInfo[] }>(
-        `/trackers/seasons?url=${encodeURIComponent(debouncedUrl)}`,
-      ),
-    enabled: debouncedUrl.length >= 8 && !!match?.supports_season_catalog,
-    staleTime: 60_000,
-    retry: false,
-  });
-  const seasons = seasonsQuery.data?.seasons ?? [];
-  const catalogReady =
-    !!match?.supports_season_catalog && seasons.length > 0 && !seasonsQuery.isError;
-  const selectedSeasonEpisodes =
-    seasons.find((s) => String(s.number) === startSeason)?.episodes ?? [];
-
-  // The user may already have an account for this tracker — don't nag them
-  // to add one if they do. Gate the credentials warning on the absence of a
-  // matching credential rather than on requires_credentials alone.
-  const credentialsQuery = useQuery({
-    queryKey: QK.credentials,
-    queryFn: () => api.get<{ credentials: CredentialView[] | null }>("/credentials"),
-    staleTime: 60_000,
-  });
-  const hasCredential = (credentialsQuery.data?.credentials ?? []).some(
-    (c) => c.tracker_name === match?.tracker_name,
-  );
-  const matchError = trackerMatchQuery.isError
-    ? "No tracker plugin matches this URL."
-    : null;
-
-  // Auto-populate `quality` once a default arrives from a fresh match,
-  // but never overwrite a value the user already picked.
-  useEffect(() => {
-    if (match?.default_quality && !quality) {
-      setQuality(match.default_quality);
-    }
-  }, [match, quality]);
-
-  // Reset the season/episode selection whenever the series URL changes.
-  // Otherwise a stale value (e.g. Season 2 from a previous series) could
-  // linger as a `<select>` value with no matching `<option>` — and submit
-  // a season the newly-pasted series doesn't actually have.
-  useEffect(() => {
-    setStartSeason("");
-    setStartEpisode("");
-  }, [debouncedUrl]);
-
-  const create = useMutation({
-    mutationFn: () =>
-      api.post<Topic>("/topics", {
-        url,
-        display_name: displayName || undefined,
-        quality: quality || undefined,
-        start_season: startSeason ? parseInt(startSeason, 10) : undefined,
-        start_episode: startEpisode ? parseInt(startEpisode, 10) : undefined,
-        client_id: delivery.clientId || undefined,
-        download_dir: delivery.downloadDir || undefined,
-        category: delivery.category || undefined,
-      }),
-    onSuccess: () => onCreated(),
-    onError: (err) => setError(err instanceof Error ? err.message : "Failed"),
-  });
-
-  return (
-    <motion.div
-      initial={{ opacity: 0, y: -8, height: 0 }}
-      animate={{ opacity: 1, y: 0, height: "auto" }}
-      exit={{ opacity: 0, y: -8, height: 0 }}
-      transition={{ duration: 0.2 }}
-    >
-      <Card className="overflow-hidden">
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            setError(null);
-            create.mutate();
-          }}
-          className="space-y-4 p-6"
-        >
-          <h3 className="text-base font-semibold">Add a new topic</h3>
-          <div className="space-y-1.5">
-            <Label htmlFor="url">URL or magnet link</Label>
-            <Input
-              id="url"
-              required
-              value={url}
-              onChange={(e) => setUrl(e.target.value)}
-              placeholder="magnet:?xt=urn:btih:... or https://tracker.example.com/.../file.torrent"
-            />
-            {match && (
-              <p className="text-xs text-success">
-                ✓ Detected: <span className="font-medium">{match.display_name}</span>
-              </p>
-            )}
-            {matchError && (
-              <p className="text-xs text-muted-foreground">{matchError}</p>
-            )}
-          </div>
-
-          <div className="space-y-1.5">
-            <Label htmlFor="display">Display name (optional)</Label>
-            <Input
-              id="display"
-              value={displayName}
-              onChange={(e) => setDisplayName(e.target.value)}
-              placeholder="Leave blank to auto-detect"
-            />
-          </div>
-
-          {match?.qualities && match.qualities.length > 0 && (
-            <div className="space-y-1.5">
-              <Label htmlFor="quality">Quality</Label>
-              <select
-                id="quality"
-                value={quality}
-                onChange={(e) => setQuality(e.target.value)}
-                className={SELECT_CLASS}
-              >
-                {match.qualities.map((q) => (
-                  <option key={q} value={q}>
-                    {q}
-                  </option>
-                ))}
-              </select>
-              <p className="text-xs text-muted-foreground">
-                Marauder will pick this quality variant when the tracker offers
-                more than one.
-              </p>
-            </div>
-          )}
-
-          {match?.supports_episode_filter && (
-            <SeasonEpisodePicker
-              catalogReady={catalogReady}
-              seasons={seasons}
-              selectedSeasonEpisodes={selectedSeasonEpisodes}
-              startSeason={startSeason}
-              startEpisode={startEpisode}
-              onSeasonChange={(v) => {
-                setStartSeason(v);
-                setStartEpisode("");
-              }}
-              onEpisodeChange={setStartEpisode}
-            />
-          )}
-
-          {match?.requires_credentials && !hasCredential && (
-            <div className="rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-warning">
-              This tracker requires login credentials.{" "}
-              <a href="/accounts" className="font-semibold underline-offset-4 hover:underline">
-                Add a {match.display_name} account →
-              </a>
-            </div>
-          )}
-
-          {match?.requires_credentials && hasCredential && (
-            <div className="rounded-md border border-success/40 bg-success/10 px-3 py-2 text-xs text-success">
-              ✓ Using your {match.display_name} account.
-            </div>
-          )}
-
-          <div className="space-y-1.5">
-            <Label htmlFor="client">Client (optional)</Label>
-            <select
-              id="client"
-              value={delivery.clientId}
-              onChange={(e) =>
-                setDelivery((d) => ({ ...d, clientId: e.target.value }))
-              }
-              className={SELECT_CLASS}
-            >
-              <option value="">Use default client</option>
-              {clients.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.display_name}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div className="grid gap-4 sm:grid-cols-2">
-            <div className="space-y-1.5">
-              <Label htmlFor="download-dir">Download folder (optional)</Label>
-              <Input
-                id="download-dir"
-                value={delivery.downloadDir}
-                onChange={(e) =>
-                  setDelivery((d) => ({ ...d, downloadDir: e.target.value }))
-                }
-                placeholder="/downloads/tv"
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="category">Category (optional)</Label>
-              <Input
-                id="category"
-                value={delivery.category}
-                onChange={(e) =>
-                  setDelivery((d) => ({ ...d, category: e.target.value }))
-                }
-                placeholder="tv"
-              />
-              <p className="text-xs text-muted-foreground">
-                Applies to qBittorrent.
-              </p>
-            </div>
-          </div>
-
-          {error && (
-            <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-              {error}
-            </div>
-          )}
-          <div className="flex justify-end gap-2">
-            <Button type="button" variant="outline" onClick={onClose}>
-              Cancel
-            </Button>
-            <Button type="submit" disabled={create.isPending}>
-              {create.isPending && <Loader2 className="size-4 animate-spin" />}
-              Add topic
-            </Button>
-          </div>
-        </form>
-      </Card>
-    </motion.div>
-  );
-}
-
-interface SeasonEpisodePickerProps {
-  catalogReady: boolean;
-  seasons: SeasonInfo[];
-  selectedSeasonEpisodes: number[];
-  startSeason: string;
-  startEpisode: string;
-  onSeasonChange: (value: string) => void;
-  onEpisodeChange: (value: string) => void;
-}
-
-// Renders the season/episode constraint. When the tracker's released
-// catalog is available we show dependent dropdowns (season → that
-// season's episodes); otherwise we fall back to the original free-text
-// number inputs so non-catalog trackers keep working unchanged.
-function SeasonEpisodePicker({
-  catalogReady,
-  seasons,
-  selectedSeasonEpisodes,
-  startSeason,
-  startEpisode,
-  onSeasonChange,
-  onEpisodeChange,
-}: SeasonEpisodePickerProps) {
-  if (!catalogReady) {
-    return (
-      <div className="grid gap-4 sm:grid-cols-2">
-        <div className="space-y-1.5">
-          <Label htmlFor="start-season">Start from season (optional)</Label>
-          <Input
-            id="start-season"
-            type="number"
-            min={1}
-            value={startSeason}
-            onChange={(e) => onSeasonChange(e.target.value)}
-            placeholder="e.g. 2"
-          />
-        </div>
-        <div className="space-y-1.5">
-          <Label htmlFor="start-episode">Start from episode (optional)</Label>
-          <Input
-            id="start-episode"
-            type="number"
-            min={1}
-            value={startEpisode}
-            onChange={(e) => onEpisodeChange(e.target.value)}
-            placeholder="e.g. 5"
-          />
-        </div>
-        <p className="text-xs text-muted-foreground sm:col-span-2">
-          Episodes before this point will be skipped — only newer episodes
-          are downloaded.
-        </p>
-      </div>
-    );
-  }
-
-  const firstSeason = seasons[0].number;
-  const lastSeason = seasons[seasons.length - 1].number;
-
-  return (
-    <div className="grid gap-4 sm:grid-cols-2">
-      <p className="text-xs text-muted-foreground sm:col-span-2">
-        {seasons.length} seasons available · S{firstSeason}–S{lastSeason}
-      </p>
-      <div className="space-y-1.5">
-        <Label htmlFor="start-season">Start from season (optional)</Label>
-        <select
-          id="start-season"
-          value={startSeason}
-          onChange={(e) => onSeasonChange(e.target.value)}
-          className={SELECT_CLASS}
-        >
-          <option value="">From the start</option>
-          {seasons.map((s) => (
-            <option key={s.number} value={String(s.number)}>
-              Season {s.number}
-            </option>
-          ))}
-        </select>
-      </div>
-      <div className="space-y-1.5">
-        <Label htmlFor="start-episode">Start from episode (optional)</Label>
-        <select
-          id="start-episode"
-          value={startEpisode}
-          disabled={!startSeason}
-          onChange={(e) => onEpisodeChange(e.target.value)}
-          className={cn(SELECT_CLASS, "disabled:cursor-not-allowed disabled:opacity-50")}
-        >
-          <option value="">From the start</option>
-          {selectedSeasonEpisodes.map((ep) => (
-            <option key={ep} value={String(ep)}>
-              Episode {ep}
-            </option>
-          ))}
-        </select>
-      </div>
-      <p className="text-xs text-muted-foreground sm:col-span-2">
-        Episodes before this point will be skipped — only newer episodes are
-        downloaded.
-      </p>
     </div>
   );
 }

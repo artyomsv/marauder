@@ -153,7 +153,24 @@ export const api = {
     request<InteractiveBeginResult>("POST", `/credentials/${id}/reauth/begin`, {}),
   reauthComplete: (id: string, body: { challenge_id: string; answer: string }) =>
     request<{ credential: CredentialView }>("POST", `/credentials/${id}/reauth/complete`, body),
+
+  // Update an existing topic. URL/tracker are immutable; the backend merges
+  // the capability fields into the topic's Extra blob, preserving
+  // downloaded_episodes. 404 unknown/foreign, 422 bad quality.
+  updateTopic: (id: string, body: UpdateTopicBody) =>
+    request<Topic>("PUT", `/topics/${id}`, body),
 };
+
+// Body of PUT /topics/{id}. Mirrors the backend updateTopicReq.
+export interface UpdateTopicBody {
+  display_name: string;
+  client_id?: string | null;
+  download_dir?: string;
+  category?: string;
+  quality?: string;
+  start_season?: number;
+  start_episode?: number;
+}
 
 // --- Typed models mirroring backend/internal/domain ---------------------
 
@@ -207,6 +224,17 @@ export type TokenPair = {
   token_type: string;
 };
 
+// The capability fields a tracker plugin reads from a topic's Extra blob.
+// Stored as lowercase keys in the JSONB map (see backend topics handler),
+// so the JSON shape here is snake_case even though the surrounding Topic
+// fields are PascalCase (domain.Topic has no JSON tags).
+export interface TopicExtra {
+  quality?: string;
+  start_season?: number;
+  start_episode?: number;
+  [key: string]: unknown;
+}
+
 export type Topic = {
   ID: string;
   UserID: string;
@@ -215,6 +243,8 @@ export type Topic = {
   DisplayName: string;
   ClientID: string | null;
   DownloadDir: string;
+  Category: string;
+  Extra: TopicExtra | null;
   LastHash: string;
   LastCheckedAt: string | null;
   LastUpdatedAt: string | null;
