@@ -41,12 +41,21 @@ const catalogMatch = {
   uses_cloudflare: false,
 };
 
-// Routes /trackers/match and /trackers/seasons; everything else (e.g. the
-// /credentials list the card also reads) resolves empty.
+// Two clients the picker should list, plus the "Use default client" option.
+const clientsList = {
+  clients: [
+    { id: "c1", display_name: "qBittorrent" },
+    { id: "c2", display_name: "Transmission" },
+  ],
+};
+
+// Routes /trackers/match, /trackers/seasons and /clients; everything else
+// (e.g. the /credentials list the card also reads) resolves empty.
 function routeGet(seasonsImpl: () => unknown) {
   mockApi.get.mockImplementation((path: string) => {
     if (path.startsWith("/trackers/match")) return Promise.resolve(catalogMatch);
     if (path.startsWith("/trackers/seasons")) return seasonsImpl();
+    if (path.startsWith("/clients")) return Promise.resolve(clientsList);
     return Promise.resolve({ credentials: [] });
   });
 }
@@ -123,5 +132,53 @@ describe("AddTopicCard — season/episode catalog dropdowns", () => {
     const episodeInput = screen.getByLabelText(/start from episode/i);
     expect(episodeInput.tagName).toBe("INPUT");
     expect(episodeInput).toHaveAttribute("type", "number");
+  });
+});
+
+describe("AddTopicCard — client picker + download folder + category", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("lists the user's clients plus a default option", async () => {
+    const user = userEvent.setup();
+    routeGet(() => Promise.resolve({ seasons: [] }));
+
+    renderCard();
+    await user.type(screen.getByLabelText(/url or magnet link/i), LOSTFILM_URL);
+
+    const clientSelect = (await screen.findByLabelText(
+      /^client \(optional\)$/i,
+    )) as HTMLSelectElement;
+    const options = within(clientSelect)
+      .getAllByRole("option")
+      .map((o) => o.textContent);
+    expect(options).toEqual(["Use default client", "qBittorrent", "Transmission"]);
+  });
+
+  it("sends client_id, download_dir and category in the create payload", async () => {
+    const user = userEvent.setup();
+    routeGet(() => Promise.resolve({ seasons: [] }));
+    mockApi.post.mockResolvedValue({});
+
+    renderCard();
+    await user.type(screen.getByLabelText(/url or magnet link/i), LOSTFILM_URL);
+
+    const clientSelect = await screen.findByLabelText(/^client \(optional\)$/i);
+    await user.selectOptions(clientSelect, "c1");
+    await user.type(screen.getByLabelText(/download folder/i), "/downloads/tv");
+    await user.type(screen.getByLabelText(/^category \(optional\)$/i), "tv");
+
+    await user.click(screen.getByRole("button", { name: /add topic/i }));
+
+    expect(mockApi.post).toHaveBeenCalledWith(
+      "/topics",
+      expect.objectContaining({
+        url: LOSTFILM_URL,
+        client_id: "c1",
+        download_dir: "/downloads/tv",
+        category: "tv",
+      }),
+    );
   });
 });

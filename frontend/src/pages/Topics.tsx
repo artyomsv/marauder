@@ -359,6 +359,21 @@ interface AddTopicCardProps {
   onCreated: () => void;
 }
 
+// Minimal shape of a torrent client for the picker. The full ClientView
+// lives in Clients.tsx; AddTopicCard only needs id + display_name.
+interface ClientOption {
+  id: string;
+  display_name: string;
+}
+
+// The three optional delivery overrides for a new topic. Grouped into one
+// object so AddTopicCard stays under the 8-useState component limit.
+interface DeliveryState {
+  clientId: string;
+  downloadDir: string;
+  category: string;
+}
+
 // Native <select> styling, shared with the Quality select above so the
 // catalog dropdowns match the rest of the form chrome.
 const SELECT_CLASS =
@@ -370,7 +385,21 @@ export function AddTopicCard({ onClose, onCreated }: AddTopicCardProps) {
   const [quality, setQuality] = useState<string>("");
   const [startSeason, setStartSeason] = useState<string>("");
   const [startEpisode, setStartEpisode] = useState<string>("");
+  const [delivery, setDelivery] = useState<DeliveryState>({
+    clientId: "",
+    downloadDir: "",
+    category: "",
+  });
   const [error, setError] = useState<string | null>(null);
+
+  // Clients available to assign as the topic's delivery target. Mirrors the
+  // query in Clients.tsx so the cache is shared via QK.clients.
+  const clientsQuery = useQuery({
+    queryKey: QK.clients,
+    queryFn: () => api.get<{ clients: ClientOption[] | null }>("/clients"),
+    staleTime: 60_000,
+  });
+  const clients = clientsQuery.data?.clients ?? [];
 
   // Debounce the URL → /trackers/match lookup so we don't hammer the
   // backend on every keystroke. 350 ms is the conventional sweet spot
@@ -445,6 +474,9 @@ export function AddTopicCard({ onClose, onCreated }: AddTopicCardProps) {
         quality: quality || undefined,
         start_season: startSeason ? parseInt(startSeason, 10) : undefined,
         start_episode: startEpisode ? parseInt(startEpisode, 10) : undefined,
+        client_id: delivery.clientId || undefined,
+        download_dir: delivery.downloadDir || undefined,
+        category: delivery.category || undefined,
       }),
     onSuccess: () => onCreated(),
     onError: (err) => setError(err instanceof Error ? err.message : "Failed"),
@@ -547,6 +579,53 @@ export function AddTopicCard({ onClose, onCreated }: AddTopicCardProps) {
               ✓ Using your {match.display_name} account.
             </div>
           )}
+
+          <div className="space-y-1.5">
+            <Label htmlFor="client">Client (optional)</Label>
+            <select
+              id="client"
+              value={delivery.clientId}
+              onChange={(e) =>
+                setDelivery((d) => ({ ...d, clientId: e.target.value }))
+              }
+              className={SELECT_CLASS}
+            >
+              <option value="">Use default client</option>
+              {clients.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.display_name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="download-dir">Download folder (optional)</Label>
+              <Input
+                id="download-dir"
+                value={delivery.downloadDir}
+                onChange={(e) =>
+                  setDelivery((d) => ({ ...d, downloadDir: e.target.value }))
+                }
+                placeholder="/downloads/tv"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="category">Category (optional)</Label>
+              <Input
+                id="category"
+                value={delivery.category}
+                onChange={(e) =>
+                  setDelivery((d) => ({ ...d, category: e.target.value }))
+                }
+                placeholder="tv"
+              />
+              <p className="text-xs text-muted-foreground">
+                Applies to qBittorrent.
+              </p>
+            </div>
+          </div>
 
           {error && (
             <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
