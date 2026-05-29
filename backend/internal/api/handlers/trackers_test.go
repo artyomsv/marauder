@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -49,9 +50,30 @@ func (f *fakeNoSeasonTracker) Download(context.Context, *domain.Topic, *domain.C
 	return nil, nil
 }
 
+// fakeErrSeasonTracker implements registry.Tracker + WithSeasonCatalog but
+// its SeasonCatalog always fails, exercising the 502 path.
+type fakeErrSeasonTracker struct{ name string }
+
+func (f *fakeErrSeasonTracker) Name() string        { return f.name }
+func (f *fakeErrSeasonTracker) DisplayName() string { return "Fake Err Season Tracker" }
+func (f *fakeErrSeasonTracker) CanParse(rawURL string) bool {
+	return rawURL == "https://fake-err-season-tracker.test/series/1"
+}
+func (f *fakeErrSeasonTracker) Parse(context.Context, string) (*domain.Topic, error) { return nil, nil }
+func (f *fakeErrSeasonTracker) Check(context.Context, *domain.Topic, *domain.TrackerCredential) (*domain.Check, error) {
+	return nil, nil
+}
+func (f *fakeErrSeasonTracker) Download(context.Context, *domain.Topic, *domain.Check, *domain.TrackerCredential) (*domain.Payload, error) {
+	return nil, nil
+}
+func (f *fakeErrSeasonTracker) SeasonCatalog(_ context.Context, _ string) ([]registry.Season, error) {
+	return nil, errors.New("boom")
+}
+
 func init() {
 	registry.RegisterTracker(&fakeSeasonTracker{name: "fake-season-tracker-test"})
 	registry.RegisterTracker(&fakeNoSeasonTracker{name: "fake-no-season-tracker-test"})
+	registry.RegisterTracker(&fakeErrSeasonTracker{name: "fake-err-season-tracker-test"})
 }
 
 func TestTrackers_Seasons_OK(t *testing.T) {
@@ -114,5 +136,17 @@ func TestTrackers_Seasons_MissingURL_400(t *testing.T) {
 
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("want 400, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestTrackers_Seasons_UpstreamError_502(t *testing.T) {
+	h := &Trackers{BaseURL: "http://test"}
+	req := httptest.NewRequest(http.MethodGet, "/trackers/seasons?url=https://fake-err-season-tracker.test/series/1", nil)
+	w := httptest.NewRecorder()
+
+	h.Seasons(w, req)
+
+	if w.Code != http.StatusBadGateway {
+		t.Fatalf("want 502, got %d: %s", w.Code, w.Body.String())
 	}
 }

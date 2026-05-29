@@ -1,8 +1,10 @@
 package handlers
 
 import (
+	"context"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/artyomsv/marauder/backend/internal/plugins/registry"
 	"github.com/artyomsv/marauder/backend/internal/problem"
@@ -92,7 +94,11 @@ func (h *Trackers) Seasons(w http.ResponseWriter, r *http.Request) {
 		problem.Write(w, r, h.BaseURL, problem.ErrUnprocessable("tracker '"+t.Name()+"' has no season catalog"))
 		return
 	}
-	seasons, err := sc.SeasonCatalog(r.Context(), rawURL)
+	// Bound the upstream catalog fetch (the session client also caps at
+	// ~30s; this makes it cancellable on client disconnect).
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	seasons, err := sc.SeasonCatalog(ctx, rawURL)
 	if err != nil {
 		problem.Write(w, r, h.BaseURL, problem.ErrBadGateway("season catalog unavailable: "+err.Error()))
 		return
