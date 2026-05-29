@@ -173,6 +173,48 @@ access during development. Container-internal ports (right column) keep
 their conventional values — only the host-side mappings (left column)
 must stay in the safe 34xxx range.
 
+### Local dev access (dev overlay) — default hosts & credentials
+
+**Open the app at the gateway, not the frontend container.** The
+frontend container (`34001`) serves only the static SPA and does **not**
+proxy `/api` — hitting it directly makes login fail with
+`Unexpected token '<' ... is not valid JSON` (the API call falls through
+to `index.html`). Use the gateway, which proxies both `/` and `/api`:
+
+| What | URL | Credentials |
+|---|---|---|
+| Marauder app (login here) | http://localhost:34080 | `admin` / `pleasechangeme` |
+| Frontend container (SPA only, no API) | http://localhost:34001 | — (don't use for login) |
+| qBittorrent WebUI | http://localhost:34611 | `admin` / temp password — see below |
+| Transmission WebUI | http://localhost:34091 | no auth (`rpc-authentication-required: false`) |
+
+App login comes from `MARAUDER_ADMIN_INITIAL_USERNAME` /
+`MARAUDER_ADMIN_INITIAL_PASSWORD` in `deploy/.env`, seeded **only when
+the users table is empty** (`ensureAdmin`, `cmd/server/main.go`).
+Changing `.env` after the first boot has no effect — rotate via the UI.
+
+qBittorrent has no fixed password: the linuxserver image mints a random
+temporary one on every start until you set a permanent one in the WebUI.
+Retrieve the current value with:
+
+```bash
+docker logs deploy-qbittorrent-1 2>&1 | grep "temporary password"
+```
+
+**Torrent-client config inside Marauder must use Docker service DNS, not
+the host ports.** The `localhost:34xxx` mappings only work from your
+browser on the host; the backend container reaches the clients on the
+internal network by service name + container-internal port:
+
+| Client | RPC/Host URL to enter in Marauder |
+|---|---|
+| qBittorrent | `http://qbittorrent:6611` |
+| Transmission | `http://transmission:9091/transmission/rpc` |
+
+Entering `http://localhost:34611` / `:34091` here fails with a
+connection-refused error because `localhost` inside the backend
+container is the backend itself.
+
 ## Key environment variables
 
 - `MARAUDER_MASTER_KEY` — AES-256 key for credential/config encryption (REQUIRED)
