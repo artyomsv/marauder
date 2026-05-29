@@ -90,7 +90,11 @@ jobs:
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v7
         with:
-          version: latest
+          # Pin the linter version for reproducible CI. `latest` drifts the
+          # rule set (e.g. gosec G124/G710 added in 2.12.x flag false
+          # positives in correctly-secured cookie/redirect code), breaking
+          # unrelated PRs. Bump deliberately in a dedicated lint-review PR.
+          version: v2.1.6
           working-directory: backend
           args: --timeout=5m
 
