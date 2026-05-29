@@ -32,7 +32,9 @@ RUN adduser -S -u 10002 -G nginx marauder \
 USER marauder:nginx
 EXPOSE 8081
 
+# 127.0.0.1, not localhost: nginx listens on IPv4 only; localhost resolves
+# to ::1 first in this image, which would falsely report unhealthy.
 HEALTHCHECK --interval=30s --timeout=3s --retries=3 \
-  CMD wget -qO- http://localhost:8081/ >/dev/null 2>&1 || exit 1
+  CMD wget -qO- http://127.0.0.1:8081/ >/dev/null 2>&1 || exit 1
 
 CMD ["nginx", "-g", "daemon off;"]

@@ -90,7 +90,9 @@ services:
     depends_on:
       - backend
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:8081/"]
+      # 127.0.0.1, not localhost: nginx listens on IPv4 only (`listen 8081;`),
+      # but localhost resolves to ::1 first in this image -> false unhealthy.
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8081/"]
       interval: 30s
       timeout: 3s
       retries: 3
@@ -133,7 +135,9 @@ services:
     volumes:
       - ./nginx/gateway.conf:/etc/nginx/conf.d/default.conf:ro
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:6688/"]
+      # 127.0.0.1, not localhost: nginx listens on IPv4 only (`listen 6688;`),
+      # but localhost resolves to ::1 first in this image -> false unhealthy.
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:6688/"]
       interval: 30s
       timeout: 3s
       retries: 3
