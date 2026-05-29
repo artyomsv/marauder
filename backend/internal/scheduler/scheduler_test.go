@@ -150,13 +150,18 @@ func (f *fakeCreds) GetForTracker(_ context.Context, _ uuid.UUID, _ string) (*do
 	return nil, nil
 }
 
-func (f *fakeCreds) MarkSessionExpired(_ context.Context, _, _ uuid.UUID) error { return nil }
+func (f *fakeCreds) MarkSessionExpired(_ context.Context, _, _ uuid.UUID) (bool, error) {
+	return false, nil
+}
 
 // fakeCredsSession is a credentials repo that returns a configured credential
-// and records MarkSessionExpired calls.
+// and records MarkSessionExpired calls. markExpiredWon controls whether the
+// fake reports that THIS call won the NULL->now() transition (the real repo
+// derives this from RowsAffected==1).
 type fakeCredsSession struct {
 	stored           *domain.TrackerCredential
 	markExpiredCalls int
+	markExpiredWon   bool
 	markExpiredErr   error
 }
 
@@ -164,9 +169,9 @@ func (f *fakeCredsSession) GetForTracker(_ context.Context, _ uuid.UUID, _ strin
 	return f.stored, nil
 }
 
-func (f *fakeCredsSession) MarkSessionExpired(_ context.Context, _, _ uuid.UUID) error {
+func (f *fakeCredsSession) MarkSessionExpired(_ context.Context, _, _ uuid.UUID) (bool, error) {
 	f.markExpiredCalls++
-	return f.markExpiredErr
+	return f.markExpiredWon, f.markExpiredErr
 }
 
 // fakeNotifier records Send calls.
@@ -740,11 +745,12 @@ func newSessionFixture(t *testing.T, creds credentialsRepo, notifier sessionNoti
 	return s, topic
 }
 
-// TestLoadCredentials_SessionExpired_NotYetFlagged verifies that when
-// Login returns ErrSessionExpired and the credential is not yet flagged
-// (SessionExpiredAt == nil), MarkSessionExpired and Send are each called
-// exactly once.
-func TestLoadCredentials_SessionExpired_NotYetFlagged(t *testing.T) {
+// TestLoadCredentials_SessionExpired_WonTransition verifies that when
+// Login returns ErrSessionExpired, the credential is not yet flagged
+// (SessionExpiredAt == nil), and the atomic UPDATE wins the NULL->now()
+// transition (MarkSessionExpired returns true), MarkSessionExpired and
+// Send are each called exactly once.
+func TestLoadCredentials_SessionExpired_WonTransition(t *testing.T) {
 	tr := &fakeTrackerWithCreds{
 		fakeTracker: fakeTracker{name: "lostfilm"},
 		loginErr:    fmt.Errorf("lostfilm: %w", registry.ErrSessionExpired),
@@ -757,7 +763,7 @@ func TestLoadCredentials_SessionExpired_NotYetFlagged(t *testing.T) {
 		SessionExpiredAt: nil, // not yet flagged
 		SecretEnc:        []byte("secret"),
 	}
-	creds := &fakeCredsSession{stored: storedCred}
+	creds := &fakeCredsSession{stored: storedCred, markExpiredWon: true}
 	notifier := &fakeNotifier{}
 
 	s, topic := newSessionFixture(t, creds, notifier)
@@ -782,6 +788,51 @@ func TestLoadCredentials_SessionExpired_NotYetFlagged(t *testing.T) {
 	}
 	if notifier.lastID != storedCred.UserID {
 		t.Errorf("notifier.Send userID: want %s, got %s", storedCred.UserID, notifier.lastID)
+	}
+}
+
+// TestLoadCredentials_SessionExpired_LostRace simulates the concurrent-dedup
+// case: the cheap fast-path snapshot still shows SessionExpiredAt == nil (a
+// stale read shared across topics on one credential), so the check attempts
+// the UPDATE — but another concurrent check already transitioned the row, so
+// the atomic UPDATE...WHERE IS NULL affects 0 rows and MarkSessionExpired
+// returns false. This check must NOT notify even though it saw a nil snapshot
+// and Login returned ErrSessionExpired.
+func TestLoadCredentials_SessionExpired_LostRace(t *testing.T) {
+	tr := &fakeTrackerWithCreds{
+		fakeTracker: fakeTracker{name: "lostfilm"},
+		loginErr:    fmt.Errorf("lostfilm: %w", registry.ErrSessionExpired),
+	}
+
+	storedCred := &domain.TrackerCredential{
+		ID:               uuid.New(),
+		UserID:           uuid.New(),
+		TrackerName:      "lostfilm",
+		SessionExpiredAt: nil, // stale snapshot — looked nil to this check
+		SecretEnc:        []byte("secret"),
+	}
+	creds := &fakeCredsSession{stored: storedCred, markExpiredWon: false}
+	notifier := &fakeNotifier{}
+
+	s, topic := newSessionFixture(t, creds, notifier)
+	topic.UserID = storedCred.UserID
+	s.lookupTracker = func(_ string) registry.Tracker { return tr }
+
+	ctx := context.Background()
+	checkCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	log := zerolog.New(io.Discard)
+
+	_, ok := s.loadCredentials(ctx, checkCtx, log, topic, tr)
+
+	if ok {
+		t.Fatal("expected loadCredentials to return ok=false on login error")
+	}
+	if got := creds.markExpiredCalls; got != 1 {
+		t.Errorf("MarkSessionExpired: want 1 attempt (the UPDATE is the gate), got %d", got)
+	}
+	if got := notifier.calls; got != 0 {
+		t.Errorf("notifier.Send: want 0 calls (lost the transition race), got %d", got)
 	}
 }
 

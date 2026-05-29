@@ -60,7 +60,7 @@ func TestTrackerCredentials_SetSession_NoRows_ReturnsErrNotFound(t *testing.T) {
 	}
 }
 
-func TestTrackerCredentials_MarkSessionExpired(t *testing.T) {
+func TestTrackerCredentials_MarkSessionExpired_Transitions(t *testing.T) {
 	repo, mock := newMockCreds(t)
 	t.Cleanup(func() {
 		if err := mock.ExpectationsWereMet(); err != nil {
@@ -68,10 +68,35 @@ func TestTrackerCredentials_MarkSessionExpired(t *testing.T) {
 		}
 	})
 	id, userID := uuid.New(), uuid.New()
-	mock.ExpectExec(`UPDATE tracker_credentials SET session_expired_at = now\(\) WHERE id = \$1 AND user_id = \$2`).
+	mock.ExpectExec(`UPDATE tracker_credentials SET session_expired_at = now\(\) WHERE id = \$1 AND user_id = \$2 AND session_expired_at IS NULL`).
 		WithArgs(id, userID).WillReturnResult(pgxmock.NewResult("UPDATE", 1))
-	if err := repo.MarkSessionExpired(context.Background(), id, userID); err != nil {
+	won, err := repo.MarkSessionExpired(context.Background(), id, userID)
+	if err != nil {
 		t.Fatalf("MarkSessionExpired: %v", err)
+	}
+	if !won {
+		t.Errorf("expected won=true when RowsAffected=1, got false")
+	}
+}
+
+func TestTrackerCredentials_MarkSessionExpired_AlreadyMarked(t *testing.T) {
+	repo, mock := newMockCreds(t)
+	t.Cleanup(func() {
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Errorf("unfulfilled: %v", err)
+		}
+	})
+	id, userID := uuid.New(), uuid.New()
+	// RowsAffected=0: row already had session_expired_at set (or not found).
+	// No error — the caller treats false as "someone else won the race".
+	mock.ExpectExec(`UPDATE tracker_credentials SET session_expired_at = now\(\) WHERE id = \$1 AND user_id = \$2 AND session_expired_at IS NULL`).
+		WithArgs(id, userID).WillReturnResult(pgxmock.NewResult("UPDATE", 0))
+	won, err := repo.MarkSessionExpired(context.Background(), id, userID)
+	if err != nil {
+		t.Fatalf("MarkSessionExpired: %v", err)
+	}
+	if won {
+		t.Errorf("expected won=false when RowsAffected=0, got true")
 	}
 }
 

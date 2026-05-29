@@ -125,20 +125,19 @@ func (r *TrackerCredentials) SetSession(ctx context.Context, id, userID uuid.UUI
 	return nil
 }
 
-// MarkSessionExpired flags a credential's stored session as no longer
-// valid (used by the scheduler to dedupe expiry notifications). Cleared
-// by SetSession on successful re-auth.
-func (r *TrackerCredentials) MarkSessionExpired(ctx context.Context, id, userID uuid.UUID) error {
+// MarkSessionExpired atomically flags the stored session as expired,
+// transitioning session_expired_at from NULL to now() in a single UPDATE.
+// Returns true only if THIS call performed the transition (i.e. it was
+// previously NULL) — the caller uses that to dedupe expiry notifications
+// across concurrent checks sharing one credential. Cleared by SetSession.
+func (r *TrackerCredentials) MarkSessionExpired(ctx context.Context, id, userID uuid.UUID) (bool, error) {
 	ct, err := r.pool.Exec(ctx,
-		`UPDATE tracker_credentials SET session_expired_at = now() WHERE id = $1 AND user_id = $2`,
+		`UPDATE tracker_credentials SET session_expired_at = now() WHERE id = $1 AND user_id = $2 AND session_expired_at IS NULL`,
 		id, userID)
 	if err != nil {
-		return err
+		return false, err
 	}
-	if ct.RowsAffected() == 0 {
-		return ErrNotFound
-	}
-	return nil
+	return ct.RowsAffected() == 1, nil
 }
 
 // Delete removes a credential.

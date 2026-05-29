@@ -69,7 +69,7 @@ type clientsRepo interface {
 // scheduler uses.
 type credentialsRepo interface {
 	GetForTracker(ctx context.Context, userID uuid.UUID, trackerName string) (*domain.TrackerCredential, error)
-	MarkSessionExpired(ctx context.Context, id, userID uuid.UUID) error
+	MarkSessionExpired(ctx context.Context, id, userID uuid.UUID) (bool, error)
 }
 
 // sessionNotifier is the subset of *notify.Dispatcher that the scheduler
@@ -404,10 +404,16 @@ func (s *Scheduler) loadCredentials(ctx context.Context, checkCtx context.Contex
 	}
 	if loginErr := wc.Login(checkCtx, stored); loginErr != nil {
 		if errors.Is(loginErr, registry.ErrSessionExpired) && stored.SessionExpiredAt == nil {
-			if merr := s.creds.MarkSessionExpired(ctx, stored.ID, stored.UserID); merr != nil {
+			// The atomic UPDATE...WHERE session_expired_at IS NULL is the
+			// real dedup gate: when many topics share one credential and
+			// all see the stale nil snapshot in the same tick, only the
+			// check whose UPDATE actually transitioned NULL->now() gets
+			// transitioned==true and fires the single notification.
+			transitioned, merr := s.creds.MarkSessionExpired(ctx, stored.ID, stored.UserID)
+			if merr != nil {
 				log.Warn().Err(merr).Msg("mark session expired failed")
 			}
-			if s.notifier != nil {
+			if transitioned && s.notifier != nil {
 				s.notifier.Send(ctx, stored.UserID, domain.Message{
 					Title: "Tracker session expired",
 					Body:  t.TrackerName + " needs re-authentication — solve the captcha in Marauder.",
