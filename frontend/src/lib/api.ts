@@ -157,6 +157,14 @@ export const api = {
 
 // --- Typed models mirroring backend/internal/domain ---------------------
 
+// One season of a tracker's released-episode catalog, returned by
+// GET /trackers/seasons. Episodes are the released episode numbers for
+// that season (sorted ascending by the backend).
+export interface SeasonInfo {
+  number: number;
+  episodes: number[];
+}
+
 export interface CredentialView {
   id: string;
   tracker_name: string;
