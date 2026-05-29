@@ -177,7 +177,13 @@ func TestCompleteInteractive_Success(t *testing.T) {
 		t.Fatalf("status %d, want 201; body %s", w.Code, w.Body.String())
 	}
 	if store.created == nil {
-		t.Error("complete success must persist a credential")
+		t.Fatal("complete success must persist a credential")
+	}
+	if len(store.created.SecretEnc) == 0 {
+		t.Error("complete success must store encrypted password (SecretEnc must be non-empty)")
+	}
+	if len(store.created.SessionEnc) == 0 {
+		t.Error("complete success must store encrypted session (SessionEnc must be non-empty)")
 	}
 }
 

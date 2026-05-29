@@ -24,13 +24,14 @@ import (
 // "expired challenge" 422), but equal TTLs avoid confusing mismatches.
 const interactiveChallengeTTL = 5 * time.Minute
 
-// handlerPending holds non-secret correlation metadata for an in-flight
-// interactive login. The password lives only in the plugin engine's
-// pending jar, never here.
+// handlerPending holds correlation metadata for an in-flight interactive
+// login. The password is carried so that a captcha-only re-auth can
+// encrypt and store it when the session is persisted in CompleteInteractive.
 type handlerPending struct {
 	userID      uuid.UUID
 	trackerName string
 	username    string
+	password    string
 	expires     time.Time
 }
 
@@ -105,28 +106,33 @@ func (h *Credentials) interactivePlugin(trackerName string) (registry.WithIntera
 	return wi, nil
 }
 
-func (h *Credentials) persistSession(ctx context.Context, uid uuid.UUID, trackerName, username string, cookies registry.SessionCookies) (*domain.TrackerCredential, error) {
+func (h *Credentials) persistSession(ctx context.Context, uid uuid.UUID, trackerName, username, password string, cookies registry.SessionCookies) (*domain.TrackerCredential, error) {
 	cookieJSON, err := json.Marshal(cookies)
 	if err != nil {
 		return nil, err
 	}
-	enc, nonce, err := h.Master.Encrypt(cookieJSON)
+	sEnc, sNonce, err := h.Master.Encrypt(cookieJSON)
 	if err != nil {
 		return nil, err
 	}
 	// Upsert: re-authenticating an existing account (the ErrSessionExpired
 	// recovery path) refreshes the stored session in place rather than
 	// violating UNIQUE(user_id, tracker_name) with a second Create.
+	// The existing password (SecretEnc) is left untouched on the upsert path.
 	if existing, gerr := h.Creds.GetForTracker(ctx, uid, trackerName); gerr == nil && existing != nil {
-		if serr := h.Creds.SetSession(ctx, existing.ID, uid, enc, nonce); serr != nil {
+		if serr := h.Creds.SetSession(ctx, existing.ID, uid, sEnc, sNonce); serr != nil {
 			return nil, serr
 		}
-		existing.SessionEnc, existing.SessionNonce = enc, nonce
+		existing.SessionEnc, existing.SessionNonce = sEnc, sNonce
 		return existing, nil
+	}
+	pEnc, pNonce, err := h.Master.Encrypt([]byte(password))
+	if err != nil {
+		return nil, err
 	}
 	return h.Creds.Create(ctx, &domain.TrackerCredential{
 		UserID: uid, TrackerName: trackerName, Username: username,
-		SessionEnc: enc, SessionNonce: nonce,
+		SecretEnc: pEnc, SecretNonce: pNonce, SessionEnc: sEnc, SessionNonce: sNonce,
 	})
 }
 
@@ -161,7 +167,7 @@ func (h *Credentials) BeginInteractive(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if cookies != nil { // trusted IP, no captcha required
-		created, cerr := h.persistSession(r.Context(), uid, req.TrackerName, req.Username, cookies)
+		created, cerr := h.persistSession(r.Context(), uid, req.TrackerName, req.Username, req.Password, cookies)
 		if cerr != nil {
 			problem.Write(w, r, h.BaseURL, problem.ErrInternal("persist session: "+cerr.Error()))
 			return
@@ -170,7 +176,7 @@ func (h *Credentials) BeginInteractive(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.pending.put(challenge.ChallengeID, &handlerPending{
-		userID: uid, trackerName: req.TrackerName, username: req.Username,
+		userID: uid, trackerName: req.TrackerName, username: req.Username, password: req.Password,
 		expires: time.Now().Add(interactiveChallengeTTL),
 	})
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -212,7 +218,7 @@ func (h *Credentials) CompleteInteractive(w http.ResponseWriter, r *http.Request
 		problem.Write(w, r, h.BaseURL, problem.ErrUnprocessable(err.Error()))
 		return
 	}
-	created, cerr := h.persistSession(r.Context(), uid, p.trackerName, p.username, cookies)
+	created, cerr := h.persistSession(r.Context(), uid, p.trackerName, p.username, p.password, cookies)
 	if cerr != nil {
 		problem.Write(w, r, h.BaseURL, problem.ErrInternal("persist session: "+cerr.Error()))
 		return
