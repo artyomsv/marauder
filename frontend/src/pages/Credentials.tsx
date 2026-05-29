@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { motion, AnimatePresence } from "framer-motion";
 import {
@@ -606,12 +606,15 @@ function ReauthDialog({
     },
   });
 
-  // Kick off begin once on mount.
-  const beginMutate = begin.mutate;
+  // Kick off begin exactly once when the dialog opens. The ref guard
+  // stops React StrictMode's double-invoked effect (dev) from firing two
+  // reauthBegin POSTs and creating two server-side pending challenges.
+  const started = useRef(false);
   useEffect(() => {
-    beginMutate();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    if (started.current) return;
+    started.current = true;
+    begin.mutate();
+  }, [begin]);
 
   return (
     <motion.div

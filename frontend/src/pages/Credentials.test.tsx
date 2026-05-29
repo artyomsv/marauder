@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import type { ReactNode } from "react";
+import { StrictMode, type ReactNode } from "react";
 
 import { CredentialsPage } from "./Credentials";
 import { ApiError } from "@/lib/api";
@@ -77,6 +77,21 @@ function renderPage() {
   });
   const wrapper = ({ children }: { children: ReactNode }) => (
     <QueryClientProvider client={client}>{children}</QueryClientProvider>
+  );
+  return render(<CredentialsPage />, { wrapper });
+}
+
+// Same as renderPage but wrapped in StrictMode, which double-invokes
+// effects in dev. RTL does NOT enable StrictMode by default, so this is
+// the only way to prove the reauth-begin effect fires exactly once.
+function renderPageStrict() {
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
+  const wrapper = ({ children }: { children: ReactNode }) => (
+    <StrictMode>
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    </StrictMode>
   );
   return render(<CredentialsPage />, { wrapper });
 }
@@ -388,5 +403,24 @@ describe("CredentialsPage — session-expired re-authentication", () => {
         "data:image/gif;base64,NEW=",
       ),
     );
+  });
+
+  it("calls reauthBegin exactly once even under StrictMode", async () => {
+    const user = userEvent.setup();
+    mockApi.reauthBegin.mockResolvedValue({
+      status: "captcha",
+      challenge_id: "rc1",
+      captcha_image: "data:image/gif;base64,Rk=",
+    });
+
+    renderPageStrict();
+    await user.click(
+      await screen.findByRole("button", { name: /re-authenticate/i }),
+    );
+
+    await screen.findByRole("img", { name: /captcha/i });
+    // The ref guard must suppress StrictMode's double-invoked effect — a
+    // second reauthBegin would create a wasted server-side pending challenge.
+    expect(mockApi.reauthBegin).toHaveBeenCalledTimes(1);
   });
 });
