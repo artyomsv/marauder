@@ -30,7 +30,7 @@ func TestTrackerCredentials_SetSession_UpdatesEncryptedColumns(t *testing.T) {
 	id, userID := uuid.New(), uuid.New()
 	enc, nonce := []byte("ct"), []byte("nonce")
 
-	mock.ExpectExec(`UPDATE tracker_credentials SET session_enc = \$3, session_nonce = \$4, updated_at = now\(\) WHERE id = \$1 AND user_id = \$2`).
+	mock.ExpectExec(`UPDATE tracker_credentials SET session_enc = \$3, session_nonce = \$4, session_expired_at = NULL, updated_at = now\(\) WHERE id = \$1 AND user_id = \$2`).
 		WithArgs(id, userID, enc, nonce).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 
@@ -50,12 +50,42 @@ func TestTrackerCredentials_SetSession_NoRows_ReturnsErrNotFound(t *testing.T) {
 	id, userID := uuid.New(), uuid.New()
 	enc, nonce := []byte("ct"), []byte("nonce")
 
-	mock.ExpectExec(`UPDATE tracker_credentials SET session_enc = \$3, session_nonce = \$4, updated_at = now\(\) WHERE id = \$1 AND user_id = \$2`).
+	mock.ExpectExec(`UPDATE tracker_credentials SET session_enc = \$3, session_nonce = \$4, session_expired_at = NULL, updated_at = now\(\) WHERE id = \$1 AND user_id = \$2`).
 		WithArgs(id, userID, enc, nonce).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
 
 	err := repo.SetSession(context.Background(), id, userID, enc, nonce)
 	if !errors.Is(err, ErrNotFound) {
 		t.Fatalf("SetSession: got %v, want ErrNotFound", err)
+	}
+}
+
+func TestTrackerCredentials_MarkSessionExpired(t *testing.T) {
+	repo, mock := newMockCreds(t)
+	t.Cleanup(func() {
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Errorf("unfulfilled: %v", err)
+		}
+	})
+	id, userID := uuid.New(), uuid.New()
+	mock.ExpectExec(`UPDATE tracker_credentials SET session_expired_at = now\(\) WHERE id = \$1 AND user_id = \$2`).
+		WithArgs(id, userID).WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	if err := repo.MarkSessionExpired(context.Background(), id, userID); err != nil {
+		t.Fatalf("MarkSessionExpired: %v", err)
+	}
+}
+
+func TestTrackerCredentials_SetSession_ClearsExpiredMarker(t *testing.T) {
+	repo, mock := newMockCreds(t)
+	t.Cleanup(func() {
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Errorf("unfulfilled: %v", err)
+		}
+	})
+	id, userID := uuid.New(), uuid.New()
+	mock.ExpectExec(`UPDATE tracker_credentials SET session_enc = \$3, session_nonce = \$4, session_expired_at = NULL, updated_at = now\(\) WHERE id = \$1 AND user_id = \$2`).
+		WithArgs(id, userID, []byte("ct"), []byte("n")).WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	if err := repo.SetSession(context.Background(), id, userID, []byte("ct"), []byte("n")); err != nil {
+		t.Fatalf("SetSession: %v", err)
 	}
 }

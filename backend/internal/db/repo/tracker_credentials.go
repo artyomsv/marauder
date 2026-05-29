@@ -70,7 +70,7 @@ func (r *TrackerCredentials) GetForTracker(ctx context.Context, userID uuid.UUID
 func (r *TrackerCredentials) ListForUser(ctx context.Context, userID uuid.UUID) ([]*domain.TrackerCredential, error) {
 	const q = `
 SELECT id, user_id, tracker_name, COALESCE(username,''), secret_enc, secret_nonce,
-       session_enc, session_nonce, extra, created_at, updated_at
+       session_enc, session_nonce, session_expired_at, extra, created_at, updated_at
 FROM tracker_credentials
 WHERE user_id = $1
 ORDER BY tracker_name ASC`
@@ -114,8 +114,24 @@ WHERE id = $1 AND user_id = $2`
 // SetSession overwrites only the encrypted session-cookie blob.
 func (r *TrackerCredentials) SetSession(ctx context.Context, id, userID uuid.UUID, sessionEnc, sessionNonce []byte) error {
 	ct, err := r.pool.Exec(ctx,
-		`UPDATE tracker_credentials SET session_enc = $3, session_nonce = $4, updated_at = now() WHERE id = $1 AND user_id = $2`,
+		`UPDATE tracker_credentials SET session_enc = $3, session_nonce = $4, session_expired_at = NULL, updated_at = now() WHERE id = $1 AND user_id = $2`,
 		id, userID, sessionEnc, sessionNonce)
+	if err != nil {
+		return err
+	}
+	if ct.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// MarkSessionExpired flags a credential's stored session as no longer
+// valid (used by the scheduler to dedupe expiry notifications). Cleared
+// by SetSession on successful re-auth.
+func (r *TrackerCredentials) MarkSessionExpired(ctx context.Context, id, userID uuid.UUID) error {
+	ct, err := r.pool.Exec(ctx,
+		`UPDATE tracker_credentials SET session_expired_at = now() WHERE id = $1 AND user_id = $2`,
+		id, userID)
 	if err != nil {
 		return err
 	}
@@ -139,7 +155,7 @@ func (r *TrackerCredentials) Delete(ctx context.Context, id, userID uuid.UUID) e
 
 func (r *TrackerCredentials) scanOne(ctx context.Context, where string, args ...any) (*domain.TrackerCredential, error) {
 	q := `SELECT id, user_id, tracker_name, COALESCE(username,''), secret_enc, secret_nonce,
-                 session_enc, session_nonce, extra, created_at, updated_at
+                 session_enc, session_nonce, session_expired_at, extra, created_at, updated_at
           FROM tracker_credentials ` + where
 	row := r.pool.QueryRow(ctx, q, args...)
 	c, err := scanCred(row)
@@ -159,7 +175,7 @@ func scanCred(s rowScanner) (*domain.TrackerCredential, error) {
 	var extraRaw []byte
 	err := s.Scan(
 		&c.ID, &c.UserID, &c.TrackerName, &c.Username,
-		&c.SecretEnc, &c.SecretNonce, &c.SessionEnc, &c.SessionNonce, &extraRaw,
+		&c.SecretEnc, &c.SecretNonce, &c.SessionEnc, &c.SessionNonce, &c.SessionExpiredAt, &extraRaw,
 		&c.CreatedAt, &c.UpdatedAt,
 	)
 	if err != nil {
