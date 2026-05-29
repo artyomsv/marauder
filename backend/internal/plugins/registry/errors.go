@@ -20,3 +20,8 @@ var ErrNoPendingEpisodes = errors.New("no pending episodes")
 // instead of the misleading "credentials likely wrong". Plugins wrap it
 // with %w so callers can match via errors.Is.
 var ErrCaptchaRequired = errors.New("tracker requires a captcha")
+
+// ErrSessionExpired is returned by a cookie-session plugin's Login when
+// no stored session exists or the stored session no longer authenticates.
+// The user must re-run the interactive (captcha) login flow.
+var ErrSessionExpired = errors.New("tracker session expired")

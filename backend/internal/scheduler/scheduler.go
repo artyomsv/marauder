@@ -381,6 +381,16 @@ func (s *Scheduler) loadCredentials(ctx context.Context, checkCtx context.Contex
 		return nil, true
 	}
 	stored.SecretEnc = plain
+	// Rehydrate the persisted session cookie (cookie-session plugins read
+	// plaintext JSON from SessionEnc, mirroring the SecretEnc convention).
+	if len(stored.SessionEnc) > 0 {
+		sessPlain, serr := s.master.Decrypt(stored.SessionEnc, stored.SessionNonce)
+		if serr != nil {
+			log.Warn().Err(serr).Msg("decrypt session failed")
+		} else {
+			stored.SessionEnc = sessPlain
+		}
+	}
 	if loginErr := wc.Login(checkCtx, stored); loginErr != nil {
 		log.Warn().Err(loginErr).Msg("tracker login failed")
 		metrics.SchedulerTopicChecksTotal.WithLabelValues(t.TrackerName, "auth_error").Inc()

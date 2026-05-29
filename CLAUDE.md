@@ -39,12 +39,13 @@ techdebt/       Debt-tracking files (one per issue, see global rule)
 | `cfsolver` | in-process client to the standalone `cfsolver/` service |
 | `config` | env-driven config struct (caarlos0/env) — **add new env vars here** |
 | `crypto` | AES-256-GCM for tracker credentials and client config blobs |
-| `db` / `db/repo` | pgxpool wrapper + repository structs (`Topics`, `Clients`, `Notifiers`, `Users`, `TrackerCredentials`, `Audit`, `Settings`) |
+| `db` / `db/repo` | pgxpool wrapper + repository structs (`Topics`, `Clients`, `Notifiers`, `Users`, `TrackerCredentials`, `Audit`, `Settings`). `TrackerCredentials` carries encrypted `secret_enc` (password) **and** `session_enc`/`session_nonce` (cookie-session blob for interactive-login trackers; migration `0002`) |
 | `domain` | core types: `Topic`, `Check`, `Payload`, `TrackerCredential` |
 | **`extra`** | shared `extra.Int / StringSlice / String` helpers for the untyped `map[string]any` blobs in `Topic.Extra` and `Check.Extra` (added 2026-04-07; **use this instead of writing local helpers**) |
 | `logging` | zerolog setup (JSON in prod, pretty in dev) |
 | `metrics` | Prometheus collectors (HTTP, scheduler, tracker, client) |
-| `plugins/registry` | plugin interfaces + global registry + capability interfaces (`WithQuality`, `WithEpisodeFilter`, `WithCredentials`, `WithCloudflare`) + **`registry.ErrNoPendingEpisodes`** typed sentinel |
+| `plugins/registry` | plugin interfaces + global registry + capability interfaces (`WithQuality`, `WithEpisodeFilter`, `WithCredentials`, `WithCloudflare`, `WithInteractiveLogin`) + typed sentinels **`registry.ErrNoPendingEpisodes`**, `ErrCaptchaRequired`, `ErrSessionExpired` |
+| **`plugins/captchalogin`** | reusable human-in-the-loop interactive captcha-login engine (`Begin`/`Complete`/`Refresh` + TTL pending-session store). A tracker supplies a `Config` (LoginURL, CaptchaURL, CookieNames, BuildForm, Classify); first consumer is LostFilm. See `WithInteractiveLogin` |
 | `plugins/trackers/<name>` | one package per tracker plugin (16 plugins as of v1.0.0+) |
 | `plugins/clients/<name>` | one package per torrent client (qBittorrent, Transmission, Deluge, µTorrent, downloadfolder) |
 | `plugins/notifiers/<name>` | telegram, email, webhook, pushover |
@@ -232,9 +233,26 @@ See `docs/plugin-development.md`. The pattern: implement the
 unit test plus an e2e test using `plugins/e2etest.HostRewriteTransport`.
 
 Optional capability interfaces: `WithQuality`, `WithEpisodeFilter`,
-`WithCredentials`, `WithCloudflare`. The frontend AddTopic form
-discovers them via `GET /api/v1/trackers/match?url=`.
+`WithCredentials`, `WithCloudflare`, `WithInteractiveLogin`. The frontend
+AddTopic form discovers most via `GET /api/v1/trackers/match?url=`;
+`supports_interactive_login` is **also** surfaced per-tracker in
+`GET /api/v1/system/info` because the add-credential form selects a
+tracker by name and has no URL.
 
 For per-episode trackers (currently only LostFilm), `Download` must
 return `fmt.Errorf("...: %w", registry.ErrNoPendingEpisodes)` when the
 pending list is empty so the scheduler's per-episode loop terminates.
+
+### Interactive (captcha) login
+
+Trackers that gate login behind a captcha implement
+`registry.WithInteractiveLogin` (`BeginLogin`/`CompleteLogin`/
+`RefreshChallenge`) — easiest by embedding a `captchalogin.Engine` built
+from a `captchalogin.Config`. The user solves the captcha in-app via
+`POST /api/v1/credentials/interactive/{begin,complete,refresh}`; the
+harvested session cookie is persisted (encrypted) in
+`tracker_credentials.session_enc`. Such a plugin's `Login` rehydrates the
+stored cookie into its session jar and validates it via `Verify`,
+returning `registry.ErrSessionExpired` when the cookie is missing/dead so
+the user is prompted to re-run the captcha flow. LostFilm is the
+reference implementation.

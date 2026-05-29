@@ -88,15 +88,17 @@ type Topic struct {
 // TrackerCredential holds a user's login details for a tracker plugin.
 // The secret is stored encrypted at rest.
 type TrackerCredential struct {
-	ID          uuid.UUID
-	UserID      uuid.UUID
-	TrackerName string
-	Username    string
-	SecretEnc   []byte // nil if not set
-	SecretNonce []byte
-	Extra       map[string]any
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	ID           uuid.UUID
+	UserID       uuid.UUID
+	TrackerName  string
+	Username     string
+	SecretEnc    []byte // nil if not set
+	SecretNonce  []byte
+	SessionEnc   []byte // encrypted JSON cookie map; plaintext JSON in-memory after decrypt
+	SessionNonce []byte
+	Extra        map[string]any
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
 }
 
 // TopicEvent is a single entry in a topic's history.

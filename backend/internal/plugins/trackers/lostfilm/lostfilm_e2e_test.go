@@ -2,6 +2,7 @@ package lostfilm
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -16,6 +17,16 @@ import (
 	"github.com/artyomsv/marauder/backend/internal/plugins/registry"
 	"github.com/artyomsv/marauder/backend/internal/plugins/trackers/forumcommon"
 )
+
+// mustJSON marshals v and panics on error — test-only convenience for
+// building a SessionEnc cookie blob inline.
+func mustJSON(v any) []byte {
+	b, err := json.Marshal(v)
+	if err != nil {
+		panic(err)
+	}
+	return b
+}
 
 // permissiveRedirectValidator is the test seam used in place of the
 // production SSRF allowlist. The httptest servers below run on
@@ -89,9 +100,10 @@ func TestE2E(t *testing.T) {
 			return p, "https://www.lostfilm.tv/series/the-series/"
 		},
 		Creds: &domain.TrackerCredential{
-			UserID:    uuid.New(),
-			Username:  "alice",
-			SecretEnc: []byte("password"),
+			UserID:     uuid.New(),
+			Username:   "alice",
+			SecretEnc:  []byte("password"),
+			SessionEnc: mustJSON(map[string]string{"lf_session": "x"}),
 		},
 		// New hash format: 1 episode total, 0 done, 1 pending
 		ExpectedHash:         "eps:1/done:0/pending:1",
@@ -154,6 +166,9 @@ func TestRedirectorFlow(t *testing.T) {
 		case r.URL.Path == "/dl/Monarch_S02E02":
 			w.WriteHeader(200)
 			_, _ = w.Write([]byte(e2eRedirectorDestHTML))
+		case r.URL.Path == "/my":
+			w.WriteHeader(200)
+			_, _ = w.Write([]byte(`<a href="logout">logout</a>`))
 		case strings.HasPrefix(r.URL.Path, "/td.php"):
 			lastTorrentPath = r.URL.RequestURI()
 			w.WriteHeader(200)
@@ -178,9 +193,10 @@ func TestRedirectorFlow(t *testing.T) {
 	}
 
 	creds := &domain.TrackerCredential{
-		UserID:    uuid.New(),
-		Username:  "alice",
-		SecretEnc: []byte("password"),
+		UserID:     uuid.New(),
+		Username:   "alice",
+		SecretEnc:  []byte("password"),
+		SessionEnc: mustJSON(map[string]string{"lf_session": "x"}),
 	}
 	ctx := context.Background()
 

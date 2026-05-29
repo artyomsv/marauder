@@ -79,6 +79,15 @@ const en: Record<string, string> = {
   "clients.add.submit": "Test & save",
   "clients.badge.default": "default",
 
+  // Credentials — interactive captcha login
+  "credentials.captchaTitle": "Enter the code from the image",
+  "credentials.captchaPlaceholder": "Code from the image",
+  "credentials.captchaImageAlt": "Captcha challenge image",
+  "credentials.captchaRefresh": "Refresh code",
+  "credentials.captchaIncorrect": "Incorrect code, please try again",
+  "credentials.captchaSubmit": "Verify & save",
+  "credentials.captchaCancel": "Cancel",
+
   // Settings
   "settings.kicker": "preferences",
   "settings.title": "Settings",
