@@ -237,6 +237,30 @@ WHERE  id = $1`
 	return nil
 }
 
+// Update edits a topic's user-editable fields (display name, client,
+// download dir, category, and the capability Extra map). It does NOT
+// touch url/tracker/status/hash/scheduling. Returns ErrNotFound when the
+// topic doesn't belong to the user.
+func (r *Topics) Update(ctx context.Context, id, userID uuid.UUID, displayName string, clientID *uuid.UUID, downloadDir, category string, extra map[string]any) (*domain.Topic, error) {
+	raw, err := json.Marshal(extra)
+	if err != nil {
+		return nil, fmt.Errorf("topics: marshal extra: %w", err)
+	}
+	if len(raw) == 0 {
+		raw = []byte("{}")
+	}
+	row := r.pool.QueryRow(ctx, `UPDATE topics SET
+		display_name = $3, client_id = $4, download_dir = $5, category = $6,
+		extra = $7, updated_at = now()
+	WHERE id = $1 AND user_id = $2
+	RETURNING `+topicColumns, id, userID, displayName, clientID, downloadDir, category, raw)
+	t, err := scanTopic(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	return t, err
+}
+
 // DueForCheck returns up to `limit` topics whose next_check_at is in the past
 // and status is active or error. Errored topics are retried on their
 // exponential-backoff schedule; paused topics remain excluded.

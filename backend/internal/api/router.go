@@ -123,6 +123,7 @@ func NewRouter(d Deps) http.Handler {
 			r.Get("/topics", topicsH.List)
 			r.Post("/topics", topicsH.Create)
 			r.Get("/topics/{id}", topicsH.Get)
+			r.Put("/topics/{id}", topicsH.Update)
 			r.Delete("/topics/{id}", topicsH.Delete)
 			r.Post("/topics/{id}/pause", topicsH.Pause)
 			r.Post("/topics/{id}/resume", topicsH.Resume)
