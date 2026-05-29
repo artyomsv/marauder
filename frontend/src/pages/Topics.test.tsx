@@ -323,4 +323,22 @@ describe("EditTopicCard — prefill + update", () => {
     );
     expect(onSaved).toHaveBeenCalled();
   });
+
+  it("sends download_dir: \"\" when the folder is emptied (explicit clear)", async () => {
+    const user = userEvent.setup();
+    routeGetWithQuality(() => Promise.resolve({ seasons: [] }));
+    mockApi.updateTopic.mockResolvedValue({});
+
+    renderEdit();
+
+    const folderInput = await screen.findByLabelText(/download folder/i);
+    await user.clear(folderInput);
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    expect(mockApi.updateTopic).toHaveBeenCalledWith(
+      "t-1",
+      expect.objectContaining({ download_dir: "" }),
+    );
+  });
 });

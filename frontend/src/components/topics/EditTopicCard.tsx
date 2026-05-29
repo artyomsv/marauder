@@ -42,8 +42,11 @@ export function EditTopicCard({ topic, onClose, onSaved }: EditTopicCardProps) {
       api.updateTopic(topic.ID, {
         display_name: v.displayName,
         client_id: v.clientId || null,
-        download_dir: v.downloadDir || undefined,
-        category: v.category || undefined,
+        // Backend Update overwrites DownloadDir/Category as plain strings,
+        // so send the raw values — "" unambiguously clears the column,
+        // matching the always-overwrite semantics.
+        download_dir: v.downloadDir,
+        category: v.category,
         quality: v.quality || undefined,
         start_season: v.startSeason ? parseInt(v.startSeason, 10) : undefined,
         start_episode: v.startEpisode ? parseInt(v.startEpisode, 10) : undefined,
