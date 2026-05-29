@@ -81,7 +81,7 @@ func parseEpisodes(body []byte) []episodeRef {
 			if len(packed) < 7 {
 				continue
 			}
-			ep, _ := strconv.Atoi(packed[len(packed)-3:])           // regex guarantees digits
+			ep, _ := strconv.Atoi(packed[len(packed)-3:])                // regex guarantees digits
 			se, _ := strconv.Atoi(packed[len(packed)-6 : len(packed)-3]) // regex guarantees digits
 			showID := packed[:len(packed)-6]
 			if ep == 0 || se == 0 || showID == "" {
