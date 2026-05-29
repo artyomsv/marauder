@@ -22,10 +22,15 @@ import (
 )
 
 // fakeInteractiveTracker implements registry.Tracker + WithInteractiveLogin.
-// `mode` switches BeginLogin between the captcha and no-captcha paths.
-type fakeInteractiveTracker struct{ mode string }
+// `mode` (set once at construction, never mutated) switches BeginLogin
+// between the captcha and no-captcha paths. Two fixed instances are
+// registered under distinct names so tests never share mutable state.
+type fakeInteractiveTracker struct {
+	name string
+	mode string
+}
 
-func (f *fakeInteractiveTracker) Name() string         { return "faketracker" }
+func (f *fakeInteractiveTracker) Name() string         { return f.name }
 func (f *fakeInteractiveTracker) DisplayName() string  { return "Fake Tracker" }
 func (f *fakeInteractiveTracker) CanParse(string) bool { return false }
 func (f *fakeInteractiveTracker) Parse(context.Context, string) (*domain.Topic, error) {
@@ -53,10 +58,16 @@ func (f *fakeInteractiveTracker) RefreshChallenge(context.Context, string) (*reg
 	return &registry.LoginChallenge{ChallengeID: "chal-1", Image: []byte("GIF2"), MIMEType: "image/gif"}, nil
 }
 
-// fakeTrk is registered once; tests set fakeTrk.mode before exercising it.
-var fakeTrk = &fakeInteractiveTracker{mode: "captcha"}
+// Two fixed, immutable fake trackers registered under distinct names.
+const (
+	fakeCaptchaName   = "faketracker"
+	fakeNoCaptchaName = "faketracker-nc"
+)
 
-func init() { registry.RegisterTracker(fakeTrk) }
+func init() {
+	registry.RegisterTracker(&fakeInteractiveTracker{name: fakeCaptchaName, mode: "captcha"})
+	registry.RegisterTracker(&fakeInteractiveTracker{name: fakeNoCaptchaName, mode: "nocaptcha"})
+}
 
 // fakeCredStore is an in-memory credentialStore for handler tests.
 type fakeCredStore struct {
@@ -103,7 +114,6 @@ func authedReq(t *testing.T, uid uuid.UUID, body any) *http.Request {
 }
 
 func TestBeginInteractive_Captcha(t *testing.T) {
-	fakeTrk.mode = "captcha"
 	store := &fakeCredStore{}
 	h := newCredsHandler(t, store)
 	w := httptest.NewRecorder()
@@ -130,12 +140,10 @@ func TestBeginInteractive_Captcha(t *testing.T) {
 }
 
 func TestBeginInteractive_NoCaptchaPersists(t *testing.T) {
-	fakeTrk.mode = "nocaptcha"
-	defer func() { fakeTrk.mode = "captcha" }()
 	store := &fakeCredStore{}
 	h := newCredsHandler(t, store)
 	w := httptest.NewRecorder()
-	h.BeginInteractive(w, authedReq(t, uuid.New(), beginReq{TrackerName: "faketracker", Username: "u", Password: "p"}))
+	h.BeginInteractive(w, authedReq(t, uuid.New(), beginReq{TrackerName: fakeNoCaptchaName, Username: "u", Password: "p"}))
 	if w.Code != http.StatusOK {
 		t.Fatalf("status %d, want 200; body %s", w.Code, w.Body.String())
 	}
@@ -150,7 +158,6 @@ func TestBeginInteractive_NoCaptchaPersists(t *testing.T) {
 }
 
 func TestCompleteInteractive_Success(t *testing.T) {
-	fakeTrk.mode = "captcha"
 	store := &fakeCredStore{}
 	h := newCredsHandler(t, store)
 	uid := uuid.New()
@@ -166,7 +173,6 @@ func TestCompleteInteractive_Success(t *testing.T) {
 }
 
 func TestCompleteInteractive_WrongCaptchaKeepsPending(t *testing.T) {
-	fakeTrk.mode = "captcha"
 	h := newCredsHandler(t, &fakeCredStore{})
 	uid := uuid.New()
 	h.BeginInteractive(httptest.NewRecorder(), authedReq(t, uid, beginReq{TrackerName: "faketracker", Username: "u", Password: "p"}))
@@ -198,7 +204,6 @@ func TestCompleteInteractive_UnknownChallenge(t *testing.T) {
 }
 
 func TestCompleteInteractive_ForeignUserCannotComplete(t *testing.T) {
-	fakeTrk.mode = "captcha"
 	h := newCredsHandler(t, &fakeCredStore{})
 	owner, attacker := uuid.New(), uuid.New()
 	h.BeginInteractive(httptest.NewRecorder(), authedReq(t, owner, beginReq{TrackerName: "faketracker", Username: "u", Password: "p"}))
@@ -206,5 +211,23 @@ func TestCompleteInteractive_ForeignUserCannotComplete(t *testing.T) {
 	h.CompleteInteractive(w, authedReq(t, attacker, answerReq{TrackerName: "faketracker", ChallengeID: "chal-1", Answer: "good"}))
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("foreign user got status %d, want 404; body %s", w.Code, w.Body.String())
+	}
+}
+
+func TestBeginInteractive_UnknownTracker(t *testing.T) {
+	h := newCredsHandler(t, &fakeCredStore{})
+	w := httptest.NewRecorder()
+	h.BeginInteractive(w, authedReq(t, uuid.New(), beginReq{TrackerName: "does-not-exist", Username: "u", Password: "p"}))
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status %d, want 422; body %s", w.Code, w.Body.String())
+	}
+}
+
+func TestBeginInteractive_MissingFields(t *testing.T) {
+	h := newCredsHandler(t, &fakeCredStore{})
+	w := httptest.NewRecorder()
+	h.BeginInteractive(w, authedReq(t, uuid.New(), beginReq{TrackerName: "faketracker", Username: "u"})) // no password
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status %d, want 400; body %s", w.Code, w.Body.String())
 	}
 }

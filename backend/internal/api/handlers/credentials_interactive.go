@@ -18,6 +18,10 @@ import (
 	"github.com/artyomsv/marauder/backend/internal/problem"
 )
 
+// interactiveChallengeTTL bounds how long the handler keeps challenge
+// metadata. Keep it equal to captchalogin's engine-side pendingTTL — if
+// they drift the failure is still graceful (a 404 here, or the engine's
+// "expired challenge" 422), but equal TTLs avoid confusing mismatches.
 const interactiveChallengeTTL = 5 * time.Minute
 
 // handlerPending holds non-secret correlation metadata for an in-flight
