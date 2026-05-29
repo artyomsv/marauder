@@ -27,6 +27,7 @@ type createTopicReq struct {
 	DisplayName      string     `json:"display_name"`
 	ClientID         *uuid.UUID `json:"client_id"`
 	DownloadDir      string     `json:"download_dir"`
+	Category         string     `json:"category"`
 	CheckIntervalSec int        `json:"check_interval_sec"`
 	// Optional capability-driven fields. The frontend learns whether a
 	// tracker accepts these via GET /api/v1/trackers/match. Plugins read
@@ -134,6 +135,7 @@ func (h *Topics) Create(w http.ResponseWriter, r *http.Request) {
 		DisplayName:      displayName,
 		ClientID:         req.ClientID,
 		DownloadDir:      req.DownloadDir,
+		Category:         req.Category,
 		Extra:            extra,
 		CheckIntervalSec: interval,
 		NextCheckAt:      time.Now().UTC(),

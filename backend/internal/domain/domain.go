@@ -72,6 +72,7 @@ type Topic struct {
 	DisplayName       string
 	ClientID          *uuid.UUID
 	DownloadDir       string
+	Category          string
 	Extra             map[string]any
 	LastHash          string
 	LastCheckedAt     *time.Time

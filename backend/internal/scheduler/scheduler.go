@@ -556,6 +556,7 @@ func (s *Scheduler) sendViaClient(ctx context.Context, cfg *domain.Client, t *do
 	}
 	if err := clientPlugin.Add(ctx, rawConfig, payload, domain.AddOptions{
 		DownloadDir: t.DownloadDir,
+		Category:    t.Category,
 	}); err != nil {
 		metrics.ClientSubmitTotal.WithLabelValues(cfg.ClientName, "error").Inc()
 		return err
