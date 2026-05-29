@@ -277,39 +277,12 @@ function AddCredentialCard({
     onError: (err) => setError(problemDetail(err)),
   });
 
-  // Step 2: submit the captcha answer. Wrong answer → inline message AND a
-  // fresh image fetched via refresh so the user can retry the same flow.
-  const complete = useMutation({
-    mutationFn: (answer: string) =>
-      api.interactiveComplete({
-        tracker_name: trackerName,
-        challenge_id: captcha!.challengeId,
-        answer,
-      }),
-    onSuccess: () => onCreated(),
-    onError: async (err) => {
-      if (err instanceof ApiError && err.problem.detail === "captcha_incorrect") {
-        const fresh = await api.interactiveRefresh({
-          tracker_name: trackerName,
-          challenge_id: captcha!.challengeId,
-        });
-        setCaptcha((prev) =>
-          prev
-            ? {
-                ...prev,
-                challengeId: fresh.challenge_id,
-                captchaImage: fresh.captcha_image,
-                answer: "",
-                error: t("credentials.captchaIncorrect"),
-              }
-            : prev,
-        );
-        return;
-      }
-      setCaptcha((prev) => (prev ? { ...prev, error: problemDetail(err) } : prev));
-    },
-  });
-
+  // Fetches a fresh captcha image on the same pending session. Swaps the
+  // image + challenge id but leaves the `error` slot to the caller: the
+  // manual refresh button clears it, the auto-refresh after a wrong answer
+  // keeps the "incorrect code" message. Routing the auto-refresh through
+  // this mutation (not a bare api call) gives it a loading state and a
+  // single error path.
   const refresh = useMutation({
     mutationFn: () =>
       api.interactiveRefresh({
@@ -319,9 +292,35 @@ function AddCredentialCard({
     onSuccess: (fresh) =>
       setCaptcha((prev) =>
         prev
-          ? { ...prev, challengeId: fresh.challenge_id, captchaImage: fresh.captcha_image, error: null }
+          ? { ...prev, challengeId: fresh.challenge_id, captchaImage: fresh.captcha_image, answer: "" }
           : prev,
       ),
+    onError: (err) =>
+      setCaptcha((prev) => (prev ? { ...prev, error: problemDetail(err) } : prev)),
+  });
+
+  // Step 2: submit the captcha answer. Wrong answer → inline message AND a
+  // fresh image (via the refresh mutation) so the user can retry the same
+  // flow without re-entering credentials.
+  const complete = useMutation({
+    mutationFn: (answer: string) =>
+      api.interactiveComplete({
+        tracker_name: trackerName,
+        challenge_id: captcha!.challengeId,
+        answer,
+      }),
+    onSuccess: () => onCreated(),
+    onError: (err) => {
+      if (err instanceof ApiError && err.problem.detail === "captcha_incorrect") {
+        setCaptcha((prev) =>
+          prev ? { ...prev, error: t("credentials.captchaIncorrect") } : prev,
+        );
+        // Swap in a fresh image; refresh.onError surfaces any failure here.
+        refresh.mutate();
+        return;
+      }
+      setCaptcha((prev) => (prev ? { ...prev, error: problemDetail(err) } : prev));
+    },
   });
 
   const submitting = begin.isPending || create.isPending;
@@ -409,7 +408,10 @@ function AddCredentialCard({
               onAnswerChange={(value) =>
                 setCaptcha((prev) => (prev ? { ...prev, answer: value } : prev))
               }
-              onRefresh={() => refresh.mutate()}
+              onRefresh={() => {
+                setCaptcha((prev) => (prev ? { ...prev, error: null } : prev));
+                refresh.mutate();
+              }}
             />
           )}
 
@@ -426,7 +428,7 @@ function AddCredentialCard({
             {captcha ? (
               <Button
                 type="button"
-                disabled={complete.isPending || !captcha.answer}
+                disabled={complete.isPending || refresh.isPending || !captcha.answer}
                 onClick={() => complete.mutate(captcha.answer)}
               >
                 {complete.isPending && <Loader2 className="size-4 animate-spin" />}

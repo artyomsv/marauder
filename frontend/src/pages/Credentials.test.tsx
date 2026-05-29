@@ -164,6 +164,73 @@ describe("CredentialsPage — interactive captcha flow", () => {
     );
   });
 
+  it("disables the submit button while the auto-refresh is in flight", async () => {
+    const user = userEvent.setup();
+    mockApi.interactiveBegin.mockResolvedValue({
+      status: "captcha",
+      challenge_id: "c1",
+      captcha_image: "data:image/gif;base64,OLD=",
+    });
+    mockApi.interactiveComplete.mockRejectedValue(
+      new ApiError({ title: "Unprocessable", status: 422, detail: "captcha_incorrect" }),
+    );
+    // Deferred refresh: stays pending until we resolve it, so we can
+    // observe the in-flight loading/disabled state deterministically.
+    let resolveRefresh!: (v: { challenge_id: string; captcha_image: string }) => void;
+    mockApi.interactiveRefresh.mockReturnValue(
+      new Promise((resolve) => {
+        resolveRefresh = resolve;
+      }),
+    );
+
+    renderPage();
+    await fillAndSubmit(user);
+    await screen.findByRole("img", { name: /captcha/i });
+
+    await user.type(screen.getByPlaceholderText(/code from the image/i), "WRNG");
+    await user.click(screen.getByRole("button", { name: /verify & save/i }));
+
+    // Wrong answer accepted, refresh kicked off but not yet resolved:
+    // the submit button must be disabled (refresh.isPending) so the user
+    // can't re-submit against a challenge that's about to be replaced.
+    await waitFor(() => expect(mockApi.interactiveRefresh).toHaveBeenCalled());
+    expect(screen.getByRole("button", { name: /verify & save/i })).toBeDisabled();
+
+    // Resolving the refresh clears answer and re-enables submission.
+    resolveRefresh({ challenge_id: "c1", captcha_image: "data:image/gif;base64,NEW=" });
+    await waitFor(() =>
+      expect(screen.getByRole("img", { name: /captcha/i })).toHaveAttribute(
+        "src",
+        "data:image/gif;base64,NEW=",
+      ),
+    );
+  });
+
+  it("surfaces an error when the auto-refresh itself fails", async () => {
+    const user = userEvent.setup();
+    mockApi.interactiveBegin.mockResolvedValue({
+      status: "captcha",
+      challenge_id: "c1",
+      captcha_image: "data:image/gif;base64,OLD=",
+    });
+    mockApi.interactiveComplete.mockRejectedValue(
+      new ApiError({ title: "Unprocessable", status: 422, detail: "captcha_incorrect" }),
+    );
+    mockApi.interactiveRefresh.mockRejectedValue(
+      new ApiError({ title: "Bad Gateway", status: 502, detail: "tracker unreachable" }),
+    );
+
+    renderPage();
+    await fillAndSubmit(user);
+    await screen.findByRole("img", { name: /captcha/i });
+
+    await user.type(screen.getByPlaceholderText(/code from the image/i), "WRNG");
+    await user.click(screen.getByRole("button", { name: /verify & save/i }));
+
+    // The failed refresh routes through refresh.onError → error slot.
+    expect(await screen.findByText(/tracker unreachable/i)).toBeInTheDocument();
+  });
+
   it("uses the plain create flow directly for non-interactive trackers", async () => {
     supportsInteractiveLogin = false;
     const user = userEvent.setup();
