@@ -11,6 +11,7 @@ package forumcommon
 import (
 	"net/http"
 	"net/http/cookiejar"
+	"net/url"
 	"sync"
 	"time"
 )
@@ -71,4 +72,20 @@ func (s *SessionStore) Invalidate(key string) {
 // SessionKey is the convention for building store keys.
 func SessionKey(trackerName, userID string) string {
 	return trackerName + ":" + userID
+}
+
+// CookiesByName returns the named cookies from the session jar for u as a
+// name->value map. Names absent from the jar are simply omitted.
+func CookiesByName(s *Session, u *url.URL, names []string) map[string]string {
+	want := make(map[string]struct{}, len(names))
+	for _, n := range names {
+		want[n] = struct{}{}
+	}
+	out := map[string]string{}
+	for _, c := range s.Client.Jar.Cookies(u) {
+		if _, ok := want[c.Name]; ok {
+			out[c.Name] = c.Value
+		}
+	}
+	return out
 }
