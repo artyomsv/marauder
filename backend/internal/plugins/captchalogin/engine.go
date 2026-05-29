@@ -39,11 +39,13 @@ type Config struct {
 
 // Engine runs the Config's interactive login flow.
 type Engine struct {
-	cfg     Config
-	store   *pendingStore
+	cfg   Config
+	store *pendingStore
+	// newSess MUST return a fresh, independent session (its own cookie jar) on every call. The engine holds one session per pending challenge for that challenge's lifetime and never shares a session across challenges; a newSess that returns a shared/cached session would let concurrent logins cross-contaminate captcha cookies.
 	newSess func() *forumcommon.Session // injects a jar (+ test transport)
 }
 
+// New builds an Engine. newSess MUST return a fresh, independent session (its own cookie jar) on every call. The engine holds one session per pending challenge for that challenge's lifetime and never shares a session across challenges; a newSess that returns a shared/cached session would let concurrent logins cross-contaminate captcha cookies.
 func New(cfg Config, newSess func() *forumcommon.Session) *Engine {
 	return &Engine{cfg: cfg, store: newPendingStore(), newSess: newSess}
 }
@@ -90,10 +92,11 @@ func (e *Engine) fetchCaptcha(ctx context.Context, sess *forumcommon.Session) (*
 func (e *Engine) Begin(ctx context.Context, creds *domain.TrackerCredential) (*registry.LoginChallenge, registry.SessionCookies, error) {
 	sess := e.newSess()
 	if e.cfg.SeedURL != "" {
-		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, e.cfg.SeedURL, nil)
-		req.Header.Set("User-Agent", sess.UserAgent)
-		if resp, err := sess.Client.Do(req); err == nil {
-			resp.Body.Close()
+		if req, rerr := http.NewRequestWithContext(ctx, http.MethodGet, e.cfg.SeedURL, nil); rerr == nil {
+			req.Header.Set("User-Agent", sess.UserAgent)
+			if resp, err := sess.Client.Do(req); err == nil {
+				resp.Body.Close()
+			}
 		}
 	}
 	body, err := e.post(ctx, sess, e.cfg.BuildForm(creds, "", false))
@@ -158,6 +161,7 @@ func (e *Engine) Complete(ctx context.Context, challengeID, answer string) (regi
 }
 
 func (e *Engine) harvest(sess *forumcommon.Session) registry.SessionCookies {
+	// Auth cookies are assumed to live on the LoginURL host. Trackers whose auth cookie is set on a different host than LoginURL are not supported by this harvest.
 	u, _ := url.Parse(e.cfg.LoginURL)
 	return registry.SessionCookies(forumcommon.CookiesByName(sess, u, e.cfg.CookieNames))
 }

@@ -140,3 +140,38 @@ func TestPending_TTLEviction(t *testing.T) {
 		t.Error("expired entry should have been evicted")
 	}
 }
+
+func TestBegin_HardFailRejected(t *testing.T) {
+	e := testEngine(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"nope":1}`))
+	})
+	ch, cookies, err := e.Begin(context.Background(), &domain.TrackerCredential{Username: "a"})
+	if err == nil {
+		t.Fatal("want error for hard-fail login, got nil")
+	}
+	if ch != nil || cookies != nil {
+		t.Errorf("want nil challenge and cookies, got ch=%v cookies=%v", ch, cookies)
+	}
+}
+
+func TestBegin_FetchCaptchaError(t *testing.T) {
+	e := testEngine(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/login":
+			w.Write([]byte(`{"need_captcha":true}`))
+		case "/captcha":
+			// Abort the response mid-flight to force a client-side transport error.
+			panic(http.ErrAbortHandler)
+		}
+	})
+	ch, cookies, err := e.Begin(context.Background(), &domain.TrackerCredential{Username: "a"})
+	if err == nil {
+		t.Fatal("want error when captcha fetch fails, got nil")
+	}
+	if !strings.Contains(err.Error(), "fetch captcha") {
+		t.Errorf("err = %v, want mention of \"fetch captcha\"", err)
+	}
+	if ch != nil || cookies != nil {
+		t.Errorf("want nil challenge and cookies, got ch=%v cookies=%v", ch, cookies)
+	}
+}
