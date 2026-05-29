@@ -311,6 +311,11 @@ func (h *Credentials) ReauthBegin(w http.ResponseWriter, r *http.Request) {
 			problem.Write(w, r, h.BaseURL, perr)
 			return
 		}
+		if h.Audit != nil {
+			ip, ua := audit.FromRequest(r)
+			h.Audit.Generic(&uid, "credential_reauth", "tracker_credential", id.String(), "success",
+				map[string]any{"tracker_name": cred.TrackerName, "ip": ip, "ua": ua})
+		}
 		writeJSON(w, http.StatusOK, map[string]any{"status": "logged_in"})
 		return
 	}
@@ -368,7 +373,16 @@ func (h *Credentials) ReauthComplete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.pending.del(body.ChallengeID)
-	cred, _ := h.Creds.GetByID(r.Context(), id, uid)
+	if h.Audit != nil {
+		ip, ua := audit.FromRequest(r)
+		h.Audit.Generic(&uid, "credential_reauth", "tracker_credential", id.String(), "success",
+			map[string]any{"tracker_name": p.trackerName, "ip": ip, "ua": ua})
+	}
+	cred, gerr := h.Creds.GetByID(r.Context(), id, uid)
+	if gerr != nil || cred == nil {
+		problem.Write(w, r, h.BaseURL, problem.ErrInternal("re-fetch credential after re-auth failed"))
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"credential": toCredView(cred)})
 }
 
