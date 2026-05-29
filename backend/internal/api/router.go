@@ -118,6 +118,7 @@ func NewRouter(d Deps) http.Handler {
 			r.Post("/auth/me/password", authH.ChangePassword)
 			r.Get("/system/status", sysH.Status)
 			r.Get("/trackers/match", trackersH.Match)
+			r.Get("/trackers/seasons", trackersH.Seasons)
 
 			r.Get("/topics", topicsH.List)
 			r.Post("/topics", topicsH.Create)

@@ -62,6 +62,9 @@ var (
 	ErrInternal = func(detail string) *Error {
 		return New(http.StatusInternalServerError, "internal", "Internal Server Error", detail)
 	}
+	ErrBadGateway = func(detail string) *Error {
+		return New(http.StatusBadGateway, "bad-gateway", "Bad Gateway", detail)
+	}
 )
 
 // Write renders an error as a JSON RFC 7807 response.
