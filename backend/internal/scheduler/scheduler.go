@@ -348,17 +348,23 @@ func (s *Scheduler) runCheck(ctx context.Context, log zerolog.Logger, t *domain.
 		var dlErr error
 		anySubmitted, dlErr = s.downloadAllPending(ctx, log, t, tr, check, creds)
 		if dlErr != nil {
-			// Mid-loop and first-iteration failures both arrive here.
-			// anySubmitted distinguishes "we made progress" from "we
-			// got nothing", which controls whether RecordCheckResult
-			// persists the new hash + last_updated_at timestamp.
+			// A failed download loop must NOT advance the persisted hash.
+			// If it did, the next check would see check.Hash == LastHash,
+			// treat the topic as unchanged, skip the download forever, and
+			// a later no-op check would even clear the error — leaving the
+			// topic "active, no error, never updated" while silently never
+			// downloading. Persist the OLD hash so the change is re-detected
+			// and retried next tick. Any progress made before the failure
+			// was already persisted via MarkEpisodeDownloaded and is encoded
+			// into the recomputed hash, so keeping the old hash still
+			// re-triggers without losing that progress.
 			if anySubmitted {
 				log.Warn().Err(dlErr).Msg("download loop failed mid-progress")
 			} else {
 				log.Warn().Err(dlErr).Msg("download failed")
 				metrics.SchedulerTopicChecksTotal.WithLabelValues(t.TrackerName, "download_error").Inc()
 			}
-			s.recordResult(ctx, log, t.ID, check.Hash, anySubmitted, s.backoff(t, true), dlErr.Error())
+			s.recordResult(ctx, log, t.ID, t.LastHash, anySubmitted, s.backoff(t, true), dlErr.Error())
 			s.recordChecked(true, true)
 			return
 		}
@@ -458,8 +464,14 @@ func (s *Scheduler) downloadAllPending(ctx context.Context, log zerolog.Logger, 
 		cancel()
 
 		if derr != nil {
-			if i > 0 && isNoPendingError(derr) {
-				// Graceful loop end — natural exit signal from the plugin.
+			if isNoPendingError(derr) {
+				// ErrNoPendingEpisodes is the plugin's graceful "nothing
+				// (more) to download" signal — valid even on the first
+				// iteration. A hash change that yields zero pending (the
+				// user caught up, or the start filter excludes every
+				// episode) is a legitimate no-op, not a failure; returning
+				// nil lets runCheck advance the hash to the now-current
+				// state instead of erroring and stranding the topic.
 				return anySubmitted, nil
 			}
 			return anySubmitted, derr

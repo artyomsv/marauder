@@ -440,6 +440,12 @@ func TestRunCheck_FirstDownloadError(t *testing.T) {
 	if rec.errMsg == "" {
 		t.Errorf("expected non-empty errMsg")
 	}
+	// The hash must NOT advance on a failed download: a transient failure
+	// would otherwise strand the topic permanently (next check sees no
+	// change and never retries).
+	if rec.hash != "old-hash" {
+		t.Errorf("expected hash to stay old-hash (not advance on failure), got %q", rec.hash)
+	}
 }
 
 func TestRunCheck_MidLoopDownloadError(t *testing.T) {
@@ -477,6 +483,45 @@ func TestRunCheck_MidLoopDownloadError(t *testing.T) {
 	}
 	if rec.errMsg == "" {
 		t.Errorf("expected non-empty errMsg")
+	}
+	// Hash stays at the old value so the remaining (undownloaded) episode
+	// is re-detected and retried on the next check rather than stranded.
+	if rec.hash != "old-hash" {
+		t.Errorf("expected hash to stay old-hash so the remaining episode retries, got %q", rec.hash)
+	}
+}
+
+// TestRunCheck_CaughtUpNoPending covers a legitimate no-op: the hash
+// changed (so the topic looks "updated") but the very first Download
+// returns ErrNoPendingEpisodes because every episode is already
+// downloaded or excluded by the start filter. This must be treated as a
+// graceful no-op — no error, and the hash advances to the now-current
+// state — not as a first-iteration download failure.
+func TestRunCheck_CaughtUpNoPending(t *testing.T) {
+	tr := &fakeTracker{
+		name: "faketracker",
+		checks: []checkResult{
+			{check: &domain.Check{Hash: "new-hash", Extra: map[string]any{}}, err: nil},
+		},
+		downloads: []downloadResult{
+			{err: registry.ErrNoPendingEpisodes},
+		},
+	}
+	f := newFixture(t, tr, false)
+
+	f.s.runCheck(context.Background(), f.s.log, f.topic)
+
+	if f.clientPlugin.addCalls != 0 {
+		t.Errorf("expected 0 client Add calls, got %d", f.clientPlugin.addCalls)
+	}
+	rec := f.lastRecord(t)
+	if rec.errMsg != "" {
+		t.Errorf("expected empty errMsg (graceful no-op, not a download failure), got %q", rec.errMsg)
+	}
+	// The hash DOES advance here: there is genuinely nothing pending, so
+	// the new state is fully processed and must not be re-checked as "new".
+	if rec.hash != "new-hash" {
+		t.Errorf("expected hash to advance to new-hash, got %q", rec.hash)
 	}
 }
 
