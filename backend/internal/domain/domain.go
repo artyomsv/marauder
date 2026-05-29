@@ -92,9 +92,11 @@ type TrackerCredential struct {
 	UserID      uuid.UUID
 	TrackerName string
 	Username    string
-	SecretEnc   []byte // nil if not set
-	SecretNonce []byte
-	Extra       map[string]any
+	SecretEnc    []byte // nil if not set
+	SecretNonce  []byte
+	SessionEnc   []byte // encrypted JSON cookie map; plaintext JSON in-memory after decrypt
+	SessionNonce []byte
+	Extra        map[string]any
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
 }

@@ -7,17 +7,28 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/artyomsv/marauder/backend/internal/domain"
 )
+
+// credsPool is the minimal subset of *pgxpool.Pool used by TrackerCredentials.
+// Defined as an unexported interface so tests can substitute a mock
+// (e.g. pgxmock) without changing the public constructor signature.
+// The concrete *pgxpool.Pool type still satisfies this interface.
+type credsPool interface {
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
 
 // TrackerCredentials is the repository for the tracker_credentials table.
 //
 // The table has a UNIQUE (user_id, tracker_name) constraint, so each
 // user can hold at most one credential per tracker plugin.
 type TrackerCredentials struct {
-	pool *pgxpool.Pool
+	pool credsPool
 }
 
 // NewTrackerCredentials constructs the repository.
@@ -28,15 +39,15 @@ func NewTrackerCredentials(pool *pgxpool.Pool) *TrackerCredentials {
 // Create inserts a new credential.
 func (r *TrackerCredentials) Create(ctx context.Context, c *domain.TrackerCredential) (*domain.TrackerCredential, error) {
 	const q = `
-INSERT INTO tracker_credentials (user_id, tracker_name, username, secret_enc, secret_nonce, extra)
-VALUES ($1,$2,$3,$4,$5,$6)
+INSERT INTO tracker_credentials (user_id, tracker_name, username, secret_enc, secret_nonce, session_enc, session_nonce, extra)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
 RETURNING id, created_at, updated_at`
 	extra, _ := json.Marshal(c.Extra)
 	if len(extra) == 0 {
 		extra = []byte("{}")
 	}
 	err := r.pool.QueryRow(ctx, q,
-		c.UserID, c.TrackerName, c.Username, c.SecretEnc, c.SecretNonce, extra,
+		c.UserID, c.TrackerName, c.Username, c.SecretEnc, c.SecretNonce, c.SessionEnc, c.SessionNonce, extra,
 	).Scan(&c.ID, &c.CreatedAt, &c.UpdatedAt)
 	return c, err
 }
@@ -59,7 +70,7 @@ func (r *TrackerCredentials) GetForTracker(ctx context.Context, userID uuid.UUID
 func (r *TrackerCredentials) ListForUser(ctx context.Context, userID uuid.UUID) ([]*domain.TrackerCredential, error) {
 	const q = `
 SELECT id, user_id, tracker_name, COALESCE(username,''), secret_enc, secret_nonce,
-       extra, created_at, updated_at
+       session_enc, session_nonce, extra, created_at, updated_at
 FROM tracker_credentials
 WHERE user_id = $1
 ORDER BY tracker_name ASC`
@@ -100,6 +111,20 @@ WHERE id = $1 AND user_id = $2`
 	return nil
 }
 
+// SetSession overwrites only the encrypted session-cookie blob.
+func (r *TrackerCredentials) SetSession(ctx context.Context, id, userID uuid.UUID, sessionEnc, sessionNonce []byte) error {
+	ct, err := r.pool.Exec(ctx,
+		`UPDATE tracker_credentials SET session_enc = $3, session_nonce = $4, updated_at = now() WHERE id = $1 AND user_id = $2`,
+		id, userID, sessionEnc, sessionNonce)
+	if err != nil {
+		return err
+	}
+	if ct.RowsAffected() == 0 {
+		return pgx.ErrNoRows
+	}
+	return nil
+}
+
 // Delete removes a credential.
 func (r *TrackerCredentials) Delete(ctx context.Context, id, userID uuid.UUID) error {
 	ct, err := r.pool.Exec(ctx, `DELETE FROM tracker_credentials WHERE id = $1 AND user_id = $2`, id, userID)
@@ -114,7 +139,7 @@ func (r *TrackerCredentials) Delete(ctx context.Context, id, userID uuid.UUID) e
 
 func (r *TrackerCredentials) scanOne(ctx context.Context, where string, args ...any) (*domain.TrackerCredential, error) {
 	q := `SELECT id, user_id, tracker_name, COALESCE(username,''), secret_enc, secret_nonce,
-                 extra, created_at, updated_at
+                 session_enc, session_nonce, extra, created_at, updated_at
           FROM tracker_credentials ` + where
 	row := r.pool.QueryRow(ctx, q, args...)
 	c, err := scanCred(row)
@@ -134,7 +159,7 @@ func scanCred(s rowScanner) (*domain.TrackerCredential, error) {
 	var extraRaw []byte
 	err := s.Scan(
 		&c.ID, &c.UserID, &c.TrackerName, &c.Username,
-		&c.SecretEnc, &c.SecretNonce, &extraRaw,
+		&c.SecretEnc, &c.SecretNonce, &c.SessionEnc, &c.SessionNonce, &extraRaw,
 		&c.CreatedAt, &c.UpdatedAt,
 	)
 	if err != nil {
