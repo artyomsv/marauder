@@ -2,7 +2,7 @@ package lostfilm
 
 import (
 	"context"
-	"errors"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -13,6 +13,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/artyomsv/marauder/backend/internal/domain"
+	"github.com/artyomsv/marauder/backend/internal/plugins/captchalogin"
 	"github.com/artyomsv/marauder/backend/internal/plugins/registry"
 	"github.com/artyomsv/marauder/backend/internal/plugins/trackers/forumcommon"
 )
@@ -38,65 +39,92 @@ const (
 // makes the next domain rotation a one-line change.
 var urlPattern = regexp.MustCompile(`^https?://(?:www\.)?lostfilm\.(?:tv|win|run)/series/([^/]+)/?`)
 
-// Login implements registry.WithCredentials.
+// captchaConfig is the LostFilm-specific configuration for the shared
+// interactive captcha-login engine. LostFilm's login endpoint is the
+// ajaxik users handler, and its captcha image is served by
+// simple_captcha.php on the same host.
+func (p *plugin) captchaConfig() captchalogin.Config {
+	base := "https://" + p.domain
+	return captchalogin.Config{
+		LoginURL:    base + "/ajaxik.users.php",
+		CaptchaURL:  base + "/simple_captcha.php",
+		CookieNames: []string{"lf_session"},
+		BuildForm: func(c *domain.TrackerCredential, answer string, needCaptcha bool) url.Values {
+			nc := "0"
+			if needCaptcha {
+				nc = "1"
+			}
+			return url.Values{
+				"act": {"users"}, "type": {"login"},
+				"mail": {c.Username}, "pass": {string(c.SecretEnc)},
+				"rem": {"1"}, "need_captcha": {nc}, "captcha": {answer},
+			}
+		},
+		Classify: classifyLostfilmLogin,
+	}
+}
+
+// classifyLostfilmLogin maps LostFilm's ajaxik JSON to an Outcome.
+func classifyLostfilmLogin(body []byte) captchalogin.Outcome {
+	s := string(body)
+	switch {
+	case strings.Contains(s, `"error":4`):
+		return captchalogin.OutcomeWrongCaptcha
+	case strings.Contains(s, `"need_captcha":true`):
+		return captchalogin.OutcomeNeedCaptcha
+	case strings.Contains(s, `"success"`):
+		return captchalogin.OutcomeSuccess
+	default:
+		return captchalogin.OutcomeFailed
+	}
+}
+
+// BeginLogin implements registry.WithInteractiveLogin.
+func (p *plugin) BeginLogin(ctx context.Context, creds *domain.TrackerCredential) (*registry.LoginChallenge, registry.SessionCookies, error) {
+	return p.eng().Begin(ctx, creds)
+}
+
+// CompleteLogin implements registry.WithInteractiveLogin.
+func (p *plugin) CompleteLogin(ctx context.Context, challengeID, answer string) (registry.SessionCookies, error) {
+	return p.eng().Complete(ctx, challengeID, answer)
+}
+
+// RefreshChallenge implements registry.WithInteractiveLogin.
+func (p *plugin) RefreshChallenge(ctx context.Context, challengeID string) (*registry.LoginChallenge, error) {
+	return p.eng().Refresh(ctx, challengeID)
+}
+
+// Login implements registry.WithCredentials. LostFilm logins go through
+// the interactive captcha flow (BeginLogin / CompleteLogin), which
+// persists the harvested session cookies into creds.SessionEnc. Login
+// therefore no longer POSTs credentials: it rehydrates the stored
+// cookies into the per-user session jar and confirms they are still
+// valid via Verify. A missing or dead session surfaces as
+// registry.ErrSessionExpired so the caller can re-run the captcha flow.
 func (p *plugin) Login(ctx context.Context, creds *domain.TrackerCredential) error {
-	if creds == nil || creds.Username == "" {
-		return errors.New("lostfilm credentials are required")
+	if creds == nil || len(creds.SessionEnc) == 0 {
+		return fmt.Errorf("lostfilm: no stored session; add the account via the captcha login flow: %w", registry.ErrSessionExpired)
+	}
+	var cookies map[string]string
+	if err := json.Unmarshal(creds.SessionEnc, &cookies); err != nil {
+		return fmt.Errorf("lostfilm: corrupt stored session: %w", registry.ErrSessionExpired)
 	}
 	sess := p.sessions.GetOrCreate(forumcommon.SessionKey(pluginName, creds.UserID.String()), userAgent)
 	if p.transport != nil {
 		sess.Client.Transport = p.transport
 	}
-	form := url.Values{
-		"act":  {"users"},
-		"type": {"login"},
-		"mail": {creds.Username},
-		"pass": {string(creds.SecretEnc)},
-		"rem":  {"1"},
+	u, _ := url.Parse("https://" + p.domain + "/")
+	jarCookies := make([]*http.Cookie, 0, len(cookies))
+	for name, val := range cookies {
+		jarCookies = append(jarCookies, &http.Cookie{Name: name, Value: val})
 	}
-	endpoint := "https://" + p.domain + "/ajaxik.php"
-	log.Debug().Str("plugin", pluginName).Str("step", "login").Str("url", endpoint).Str("user", creds.Username).Msg("POST login")
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(form.Encode()))
+	sess.Client.Jar.SetCookies(u, jarCookies)
+	ok, err := p.Verify(ctx, creds)
 	if err != nil {
-		return fmt.Errorf("lostfilm login: build request: %w", err)
+		return fmt.Errorf("lostfilm: session validation: %w", err)
 	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("User-Agent", userAgent)
-	resp, err := sess.Client.Do(req)
-	if err != nil {
-		return fmt.Errorf("lostfilm login: %w", err)
-	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
-	if err != nil {
-		return fmt.Errorf("lostfilm login: read body: %w", err)
-	}
-	log.Debug().Str("plugin", pluginName).Str("step", "login").Int("status", resp.StatusCode).Int("body_len", len(body)).Msg("login response")
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("lostfilm login failed: HTTP %d", resp.StatusCode)
-	}
-	// Captcha gate: LostFilm responds {"need_captcha":true,"result":"ok"}
-	// with HTTP 200 when it wants a captcha — common when the request
-	// originates from a datacenter/Docker egress IP or after repeated
-	// attempts. This carries no "error" key and even says result:"ok",
-	// so it must be detected explicitly; otherwise Login reports false
-	// success and Verify fails later with a misleading "credentials
-	// likely wrong". This is NOT a wrong-password condition.
-	if strings.Contains(string(body), `"need_captcha":true`) {
-		return fmt.Errorf("lostfilm login blocked by a captcha; sign in via a web browser to clear it, or route this tracker through the cfsolver sidecar: %w", registry.ErrCaptchaRequired)
-	}
-	// Negative-indicator check: LostFilm's /ajaxik.php returns
-	// {"error":1,"message":"..."} on failed login. But the real signal
-	// comes from Verify() (called by the credentials handler right after
-	// Login) which hits /my and looks for a positive authenticated
-	// marker. Don't trust this substring check in isolation.
-	if strings.Contains(string(body), `"error"`) {
-		return errors.New("lostfilm login failed: server returned error")
-	}
-	// A truly empty body (0-byte 200) is a strong hint something went
-	// wrong — real logins return a JSON user object.
-	if len(body) == 0 {
-		return errors.New("lostfilm login failed: empty response body")
+	if !ok {
+		return fmt.Errorf("lostfilm: stored session no longer valid; re-run the captcha login flow: %w", registry.ErrSessionExpired)
 	}
 	sess.LoggedIn = true
 	return nil
