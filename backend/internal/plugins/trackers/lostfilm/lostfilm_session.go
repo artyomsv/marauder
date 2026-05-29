@@ -13,6 +13,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/artyomsv/marauder/backend/internal/domain"
+	"github.com/artyomsv/marauder/backend/internal/plugins/registry"
 	"github.com/artyomsv/marauder/backend/internal/plugins/trackers/forumcommon"
 )
 
@@ -73,6 +74,16 @@ func (p *plugin) Login(ctx context.Context, creds *domain.TrackerCredential) err
 	log.Debug().Str("plugin", pluginName).Str("step", "login").Int("status", resp.StatusCode).Int("body_len", len(body)).Msg("login response")
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("lostfilm login failed: HTTP %d", resp.StatusCode)
+	}
+	// Captcha gate: LostFilm responds {"need_captcha":true,"result":"ok"}
+	// with HTTP 200 when it wants a captcha — common when the request
+	// originates from a datacenter/Docker egress IP or after repeated
+	// attempts. This carries no "error" key and even says result:"ok",
+	// so it must be detected explicitly; otherwise Login reports false
+	// success and Verify fails later with a misleading "credentials
+	// likely wrong". This is NOT a wrong-password condition.
+	if strings.Contains(string(body), `"need_captcha":true`) {
+		return fmt.Errorf("lostfilm login blocked by a captcha; sign in via a web browser to clear it, or route this tracker through the cfsolver sidecar: %w", registry.ErrCaptchaRequired)
 	}
 	// Negative-indicator check: LostFilm's /ajaxik.php returns
 	// {"error":1,"message":"..."} on failed login. But the real signal
