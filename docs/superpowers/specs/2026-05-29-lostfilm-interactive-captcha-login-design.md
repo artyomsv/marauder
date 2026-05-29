@@ -22,12 +22,18 @@ once, persist it, and reuse it for all subsequent checks.
 Spike findings that ground this design (verified live against
 www.lostfilm.tv and the monitorrent predecessor source):
 
-- Captcha image: `GET /simple_captcha.php` (append `?<rnd>` to refresh) —
-  a plain server-rendered image bound to the session cookie. Proxyable.
+- Captcha image: `GET /simple_captcha.php` (append `?<rnd>` to refresh).
+  Returns an `image/gif` (`GIF87a`). **This request is what seeds the
+  binding cookie** — it sets `PHPSESSID` (`GET /login` sets no cookie,
+  and the `ajaxik` login POST sets no cookie). The captcha answer is
+  validated against the `PHPSESSID` present on the session, so the
+  validating login POST must reuse the same cookie jar as the captcha
+  fetch. Verified live 2026-05-29.
 - Login endpoint: `POST /ajaxik.users.php` with
   `act=users&type=login&mail&pass&rem&need_captcha=1&captcha=<answer>`.
 - Answer field name: `captcha`.
-- Session cookie to persist: `lf_session`.
+- Cookies in play: `PHPSESSID` (transient, binds the captcha; not
+  persisted) and `lf_session` (the authenticated session, **persisted**).
 - Response classification: `success` → logged in; `error==4` → wrong
   captcha; `need_captcha` → captcha required.
 - Sessions appear portable (not hard IP-pinned): monitorrent reused a
@@ -102,9 +108,9 @@ auto-recover because a captcha is mandatory).
 
 ```go
 type LoginChallenge struct {
-    ChallengeID string // correlates Begin -> Complete
-    ImagePNG    []byte
-    MIMEType    string // e.g. "image/png"
+    ChallengeID string // correlates Begin -> Complete / Refresh
+    Image       []byte // raw captcha image bytes (LostFilm: GIF)
+    MIMEType    string // from the captcha response Content-Type, e.g. "image/gif"
 }
 
 type SessionCookies map[string]string // cookie name -> value
@@ -116,6 +122,11 @@ type WithInteractiveLogin interface {
     Tracker
     BeginLogin(ctx context.Context, creds *domain.TrackerCredential) (*LoginChallenge, SessionCookies, error)
     CompleteLogin(ctx context.Context, challengeID, answer string) (SessionCookies, error)
+    // RefreshChallenge re-fetches a new captcha image on the SAME pending
+    // session jar (cheap; does not re-run the login POST). Mirrors the
+    // site's own CaptchaRefresh() which just re-GETs the image — avoids
+    // escalating rate-limiting on an already bot-flagged IP.
+    RefreshChallenge(ctx context.Context, challengeID string) (*LoginChallenge, error)
 }
 ```
 
@@ -134,9 +145,16 @@ const (
 )
 
 type Config struct {
+    SeedURL    string   // optional: GET'd first to seed a session cookie.
+                        // LostFilm leaves this empty — its CaptchaURL
+                        // self-seeds PHPSESSID. Provided for trackers
+                        // whose captcha needs a pre-existing session.
     LoginURL   string
     CaptchaURL string
-    CookieNames []string // cookies to harvest into SessionCookies
+    CookieNames []string // cookies to harvest into SessionCookies (the
+                        // persisted auth cookie(s), e.g. ["lf_session"]).
+                        // Transient binding cookies (PHPSESSID) are NOT
+                        // listed — they live in the jar, not persisted.
     BuildForm  func(c *domain.TrackerCredential, answer string, needCaptcha bool) url.Values
     Classify   func(body []byte) Outcome
 }
@@ -145,6 +163,7 @@ type Engine struct { /* cfg, pending store, session factory */ }
 
 func (e *Engine) Begin(ctx, creds) (*registry.LoginChallenge, registry.SessionCookies, error)
 func (e *Engine) Complete(ctx, challengeID, answer string) (registry.SessionCookies, error)
+func (e *Engine) Refresh(ctx, challengeID string) (*registry.LoginChallenge, error)
 ```
 
 `Classify` is the only genuinely tracker-specific bit; the engine never
@@ -154,30 +173,41 @@ with lazy expiry on access plus periodic eviction. `challengeID` is
 crypto-random hex.
 
 Engine.Begin:
-1. New session jar; POST `LoginURL` with `BuildForm(creds, "", false)`.
-2. `Classify(body)`:
+1. New session jar. If `SeedURL` set, `GET` it on the jar first.
+2. POST `LoginURL` with `BuildForm(creds, "", false)`.
+3. `Classify(body)`:
    - `OutcomeSuccess` → harvest `CookieNames` from jar → return
-     `(nil, cookies, nil)`.
-   - `OutcomeNeedCaptcha` → `GET CaptchaURL` on the same jar → read image
-     → store pending under a new `challengeID` → return
+     `(nil, cookies, nil)` (trusted IP, no captcha).
+   - `OutcomeNeedCaptcha` → `GET CaptchaURL` on the same jar (for
+     LostFilm this is what sets `PHPSESSID`) → read image + Content-Type
+     → store pending `{jar, creds}` under a new `challengeID` → return
      `(&LoginChallenge{...}, nil, nil)`.
    - else → error.
 
+Engine.Refresh:
+1. Load pending by `challengeID` (error if missing/expired).
+2. `GET CaptchaURL` on the stored jar (same `PHPSESSID`) → return a new
+   `LoginChallenge` with the same `challengeID` and the fresh image.
+
 Engine.Complete:
 1. Load pending by `challengeID` (error if missing/expired).
-2. POST `LoginURL` with `BuildForm(creds, answer, true)` on the stored jar.
+2. POST `LoginURL` with `BuildForm(creds, answer, true)` on the stored
+   jar (carries the captcha-bound `PHPSESSID`).
 3. `Classify(body)`:
-   - `OutcomeSuccess` → harvest cookies → evict pending → return cookies.
-   - `OutcomeWrongCaptcha` → return typed error (caller restarts via
-     a fresh Begin); evict pending.
+   - `OutcomeSuccess` → harvest `CookieNames` (e.g. `lf_session`) →
+     evict pending → return cookies.
+   - `OutcomeWrongCaptcha` → return typed error; keep pending so the
+     caller can `Refresh` and retry. (Pending still TTL-evicts.)
    - else → error; evict pending.
 
 ### LostFilm wiring
 
 `captchalogin.Config`:
+- `SeedURL`   = "" (empty — `CaptchaURL` self-seeds `PHPSESSID`)
 - `LoginURL`  = `https://<domain>/ajaxik.users.php`
 - `CaptchaURL`= `https://<domain>/simple_captcha.php`
-- `CookieNames` = `["lf_session"]`
+- `CookieNames` = `["lf_session"]` (the persisted auth cookie; `PHPSESSID`
+  stays in the jar, not harvested)
 - `BuildForm` → `act=users,type=login,mail=Username,pass=SecretEnc,
   rem=1,need_captcha=<0|1>,captcha=<answer>`
 - `Classify` → parse JSON: `success` truthy → Success; `error==4` →
@@ -227,8 +257,16 @@ Both admin-authenticated, same as existing `/credentials`.
 - success → encrypt cookie map, persist credential (username from the
   pending entry), evict pending, audit `credential_create`, return
   `{credential: <CredView>}` (201).
-- wrong captcha → 422 "captcha incorrect; please restart"; frontend
-  re-calls begin for a fresh image.
+- wrong captcha → 422 `captcha_incorrect`; pending is kept so the
+  frontend calls `/interactive/refresh` for a fresh image and retries.
+
+`POST /api/v1/credentials/interactive/refresh`
+- body: `{tracker_name, challenge_id}`
+- Verify caller owns the challenge (else 404). Call `RefreshChallenge` →
+  return `{challenge_id, captcha_image:"data:<mime>;base64,<...>"}`.
+- Lighter than re-running begin: re-GETs the captcha on the existing
+  pending jar, mirroring the site's own `CaptchaRefresh()`. Avoids a
+  fresh login POST that could escalate rate-limiting on a flagged IP.
 
 Handler-side pending store mirrors the engine's: small mutex-guarded map
 with TTL. It holds only non-secret correlation metadata. The password
@@ -248,10 +286,12 @@ When the selected tracker has `supports_interactive_login`:
 2. POST `/interactive/begin`.
    - `logged_in` → toast success, invalidate `QK.credentials`, close.
    - `captcha` → render `<img src={captcha_image}>`, an answer input,
-     and a "↻ refresh" link that re-calls begin.
+     and a "↻ refresh" link that calls `/interactive/refresh`.
 3. User submits answer → POST `/interactive/complete`.
    - success → credential row appears, close.
-   - 422 → inline error + auto-refresh a new captcha image.
+   - 422 `captcha_incorrect` → inline error; auto-call
+     `/interactive/refresh` to swap in a fresh image and let the user
+     retry (same challenge, no restart).
 
 Non-interactive trackers keep the existing single-step create flow
 unchanged. Add new `QK` keys, React Query mutations, and en/ru `useT()`
@@ -263,7 +303,7 @@ calls from the browser to the tracker — session stays server-side).
 | Condition | Surfaced as |
 |---|---|
 | Tracker has no `WithInteractiveLogin` | 422 at `/begin` |
-| Wrong captcha answer | 422 at `/complete`; UI refreshes image |
+| Wrong captcha answer | 422 `captcha_incorrect` at `/complete`; pending kept; UI calls `/refresh` and retries |
 | Challenge expired / unknown | 404 at `/complete`; UI restarts flow |
 | Challenge not owned by caller | 404 (no info leak) |
 | Stored session expired (scheduler) | `Login` returns `ErrSessionExpired`; topic shows `auth failed: ... session expired`; user re-runs flow |
@@ -272,8 +312,9 @@ calls from the browser to the tracker — session stays server-side).
 ## Testing
 
 - `captchalogin` engine — httptest stub: success-no-captcha,
-  need-captcha→complete-success, wrong-captcha, TTL eviction, unknown
-  challenge ID, cookie harvesting.
+  need-captcha→complete-success, wrong-captcha (pending kept),
+  refresh-returns-fresh-image-on-same-jar, TTL eviction, unknown
+  challenge ID, cookie harvesting, optional `SeedURL` GET.
 - LostFilm — extend fixture e2e: stub `/ajaxik.users.php` +
   `/simple_captcha.php`; assert `BeginLogin` returns image bytes,
   `CompleteLogin` harvests `lf_session`, rewritten `Login` rehydrates
