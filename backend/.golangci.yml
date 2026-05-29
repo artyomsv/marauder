@@ -50,6 +50,17 @@ linters:
         # site is noisier than the warning.
         - G401
         - G505
+        # G124 (cookie missing Secure/HttpOnly/SameSite) — false positives:
+        # the OIDC state cookie sets HttpOnly + SameSite and Secure
+        # conditionally on https (gosec doesn't track the conditional); its
+        # matching deletion cookie carries no value; and the LostFilm session
+        # jar builds *outbound request* cookies, not Set-Cookie responses,
+        # where these attributes don't apply.
+        - G124
+        # G710 (open redirect via taint) — the OIDC callback redirect target
+        # is built from trusted server config (BaseURL) plus server-generated
+        # tokens, never user-controlled input.
+        - G710
     errcheck:
       check-blank: false
       # The .Close() and .Rollback() methods are idiomatically deferred
