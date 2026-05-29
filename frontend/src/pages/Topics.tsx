@@ -14,7 +14,7 @@ import {
   X,
 } from "lucide-react";
 
-import { api, type Topic } from "@/lib/api";
+import { api, type Topic, type CredentialView } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -379,6 +379,18 @@ function AddTopicCard({ onClose, onCreated }: AddTopicCardProps) {
     retry: false,
   });
   const match = trackerMatchQuery.data ?? null;
+
+  // The user may already have an account for this tracker — don't nag them
+  // to add one if they do. Gate the credentials warning on the absence of a
+  // matching credential rather than on requires_credentials alone.
+  const credentialsQuery = useQuery({
+    queryKey: QK.credentials,
+    queryFn: () => api.get<{ credentials: CredentialView[] | null }>("/credentials"),
+    staleTime: 60_000,
+  });
+  const hasCredential = (credentialsQuery.data?.credentials ?? []).some(
+    (c) => c.tracker_name === match?.tracker_name,
+  );
   const matchError = trackerMatchQuery.isError
     ? "No tracker plugin matches this URL."
     : null;
@@ -503,12 +515,18 @@ function AddTopicCard({ onClose, onCreated }: AddTopicCardProps) {
             </div>
           )}
 
-          {match?.requires_credentials && (
+          {match?.requires_credentials && !hasCredential && (
             <div className="rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-warning">
               This tracker requires login credentials.{" "}
               <a href="/accounts" className="font-semibold underline-offset-4 hover:underline">
                 Add a {match.display_name} account →
               </a>
+            </div>
+          )}
+
+          {match?.requires_credentials && hasCredential && (
+            <div className="rounded-md border border-success/40 bg-success/10 px-3 py-2 text-xs text-success">
+              ✓ Using your {match.display_name} account.
             </div>
           )}
 
