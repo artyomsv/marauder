@@ -41,7 +41,7 @@ techdebt/       Debt-tracking files (one per issue, see global rule)
 | `crypto` | AES-256-GCM for tracker credentials and client config blobs |
 | `db` / `db/repo` | pgxpool wrapper + repository structs (`Topics`, `Clients`, `Notifiers`, `Users`, `TrackerCredentials`, `Audit`, `Settings`). `TrackerCredentials` carries encrypted `secret_enc` (password) **and** `session_enc`/`session_nonce` (cookie-session blob; migration `0002`), plus a nullable `session_expired_at` marker (migration `0003`) the scheduler uses to dedupe expiry notifications (atomic `MarkSessionExpired`, cleared by `SetSession` on re-auth) |
 | **`notify`** | reusable notification dispatcher — `Send(userID, domain.Message)` fans out to all of a user's configured notifiers (best-effort, metered). First/only consumer: scheduler session-expiry alerts. The single event→notifier fan-out point |
-| `domain` | core types: `Topic`, `Check`, `Payload`, `TrackerCredential` |
+| `domain` | core types: `Topic` (incl. per-topic `ClientID`, `DownloadDir`, `Category`), `Check`, `Payload`, `TrackerCredential`, `AddOptions` (`DownloadDir` + `Category`) |
 | **`extra`** | shared `extra.Int / StringSlice / String` helpers for the untyped `map[string]any` blobs in `Topic.Extra` and `Check.Extra` (added 2026-04-07; **use this instead of writing local helpers**) |
 | `logging` | zerolog setup (JSON in prod, pretty in dev) |
 | `metrics` | Prometheus collectors (HTTP, scheduler, tracker, client) |
@@ -77,6 +77,16 @@ techdebt/       Debt-tracking files (one per issue, see global rule)
      `updated || anySubmitted`.
 4. `recordResult` — persists `next_check_at` (with exponential backoff
    on errors, capped at 6h) and writes the run summary metrics.
+
+**Per-topic delivery:** `sendViaClient` passes `domain.AddOptions{DownloadDir:
+t.DownloadDir, Category: t.Category}` to the client plugin, so each topic can
+target its own save folder and (qBittorrent) category. Transmission ignores
+`Category`. Both fields are editable via `PUT /topics/{id}`.
+
+**Errored-topic retry:** `DueForCheck` selects `WHERE status IN
+('active','error')`, so a topic that errors keeps retrying on its already-
+persisted backoff `next_check_at` (≤6h) instead of parking permanently. A
+successful check flips the status back to `active` (`paused` stays excluded).
 
 The scheduler depends on small **consumer-side interfaces** (`topicsRepo`,
 `markEpisodeDownloader`, `clientsRepo`, `credentialsRepo`, `decryptor`)
