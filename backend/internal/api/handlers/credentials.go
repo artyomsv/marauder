@@ -27,11 +27,30 @@ import (
 // it needs to call the plugin's Login (on POST/test/etc.) and never
 // returns the plaintext to the client. The list endpoint returns
 // usernames and IDs but not secrets.
+// credentialStore is the consumer-side seam over *repo.TrackerCredentials
+// so the handler is unit-testable with a fake store (mirrors the
+// scheduler's consumer-interface pattern). *repo.TrackerCredentials
+// satisfies it, so production wiring is unchanged.
+type credentialStore interface {
+	Create(ctx context.Context, c *domain.TrackerCredential) (*domain.TrackerCredential, error)
+	GetByID(ctx context.Context, id, userID uuid.UUID) (*domain.TrackerCredential, error)
+	ListForUser(ctx context.Context, userID uuid.UUID) ([]*domain.TrackerCredential, error)
+	Update(ctx context.Context, id, userID uuid.UUID, username string, secretEnc, secretNonce []byte) error
+	Delete(ctx context.Context, id, userID uuid.UUID) error
+}
+
 type Credentials struct {
-	Creds   *repo.TrackerCredentials
+	Creds   credentialStore
 	Master  *crypto.MasterKey
 	Audit   *audit.Logger
 	BaseURL string
+	pending *interactivePendingStore
+}
+
+// NewCredentials builds the handler with an initialized interactive-login
+// pending store.
+func NewCredentials(creds credentialStore, master *crypto.MasterKey, auditLog *audit.Logger, baseURL string) *Credentials {
+	return &Credentials{Creds: creds, Master: master, Audit: auditLog, BaseURL: baseURL, pending: newInteractivePendingStore()}
 }
 
 // credentialView is the safe-to-return shape — never includes the secret.
