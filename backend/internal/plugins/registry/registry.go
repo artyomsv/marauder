@@ -91,6 +91,19 @@ type WithEpisodeFilter interface {
 	SupportsEpisodeFilter() bool
 }
 
+// Season is one released season and its released episode numbers.
+type Season struct {
+	Number   int   `json:"number"`
+	Episodes []int `json:"episodes"`
+}
+
+// WithSeasonCatalog is implemented by trackers that can enumerate a
+// series' released seasons/episodes from its URL.
+type WithSeasonCatalog interface {
+	Tracker
+	SeasonCatalog(ctx context.Context, url string) ([]Season, error)
+}
+
 // --- Client & Notifier interfaces ---------------------------------------
 
 // Client is a torrent client plugin.
