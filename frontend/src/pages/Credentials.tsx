@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   AlertCircle,
+  AlertTriangle,
   CheckCircle2,
   KeyRound,
   Loader2,
@@ -11,7 +12,7 @@ import {
   RefreshCw,
 } from "lucide-react";
 
-import { api, ApiError } from "@/lib/api";
+import { api, ApiError, type CredentialView } from "@/lib/api";
 import { useSystemInfo } from "@/lib/hooks/useSystemInfo";
 import { useT } from "@/i18n";
 import { QK } from "@/lib/queryKeys";
@@ -31,18 +32,10 @@ import { ResourceCard } from "@/components/shared/ResourceCard";
  * gates content behind a session cookie.
  */
 
-type CredentialView = {
-  id: string;
-  tracker_name: string;
-  display_name: string;
-  username: string;
-  created_at: string;
-  updated_at: string;
-};
-
 type CredList = { credentials: CredentialView[] | null };
 
 export function CredentialsPage() {
+  const t = useT();
   const qc = useQueryClient();
   const { data: credsData, isLoading } = useQuery({
     queryKey: QK.credentials,
@@ -52,6 +45,7 @@ export function CredentialsPage() {
 
   const [showAdd, setShowAdd] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [reauthId, setReauthId] = useState<string | null>(null);
   const credentials = credsData?.credentials ?? [];
   const trackers = systemInfo?.trackers ?? [];
 
@@ -150,6 +144,12 @@ export function CredentialsPage() {
                   <span className="text-xs text-muted-foreground">
                     {c.username}
                   </span>
+                  {c.session_expired && (
+                    <Badge variant="destructive" className="gap-1">
+                      <AlertTriangle className="size-3" />
+                      {t("credentials.sessionExpired")}
+                    </Badge>
+                  )}
                 </>
               }
               actions={
@@ -188,12 +188,34 @@ export function CredentialsPage() {
                   )}
                   Test login
                 </Button>
+                {c.session_expired && reauthId !== c.id && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setReauthId(c.id)}
+                  >
+                    <RefreshCw className="size-4" />
+                    {t("credentials.reauthenticate")}
+                  </Button>
+                )}
               </div>
               {test.isError && test.variables === c.id && (
                 <div className="mt-2 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
                   {(test.error as Error)?.message}
                 </div>
               )}
+              <AnimatePresence>
+                {reauthId === c.id && (
+                  <ReauthDialog
+                    credential={c}
+                    onClose={() => setReauthId(null)}
+                    onDone={() => {
+                      setReauthId(null);
+                      qc.invalidateQueries({ queryKey: QK.credentials });
+                    }}
+                  />
+                )}
+              </AnimatePresence>
             </ResourceCard>
           ))}
         </div>
@@ -503,6 +525,153 @@ function CaptchaChallenge({
       />
       {errorText && <p className="text-sm text-destructive">{errorText}</p>}
     </div>
+  );
+}
+
+// ReauthDialog re-establishes the session cookie for a credential whose
+// server-side session expired. It is captcha-ONLY: the backend reuses the
+// stored password, so there are no email/password inputs here. The flow
+// mirrors AddCredentialCard's begin/complete/refresh trio but keyed by the
+// credential id, and reuses the shared CaptchaChallenge component.
+function ReauthDialog({
+  credential,
+  onClose,
+  onDone,
+}: {
+  credential: CredentialView;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const t = useT();
+  const [error, setError] = useState<string | null>(null);
+  // null until reauthBegin hands back a captcha challenge.
+  const [captcha, setCaptcha] = useState<CaptchaState | null>(null);
+
+  // Step 1: begin. logged_in (stored password still valid) → done; captcha
+  // → relay the challenge. Empty body — the backend uses the stored password.
+  const begin = useMutation({
+    mutationFn: () => api.reauthBegin(credential.id),
+    onSuccess: (res) => {
+      if (res.status === "logged_in") {
+        onDone();
+        return;
+      }
+      setCaptcha({
+        challengeId: res.challenge_id ?? "",
+        captchaImage: res.captcha_image ?? "",
+        answer: "",
+        error: null,
+      });
+    },
+    onError: (err) => setError(problemDetail(err)),
+  });
+
+  // Image refresh — reuses the shared interactive refresh endpoint, keyed by
+  // challenge_id. Routed through a mutation so the submit button can disable
+  // while a refresh is in flight (mirrors the add flow's hardened behaviour).
+  const refresh = useMutation({
+    mutationFn: () =>
+      api.interactiveRefresh({
+        tracker_name: credential.tracker_name,
+        challenge_id: captcha!.challengeId,
+      }),
+    onSuccess: (fresh) =>
+      setCaptcha((prev) =>
+        prev
+          ? { ...prev, challengeId: fresh.challenge_id, captchaImage: fresh.captcha_image, answer: "" }
+          : prev,
+      ),
+    onError: (err) =>
+      setCaptcha((prev) => (prev ? { ...prev, error: problemDetail(err) } : prev)),
+  });
+
+  // Step 2: submit the captcha answer. Wrong answer → inline message AND a
+  // fresh image so the user can retry without leaving the dialog.
+  const complete = useMutation({
+    mutationFn: (answer: string) =>
+      api.reauthComplete(credential.id, {
+        challenge_id: captcha!.challengeId,
+        answer,
+      }),
+    onSuccess: () => onDone(),
+    onError: (err) => {
+      if (err instanceof ApiError && err.problem.detail === "captcha_incorrect") {
+        setCaptcha((prev) =>
+          prev ? { ...prev, error: t("credentials.captchaIncorrect") } : prev,
+        );
+        refresh.mutate();
+        return;
+      }
+      setCaptcha((prev) => (prev ? { ...prev, error: problemDetail(err) } : prev));
+    },
+  });
+
+  // Kick off begin exactly once when the dialog opens. The ref guard
+  // stops React StrictMode's double-invoked effect (dev) from firing two
+  // reauthBegin POSTs and creating two server-side pending challenges.
+  const started = useRef(false);
+  useEffect(() => {
+    if (started.current) return;
+    started.current = true;
+    begin.mutate();
+  }, [begin]);
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, height: 0 }}
+      animate={{ opacity: 1, height: "auto" }}
+      exit={{ opacity: 0, height: 0 }}
+      transition={{ duration: 0.2 }}
+      className="mt-4"
+    >
+      <div className="space-y-3 rounded-md border border-input bg-background/40 p-4">
+        {begin.isPending && (
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <Loader2 className="size-4 animate-spin" />
+            {t("credentials.reauthenticate")}
+          </div>
+        )}
+
+        {captcha && (
+          <CaptchaChallenge
+            imageSrc={captcha.captchaImage}
+            answer={captcha.answer}
+            errorText={captcha.error}
+            isRefreshing={refresh.isPending}
+            onAnswerChange={(value) =>
+              setCaptcha((prev) => (prev ? { ...prev, answer: value } : prev))
+            }
+            onRefresh={() => {
+              setCaptcha((prev) => (prev ? { ...prev, error: null } : prev));
+              refresh.mutate();
+            }}
+          />
+        )}
+
+        {error && (
+          <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+            {error}
+          </div>
+        )}
+
+        <div className="flex justify-end gap-2">
+          <Button type="button" variant="outline" size="sm" onClick={onClose}>
+            {t("credentials.captchaCancel")}
+          </Button>
+          {captcha && (
+            <Button
+              type="button"
+              size="sm"
+              disabled={complete.isPending || refresh.isPending || !captcha.answer}
+              onClick={() => complete.mutate(captcha.answer)}
+            >
+              {complete.isPending && <Loader2 className="size-4 animate-spin" />}
+              {t("credentials.captchaSubmit")}
+            </Button>
+          )}
+        </div>
+      </div>
+    </motion.div>
   );
 }
 

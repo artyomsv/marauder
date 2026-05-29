@@ -89,6 +89,8 @@ const ru: Record<string, string> = {
   "credentials.captchaIncorrect": "Неверный код, попробуйте ещё раз",
   "credentials.captchaSubmit": "Проверить и сохранить",
   "credentials.captchaCancel": "Отмена",
+  "credentials.sessionExpired": "Сессия истекла",
+  "credentials.reauthenticate": "Повторная авторизация",
 
   // Settings
   "settings.kicker": "настройки",

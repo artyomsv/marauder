@@ -134,6 +134,15 @@ Advertise the capability to the credentials UI by ensuring it shows up in
 `supports_interactive_login` flag). See `plugins/trackers/lostfilm` for
 the reference implementation.
 
+The interactive add flow also persists the **password** (encrypted
+`secret_enc`) so an expired session can be re-established without
+re-entering credentials. When `Login` returns `ErrSessionExpired`, the
+scheduler fires a one-shot notification (via the `notify` dispatcher) and
+the UI offers a captcha-only re-auth (`/credentials/{id}/reauth/*`) that
+decrypts the stored password to fetch a fresh captcha. So a captcha
+tracker should implement BOTH `WithCredentials` (cookie rehydration in
+`Login`) and `WithInteractiveLogin` (the captcha flow).
+
 ### Sharing HTTP sessions
 
 Forum-style trackers should use `internal/plugins/trackers/forumcommon`

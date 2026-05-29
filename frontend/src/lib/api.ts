@@ -144,6 +144,15 @@ export const api = {
     request<{ credential: CredentialView }>("POST", "/credentials/interactive/complete", body),
   interactiveRefresh: (body: { tracker_name: string; challenge_id: string }) =>
     request<InteractiveRefreshResult>("POST", "/credentials/interactive/refresh", body),
+
+  // --- Re-authentication for an existing credential whose session cookie
+  // expired. Mirrors the interactive begin/complete pair but uses the
+  // stored password server-side, so the body is empty — the user only
+  // ever solves a captcha. Image refreshes reuse `interactiveRefresh`.
+  reauthBegin: (id: string) =>
+    request<InteractiveBeginResult>("POST", `/credentials/${id}/reauth/begin`, {}),
+  reauthComplete: (id: string, body: { challenge_id: string; answer: string }) =>
+    request<{ credential: CredentialView }>("POST", `/credentials/${id}/reauth/complete`, body),
 };
 
 // --- Typed models mirroring backend/internal/domain ---------------------
@@ -153,6 +162,7 @@ export interface CredentialView {
   tracker_name: string;
   display_name: string;
   username: string;
+  session_expired: boolean;
   created_at: string;
   updated_at: string;
 }

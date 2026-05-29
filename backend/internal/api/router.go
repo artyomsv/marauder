@@ -146,6 +146,8 @@ func NewRouter(d Deps) http.Handler {
 			r.Post("/credentials/interactive/begin", credsH.BeginInteractive)
 			r.Post("/credentials/interactive/complete", credsH.CompleteInteractive)
 			r.Post("/credentials/interactive/refresh", credsH.RefreshInteractive)
+			r.Post("/credentials/{id}/reauth/begin", credsH.ReauthBegin)
+			r.Post("/credentials/{id}/reauth/complete", credsH.ReauthComplete)
 
 			// Admin-only
 			r.Group(func(r chi.Router) {

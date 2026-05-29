@@ -39,7 +39,8 @@ techdebt/       Debt-tracking files (one per issue, see global rule)
 | `cfsolver` | in-process client to the standalone `cfsolver/` service |
 | `config` | env-driven config struct (caarlos0/env) — **add new env vars here** |
 | `crypto` | AES-256-GCM for tracker credentials and client config blobs |
-| `db` / `db/repo` | pgxpool wrapper + repository structs (`Topics`, `Clients`, `Notifiers`, `Users`, `TrackerCredentials`, `Audit`, `Settings`). `TrackerCredentials` carries encrypted `secret_enc` (password) **and** `session_enc`/`session_nonce` (cookie-session blob for interactive-login trackers; migration `0002`) |
+| `db` / `db/repo` | pgxpool wrapper + repository structs (`Topics`, `Clients`, `Notifiers`, `Users`, `TrackerCredentials`, `Audit`, `Settings`). `TrackerCredentials` carries encrypted `secret_enc` (password) **and** `session_enc`/`session_nonce` (cookie-session blob; migration `0002`), plus a nullable `session_expired_at` marker (migration `0003`) the scheduler uses to dedupe expiry notifications (atomic `MarkSessionExpired`, cleared by `SetSession` on re-auth) |
+| **`notify`** | reusable notification dispatcher — `Send(userID, domain.Message)` fans out to all of a user's configured notifiers (best-effort, metered). First/only consumer: scheduler session-expiry alerts. The single event→notifier fan-out point |
 | `domain` | core types: `Topic`, `Check`, `Payload`, `TrackerCredential` |
 | **`extra`** | shared `extra.Int / StringSlice / String` helpers for the untyped `map[string]any` blobs in `Topic.Extra` and `Check.Extra` (added 2026-04-07; **use this instead of writing local helpers**) |
 | `logging` | zerolog setup (JSON in prod, pretty in dev) |
@@ -251,8 +252,19 @@ Trackers that gate login behind a captcha implement
 from a `captchalogin.Config`. The user solves the captcha in-app via
 `POST /api/v1/credentials/interactive/{begin,complete,refresh}`; the
 harvested session cookie is persisted (encrypted) in
-`tracker_credentials.session_enc`. Such a plugin's `Login` rehydrates the
-stored cookie into its session jar and validates it via `Verify`,
-returning `registry.ErrSessionExpired` when the cookie is missing/dead so
-the user is prompted to re-run the captcha flow. LostFilm is the
-reference implementation.
+`tracker_credentials.session_enc`. The password is **also** persisted
+(encrypted `secret_enc`) on the interactive add so the session can later
+be re-established without re-entering credentials. Such a plugin's
+`Login` rehydrates the stored cookie into its session jar and validates
+it via `Verify`, returning `registry.ErrSessionExpired` when the cookie
+is missing/dead. LostFilm is the reference implementation.
+
+**Expiry → notify → re-auth loop:** when `Login` returns
+`ErrSessionExpired`, the scheduler atomically marks the credential
+(`session_expired_at`) and fires a one-shot notification via `notify`
+(deduped — only the check that wins the NULL→now() transition notifies).
+The credential view exposes `session_expired`; the UI shows a badge and a
+**captcha-only** re-auth dialog backed by
+`POST /api/v1/credentials/{id}/reauth/{begin,complete}` — these decrypt
+the stored password to fetch a fresh captcha (no credential re-entry) and
+`SetSession` clears the expiry marker on success.

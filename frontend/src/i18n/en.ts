@@ -87,6 +87,8 @@ const en: Record<string, string> = {
   "credentials.captchaIncorrect": "Incorrect code, please try again",
   "credentials.captchaSubmit": "Verify & save",
   "credentials.captchaCancel": "Cancel",
+  "credentials.sessionExpired": "Session expired",
+  "credentials.reauthenticate": "Re-authenticate",
 
   // Settings
   "settings.kicker": "preferences",

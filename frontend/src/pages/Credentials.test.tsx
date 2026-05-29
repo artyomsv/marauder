@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import type { ReactNode } from "react";
+import { StrictMode, type ReactNode } from "react";
 
 import { CredentialsPage } from "./Credentials";
 import { ApiError } from "@/lib/api";
@@ -23,6 +23,8 @@ vi.mock("@/lib/api", async () => {
       interactiveBegin: vi.fn(),
       interactiveComplete: vi.fn(),
       interactiveRefresh: vi.fn(),
+      reauthBegin: vi.fn(),
+      reauthComplete: vi.fn(),
     },
   };
 });
@@ -53,6 +55,20 @@ const mockApi = api as unknown as {
   interactiveBegin: ReturnType<typeof vi.fn>;
   interactiveComplete: ReturnType<typeof vi.fn>;
   interactiveRefresh: ReturnType<typeof vi.fn>;
+  reauthBegin: ReturnType<typeof vi.fn>;
+  reauthComplete: ReturnType<typeof vi.fn>;
+};
+
+// A credential row whose server-side session expired — drives the
+// re-authenticate badge + captcha-only dialog tests.
+const expiredCredential = {
+  id: "cred-1",
+  tracker_name: "lostfilm",
+  display_name: "My LostFilm",
+  username: "user@example.com",
+  session_expired: true,
+  created_at: "2026-01-01T00:00:00Z",
+  updated_at: "2026-01-01T00:00:00Z",
 };
 
 function renderPage() {
@@ -61,6 +77,21 @@ function renderPage() {
   });
   const wrapper = ({ children }: { children: ReactNode }) => (
     <QueryClientProvider client={client}>{children}</QueryClientProvider>
+  );
+  return render(<CredentialsPage />, { wrapper });
+}
+
+// Same as renderPage but wrapped in StrictMode, which double-invokes
+// effects in dev. RTL does NOT enable StrictMode by default, so this is
+// the only way to prove the reauth-begin effect fires exactly once.
+function renderPageStrict() {
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
+  const wrapper = ({ children }: { children: ReactNode }) => (
+    <StrictMode>
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    </StrictMode>
   );
   return render(<CredentialsPage />, { wrapper });
 }
@@ -251,5 +282,145 @@ describe("CredentialsPage — interactive captcha flow", () => {
     // and no captcha UI appears.
     expect(mockApi.interactiveBegin).not.toHaveBeenCalled();
     expect(screen.queryByRole("img", { name: /captcha/i })).not.toBeInTheDocument();
+  });
+});
+
+describe("CredentialsPage — session-expired re-authentication", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    supportsInteractiveLogin = true;
+    mockApi.get.mockResolvedValue({ credentials: [expiredCredential] });
+  });
+
+  it("shows the session-expired badge and a Re-authenticate button", async () => {
+    renderPage();
+    expect(await screen.findByText(/session expired/i)).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /re-authenticate/i }),
+    ).toBeInTheDocument();
+  });
+
+  it("opens a captcha-only dialog with NO email/password inputs", async () => {
+    const user = userEvent.setup();
+    mockApi.reauthBegin.mockResolvedValue({
+      status: "captcha",
+      challenge_id: "rc1",
+      captcha_image: "data:image/gif;base64,Rk=",
+    });
+
+    renderPage();
+    await user.click(
+      await screen.findByRole("button", { name: /re-authenticate/i }),
+    );
+
+    const img = await screen.findByRole("img", { name: /captcha/i });
+    expect(img).toHaveAttribute("src", "data:image/gif;base64,Rk=");
+    expect(mockApi.reauthBegin).toHaveBeenCalledWith("cred-1");
+    // Captcha-only: the re-auth flow must never ask for credentials again.
+    expect(screen.getByPlaceholderText(/code from the image/i)).toBeInTheDocument();
+    expect(screen.queryByLabelText(/password/i)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/username \/ email/i)).not.toBeInTheDocument();
+  });
+
+  it("closes and invalidates when begin returns logged_in", async () => {
+    const user = userEvent.setup();
+    mockApi.reauthBegin.mockResolvedValue({ status: "logged_in" });
+
+    renderPage();
+    await user.click(
+      await screen.findByRole("button", { name: /re-authenticate/i }),
+    );
+
+    await waitFor(() => expect(mockApi.reauthBegin).toHaveBeenCalledWith("cred-1"));
+    // No captcha shown, list re-fetched (get called again on invalidation).
+    expect(screen.queryByRole("img", { name: /captcha/i })).not.toBeInTheDocument();
+    await waitFor(() => expect(mockApi.get.mock.calls.length).toBeGreaterThan(1));
+  });
+
+  it("completes a correct captcha answer, then closes + invalidates", async () => {
+    const user = userEvent.setup();
+    mockApi.reauthBegin.mockResolvedValue({
+      status: "captcha",
+      challenge_id: "rc1",
+      captcha_image: "data:image/gif;base64,Rk=",
+    });
+    mockApi.reauthComplete.mockResolvedValue({ credential: expiredCredential });
+
+    renderPage();
+    await user.click(
+      await screen.findByRole("button", { name: /re-authenticate/i }),
+    );
+    await screen.findByRole("img", { name: /captcha/i });
+
+    await user.type(screen.getByPlaceholderText(/code from the image/i), "ABCD");
+    await user.click(screen.getByRole("button", { name: /verify & save/i }));
+
+    await waitFor(() =>
+      expect(mockApi.reauthComplete).toHaveBeenCalledWith("cred-1", {
+        challenge_id: "rc1",
+        answer: "ABCD",
+      }),
+    );
+    await waitFor(() =>
+      expect(screen.queryByRole("img", { name: /captcha/i })).not.toBeInTheDocument(),
+    );
+  });
+
+  it("shows an error and refreshes the image on captcha_incorrect", async () => {
+    const user = userEvent.setup();
+    mockApi.reauthBegin.mockResolvedValue({
+      status: "captcha",
+      challenge_id: "rc1",
+      captcha_image: "data:image/gif;base64,OLD=",
+    });
+    mockApi.reauthComplete.mockRejectedValue(
+      new ApiError({ title: "Unprocessable", status: 422, detail: "captcha_incorrect" }),
+    );
+    mockApi.interactiveRefresh.mockResolvedValue({
+      challenge_id: "rc1",
+      captcha_image: "data:image/gif;base64,NEW=",
+    });
+
+    renderPage();
+    await user.click(
+      await screen.findByRole("button", { name: /re-authenticate/i }),
+    );
+    await screen.findByRole("img", { name: /captcha/i });
+
+    await user.type(screen.getByPlaceholderText(/code from the image/i), "WRNG");
+    await user.click(screen.getByRole("button", { name: /verify & save/i }));
+
+    expect(await screen.findByText(/incorrect code/i)).toBeInTheDocument();
+    await waitFor(() =>
+      expect(mockApi.interactiveRefresh).toHaveBeenCalledWith({
+        tracker_name: "lostfilm",
+        challenge_id: "rc1",
+      }),
+    );
+    await waitFor(() =>
+      expect(screen.getByRole("img", { name: /captcha/i })).toHaveAttribute(
+        "src",
+        "data:image/gif;base64,NEW=",
+      ),
+    );
+  });
+
+  it("calls reauthBegin exactly once even under StrictMode", async () => {
+    const user = userEvent.setup();
+    mockApi.reauthBegin.mockResolvedValue({
+      status: "captcha",
+      challenge_id: "rc1",
+      captcha_image: "data:image/gif;base64,Rk=",
+    });
+
+    renderPageStrict();
+    await user.click(
+      await screen.findByRole("button", { name: /re-authenticate/i }),
+    );
+
+    await screen.findByRole("img", { name: /captcha/i });
+    // The ref guard must suppress StrictMode's double-invoked effect — a
+    // second reauthBegin would create a wasted server-side pending challenge.
+    expect(mockApi.reauthBegin).toHaveBeenCalledTimes(1);
   });
 });
