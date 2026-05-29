@@ -26,12 +26,14 @@ import { QK } from "@/lib/queryKeys";
 import { useArmedConfirm } from "@/lib/hooks/useArmedConfirm";
 import { AddTopicCard } from "@/components/topics/AddTopicCard";
 import { EditTopicCard } from "@/components/topics/EditTopicCard";
+import { ClientBadge, type ClientRef } from "@/components/topics/ClientBadge";
 
 // Re-exported so existing imports (and tests) that reference AddTopicCard
 // from this page module keep resolving after the extraction.
 export { AddTopicCard } from "@/components/topics/AddTopicCard";
 
 type TopicsList = { topics: Topic[] | null };
+type ClientsList = { clients: ClientRef[] | null };
 
 export function TopicsPage() {
   const qc = useQueryClient();
@@ -39,6 +41,13 @@ export function TopicsPage() {
     queryKey: QK.topics,
     queryFn: () => api.get<TopicsList>("/topics"),
   });
+  const { data: clientsData } = useQuery({
+    queryKey: QK.clients,
+    queryFn: () => api.get<ClientsList>("/clients"),
+  });
+  const clients = clientsData?.clients ?? [];
+  const clientById = new Map(clients.map((c) => [c.id, c]));
+  const defaultClient = clients.find((c) => c.is_default) ?? null;
   const density = usePrefs((s) => s.density);
   const setDensity = usePrefs((s) => s.setDensity);
   const [showAdd, setShowAdd] = useState(false);
@@ -183,6 +192,11 @@ export function TopicsPage() {
                       <Badge variant="outline" className="font-mono">
                         {t.TrackerName}
                       </Badge>
+                      <ClientBadge
+                        topic={t}
+                        clientById={clientById}
+                        defaultClient={defaultClient}
+                      />
                     </div>
                     {!compact && (
                       <div className="truncate font-mono text-xs text-muted-foreground">
