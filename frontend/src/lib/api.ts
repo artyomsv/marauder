@@ -133,9 +133,46 @@ export const api = {
     request<T>("PATCH", path, body, opts),
   del: <T>(path: string, opts?: { auth?: boolean }) =>
     request<T>("DELETE", path, undefined, opts),
+
+  // --- Interactive (captcha) login for trackers that advertise
+  // `supports_interactive_login` via /trackers/match. The captcha image
+  // is returned as a data URL, so the browser never talks to the tracker
+  // directly — Marauder's backend proxies the whole challenge.
+  interactiveBegin: (body: { tracker_name: string; username: string; password: string }) =>
+    request<InteractiveBeginResult>("POST", "/credentials/interactive/begin", body),
+  interactiveComplete: (body: { tracker_name: string; challenge_id: string; answer: string }) =>
+    request<{ credential: CredentialView }>("POST", "/credentials/interactive/complete", body),
+  interactiveRefresh: (body: { tracker_name: string; challenge_id: string }) =>
+    request<InteractiveRefreshResult>("POST", "/credentials/interactive/refresh", body),
 };
 
 // --- Typed models mirroring backend/internal/domain ---------------------
+
+export interface CredentialView {
+  id: string;
+  tracker_name: string;
+  display_name: string;
+  username: string;
+  created_at: string;
+  updated_at: string;
+}
+
+// Result of POST /credentials/interactive/begin. Either the tracker
+// logged us straight in (no captcha required) or it handed back a
+// captcha challenge to relay to the user.
+export interface InteractiveBeginResult {
+  status: "logged_in" | "captcha";
+  challenge_id?: string;
+  captcha_image?: string;
+  credential?: CredentialView;
+}
+
+// Result of POST /credentials/interactive/refresh — a fresh captcha
+// image bound to the same (or a rotated) challenge id.
+export interface InteractiveRefreshResult {
+  challenge_id: string;
+  captcha_image: string;
+}
 
 export type Me = {
   id: string;
