@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
 	"github.com/artyomsv/marauder/backend/internal/api/middleware"
@@ -74,6 +75,7 @@ type fakeCredStore struct {
 	created    *domain.TrackerCredential
 	createErr  error
 	existing   *domain.TrackerCredential // returned by GetForTracker (upsert path)
+	byID       *domain.TrackerCredential // returned by GetByID (reauth path)
 	sessionSet bool                      // SetSession was called
 }
 
@@ -88,7 +90,7 @@ func (s *fakeCredStore) Create(_ context.Context, c *domain.TrackerCredential) (
 	return c, nil
 }
 func (s *fakeCredStore) GetByID(context.Context, uuid.UUID, uuid.UUID) (*domain.TrackerCredential, error) {
-	return nil, nil
+	return s.byID, nil
 }
 func (s *fakeCredStore) GetForTracker(context.Context, uuid.UUID, string) (*domain.TrackerCredential, error) {
 	return s.existing, nil
@@ -268,5 +270,131 @@ func TestBeginInteractive_MissingFields(t *testing.T) {
 	h.BeginInteractive(w, authedReq(t, uuid.New(), beginReq{TrackerName: "faketracker", Username: "u"})) // no password
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status %d, want 400; body %s", w.Code, w.Body.String())
+	}
+}
+
+// withURLParam injects a chi {id} URL parameter into the request's context.
+// WithContext replaces the whole context, so the chi route context is layered
+// onto the request that already carries the auth claims.
+func withURLParam(r *http.Request, key, val string) *http.Request {
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add(key, val)
+	return r.WithContext(context.WithValue(r.Context(), chi.RouteCtxKey, rctx))
+}
+
+// encPassword encrypts a plaintext password with the same master key
+// newCredsHandler uses (32 zero bytes) so ReauthBegin's Decrypt succeeds.
+func encPassword(t *testing.T, plain string) (enc, nonce []byte) {
+	t.Helper()
+	mk, err := crypto.LoadMasterKey(base64.StdEncoding.EncodeToString(make([]byte, 32)))
+	if err != nil {
+		t.Fatalf("LoadMasterKey: %v", err)
+	}
+	enc, nonce, err = mk.Encrypt([]byte(plain))
+	if err != nil {
+		t.Fatalf("Encrypt: %v", err)
+	}
+	return enc, nonce
+}
+
+func TestReauthBegin_WithStoredPassword_ReturnsCaptcha(t *testing.T) {
+	id := uuid.New()
+	enc, nonce := encPassword(t, "pw")
+	store := &fakeCredStore{byID: &domain.TrackerCredential{
+		ID: id, TrackerName: fakeCaptchaName, Username: "u",
+		SecretEnc: enc, SecretNonce: nonce,
+		CreatedAt: time.Now(), UpdatedAt: time.Now(),
+	}}
+	h := newCredsHandler(t, store)
+	w := httptest.NewRecorder()
+	req := withURLParam(authedReq(t, uuid.New(), nil), "id", id.String())
+	h.ReauthBegin(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d, want 200; body %s", w.Code, w.Body.String())
+	}
+	var resp map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp["status"] != "captcha" {
+		t.Errorf("status = %v, want captcha", resp["status"])
+	}
+	if resp["challenge_id"] != "chal-1" {
+		t.Errorf("challenge_id = %v, want chal-1", resp["challenge_id"])
+	}
+	if img, _ := resp["captcha_image"].(string); !strings.HasPrefix(img, "data:image/gif;base64,") {
+		t.Errorf("captcha_image = %q, want data:image/gif;base64, prefix", img)
+	}
+}
+
+func TestReauthBegin_NoStoredPassword_422(t *testing.T) {
+	id := uuid.New()
+	store := &fakeCredStore{byID: &domain.TrackerCredential{
+		ID: id, TrackerName: fakeCaptchaName, Username: "u",
+		CreatedAt: time.Now(), UpdatedAt: time.Now(),
+	}}
+	h := newCredsHandler(t, store)
+	w := httptest.NewRecorder()
+	req := withURLParam(authedReq(t, uuid.New(), nil), "id", id.String())
+	h.ReauthBegin(w, req)
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status %d, want 422; body %s", w.Code, w.Body.String())
+	}
+}
+
+func TestReauthBegin_ForeignOrMissing_404(t *testing.T) {
+	h := newCredsHandler(t, &fakeCredStore{byID: nil})
+	w := httptest.NewRecorder()
+	req := withURLParam(authedReq(t, uuid.New(), nil), "id", uuid.New().String())
+	h.ReauthBegin(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status %d, want 404; body %s", w.Code, w.Body.String())
+	}
+}
+
+func TestReauthComplete_Success(t *testing.T) {
+	id := uuid.New()
+	uid := uuid.New()
+	enc, nonce := encPassword(t, "pw")
+	store := &fakeCredStore{byID: &domain.TrackerCredential{
+		ID: id, TrackerName: fakeCaptchaName, Username: "u",
+		SecretEnc: enc, SecretNonce: nonce,
+		CreatedAt: time.Now(), UpdatedAt: time.Now(),
+	}}
+	h := newCredsHandler(t, store)
+	// Seed pending via ReauthBegin so credentialID is populated.
+	h.ReauthBegin(httptest.NewRecorder(), withURLParam(authedReq(t, uid, nil), "id", id.String()))
+	w := httptest.NewRecorder()
+	body := map[string]any{"challenge_id": "chal-1", "answer": "good"}
+	h.ReauthComplete(w, withURLParam(authedReq(t, uid, body), "id", id.String()))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d, want 200; body %s", w.Code, w.Body.String())
+	}
+	if !store.sessionSet {
+		t.Error("reauth complete must call SetSession")
+	}
+}
+
+func TestReauthComplete_WrongAnswer_422(t *testing.T) {
+	id := uuid.New()
+	uid := uuid.New()
+	enc, nonce := encPassword(t, "pw")
+	store := &fakeCredStore{byID: &domain.TrackerCredential{
+		ID: id, TrackerName: fakeCaptchaName, Username: "u",
+		SecretEnc: enc, SecretNonce: nonce,
+		CreatedAt: time.Now(), UpdatedAt: time.Now(),
+	}}
+	h := newCredsHandler(t, store)
+	h.ReauthBegin(httptest.NewRecorder(), withURLParam(authedReq(t, uid, nil), "id", id.String()))
+	w := httptest.NewRecorder()
+	body := map[string]any{"challenge_id": "chal-1", "answer": "bad"}
+	h.ReauthComplete(w, withURLParam(authedReq(t, uid, body), "id", id.String()))
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status %d, want 422; body %s", w.Code, w.Body.String())
+	}
+	var d map[string]any
+	_ = json.Unmarshal(w.Body.Bytes(), &d)
+	if d["detail"] != "captcha_incorrect" {
+		t.Errorf("detail = %v, want captcha_incorrect", d["detail"])
 	}
 }

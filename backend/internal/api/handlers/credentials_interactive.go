@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
 	"github.com/artyomsv/marauder/backend/internal/audit"
@@ -28,11 +29,12 @@ const interactiveChallengeTTL = 5 * time.Minute
 // login. The password is carried so that a captcha-only re-auth can
 // encrypt and store it when the session is persisted in CompleteInteractive.
 type handlerPending struct {
-	userID      uuid.UUID
-	trackerName string
-	username    string
-	password    string
-	expires     time.Time
+	userID       uuid.UUID
+	trackerName  string
+	username     string
+	password     string
+	credentialID uuid.UUID
+	expires      time.Time
 }
 
 type interactivePendingStore struct {
@@ -264,4 +266,126 @@ func (h *Credentials) RefreshInteractive(w http.ResponseWriter, r *http.Request)
 		"challenge_id":  challenge.ChallengeID,
 		"captcha_image": dataURL(challenge.MIMEType, challenge.Image),
 	})
+}
+
+// ReauthBegin handles POST /credentials/{id}/reauth/begin — re-authenticate
+// an existing credential using its STORED password (no credential re-entry).
+func (h *Credentials) ReauthBegin(w http.ResponseWriter, r *http.Request) {
+	uid, perr := currentUserID(r)
+	if perr != nil {
+		problem.Write(w, r, h.BaseURL, perr)
+		return
+	}
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		problem.Write(w, r, h.BaseURL, problem.ErrBadRequest("invalid credential id"))
+		return
+	}
+	cred, gerr := h.Creds.GetByID(r.Context(), id, uid)
+	if gerr != nil || cred == nil {
+		problem.Write(w, r, h.BaseURL, problem.ErrNotFound("credential not found"))
+		return
+	}
+	if len(cred.SecretEnc) == 0 {
+		problem.Write(w, r, h.BaseURL, problem.ErrUnprocessable("this account has no stored password; delete and re-add it to enable captcha-only re-authentication"))
+		return
+	}
+	wi, perr := h.interactivePlugin(cred.TrackerName)
+	if perr != nil {
+		problem.Write(w, r, h.BaseURL, perr)
+		return
+	}
+	pw, derr := h.Master.Decrypt(cred.SecretEnc, cred.SecretNonce)
+	if derr != nil {
+		problem.Write(w, r, h.BaseURL, problem.ErrInternal("decrypt password: "+derr.Error()))
+		return
+	}
+	transient := &domain.TrackerCredential{UserID: uid, TrackerName: cred.TrackerName, Username: cred.Username, SecretEnc: pw}
+	challenge, cookies, berr := wi.BeginLogin(r.Context(), transient)
+	if berr != nil {
+		problem.Write(w, r, h.BaseURL, problem.ErrUnprocessable(berr.Error()))
+		return
+	}
+	if cookies != nil { // trusted IP, no captcha
+		if perr := h.storeReauthSession(r.Context(), id, uid, cookies); perr != nil {
+			problem.Write(w, r, h.BaseURL, perr)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"status": "logged_in"})
+		return
+	}
+	h.pending.put(challenge.ChallengeID, &handlerPending{
+		userID: uid, trackerName: cred.TrackerName, username: cred.Username,
+		credentialID: id, expires: time.Now().Add(interactiveChallengeTTL),
+	})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status": "captcha", "challenge_id": challenge.ChallengeID,
+		"captcha_image": dataURL(challenge.MIMEType, challenge.Image),
+	})
+}
+
+// ReauthComplete handles POST /credentials/{id}/reauth/complete.
+func (h *Credentials) ReauthComplete(w http.ResponseWriter, r *http.Request) {
+	uid, perr := currentUserID(r)
+	if perr != nil {
+		problem.Write(w, r, h.BaseURL, perr)
+		return
+	}
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		problem.Write(w, r, h.BaseURL, problem.ErrBadRequest("invalid credential id"))
+		return
+	}
+	var body struct {
+		ChallengeID string `json:"challenge_id"`
+		Answer      string `json:"answer"`
+	}
+	if derr := json.NewDecoder(r.Body).Decode(&body); derr != nil {
+		problem.Write(w, r, h.BaseURL, problem.ErrBadRequest("invalid JSON"))
+		return
+	}
+	p, ok := h.pending.get(body.ChallengeID, uid)
+	if !ok || p.credentialID != id {
+		problem.Write(w, r, h.BaseURL, problem.ErrNotFound("challenge not found or expired"))
+		return
+	}
+	wi, perr := h.interactivePlugin(p.trackerName)
+	if perr != nil {
+		problem.Write(w, r, h.BaseURL, perr)
+		return
+	}
+	cookies, cerr := wi.CompleteLogin(r.Context(), body.ChallengeID, body.Answer)
+	if cerr != nil {
+		if errors.Is(cerr, captchalogin.ErrWrongCaptcha) {
+			problem.Write(w, r, h.BaseURL, problem.ErrUnprocessable("captcha_incorrect"))
+			return
+		}
+		problem.Write(w, r, h.BaseURL, problem.ErrUnprocessable(cerr.Error()))
+		return
+	}
+	if perr := h.storeReauthSession(r.Context(), id, uid, cookies); perr != nil {
+		problem.Write(w, r, h.BaseURL, perr)
+		return
+	}
+	h.pending.del(body.ChallengeID)
+	cred, _ := h.Creds.GetByID(r.Context(), id, uid)
+	writeJSON(w, http.StatusOK, map[string]any{"credential": toCredView(cred)})
+}
+
+// storeReauthSession encrypts the harvested cookies and updates the
+// existing credential's session in place (SetSession also clears the
+// session_expired_at marker).
+func (h *Credentials) storeReauthSession(ctx context.Context, id, uid uuid.UUID, cookies registry.SessionCookies) *problem.Error {
+	cookieJSON, err := json.Marshal(cookies)
+	if err != nil {
+		return problem.ErrInternal("marshal cookies: " + err.Error())
+	}
+	enc, nonce, err := h.Master.Encrypt(cookieJSON)
+	if err != nil {
+		return problem.ErrInternal("encrypt session: " + err.Error())
+	}
+	if serr := h.Creds.SetSession(ctx, id, uid, enc, nonce); serr != nil {
+		return problem.ErrInternal("persist session: " + serr.Error())
+	}
+	return nil
 }
