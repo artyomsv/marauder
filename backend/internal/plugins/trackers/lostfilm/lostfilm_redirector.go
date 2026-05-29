@@ -22,7 +22,19 @@ import (
 // LostFilm publishes three buttons (SD / 1080p_mp4 / 1080p), each
 // linking to a .torrent file. We capture the href and the visible
 // quality label (the text inside the <a>).
-var qualityLinkRe = regexp.MustCompile(`(?is)<a[^>]+href="(https?://[^"]+\.torrent[^"]*)"[^>]*>([^<]*)</a>`)
+// qualityLinkRe matches one per-quality download option on LostFilm's
+// destination page. The current markup is:
+//
+//	<div class="inner-box--item">
+//	  <div class="inner-box--label">1080p</div>
+//	  <div class="inner-box--link main"><a href="https://n.tracktor.site/td.php?s=...">...</a></div>
+//	  ...
+//	</div>
+//
+// Group 1 is the quality tier label (SD / 1080p / 4K / …); group 2 is the
+// main download link (no longer a literal ".torrent" URL — it's a signed
+// tracktor.site redirector that serves the .torrent on fetch).
+var qualityLinkRe = regexp.MustCompile(`(?is)<div class="inner-box--label">\s*(.+?)\s*</div>\s*<div class="inner-box--link main">\s*<a[^>]+href="([^"]+)"`)
 
 // Meta-refresh redirect, e.g.
 //
@@ -45,6 +57,9 @@ var allowedRedirectHosts = map[string]struct{}{
 	"www.retre.org":     {},
 	"tracktor.in":       {},
 	"www.tracktor.in":   {},
+	"tracktor.site":     {},
+	"n.tracktor.site":   {},
+	"www.tracktor.site": {},
 	"lf-tracker.io":     {},
 	"www.lf-tracker.io": {},
 }
@@ -224,14 +239,17 @@ func pickQualityLink(dest []byte, want string) (string, string, error) {
 		return "", "", errors.New("lostfilm download page: no per-quality torrent links found")
 	}
 
+	// links: group 1 = quality label, group 2 = download URL.
 	for _, l := range links {
-		if qualityMatches(string(l[2]), want) {
-			return string(l[1]), string(l[2]), nil
+		label := strings.TrimSpace(string(l[1]))
+		if qualityMatches(label, want) {
+			return string(l[2]), label, nil
 		}
 	}
 
-	// Fall back to the first link.
-	first, label := string(links[0][1]), string(links[0][2])
+	// Fall back to the first link — better to return something than to fail
+	// an episode the user already paid for.
+	first, label := string(links[0][2]), strings.TrimSpace(string(links[0][1]))
 	log.Debug().Str("plugin", pluginName).Str("step", "destination").Str("fallback_label", label).Msg("no quality match, using first link")
 	return first, label, nil
 }
@@ -259,9 +277,10 @@ func qualityMatches(label, want string) bool {
 	case "1080p_mp4", "mp4":
 		return strings.Contains(l, "mp4")
 	case "1080p":
-		// 1080p but NOT 1080p_mp4 — i.e. label has "1080p" and
-		// no "mp4" tail.
-		return strings.Contains(l, "1080p") && !strings.Contains(l, "mp4")
+		// 1080p but NOT the MP4 variant. LostFilm's tier label is just
+		// "1080" (the "p" lives in the format description, not the label),
+		// so match on "1080" and exclude the separate "MP4" tier.
+		return strings.Contains(l, "1080") && !strings.Contains(l, "mp4")
 	default:
 		// Unknown quality — refuse rather than risk a 1080p/1080p_mp4
 		// false-match. Add new tiers explicitly to this switch.

@@ -41,9 +41,9 @@ type downloadResult struct {
 	err     error
 }
 
-func (f *fakeTracker) Name() string                     { return f.name }
-func (f *fakeTracker) DisplayName() string              { return f.name }
-func (f *fakeTracker) CanParse(_ string) bool           { return true }
+func (f *fakeTracker) Name() string           { return f.name }
+func (f *fakeTracker) DisplayName() string    { return f.name }
+func (f *fakeTracker) CanParse(_ string) bool { return true }
 func (f *fakeTracker) Parse(_ context.Context, _ string) (*domain.Topic, error) {
 	return nil, errors.New("not implemented")
 }
@@ -71,12 +71,12 @@ func (f *fakeTracker) Download(_ context.Context, _ *domain.Topic, _ *domain.Che
 // fakeTopics records every persistence call without touching a DB.
 // It satisfies topicsRepo (and optionally markEpisodeDownloader).
 type fakeTopics struct {
-	recordCalls          []recordCall
-	updateExtraCalls     []updateExtraCall
-	markCalls            []markCall
-	markErr              error
-	updateExtraErr       error
-	implementMarkAtomic  bool // when true, the test exercises the atomic path
+	recordCalls         []recordCall
+	updateExtraCalls    []updateExtraCall
+	markCalls           []markCall
+	markErr             error
+	updateExtraErr      error
+	implementMarkAtomic bool // when true, the test exercises the atomic path
 }
 
 type recordCall struct {
@@ -150,6 +150,44 @@ func (f *fakeCreds) GetForTracker(_ context.Context, _ uuid.UUID, _ string) (*do
 	return nil, nil
 }
 
+func (f *fakeCreds) MarkSessionExpired(_ context.Context, _, _ uuid.UUID) (bool, error) {
+	return false, nil
+}
+
+// fakeCredsSession is a credentials repo that returns a configured credential
+// and records MarkSessionExpired calls. markExpiredWon controls whether the
+// fake reports that THIS call won the NULL->now() transition (the real repo
+// derives this from RowsAffected==1).
+type fakeCredsSession struct {
+	stored           *domain.TrackerCredential
+	markExpiredCalls int
+	markExpiredWon   bool
+	markExpiredErr   error
+}
+
+func (f *fakeCredsSession) GetForTracker(_ context.Context, _ uuid.UUID, _ string) (*domain.TrackerCredential, error) {
+	return f.stored, nil
+}
+
+func (f *fakeCredsSession) MarkSessionExpired(_ context.Context, _, _ uuid.UUID) (bool, error) {
+	f.markExpiredCalls++
+	return f.markExpiredWon, f.markExpiredErr
+}
+
+// fakeNotifier records Send calls.
+type fakeNotifier struct {
+	calls   int
+	lastID  uuid.UUID
+	lastMsg domain.Message
+}
+
+func (f *fakeNotifier) Send(_ context.Context, userID uuid.UUID, msg domain.Message) int {
+	f.calls++
+	f.lastID = userID
+	f.lastMsg = msg
+	return 1
+}
+
 // fakeDecryptor returns its input unchanged.
 type fakeDecryptor struct{}
 
@@ -157,15 +195,15 @@ func (f *fakeDecryptor) Decrypt(ct, _ []byte) ([]byte, error) { return ct, nil }
 
 // fakeClientPlugin satisfies registry.Client and records every Add call.
 type fakeClientPlugin struct {
-	name      string
-	addCalls  int
-	addErr    error
-	lastOpts  domain.AddOptions
+	name     string
+	addCalls int
+	addErr   error
+	lastOpts domain.AddOptions
 }
 
-func (f *fakeClientPlugin) Name() string                       { return f.name }
-func (f *fakeClientPlugin) DisplayName() string                { return f.name }
-func (f *fakeClientPlugin) ConfigSchema() map[string]any       { return nil }
+func (f *fakeClientPlugin) Name() string                 { return f.name }
+func (f *fakeClientPlugin) DisplayName() string          { return f.name }
+func (f *fakeClientPlugin) ConfigSchema() map[string]any { return nil }
 func (f *fakeClientPlugin) Test(_ context.Context, _ []byte) error {
 	return nil
 }
@@ -402,6 +440,12 @@ func TestRunCheck_FirstDownloadError(t *testing.T) {
 	if rec.errMsg == "" {
 		t.Errorf("expected non-empty errMsg")
 	}
+	// The hash must NOT advance on a failed download: a transient failure
+	// would otherwise strand the topic permanently (next check sees no
+	// change and never retries).
+	if rec.hash != "old-hash" {
+		t.Errorf("expected hash to stay old-hash (not advance on failure), got %q", rec.hash)
+	}
 }
 
 func TestRunCheck_MidLoopDownloadError(t *testing.T) {
@@ -439,6 +483,45 @@ func TestRunCheck_MidLoopDownloadError(t *testing.T) {
 	}
 	if rec.errMsg == "" {
 		t.Errorf("expected non-empty errMsg")
+	}
+	// Hash stays at the old value so the remaining (undownloaded) episode
+	// is re-detected and retried on the next check rather than stranded.
+	if rec.hash != "old-hash" {
+		t.Errorf("expected hash to stay old-hash so the remaining episode retries, got %q", rec.hash)
+	}
+}
+
+// TestRunCheck_CaughtUpNoPending covers a legitimate no-op: the hash
+// changed (so the topic looks "updated") but the very first Download
+// returns ErrNoPendingEpisodes because every episode is already
+// downloaded or excluded by the start filter. This must be treated as a
+// graceful no-op — no error, and the hash advances to the now-current
+// state — not as a first-iteration download failure.
+func TestRunCheck_CaughtUpNoPending(t *testing.T) {
+	tr := &fakeTracker{
+		name: "faketracker",
+		checks: []checkResult{
+			{check: &domain.Check{Hash: "new-hash", Extra: map[string]any{}}, err: nil},
+		},
+		downloads: []downloadResult{
+			{err: registry.ErrNoPendingEpisodes},
+		},
+	}
+	f := newFixture(t, tr, false)
+
+	f.s.runCheck(context.Background(), f.s.log, f.topic)
+
+	if f.clientPlugin.addCalls != 0 {
+		t.Errorf("expected 0 client Add calls, got %d", f.clientPlugin.addCalls)
+	}
+	rec := f.lastRecord(t)
+	if rec.errMsg != "" {
+		t.Errorf("expected empty errMsg (graceful no-op, not a download failure), got %q", rec.errMsg)
+	}
+	// The hash DOES advance here: there is genuinely nothing pending, so
+	// the new state is fully processed and must not be re-checked as "new".
+	if rec.hash != "new-hash" {
+		t.Errorf("expected hash to advance to new-hash, got %q", rec.hash)
 	}
 }
 
@@ -646,6 +729,198 @@ func TestBackoff_TableTest(t *testing.T) {
 				t.Errorf("expected backoff to be capped at 6h, got %v", delta)
 			}
 		})
+	}
+}
+
+// fakeTrackerWithCreds wraps fakeTracker and additionally implements
+// registry.WithCredentials so that loadCredentials calls Login.
+type fakeTrackerWithCreds struct {
+	fakeTracker
+	loginErr error
+}
+
+func (f *fakeTrackerWithCreds) Login(_ context.Context, _ *domain.TrackerCredential) error {
+	return f.loginErr
+}
+
+func (f *fakeTrackerWithCreds) Verify(_ context.Context, _ *domain.TrackerCredential) (bool, error) {
+	return true, nil
+}
+
+// newSessionFixture builds a scheduler wired for session-expiry tests.
+// creds is injected as the credentials repo; notifier is the fake notifier.
+func newSessionFixture(t *testing.T, creds credentialsRepo, notifier sessionNotifier) (*Scheduler, *domain.Topic) {
+	t.Helper()
+	cfg := &config.Config{
+		SchedulerEnabled:            true,
+		SchedulerWorkers:            1,
+		SchedulerTick:               time.Second,
+		SchedulerMaxEpisodesPerTick: 25,
+		TrackerHTTPTimeout:          5 * time.Second,
+		CheckMaxBackoff:             time.Hour,
+		PublicBaseURL:               "http://localhost:34080",
+	}
+	s := &Scheduler{
+		cfg:    cfg,
+		log:    zerolog.New(io.Discard),
+		topics: &fakeTopics{},
+		clients: &fakeClients{client: &domain.Client{
+			ID:         uuid.New(),
+			ClientName: "fakeclient",
+		}},
+		creds:         creds,
+		master:        &fakeDecryptor{},
+		notifier:      notifier,
+		lookupTracker: func(_ string) registry.Tracker { return nil },
+		lookupClient:  func(_ string) registry.Client { return nil },
+		jobs:          make(chan *domain.Topic, 1),
+		stop:          make(chan struct{}),
+		ready:         make(chan struct{}),
+	}
+	topic := &domain.Topic{
+		ID:               uuid.New(),
+		UserID:           uuid.New(),
+		TrackerName:      "lostfilm",
+		URL:              "https://example.com/topic/1",
+		CheckIntervalSec: 900,
+		Status:           domain.TopicStatusActive,
+		LastHash:         "old-hash",
+		Extra:            map[string]any{},
+	}
+	return s, topic
+}
+
+// TestLoadCredentials_SessionExpired_WonTransition verifies that when
+// Login returns ErrSessionExpired, the credential is not yet flagged
+// (SessionExpiredAt == nil), and the atomic UPDATE wins the NULL->now()
+// transition (MarkSessionExpired returns true), MarkSessionExpired and
+// Send are each called exactly once.
+func TestLoadCredentials_SessionExpired_WonTransition(t *testing.T) {
+	tr := &fakeTrackerWithCreds{
+		fakeTracker: fakeTracker{name: "lostfilm"},
+		loginErr:    fmt.Errorf("lostfilm: %w", registry.ErrSessionExpired),
+	}
+
+	storedCred := &domain.TrackerCredential{
+		ID:               uuid.New(),
+		UserID:           uuid.New(),
+		TrackerName:      "lostfilm",
+		SessionExpiredAt: nil, // not yet flagged
+		SecretEnc:        []byte("secret"),
+	}
+	creds := &fakeCredsSession{stored: storedCred, markExpiredWon: true}
+	notifier := &fakeNotifier{}
+
+	s, topic := newSessionFixture(t, creds, notifier)
+	topic.UserID = storedCred.UserID
+	s.lookupTracker = func(_ string) registry.Tracker { return tr }
+
+	ctx := context.Background()
+	checkCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	log := zerolog.New(io.Discard)
+
+	_, ok := s.loadCredentials(ctx, checkCtx, log, topic, tr)
+
+	if ok {
+		t.Fatal("expected loadCredentials to return ok=false on login error")
+	}
+	if got := creds.markExpiredCalls; got != 1 {
+		t.Errorf("MarkSessionExpired: want 1 call, got %d", got)
+	}
+	if got := notifier.calls; got != 1 {
+		t.Errorf("notifier.Send: want 1 call, got %d", got)
+	}
+	if notifier.lastID != storedCred.UserID {
+		t.Errorf("notifier.Send userID: want %s, got %s", storedCred.UserID, notifier.lastID)
+	}
+}
+
+// TestLoadCredentials_SessionExpired_LostRace simulates the concurrent-dedup
+// case: the cheap fast-path snapshot still shows SessionExpiredAt == nil (a
+// stale read shared across topics on one credential), so the check attempts
+// the UPDATE — but another concurrent check already transitioned the row, so
+// the atomic UPDATE...WHERE IS NULL affects 0 rows and MarkSessionExpired
+// returns false. This check must NOT notify even though it saw a nil snapshot
+// and Login returned ErrSessionExpired.
+func TestLoadCredentials_SessionExpired_LostRace(t *testing.T) {
+	tr := &fakeTrackerWithCreds{
+		fakeTracker: fakeTracker{name: "lostfilm"},
+		loginErr:    fmt.Errorf("lostfilm: %w", registry.ErrSessionExpired),
+	}
+
+	storedCred := &domain.TrackerCredential{
+		ID:               uuid.New(),
+		UserID:           uuid.New(),
+		TrackerName:      "lostfilm",
+		SessionExpiredAt: nil, // stale snapshot — looked nil to this check
+		SecretEnc:        []byte("secret"),
+	}
+	creds := &fakeCredsSession{stored: storedCred, markExpiredWon: false}
+	notifier := &fakeNotifier{}
+
+	s, topic := newSessionFixture(t, creds, notifier)
+	topic.UserID = storedCred.UserID
+	s.lookupTracker = func(_ string) registry.Tracker { return tr }
+
+	ctx := context.Background()
+	checkCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	log := zerolog.New(io.Discard)
+
+	_, ok := s.loadCredentials(ctx, checkCtx, log, topic, tr)
+
+	if ok {
+		t.Fatal("expected loadCredentials to return ok=false on login error")
+	}
+	if got := creds.markExpiredCalls; got != 1 {
+		t.Errorf("MarkSessionExpired: want 1 attempt (the UPDATE is the gate), got %d", got)
+	}
+	if got := notifier.calls; got != 0 {
+		t.Errorf("notifier.Send: want 0 calls (lost the transition race), got %d", got)
+	}
+}
+
+// TestLoadCredentials_SessionExpired_AlreadyFlagged verifies that when
+// Login returns ErrSessionExpired but the credential is already flagged
+// (SessionExpiredAt != nil), neither MarkSessionExpired nor Send is called
+// again.
+func TestLoadCredentials_SessionExpired_AlreadyFlagged(t *testing.T) {
+	tr := &fakeTrackerWithCreds{
+		fakeTracker: fakeTracker{name: "lostfilm"},
+		loginErr:    fmt.Errorf("lostfilm: %w", registry.ErrSessionExpired),
+	}
+
+	now := time.Now()
+	storedCred := &domain.TrackerCredential{
+		ID:               uuid.New(),
+		UserID:           uuid.New(),
+		TrackerName:      "lostfilm",
+		SessionExpiredAt: &now, // already flagged — must not re-notify
+		SecretEnc:        []byte("secret"),
+	}
+	creds := &fakeCredsSession{stored: storedCred}
+	notifier := &fakeNotifier{}
+
+	s, topic := newSessionFixture(t, creds, notifier)
+	topic.UserID = storedCred.UserID
+	s.lookupTracker = func(_ string) registry.Tracker { return tr }
+
+	ctx := context.Background()
+	checkCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	log := zerolog.New(io.Discard)
+
+	_, ok := s.loadCredentials(ctx, checkCtx, log, topic, tr)
+
+	if ok {
+		t.Fatal("expected loadCredentials to return ok=false on login error")
+	}
+	if got := creds.markExpiredCalls; got != 0 {
+		t.Errorf("MarkSessionExpired: want 0 calls (already flagged), got %d", got)
+	}
+	if got := notifier.calls; got != 0 {
+		t.Errorf("notifier.Send: want 0 calls (already flagged), got %d", got)
 	}
 }
 

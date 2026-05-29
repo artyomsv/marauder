@@ -97,10 +97,61 @@ type WithCloudflare interface {
     Tracker
     UsesCloudflare() bool
 }
+
+// The tracker can enumerate a series' released seasons/episodes from its
+// URL (powers the AddTopic "start from" dropdowns). Implement it by
+// fetching the catalog page and reusing the episode parser; see LostFilm's
+// SeasonCatalog (fetches /series/<slug>/seasons, groups parseEpisodes by
+// season). Exposed via GET /api/v1/trackers/seasons?url=.
+type WithSeasonCatalog interface {
+    Tracker
+    SeasonCatalog(ctx context.Context, url string) ([]Season, error) // Season{Number int; Episodes []int}
+}
+
+// The tracker gates login behind a captcha the user solves in-app.
+type WithInteractiveLogin interface {
+    Tracker
+    BeginLogin(ctx context.Context, creds *domain.TrackerCredential) (*LoginChallenge, SessionCookies, error)
+    CompleteLogin(ctx context.Context, challengeID, answer string) (SessionCookies, error)
+    RefreshChallenge(ctx context.Context, challengeID string) (*LoginChallenge, error)
+}
 ```
 
 The registry detects these via type assertion at runtime — no separate
 registration needed.
+
+### Interactive (captcha) login
+
+For trackers that gate login behind a captcha, don't hand-roll the flow —
+embed the shared `captchalogin.Engine`. Supply a `captchalogin.Config`
+(`LoginURL`, `CaptchaURL`, `CookieNames`, a `BuildForm` that assembles the
+POST body, and a `Classify` that maps the response to
+`Success`/`NeedCaptcha`/`WrongCaptcha`/`Failed`) and delegate the three
+`WithInteractiveLogin` methods to `engine.Begin`/`Complete`/`Refresh`.
+Construct the engine lazily (e.g. behind `sync.Once`) with a `newSess`
+that returns a **fresh** session per call — the engine holds one session
+per pending challenge and must never share jars across challenges.
+
+The user solves the captcha through
+`POST /api/v1/credentials/interactive/{begin,complete,refresh}`; the
+harvested cookie(s) named in `CookieNames` are persisted encrypted in
+`tracker_credentials.session_enc`. Make the plugin's `Login` (from
+`WithCredentials`) **rehydrate** that cookie into its session jar and
+validate it via `Verify`, returning `registry.ErrSessionExpired` when the
+cookie is absent or no longer authenticates so the user is re-prompted.
+Advertise the capability to the credentials UI by ensuring it shows up in
+`GET /system/info` (automatic — the type assertion drives the
+`supports_interactive_login` flag). See `plugins/trackers/lostfilm` for
+the reference implementation.
+
+The interactive add flow also persists the **password** (encrypted
+`secret_enc`) so an expired session can be re-established without
+re-entering credentials. When `Login` returns `ErrSessionExpired`, the
+scheduler fires a one-shot notification (via the `notify` dispatcher) and
+the UI offers a captcha-only re-auth (`/credentials/{id}/reauth/*`) that
+decrypts the stored password to fetch a fresh captcha. So a captcha
+tracker should implement BOTH `WithCredentials` (cookie rehydration in
+`Login`) and `WithInteractiveLogin` (the captcha flow).
 
 ### Sharing HTTP sessions
 

@@ -81,6 +81,17 @@ const ru: Record<string, string> = {
   "clients.add.submit": "Проверить и сохранить",
   "clients.badge.default": "по умолчанию",
 
+  // Credentials — интерактивный вход с капчей
+  "credentials.captchaTitle": "Введите код с картинки",
+  "credentials.captchaPlaceholder": "Код с картинки",
+  "credentials.captchaImageAlt": "Изображение капчи",
+  "credentials.captchaRefresh": "Обновить код",
+  "credentials.captchaIncorrect": "Неверный код, попробуйте ещё раз",
+  "credentials.captchaSubmit": "Проверить и сохранить",
+  "credentials.captchaCancel": "Отмена",
+  "credentials.sessionExpired": "Сессия истекла",
+  "credentials.reauthenticate": "Повторная авторизация",
+
   // Settings
   "settings.kicker": "настройки",
   "settings.title": "Настройки",

@@ -41,6 +41,30 @@ type WithCredentials interface {
 	Verify(ctx context.Context, creds *domain.TrackerCredential) (bool, error)
 }
 
+// LoginChallenge is a captcha to present to the user during interactive
+// login. Image holds the raw bytes; MIMEType comes from the captcha
+// response Content-Type (LostFilm serves image/gif).
+type LoginChallenge struct {
+	ChallengeID string
+	Image       []byte
+	MIMEType    string
+}
+
+// SessionCookies maps cookie name -> value. It is persisted (encrypted)
+// and rehydrated into the plugin's HTTP cookie jar on each check.
+type SessionCookies map[string]string
+
+// WithInteractiveLogin is an optional capability for trackers that gate
+// login behind a captcha the user must solve. BeginLogin returns exactly
+// one of (challenge, cookies): a captcha to solve, or — if the tracker
+// did not demand one — the session straight away.
+type WithInteractiveLogin interface {
+	Tracker
+	BeginLogin(ctx context.Context, creds *domain.TrackerCredential) (*LoginChallenge, SessionCookies, error)
+	CompleteLogin(ctx context.Context, challengeID, answer string) (SessionCookies, error)
+	RefreshChallenge(ctx context.Context, challengeID string) (*LoginChallenge, error)
+}
+
 // WithQuality is an optional capability for trackers that expose per-topic
 // quality selection (e.g. LostFilm).
 type WithQuality interface {
@@ -65,6 +89,19 @@ type WithCloudflare interface {
 type WithEpisodeFilter interface {
 	Tracker
 	SupportsEpisodeFilter() bool
+}
+
+// Season is one released season and its released episode numbers.
+type Season struct {
+	Number   int   `json:"number"`
+	Episodes []int `json:"episodes"`
+}
+
+// WithSeasonCatalog is implemented by trackers that can enumerate a
+// series' released seasons/episodes from its URL.
+type WithSeasonCatalog interface {
+	Tracker
+	SeasonCatalog(ctx context.Context, url string) ([]Season, error)
 }
 
 // --- Client & Notifier interfaces ---------------------------------------

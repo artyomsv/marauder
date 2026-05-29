@@ -2,17 +2,20 @@ package lostfilm
 
 import (
 	"context"
-	"errors"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/rs/zerolog/log"
 
 	"github.com/artyomsv/marauder/backend/internal/domain"
+	"github.com/artyomsv/marauder/backend/internal/plugins/captchalogin"
+	"github.com/artyomsv/marauder/backend/internal/plugins/registry"
 	"github.com/artyomsv/marauder/backend/internal/plugins/trackers/forumcommon"
 )
 
@@ -37,55 +40,121 @@ const (
 // makes the next domain rotation a one-line change.
 var urlPattern = regexp.MustCompile(`^https?://(?:www\.)?lostfilm\.(?:tv|win|run)/series/([^/]+)/?`)
 
-// Login implements registry.WithCredentials.
+// captchaConfig is the LostFilm-specific configuration for the shared
+// interactive captcha-login engine. LostFilm's login endpoint is the
+// ajaxik users handler, and its captcha image is served by
+// simple_captcha.php on the same host.
+func (p *plugin) captchaConfig() captchalogin.Config {
+	base := "https://" + p.domain
+	return captchalogin.Config{
+		LoginURL:    base + "/ajaxik.users.php",
+		CaptchaURL:  base + "/simple_captcha.php",
+		CookieNames: []string{"lf_session"},
+		BuildForm: func(c *domain.TrackerCredential, answer string, needCaptcha bool) url.Values {
+			nc := "0"
+			if needCaptcha {
+				nc = "1"
+			}
+			return url.Values{
+				"act": {"users"}, "type": {"login"},
+				"mail": {c.Username}, "pass": {string(c.SecretEnc)},
+				"rem": {"1"}, "need_captcha": {nc}, "captcha": {answer},
+			}
+		},
+		Classify: classifyLostfilmLogin,
+	}
+}
+
+// classifyLostfilmLogin maps LostFilm's ajaxik JSON to an Outcome. It
+// parses the JSON rather than substring-matching so a multi-digit error
+// code (e.g. {"error":40}) is not mistaken for the captcha-specific
+// error 4 — that misclassification would loop the user on a captcha.
+// Success is parsed as `any` because LostFilm returns either
+// {"success":true} or a user object; non-nil means logged in.
+func classifyLostfilmLogin(body []byte) (outcome captchalogin.Outcome) {
+	// Debug-only: log the classified outcome + the raw ajaxik response so
+	// login failures are diagnosable. The body carries only the username +
+	// result flags ({"name":...,"success":true} / {"error":N} /
+	// {"need_captcha":true}); the password is never echoed and the
+	// lf_session cookie travels in a Set-Cookie header, not the body — so
+	// no secret is logged. Capped to keep an unexpected HTML error page
+	// from flooding the log.
+	defer func() {
+		b := body
+		if len(b) > 300 {
+			b = b[:300]
+		}
+		log.Debug().Str("plugin", pluginName).Str("step", "classify").
+			Int("outcome", int(outcome)).Str("body", string(b)).
+			Msg("login response classified")
+	}()
+	var r struct {
+		Success     any  `json:"success"`
+		Error       *int `json:"error"`
+		NeedCaptcha bool `json:"need_captcha"`
+	}
+	if err := json.Unmarshal(body, &r); err != nil {
+		return captchalogin.OutcomeFailed
+	}
+	switch {
+	case r.Error != nil && *r.Error == 4:
+		return captchalogin.OutcomeWrongCaptcha
+	case r.NeedCaptcha:
+		return captchalogin.OutcomeNeedCaptcha
+	case r.Success != nil:
+		return captchalogin.OutcomeSuccess
+	default:
+		return captchalogin.OutcomeFailed
+	}
+}
+
+// BeginLogin implements registry.WithInteractiveLogin.
+func (p *plugin) BeginLogin(ctx context.Context, creds *domain.TrackerCredential) (*registry.LoginChallenge, registry.SessionCookies, error) {
+	return p.eng().Begin(ctx, creds)
+}
+
+// CompleteLogin implements registry.WithInteractiveLogin.
+func (p *plugin) CompleteLogin(ctx context.Context, challengeID, answer string) (registry.SessionCookies, error) {
+	return p.eng().Complete(ctx, challengeID, answer)
+}
+
+// RefreshChallenge implements registry.WithInteractiveLogin.
+func (p *plugin) RefreshChallenge(ctx context.Context, challengeID string) (*registry.LoginChallenge, error) {
+	return p.eng().Refresh(ctx, challengeID)
+}
+
+// Login implements registry.WithCredentials. LostFilm logins go through
+// the interactive captcha flow (BeginLogin / CompleteLogin), which
+// persists the harvested session cookies into creds.SessionEnc. Login
+// therefore no longer POSTs credentials: it rehydrates the stored
+// cookies into the per-user session jar and confirms they are still
+// valid via Verify. A missing or dead session surfaces as
+// registry.ErrSessionExpired so the caller can re-run the captcha flow.
 func (p *plugin) Login(ctx context.Context, creds *domain.TrackerCredential) error {
-	if creds == nil || creds.Username == "" {
-		return errors.New("lostfilm credentials are required")
+	if creds == nil || len(creds.SessionEnc) == 0 {
+		return fmt.Errorf("lostfilm: no stored session; add the account via the captcha login flow: %w", registry.ErrSessionExpired)
+	}
+	var cookies map[string]string
+	if err := json.Unmarshal(creds.SessionEnc, &cookies); err != nil {
+		return fmt.Errorf("lostfilm: corrupt stored session: %w", registry.ErrSessionExpired)
 	}
 	sess := p.sessions.GetOrCreate(forumcommon.SessionKey(pluginName, creds.UserID.String()), userAgent)
 	if p.transport != nil {
 		sess.Client.Transport = p.transport
 	}
-	form := url.Values{
-		"act":  {"users"},
-		"type": {"login"},
-		"mail": {creds.Username},
-		"pass": {string(creds.SecretEnc)},
-		"rem":  {"1"},
+	// p.domain is a trusted constant; parse cannot fail.
+	u, _ := url.Parse("https://" + p.domain + "/")
+	jarCookies := make([]*http.Cookie, 0, len(cookies))
+	for name, val := range cookies {
+		jarCookies = append(jarCookies, &http.Cookie{Name: name, Value: val})
 	}
-	endpoint := "https://" + p.domain + "/ajaxik.php"
-	log.Debug().Str("plugin", pluginName).Str("step", "login").Str("url", endpoint).Str("user", creds.Username).Msg("POST login")
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(form.Encode()))
+	sess.Client.Jar.SetCookies(u, jarCookies)
+	ok, err := p.Verify(ctx, creds)
 	if err != nil {
-		return fmt.Errorf("lostfilm login: build request: %w", err)
+		return fmt.Errorf("lostfilm: session validation: %w", err)
 	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("User-Agent", userAgent)
-	resp, err := sess.Client.Do(req)
-	if err != nil {
-		return fmt.Errorf("lostfilm login: %w", err)
-	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
-	if err != nil {
-		return fmt.Errorf("lostfilm login: read body: %w", err)
-	}
-	log.Debug().Str("plugin", pluginName).Str("step", "login").Int("status", resp.StatusCode).Int("body_len", len(body)).Msg("login response")
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("lostfilm login failed: HTTP %d", resp.StatusCode)
-	}
-	// Negative-indicator check: LostFilm's /ajaxik.php returns
-	// {"error":1,"message":"..."} on failed login. But the real signal
-	// comes from Verify() (called by the credentials handler right after
-	// Login) which hits /my and looks for a positive authenticated
-	// marker. Don't trust this substring check in isolation.
-	if strings.Contains(string(body), `"error"`) {
-		return errors.New("lostfilm login failed: server returned error")
-	}
-	// A truly empty body (0-byte 200) is a strong hint something went
-	// wrong — real logins return a JSON user object.
-	if len(body) == 0 {
-		return errors.New("lostfilm login failed: empty response body")
+	if !ok {
+		return fmt.Errorf("lostfilm: stored session no longer valid; re-run the captcha login flow: %w", registry.ErrSessionExpired)
 	}
 	sess.LoggedIn = true
 	return nil
@@ -190,6 +259,37 @@ func (p *plugin) fetchURL(ctx context.Context, target string, sess *forumcommon.
 		return nil, fmt.Errorf("lostfilm fetchURL read: %w", err)
 	}
 	return body, nil
+}
+
+// SeasonCatalog implements registry.WithSeasonCatalog. It fetches the
+// public /series/<slug>/seasons page and groups the parsed episode
+// triples by season. No credentials needed — the catalog is public; only
+// the .torrent links are gated.
+func (p *plugin) SeasonCatalog(ctx context.Context, rawURL string) ([]registry.Season, error) {
+	m := urlPattern.FindStringSubmatch(rawURL)
+	if m == nil {
+		return nil, fmt.Errorf("lostfilm: not a series URL: %s", rawURL)
+	}
+	body, err := p.fetch(ctx, "https://"+p.domain+"/series/"+m[1]+"/seasons", nil)
+	if err != nil {
+		return nil, err
+	}
+	bySeason := map[int][]int{}
+	var order []int
+	for _, e := range parseEpisodes(body) {
+		if _, ok := bySeason[e.Season]; !ok {
+			order = append(order, e.Season)
+		}
+		bySeason[e.Season] = append(bySeason[e.Season], e.Episode)
+	}
+	sort.Ints(order)
+	out := make([]registry.Season, 0, len(order))
+	for _, s := range order {
+		ep := bySeason[s]
+		sort.Ints(ep)
+		out = append(out, registry.Season{Number: s, Episodes: ep})
+	}
+	return out, nil
 }
 
 // fetch is the simpler GET used by Check to retrieve the series page.

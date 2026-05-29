@@ -27,21 +27,43 @@ import (
 // it needs to call the plugin's Login (on POST/test/etc.) and never
 // returns the plaintext to the client. The list endpoint returns
 // usernames and IDs but not secrets.
+// credentialStore is the consumer-side seam over *repo.TrackerCredentials
+// so the handler is unit-testable with a fake store (mirrors the
+// scheduler's consumer-interface pattern). *repo.TrackerCredentials
+// satisfies it, so production wiring is unchanged.
+type credentialStore interface {
+	Create(ctx context.Context, c *domain.TrackerCredential) (*domain.TrackerCredential, error)
+	GetByID(ctx context.Context, id, userID uuid.UUID) (*domain.TrackerCredential, error)
+	GetForTracker(ctx context.Context, userID uuid.UUID, trackerName string) (*domain.TrackerCredential, error)
+	ListForUser(ctx context.Context, userID uuid.UUID) ([]*domain.TrackerCredential, error)
+	Update(ctx context.Context, id, userID uuid.UUID, username string, secretEnc, secretNonce []byte) error
+	SetSession(ctx context.Context, id, userID uuid.UUID, sessionEnc, sessionNonce []byte) error
+	Delete(ctx context.Context, id, userID uuid.UUID) error
+}
+
 type Credentials struct {
-	Creds   *repo.TrackerCredentials
+	Creds   credentialStore
 	Master  *crypto.MasterKey
 	Audit   *audit.Logger
 	BaseURL string
+	pending *interactivePendingStore
+}
+
+// NewCredentials builds the handler with an initialized interactive-login
+// pending store.
+func NewCredentials(creds credentialStore, master *crypto.MasterKey, auditLog *audit.Logger, baseURL string) *Credentials {
+	return &Credentials{Creds: creds, Master: master, Audit: auditLog, BaseURL: baseURL, pending: newInteractivePendingStore()}
 }
 
 // credentialView is the safe-to-return shape — never includes the secret.
 type credentialView struct {
-	ID          string `json:"id"`
-	TrackerName string `json:"tracker_name"`
-	DisplayName string `json:"display_name"`
-	Username    string `json:"username"`
-	CreatedAt   string `json:"created_at"`
-	UpdatedAt   string `json:"updated_at"`
+	ID             string `json:"id"`
+	TrackerName    string `json:"tracker_name"`
+	DisplayName    string `json:"display_name"`
+	Username       string `json:"username"`
+	SessionExpired bool   `json:"session_expired"`
+	CreatedAt      string `json:"created_at"`
+	UpdatedAt      string `json:"updated_at"`
 }
 
 // loginAndVerify runs the plugin's Login + Verify sequence and fails if
@@ -78,12 +100,13 @@ func toCredView(c *domain.TrackerCredential) credentialView {
 		display = t.DisplayName()
 	}
 	return credentialView{
-		ID:          c.ID.String(),
-		TrackerName: c.TrackerName,
-		DisplayName: display,
-		Username:    c.Username,
-		CreatedAt:   c.CreatedAt.UTC().Format("2006-01-02T15:04:05Z"),
-		UpdatedAt:   c.UpdatedAt.UTC().Format("2006-01-02T15:04:05Z"),
+		ID:             c.ID.String(),
+		TrackerName:    c.TrackerName,
+		DisplayName:    display,
+		Username:       c.Username,
+		SessionExpired: c.SessionExpiredAt != nil,
+		CreatedAt:      c.CreatedAt.UTC().Format("2006-01-02T15:04:05Z"),
+		UpdatedAt:      c.UpdatedAt.UTC().Format("2006-01-02T15:04:05Z"),
 	}
 }
 

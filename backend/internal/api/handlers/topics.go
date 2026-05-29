@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -16,9 +17,22 @@ import (
 	"github.com/artyomsv/marauder/backend/internal/problem"
 )
 
+// topicStore is the consumer-side seam over *repo.Topics so the handler
+// is unit-testable with a fake store (mirrors credentialStore and the
+// scheduler's consumer-interface pattern). *repo.Topics satisfies it, so
+// production wiring is unchanged.
+type topicStore interface {
+	Create(ctx context.Context, t *domain.Topic) (*domain.Topic, error)
+	GetByID(ctx context.Context, id uuid.UUID, userID *uuid.UUID) (*domain.Topic, error)
+	ListForUser(ctx context.Context, userID uuid.UUID) ([]*domain.Topic, error)
+	Delete(ctx context.Context, id, userID uuid.UUID) error
+	UpdateStatus(ctx context.Context, id, userID uuid.UUID, status domain.TopicStatus) error
+	Update(ctx context.Context, id, userID uuid.UUID, displayName string, clientID *uuid.UUID, downloadDir, category string, extra map[string]any) (*domain.Topic, error)
+}
+
 // Topics is the handler group for /topics.
 type Topics struct {
-	Topics  *repo.Topics
+	Topics  topicStore
 	BaseURL string
 }
 
@@ -27,6 +41,7 @@ type createTopicReq struct {
 	DisplayName      string     `json:"display_name"`
 	ClientID         *uuid.UUID `json:"client_id"`
 	DownloadDir      string     `json:"download_dir"`
+	Category         string     `json:"category"`
 	CheckIntervalSec int        `json:"check_interval_sec"`
 	// Optional capability-driven fields. The frontend learns whether a
 	// tracker accepts these via GET /api/v1/trackers/match. Plugins read
@@ -134,6 +149,7 @@ func (h *Topics) Create(w http.ResponseWriter, r *http.Request) {
 		DisplayName:      displayName,
 		ClientID:         req.ClientID,
 		DownloadDir:      req.DownloadDir,
+		Category:         req.Category,
 		Extra:            extra,
 		CheckIntervalSec: interval,
 		NextCheckAt:      time.Now().UTC(),
@@ -145,6 +161,92 @@ func (h *Topics) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, created)
+}
+
+type updateTopicReq struct {
+	DisplayName  string     `json:"display_name"`
+	ClientID     *uuid.UUID `json:"client_id"`
+	DownloadDir  string     `json:"download_dir"`
+	Category     string     `json:"category"`
+	Quality      string     `json:"quality,omitempty"`
+	StartSeason  *int       `json:"start_season,omitempty"`
+	StartEpisode *int       `json:"start_episode,omitempty"`
+}
+
+// Update handles PUT /topics/{id}.
+func (h *Topics) Update(w http.ResponseWriter, r *http.Request) {
+	uid, perr := currentUserID(r)
+	if perr != nil {
+		problem.Write(w, r, h.BaseURL, perr)
+		return
+	}
+	id, ierr := uuid.Parse(chi.URLParam(r, "id"))
+	if ierr != nil {
+		problem.Write(w, r, h.BaseURL, problem.ErrBadRequest("invalid topic id"))
+		return
+	}
+	var req updateTopicReq
+	if derr := json.NewDecoder(r.Body).Decode(&req); derr != nil {
+		problem.Write(w, r, h.BaseURL, problem.ErrBadRequest("invalid JSON"))
+		return
+	}
+	existing, gerr := h.Topics.GetByID(r.Context(), id, &uid)
+	if gerr != nil {
+		if errors.Is(gerr, repo.ErrNotFound) {
+			problem.Write(w, r, h.BaseURL, problem.ErrNotFound("topic not found"))
+			return
+		}
+		problem.Write(w, r, h.BaseURL, problem.ErrInternal(gerr.Error()))
+		return
+	}
+	if existing == nil {
+		problem.Write(w, r, h.BaseURL, problem.ErrNotFound("topic not found"))
+		return
+	}
+
+	// Start from the existing extra map and overlay capability fields,
+	// mirroring Create's logic exactly (same keys, same validation).
+	extra := map[string]any{}
+	for k, v := range existing.Extra {
+		extra[k] = v
+	}
+	if req.Quality != "" {
+		tracker := registry.GetTracker(existing.TrackerName)
+		if tracker != nil {
+			if wq, ok := tracker.(registry.WithQuality); ok {
+				allowed := false
+				for _, q := range wq.Qualities() {
+					if q == req.Quality {
+						allowed = true
+						break
+					}
+				}
+				if !allowed {
+					problem.Write(w, r, h.BaseURL,
+						problem.ErrUnprocessable("quality '"+req.Quality+"' not supported by this tracker"))
+					return
+				}
+			}
+		}
+		extra["quality"] = req.Quality
+	}
+	if req.StartSeason != nil {
+		extra["start_season"] = *req.StartSeason
+	}
+	if req.StartEpisode != nil {
+		extra["start_episode"] = *req.StartEpisode
+	}
+
+	updated, uerr := h.Topics.Update(r.Context(), id, uid, req.DisplayName, req.ClientID, req.DownloadDir, req.Category, extra)
+	if uerr != nil {
+		if errors.Is(uerr, repo.ErrNotFound) {
+			problem.Write(w, r, h.BaseURL, problem.ErrNotFound("topic not found"))
+			return
+		}
+		problem.Write(w, r, h.BaseURL, problem.ErrInternal("update topic: "+uerr.Error()))
+		return
+	}
+	writeJSON(w, http.StatusOK, updated)
 }
 
 // Get handles GET /topics/{id}.

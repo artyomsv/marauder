@@ -67,11 +67,14 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 
+	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
 
 	"github.com/artyomsv/marauder/backend/internal/domain"
 	"github.com/artyomsv/marauder/backend/internal/extra"
+	"github.com/artyomsv/marauder/backend/internal/plugins/captchalogin"
 	"github.com/artyomsv/marauder/backend/internal/plugins/registry"
 	"github.com/artyomsv/marauder/backend/internal/plugins/trackers/forumcommon"
 )
@@ -84,12 +87,53 @@ type plugin struct {
 	domain    string
 	transport http.RoundTripper
 
+	// engine drives the interactive captcha login flow. It is built
+	// lazily by eng() the first time an interactive login runs, because
+	// it needs p.domain / p.transport — both of which are set on the
+	// struct (production via init, tests via literals) before any login.
+	// engineOnce makes that lazy init race-free; both are zero-value
+	// friendly so test plugin{} literals need no special construction.
+	engineOnce sync.Once
+	engine     *captchalogin.Engine
+
 	// redirectValidator is a test seam for the SSRF allowlist. Production
 	// code leaves it nil; e2e tests that point the plugin at a 127.0.0.1
 	// httptest.Server install a permissive validator so the loopback IP
 	// check doesn't reject test fixtures.
 	redirectValidator func(string) error
 }
+
+// newInteractiveSession returns a FRESH, independent session (its own
+// cookie jar) on every call — the invariant captchalogin.Engine relies
+// on so concurrent interactive logins never cross-contaminate captcha
+// cookies. The uuid suffix guarantees the underlying store never hands
+// back a cached session.
+func (p *plugin) newInteractiveSession() *forumcommon.Session {
+	sess := forumcommon.New().GetOrCreate(pluginName+":pending:"+uuid.NewString(), userAgent)
+	if p.transport != nil {
+		sess.Client.Transport = p.transport
+	}
+	return sess
+}
+
+// eng lazily builds the interactive-login engine exactly once, even
+// under concurrent first calls.
+func (p *plugin) eng() *captchalogin.Engine {
+	p.engineOnce.Do(func() {
+		p.engine = captchalogin.New(p.captchaConfig(), p.newInteractiveSession)
+	})
+	return p.engine
+}
+
+// Compile-time guarantee that the plugin satisfies the capability
+// interfaces the rest of the codebase relies on. WithInteractiveLogin is
+// the captcha-login contract added alongside cookie-session rehydration.
+var (
+	_ registry.Tracker              = (*plugin)(nil)
+	_ registry.WithCredentials      = (*plugin)(nil)
+	_ registry.WithInteractiveLogin = (*plugin)(nil)
+	_ registry.WithSeasonCatalog    = (*plugin)(nil)
+)
 
 func init() {
 	registry.RegisterTracker(&plugin{

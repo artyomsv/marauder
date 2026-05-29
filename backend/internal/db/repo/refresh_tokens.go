@@ -5,18 +5,27 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/artyomsv/marauder/backend/internal/domain"
 )
 
+// refreshTokensPool is the consumer-side seam over *pgxpool.Pool, so the
+// repo is unit-testable with pgxmock (which satisfies this interface).
+type refreshTokensPool interface {
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+	Begin(ctx context.Context) (pgx.Tx, error)
+}
+
 // RefreshTokens repository.
 type RefreshTokens struct {
-	pool *pgxpool.Pool
+	pool refreshTokensPool
 }
 
 // NewRefreshTokens constructs the repository.
-func NewRefreshTokens(pool *pgxpool.Pool) *RefreshTokens {
+func NewRefreshTokens(pool refreshTokensPool) *RefreshTokens {
 	return &RefreshTokens{pool: pool}
 }
 
@@ -61,17 +70,21 @@ func (r *RefreshTokens) Rotate(ctx context.Context, oldID uuid.UUID, newTok *dom
 	}
 	defer tx.Rollback(ctx)
 
-	if _, err := tx.Exec(ctx,
-		`UPDATE refresh_tokens SET revoked_at = now(), replaced_by = $2 WHERE id = $1`,
-		oldID, newTok.ID,
-	); err != nil {
-		return err
-	}
+	// Insert the new token first so its id exists before the old row's
+	// replaced_by FK points at it. The refresh_tokens_replaced_by_fkey
+	// constraint is checked per-statement (not DEFERRABLE), so the
+	// reverse order fails with SQLSTATE 23503.
 	if _, err := tx.Exec(ctx,
 		`INSERT INTO refresh_tokens (id, user_id, token_hash, issued_at, expires_at, user_agent, ip)
          VALUES ($1,$2,$3,$4,$5,NULLIF($6,''),NULLIF($7,'')::inet)`,
 		newTok.ID, newTok.UserID, newTok.TokenHash,
 		newTok.IssuedAt, newTok.ExpiresAt, newTok.UserAgent, newTok.IP,
+	); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx,
+		`UPDATE refresh_tokens SET revoked_at = now(), replaced_by = $2 WHERE id = $1`,
+		oldID, newTok.ID,
 	); err != nil {
 		return err
 	}

@@ -19,8 +19,8 @@ type fakeCredPlugin struct {
 	verifyErr error
 }
 
-func (f *fakeCredPlugin) Name() string        { return "fake" }
-func (f *fakeCredPlugin) DisplayName() string { return "Fake" }
+func (f *fakeCredPlugin) Name() string         { return "fake" }
+func (f *fakeCredPlugin) DisplayName() string  { return "Fake" }
 func (f *fakeCredPlugin) CanParse(string) bool { return false }
 func (f *fakeCredPlugin) Parse(context.Context, string) (*domain.Topic, error) {
 	return nil, errors.New("not used in these tests")

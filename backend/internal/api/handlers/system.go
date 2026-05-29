@@ -22,7 +22,7 @@ type System struct {
 func (h *System) Info(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"version":   version.Current(),
-		"trackers":  listPluginNames(registry.ListTrackers()),
+		"trackers":  listTrackerInfos(registry.ListTrackers()),
 		"clients":   listPluginNames(registry.ListClients()),
 		"notifiers": listPluginNames(registry.ListNotifiers()),
 	})
@@ -90,6 +90,22 @@ func listPluginNames[T namedPlugin](items []T) []map[string]string {
 		out = append(out, map[string]string{
 			"name":         i.Name(),
 			"display_name": i.DisplayName(),
+		})
+	}
+	return out
+}
+
+// listTrackerInfos is like listPluginNames but adds tracker capability
+// flags the credentials UI needs by name (the add-credential form picks a
+// tracker by name and has no URL to call /trackers/match with).
+func listTrackerInfos(items []registry.Tracker) []map[string]any {
+	out := make([]map[string]any, 0, len(items))
+	for _, t := range items {
+		_, interactive := t.(registry.WithInteractiveLogin)
+		out = append(out, map[string]any{
+			"name":                       t.Name(),
+			"display_name":               t.DisplayName(),
+			"supports_interactive_login": interactive,
 		})
 	}
 	return out

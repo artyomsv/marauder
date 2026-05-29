@@ -9,7 +9,10 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/pashagolub/pgxmock/v3"
+
+	"github.com/artyomsv/marauder/backend/internal/domain"
 )
 
 // jsonMarshalForTest is a tiny indirection so the stdlib contract test
@@ -193,6 +196,32 @@ func TestTopics_MarkEpisodeDownloaded_DBError(t *testing.T) {
 
 // ---------- scanTopic malformed extra ----------
 
+// topicRow returns a pgxmock row slice that matches topicColumns exactly
+// (19 columns as of migration 0004). Callers override individual fields as
+// needed. The helper centralises column-order so tests don't drift.
+func topicRow(id, userID uuid.UUID, now time.Time) []any {
+	return []any{
+		id, userID, "faketracker", "https://example.invalid/t/1",
+		"My Topic", (*uuid.UUID)(nil),
+		"",                            // download_dir
+		"",                            // category
+		[]byte(`{"quality":"1080p"}`), // extra
+		"",                            // last_hash
+		(*time.Time)(nil), (*time.Time)(nil), now,
+		3600, 0, "active",
+		"", now, now,
+	}
+}
+
+// topicColumns19 mirrors the header slice for pgxmock.NewRows (19 cols).
+var topicColumns19 = []string{
+	"id", "user_id", "tracker_name", "url", "display_name", "client_id",
+	"download_dir", "category", "extra", "last_hash",
+	"last_checked_at", "last_updated_at", "next_check_at",
+	"check_interval_sec", "consecutive_errors", "status",
+	"last_error", "created_at", "updated_at",
+}
+
 // TestTopics_ScanTopic_MalformedExtra drives GetByID through a mocked
 // pool that returns a row whose extra column holds invalid JSON. Before
 // the fix, this silently produced an empty Extra map; after the fix, it
@@ -205,17 +234,12 @@ func TestTopics_ScanTopic_MalformedExtra(t *testing.T) {
 	userID := uuid.New()
 	now := time.Now().UTC()
 
-	// Build a row that matches topicColumns exactly (18 columns).
-	rows := pgxmock.NewRows([]string{
-		"id", "user_id", "tracker_name", "url", "display_name", "client_id",
-		"download_dir", "extra", "last_hash",
-		"last_checked_at", "last_updated_at", "next_check_at",
-		"check_interval_sec", "consecutive_errors", "status",
-		"last_error", "created_at", "updated_at",
-	}).AddRow(
+	// Build a row that matches topicColumns exactly (19 columns).
+	rows := pgxmock.NewRows(topicColumns19).AddRow(
 		id, userID, "faketracker", "https://example.invalid/t/1",
 		"My Topic", (*uuid.UUID)(nil),
-		"", []byte("{not valid json"), "",
+		"", "",
+		[]byte("{not valid json"), "",
 		(*time.Time)(nil), (*time.Time)(nil), now,
 		3600, 0, "active",
 		"", now, now,
@@ -245,20 +269,7 @@ func TestTopics_ScanTopic_ValidExtra(t *testing.T) {
 	userID := uuid.New()
 	now := time.Now().UTC()
 
-	rows := pgxmock.NewRows([]string{
-		"id", "user_id", "tracker_name", "url", "display_name", "client_id",
-		"download_dir", "extra", "last_hash",
-		"last_checked_at", "last_updated_at", "next_check_at",
-		"check_interval_sec", "consecutive_errors", "status",
-		"last_error", "created_at", "updated_at",
-	}).AddRow(
-		id, userID, "faketracker", "https://example.invalid/t/1",
-		"My Topic", (*uuid.UUID)(nil),
-		"", []byte(`{"quality":"1080p"}`), "",
-		(*time.Time)(nil), (*time.Time)(nil), now,
-		3600, 0, "active",
-		"", now, now,
-	)
+	rows := pgxmock.NewRows(topicColumns19).AddRow(topicRow(id, userID, now)...)
 
 	mock.ExpectQuery(`SELECT .* FROM topics WHERE id = \$1`).
 		WithArgs(id).
@@ -270,5 +281,177 @@ func TestTopics_ScanTopic_ValidExtra(t *testing.T) {
 	}
 	if got.Extra["quality"] != "1080p" {
 		t.Errorf("GetByID: want Extra[quality]=1080p, got %v", got.Extra["quality"])
+	}
+}
+
+// ---------- DueForCheck ----------
+
+// TestTopics_DueForCheck_IncludesErrorStatus verifies that the query
+// uses status IN ('active', 'error') so errored topics are retried on
+// their backoff schedule.
+func TestTopics_DueForCheck_IncludesErrorStatus(t *testing.T) {
+	repo, mock := newMockTopics(t)
+	t.Cleanup(func() { assertExpectationsMet(t, mock) })
+
+	id := uuid.New()
+	userID := uuid.New()
+	now := time.Now().UTC()
+
+	rows := pgxmock.NewRows(topicColumns19).AddRow(topicRow(id, userID, now)...)
+
+	// The regex asserts the IN clause is present.
+	mock.ExpectQuery(`status IN \('active', 'error'\)`).
+		WithArgs(10).
+		WillReturnRows(rows)
+
+	topics, err := repo.DueForCheck(context.Background(), 10)
+	if err != nil {
+		t.Fatalf("DueForCheck: unexpected error: %v", err)
+	}
+	if len(topics) != 1 {
+		t.Fatalf("DueForCheck: want 1 topic, got %d", len(topics))
+	}
+	if topics[0].ID != id {
+		t.Errorf("DueForCheck: want id=%s, got %s", id, topics[0].ID)
+	}
+}
+
+// ---------- Create ----------
+
+// TestTopics_Create_RoundTripsCategory verifies that Create includes
+// the category column in the INSERT and that scanTopic reads it back.
+func TestTopics_Create_RoundTripsCategory(t *testing.T) {
+	repo, mock := newMockTopics(t)
+	t.Cleanup(func() { assertExpectationsMet(t, mock) })
+
+	id := uuid.New()
+	userID := uuid.New()
+	now := time.Now().UTC()
+
+	// Build the RETURNING row with category="movies".
+	row := topicRow(id, userID, now)
+	// column index 7 is category (0-based: id,user_id,tracker_name,url,display_name,client_id,download_dir,category,...)
+	row[7] = "movies"
+
+	rows := pgxmock.NewRows(topicColumns19).AddRow(row...)
+
+	// Match INSERT containing the category column.
+	mock.ExpectQuery(`INSERT INTO topics.*category.*RETURNING`).
+		WithArgs(
+			userID, "faketracker", "https://example.invalid/t/1",
+			"My Topic", (*uuid.UUID)(nil),
+			"",               // download_dir
+			"movies",         // category
+			pgxmock.AnyArg(), // extra (JSON)
+			3600, pgxmock.AnyArg(), "active",
+		).
+		WillReturnRows(rows)
+
+	in := &domain.Topic{
+		UserID:           userID,
+		TrackerName:      "faketracker",
+		URL:              "https://example.invalid/t/1",
+		DisplayName:      "My Topic",
+		ClientID:         nil,
+		DownloadDir:      "",
+		Category:         "movies",
+		Extra:            map[string]any{"quality": "1080p"},
+		CheckIntervalSec: 3600,
+		NextCheckAt:      now,
+		Status:           domain.TopicStatusActive,
+	}
+
+	got, err := repo.Create(context.Background(), in)
+	if err != nil {
+		t.Fatalf("Create: unexpected error: %v", err)
+	}
+	if got.Category != "movies" {
+		t.Errorf("Create: want Category=%q, got %q", "movies", got.Category)
+	}
+}
+
+// ---------- Update ----------
+
+// TestTopics_Update_HappyPath verifies that Update issues the expected
+// UPDATE … RETURNING query and returns the scanned topic.
+func TestTopics_Update_HappyPath(t *testing.T) {
+	r, mock := newMockTopics(t)
+	t.Cleanup(func() { assertExpectationsMet(t, mock) })
+
+	id := uuid.New()
+	userID := uuid.New()
+	now := time.Now().UTC()
+
+	// Build the RETURNING row reflecting the updated values.
+	row := topicRow(id, userID, now)
+	row[4] = "Updated Name"                                // display_name
+	row[7] = "series"                                      // category
+	row[8] = []byte(`{"quality":"720p","start_season":2}`) // extra
+
+	rows := pgxmock.NewRows(topicColumns19).AddRow(row...)
+
+	mock.ExpectQuery(`UPDATE topics SET`).
+		WithArgs(
+			id, userID,
+			"Updated Name",    // $3 display_name
+			(*uuid.UUID)(nil), // $4 client_id
+			"",                // $5 download_dir
+			"series",          // $6 category
+			pgxmock.AnyArg(),  // $7 extra (JSON)
+		).
+		WillReturnRows(rows)
+
+	extra := map[string]any{"quality": "720p", "start_season": 2}
+	got, err := r.Update(context.Background(), id, userID, "Updated Name", nil, "", "series", extra)
+	if err != nil {
+		t.Fatalf("Update: unexpected error: %v", err)
+	}
+	if got.DisplayName != "Updated Name" {
+		t.Errorf("Update: want DisplayName=%q, got %q", "Updated Name", got.DisplayName)
+	}
+	if got.Category != "series" {
+		t.Errorf("Update: want Category=%q, got %q", "series", got.Category)
+	}
+}
+
+// TestTopics_Update_NotFound verifies that pgx.ErrNoRows is translated
+// to repo.ErrNotFound.
+func TestTopics_Update_NotFound(t *testing.T) {
+	r, mock := newMockTopics(t)
+	t.Cleanup(func() { assertExpectationsMet(t, mock) })
+
+	id := uuid.New()
+	userID := uuid.New()
+
+	mock.ExpectQuery(`UPDATE topics SET`).
+		WithArgs(id, userID, pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
+		WillReturnError(pgx.ErrNoRows)
+
+	_, err := r.Update(context.Background(), id, userID, "X", nil, "", "", map[string]any{})
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Update: want ErrNotFound, got %v", err)
+	}
+}
+
+// TestTopics_Update_DBError verifies that an arbitrary DB error is
+// propagated unchanged (not wrapped as ErrNotFound).
+func TestTopics_Update_DBError(t *testing.T) {
+	r, mock := newMockTopics(t)
+	t.Cleanup(func() { assertExpectationsMet(t, mock) })
+
+	id := uuid.New()
+	userID := uuid.New()
+	dbErr := errors.New("connection reset")
+
+	mock.ExpectQuery(`UPDATE topics SET`).
+		WithArgs(id, userID, pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
+		WillReturnError(dbErr)
+
+	_, err := r.Update(context.Background(), id, userID, "X", nil, "", "", map[string]any{})
+	if err == nil {
+		t.Fatal("Update: want error, got nil")
+	}
+	if !errors.Is(err, dbErr) {
+		t.Fatalf("Update: want wrapped %v, got %v", dbErr, err)
 	}
 }

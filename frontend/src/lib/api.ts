@@ -133,9 +133,81 @@ export const api = {
     request<T>("PATCH", path, body, opts),
   del: <T>(path: string, opts?: { auth?: boolean }) =>
     request<T>("DELETE", path, undefined, opts),
+
+  // --- Interactive (captcha) login for trackers that advertise
+  // `supports_interactive_login` via /trackers/match. The captcha image
+  // is returned as a data URL, so the browser never talks to the tracker
+  // directly — Marauder's backend proxies the whole challenge.
+  interactiveBegin: (body: { tracker_name: string; username: string; password: string }) =>
+    request<InteractiveBeginResult>("POST", "/credentials/interactive/begin", body),
+  interactiveComplete: (body: { tracker_name: string; challenge_id: string; answer: string }) =>
+    request<{ credential: CredentialView }>("POST", "/credentials/interactive/complete", body),
+  interactiveRefresh: (body: { tracker_name: string; challenge_id: string }) =>
+    request<InteractiveRefreshResult>("POST", "/credentials/interactive/refresh", body),
+
+  // --- Re-authentication for an existing credential whose session cookie
+  // expired. Mirrors the interactive begin/complete pair but uses the
+  // stored password server-side, so the body is empty — the user only
+  // ever solves a captcha. Image refreshes reuse `interactiveRefresh`.
+  reauthBegin: (id: string) =>
+    request<InteractiveBeginResult>("POST", `/credentials/${id}/reauth/begin`, {}),
+  reauthComplete: (id: string, body: { challenge_id: string; answer: string }) =>
+    request<{ credential: CredentialView }>("POST", `/credentials/${id}/reauth/complete`, body),
+
+  // Update an existing topic. URL/tracker are immutable; the backend merges
+  // the capability fields into the topic's Extra blob, preserving
+  // downloaded_episodes. 404 unknown/foreign, 422 bad quality.
+  updateTopic: (id: string, body: UpdateTopicBody) =>
+    request<Topic>("PUT", `/topics/${id}`, body),
 };
 
+// Body of PUT /topics/{id}. Mirrors the backend updateTopicReq.
+export interface UpdateTopicBody {
+  display_name: string;
+  client_id?: string | null;
+  download_dir?: string;
+  category?: string;
+  quality?: string;
+  start_season?: number;
+  start_episode?: number;
+}
+
 // --- Typed models mirroring backend/internal/domain ---------------------
+
+// One season of a tracker's released-episode catalog, returned by
+// GET /trackers/seasons. Episodes are the released episode numbers for
+// that season (sorted ascending by the backend).
+export interface SeasonInfo {
+  number: number;
+  episodes: number[];
+}
+
+export interface CredentialView {
+  id: string;
+  tracker_name: string;
+  display_name: string;
+  username: string;
+  session_expired: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+// Result of POST /credentials/interactive/begin. Either the tracker
+// logged us straight in (no captcha required) or it handed back a
+// captcha challenge to relay to the user.
+export interface InteractiveBeginResult {
+  status: "logged_in" | "captcha";
+  challenge_id?: string;
+  captcha_image?: string;
+  credential?: CredentialView;
+}
+
+// Result of POST /credentials/interactive/refresh — a fresh captcha
+// image bound to the same (or a rotated) challenge id.
+export interface InteractiveRefreshResult {
+  challenge_id: string;
+  captcha_image: string;
+}
 
 export type Me = {
   id: string;
@@ -152,6 +224,17 @@ export type TokenPair = {
   token_type: string;
 };
 
+// The capability fields a tracker plugin reads from a topic's Extra blob.
+// Stored as lowercase keys in the JSONB map (see backend topics handler),
+// so the JSON shape here is snake_case even though the surrounding Topic
+// fields are PascalCase (domain.Topic has no JSON tags).
+export interface TopicExtra {
+  quality?: string;
+  start_season?: number;
+  start_episode?: number;
+  [key: string]: unknown;
+}
+
 export type Topic = {
   ID: string;
   UserID: string;
@@ -160,6 +243,8 @@ export type Topic = {
   DisplayName: string;
   ClientID: string | null;
   DownloadDir: string;
+  Category: string;
+  Extra: TopicExtra | null;
   LastHash: string;
   LastCheckedAt: string | null;
   LastUpdatedAt: string | null;
@@ -174,7 +259,7 @@ export type Topic = {
 
 export type SystemInfo = {
   version: { version: string; commit: string; buildDate: string };
-  trackers: { name: string; display_name: string }[];
+  trackers: { name: string; display_name: string; supports_interactive_login: boolean }[];
   clients: { name: string; display_name: string }[];
   notifiers: { name: string; display_name: string }[];
 };

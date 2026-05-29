@@ -39,12 +39,14 @@ techdebt/       Debt-tracking files (one per issue, see global rule)
 | `cfsolver` | in-process client to the standalone `cfsolver/` service |
 | `config` | env-driven config struct (caarlos0/env) — **add new env vars here** |
 | `crypto` | AES-256-GCM for tracker credentials and client config blobs |
-| `db` / `db/repo` | pgxpool wrapper + repository structs (`Topics`, `Clients`, `Notifiers`, `Users`, `TrackerCredentials`, `Audit`, `Settings`) |
-| `domain` | core types: `Topic`, `Check`, `Payload`, `TrackerCredential` |
+| `db` / `db/repo` | pgxpool wrapper + repository structs (`Topics`, `Clients`, `Notifiers`, `Users`, `TrackerCredentials`, `Audit`, `Settings`). `TrackerCredentials` carries encrypted `secret_enc` (password) **and** `session_enc`/`session_nonce` (cookie-session blob; migration `0002`), plus a nullable `session_expired_at` marker (migration `0003`) the scheduler uses to dedupe expiry notifications (atomic `MarkSessionExpired`, cleared by `SetSession` on re-auth) |
+| **`notify`** | reusable notification dispatcher — `Send(userID, domain.Message)` fans out to all of a user's configured notifiers (best-effort, metered). First/only consumer: scheduler session-expiry alerts. The single event→notifier fan-out point |
+| `domain` | core types: `Topic` (incl. per-topic `ClientID`, `DownloadDir`, `Category`), `Check`, `Payload`, `TrackerCredential`, `AddOptions` (`DownloadDir` + `Category`) |
 | **`extra`** | shared `extra.Int / StringSlice / String` helpers for the untyped `map[string]any` blobs in `Topic.Extra` and `Check.Extra` (added 2026-04-07; **use this instead of writing local helpers**) |
 | `logging` | zerolog setup (JSON in prod, pretty in dev) |
 | `metrics` | Prometheus collectors (HTTP, scheduler, tracker, client) |
-| `plugins/registry` | plugin interfaces + global registry + capability interfaces (`WithQuality`, `WithEpisodeFilter`, `WithCredentials`, `WithCloudflare`) + **`registry.ErrNoPendingEpisodes`** typed sentinel |
+| `plugins/registry` | plugin interfaces + global registry + capability interfaces (`WithQuality`, `WithEpisodeFilter`, `WithCredentials`, `WithCloudflare`, `WithInteractiveLogin`, `WithSeasonCatalog`) + typed sentinels **`registry.ErrNoPendingEpisodes`**, `ErrCaptchaRequired`, `ErrSessionExpired` |
+| **`plugins/captchalogin`** | reusable human-in-the-loop interactive captcha-login engine (`Begin`/`Complete`/`Refresh` + TTL pending-session store). A tracker supplies a `Config` (LoginURL, CaptchaURL, CookieNames, BuildForm, Classify); first consumer is LostFilm. See `WithInteractiveLogin` |
 | `plugins/trackers/<name>` | one package per tracker plugin (16 plugins as of v1.0.0+) |
 | `plugins/clients/<name>` | one package per torrent client (qBittorrent, Transmission, Deluge, µTorrent, downloadfolder) |
 | `plugins/notifiers/<name>` | telegram, email, webhook, pushover |
@@ -75,6 +77,16 @@ techdebt/       Debt-tracking files (one per issue, see global rule)
      `updated || anySubmitted`.
 4. `recordResult` — persists `next_check_at` (with exponential backoff
    on errors, capped at 6h) and writes the run summary metrics.
+
+**Per-topic delivery:** `sendViaClient` passes `domain.AddOptions{DownloadDir:
+t.DownloadDir, Category: t.Category}` to the client plugin, so each topic can
+target its own save folder and (qBittorrent) category. Transmission ignores
+`Category`. Both fields are editable via `PUT /topics/{id}`.
+
+**Errored-topic retry:** `DueForCheck` selects `WHERE status IN
+('active','error')`, so a topic that errors keeps retrying on its already-
+persisted backoff `next_check_at` (≤6h) instead of parking permanently. A
+successful check flips the status back to `active` (`paused` stays excluded).
 
 The scheduler depends on small **consumer-side interfaces** (`topicsRepo`,
 `markEpisodeDownloader`, `clientsRepo`, `credentialsRepo`, `decryptor`)
@@ -141,10 +153,10 @@ src/
 
 ```bash
 # Backend (Docker — never install Go locally)
-docker run --rm -v "E:/Projects/Stukans/Prototypes/torrent/backend:/backend" -w //backend golang:1.23 sh -c "go build ./... && go vet ./... && go test -race ./..."
+docker run --rm -v "E:/Projects/Stukans/Marauder/backend:/backend" -w //backend golang:1.24 sh -c "go build ./... && go vet ./... && go test -race ./..."
 
 # Frontend
-docker run --rm -v "E:/Projects/Stukans/Prototypes/torrent/frontend:/frontend" -w //frontend node:20-alpine sh -c "npm run typecheck && npm test && npm run build"
+docker run --rm -v "E:/Projects/Stukans/Marauder/frontend:/frontend" -w //frontend node:20-alpine sh -c "npm run typecheck && npm test && npm run build"
 
 # Stack up (compose)
 docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.dev.yml up -d
@@ -173,6 +185,48 @@ access during development. Container-internal ports (right column) keep
 their conventional values — only the host-side mappings (left column)
 must stay in the safe 34xxx range.
 
+### Local dev access (dev overlay) — default hosts & credentials
+
+**Open the app at the gateway, not the frontend container.** The
+frontend container (`34001`) serves only the static SPA and does **not**
+proxy `/api` — hitting it directly makes login fail with
+`Unexpected token '<' ... is not valid JSON` (the API call falls through
+to `index.html`). Use the gateway, which proxies both `/` and `/api`:
+
+| What | URL | Credentials |
+|---|---|---|
+| Marauder app (login here) | http://localhost:34080 | `admin` / `pleasechangeme` |
+| Frontend container (SPA only, no API) | http://localhost:34001 | — (don't use for login) |
+| qBittorrent WebUI | http://localhost:34611 | `admin` / temp password — see below |
+| Transmission WebUI | http://localhost:34091 | no auth (`rpc-authentication-required: false`) |
+
+App login comes from `MARAUDER_ADMIN_INITIAL_USERNAME` /
+`MARAUDER_ADMIN_INITIAL_PASSWORD` in `deploy/.env`, seeded **only when
+the users table is empty** (`ensureAdmin`, `cmd/server/main.go`).
+Changing `.env` after the first boot has no effect — rotate via the UI.
+
+qBittorrent has no fixed password: the linuxserver image mints a random
+temporary one on every start until you set a permanent one in the WebUI.
+Retrieve the current value with:
+
+```bash
+docker logs deploy-qbittorrent-1 2>&1 | grep "temporary password"
+```
+
+**Torrent-client config inside Marauder must use Docker service DNS, not
+the host ports.** The `localhost:34xxx` mappings only work from your
+browser on the host; the backend container reaches the clients on the
+internal network by service name + container-internal port:
+
+| Client | RPC/Host URL to enter in Marauder |
+|---|---|
+| qBittorrent | `http://qbittorrent:6611` |
+| Transmission | `http://transmission:9091/transmission/rpc` |
+
+Entering `http://localhost:34611` / `:34091` here fails with a
+connection-refused error because `localhost` inside the backend
+container is the backend itself.
+
 ## Key environment variables
 
 - `MARAUDER_MASTER_KEY` — AES-256 key for credential/config encryption (REQUIRED)
@@ -190,9 +244,42 @@ See `docs/plugin-development.md`. The pattern: implement the
 unit test plus an e2e test using `plugins/e2etest.HostRewriteTransport`.
 
 Optional capability interfaces: `WithQuality`, `WithEpisodeFilter`,
-`WithCredentials`, `WithCloudflare`. The frontend AddTopic form
-discovers them via `GET /api/v1/trackers/match?url=`.
+`WithCredentials`, `WithCloudflare`, `WithInteractiveLogin`,
+`WithSeasonCatalog`. The frontend AddTopic form discovers most via
+`GET /api/v1/trackers/match?url=`; `supports_interactive_login` is
+**also** surfaced per-tracker in `GET /api/v1/system/info` because the
+add-credential form selects a tracker by name and has no URL.
+`WithSeasonCatalog` (LostFilm) enumerates a series' released
+seasons/episodes from `GET /api/v1/trackers/seasons?url=` (fetches the
+public `/series/<slug>/seasons` page, reuses the episode parser); the
+AddTopic form uses it to constrain the "start from" season/episode
+selectors to released values.
 
 For per-episode trackers (currently only LostFilm), `Download` must
 return `fmt.Errorf("...: %w", registry.ErrNoPendingEpisodes)` when the
 pending list is empty so the scheduler's per-episode loop terminates.
+
+### Interactive (captcha) login
+
+Trackers that gate login behind a captcha implement
+`registry.WithInteractiveLogin` (`BeginLogin`/`CompleteLogin`/
+`RefreshChallenge`) — easiest by embedding a `captchalogin.Engine` built
+from a `captchalogin.Config`. The user solves the captcha in-app via
+`POST /api/v1/credentials/interactive/{begin,complete,refresh}`; the
+harvested session cookie is persisted (encrypted) in
+`tracker_credentials.session_enc`. The password is **also** persisted
+(encrypted `secret_enc`) on the interactive add so the session can later
+be re-established without re-entering credentials. Such a plugin's
+`Login` rehydrates the stored cookie into its session jar and validates
+it via `Verify`, returning `registry.ErrSessionExpired` when the cookie
+is missing/dead. LostFilm is the reference implementation.
+
+**Expiry → notify → re-auth loop:** when `Login` returns
+`ErrSessionExpired`, the scheduler atomically marks the credential
+(`session_expired_at`) and fires a one-shot notification via `notify`
+(deduped — only the check that wins the NULL→now() transition notifies).
+The credential view exposes `session_expired`; the UI shows a badge and a
+**captcha-only** re-auth dialog backed by
+`POST /api/v1/credentials/{id}/reauth/{begin,complete}` — these decrypt
+the stored password to fetch a fresh captcha (no credential re-entry) and
+`SetSession` clears the expiry marker on success.

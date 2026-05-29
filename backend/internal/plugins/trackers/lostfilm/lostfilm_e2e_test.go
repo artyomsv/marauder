@@ -2,6 +2,7 @@ package lostfilm
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -16,6 +17,16 @@ import (
 	"github.com/artyomsv/marauder/backend/internal/plugins/registry"
 	"github.com/artyomsv/marauder/backend/internal/plugins/trackers/forumcommon"
 )
+
+// mustJSON marshals v and panics on error — test-only convenience for
+// building a SessionEnc cookie blob inline.
+func mustJSON(v any) []byte {
+	b, err := json.Marshal(v)
+	if err != nil {
+		panic(err)
+	}
+	return b
+}
 
 // permissiveRedirectValidator is the test seam used in place of the
 // production SSRF allowlist. The httptest servers below run on
@@ -62,7 +73,7 @@ func TestE2E(t *testing.T) {
 					w.WriteHeader(http.StatusFound)
 				case r.URL.Path == "/dl/the-series-s01e42":
 					w.WriteHeader(200)
-					_, _ = w.Write([]byte(`<a href="https://example.com/the-series-s01e42-1080p.torrent">1080p</a>`))
+					_, _ = w.Write([]byte(`<div class="inner-box--item"><div class="inner-box--label">1080</div><div class="inner-box--link main"><a href="https://example.com/the-series-s01e42-1080p.torrent">dl</a></div></div>`))
 				case strings.HasSuffix(r.URL.Path, ".torrent"):
 					w.WriteHeader(200)
 					_, _ = w.Write([]byte("d8:announce5:test:e"))
@@ -89,9 +100,10 @@ func TestE2E(t *testing.T) {
 			return p, "https://www.lostfilm.tv/series/the-series/"
 		},
 		Creds: &domain.TrackerCredential{
-			UserID:    uuid.New(),
-			Username:  "alice",
-			SecretEnc: []byte("password"),
+			UserID:     uuid.New(),
+			Username:   "alice",
+			SecretEnc:  []byte("password"),
+			SessionEnc: mustJSON(map[string]string{"lf_session": "x"}),
 		},
 		// New hash format: 1 episode total, 0 done, 1 pending
 		ExpectedHash:         "eps:1/done:0/pending:1",
@@ -118,10 +130,22 @@ const e2eRedirectorSeriesHTML = `<html>
 </body>
 </html>`
 
+// e2eRedirectorDestHTML mirrors LostFilm's current destination markup:
+// per-quality inner-box--item blocks with a tier label + a tracktor.site
+// download link (no literal ".torrent" in the URL).
 const e2eRedirectorDestHTML = `<html><body>
-<a href="https://tracktor.in/td.php?id=abc-sd.torrent">Download SD</a>
-<a href="https://tracktor.in/td.php?id=abc-1080p_mp4.torrent">Download 1080p_mp4</a>
-<a href="https://tracktor.in/td.php?id=abc-1080p.torrent">Download 1080p</a>
+<div class="inner-box--item">
+  <div class="inner-box--label">SD</div>
+  <div class="inner-box--link main"><a href="https://tracktor.in/td.php?s=token-sd">WEB-DLRip</a></div>
+</div>
+<div class="inner-box--item">
+  <div class="inner-box--label">MP4</div>
+  <div class="inner-box--link main"><a href="https://tracktor.in/td.php?s=token-mp4">MP4</a></div>
+</div>
+<div class="inner-box--item">
+  <div class="inner-box--label">1080</div>
+  <div class="inner-box--link main"><a href="https://tracktor.in/td.php?s=token-1080">WEB-DL 1080p</a></div>
+</div>
 </body></html>`
 
 // TestRedirectorFlow drives the full GET /v_search.php?a=<packed> →
@@ -154,6 +178,9 @@ func TestRedirectorFlow(t *testing.T) {
 		case r.URL.Path == "/dl/Monarch_S02E02":
 			w.WriteHeader(200)
 			_, _ = w.Write([]byte(e2eRedirectorDestHTML))
+		case r.URL.Path == "/my":
+			w.WriteHeader(200)
+			_, _ = w.Write([]byte(`<a href="logout">logout</a>`))
 		case strings.HasPrefix(r.URL.Path, "/td.php"):
 			lastTorrentPath = r.URL.RequestURI()
 			w.WriteHeader(200)
@@ -178,9 +205,10 @@ func TestRedirectorFlow(t *testing.T) {
 	}
 
 	creds := &domain.TrackerCredential{
-		UserID:    uuid.New(),
-		Username:  "alice",
-		SecretEnc: []byte("password"),
+		UserID:     uuid.New(),
+		Username:   "alice",
+		SecretEnc:  []byte("password"),
+		SessionEnc: mustJSON(map[string]string{"lf_session": "x"}),
 	}
 	ctx := context.Background()
 
@@ -230,11 +258,10 @@ func TestRedirectorFlow(t *testing.T) {
 	if !strings.Contains(lastVSearchURL, "a=791001005") {
 		t.Errorf("v_search URL = %q, want a=791001005", lastVSearchURL)
 	}
-	// CRITICAL: assert the actual fetched .torrent matches the
-	// requested quality. The naive Contains() matcher would have
-	// false-matched 1080p_mp4 here.
-	if !strings.Contains(lastTorrentPath, "1080p") || strings.Contains(lastTorrentPath, "1080p_mp4") {
-		t.Errorf("fetched torrent path = %q, want plain 1080p (not 1080p_mp4)", lastTorrentPath)
+	// CRITICAL: with want=1080p it must pick the "1080" tier link, NOT the
+	// separate "MP4" tier (both are 1080p-class on LostFilm).
+	if !strings.Contains(lastTorrentPath, "token-1080") || strings.Contains(lastTorrentPath, "token-mp4") {
+		t.Errorf("fetched torrent path = %q, want the 1080 link (not MP4)", lastTorrentPath)
 	}
 
 	// --- Mark episode 0 as downloaded, recheck

@@ -36,7 +36,7 @@ func NewTopics(pool *pgxpool.Pool) *Topics {
 }
 
 const topicColumns = `id, user_id, tracker_name, url, display_name, client_id,
-		COALESCE(download_dir,''), extra, COALESCE(last_hash,''),
+		COALESCE(download_dir,''), COALESCE(category,''), extra, COALESCE(last_hash,''),
 		last_checked_at, last_updated_at, next_check_at,
 		check_interval_sec, consecutive_errors, status,
 		COALESCE(last_error,''), created_at, updated_at`
@@ -49,7 +49,7 @@ func scanTopic(row pgx.Row) (*domain.Topic, error) {
 	var clientID *uuid.UUID
 	err := row.Scan(
 		&t.ID, &t.UserID, &t.TrackerName, &t.URL, &t.DisplayName,
-		&clientID, &t.DownloadDir, &extraRaw, &t.LastHash,
+		&clientID, &t.DownloadDir, &t.Category, &extraRaw, &t.LastHash,
 		&lastChecked, &lastUpdated, &t.NextCheckAt,
 		&t.CheckIntervalSec, &t.ConsecutiveErrors, &status,
 		&t.LastError, &t.CreatedAt, &t.UpdatedAt,
@@ -81,12 +81,12 @@ func (r *Topics) Create(ctx context.Context, t *domain.Topic) (*domain.Topic, er
 	extra, _ := json.Marshal(t.Extra)
 	q := `
 INSERT INTO topics (user_id, tracker_name, url, display_name, client_id,
-                    download_dir, extra, check_interval_sec, next_check_at, status)
-VALUES ($1,$2,$3,$4,$5,NULLIF($6,''),$7,$8,$9,$10)
+                    download_dir, category, extra, check_interval_sec, next_check_at, status)
+VALUES ($1,$2,$3,$4,$5,NULLIF($6,''),NULLIF($7,''),$8,$9,$10,$11)
 RETURNING ` + topicColumns
 	row := r.pool.QueryRow(ctx, q,
 		t.UserID, t.TrackerName, t.URL, t.DisplayName, t.ClientID,
-		t.DownloadDir, extra, t.CheckIntervalSec, t.NextCheckAt, string(t.Status),
+		t.DownloadDir, t.Category, extra, t.CheckIntervalSec, t.NextCheckAt, string(t.Status),
 	)
 	return scanTopic(row)
 }
@@ -237,12 +237,37 @@ WHERE  id = $1`
 	return nil
 }
 
+// Update edits a topic's user-editable fields (display name, client,
+// download dir, category, and the capability Extra map). It does NOT
+// touch url/tracker/status/hash/scheduling. Returns ErrNotFound when the
+// topic doesn't belong to the user.
+func (r *Topics) Update(ctx context.Context, id, userID uuid.UUID, displayName string, clientID *uuid.UUID, downloadDir, category string, extra map[string]any) (*domain.Topic, error) {
+	raw, err := json.Marshal(extra)
+	if err != nil {
+		return nil, fmt.Errorf("topics: marshal extra: %w", err)
+	}
+	if len(raw) == 0 {
+		raw = []byte("{}")
+	}
+	row := r.pool.QueryRow(ctx, `UPDATE topics SET
+		display_name = $3, client_id = $4, download_dir = $5, category = $6,
+		extra = $7, updated_at = now()
+	WHERE id = $1 AND user_id = $2
+	RETURNING `+topicColumns, id, userID, displayName, clientID, downloadDir, category, raw)
+	t, err := scanTopic(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	return t, err
+}
+
 // DueForCheck returns up to `limit` topics whose next_check_at is in the past
-// and status is active. Used by the scheduler.
+// and status is active or error. Errored topics are retried on their
+// exponential-backoff schedule; paused topics remain excluded.
 func (r *Topics) DueForCheck(ctx context.Context, limit int) ([]*domain.Topic, error) {
 	q := `SELECT ` + topicColumns + `
 FROM topics
-WHERE status = 'active' AND next_check_at <= now()
+WHERE status IN ('active', 'error') AND next_check_at <= now()
 ORDER BY next_check_at ASC
 LIMIT $1`
 	rows, err := r.pool.Query(ctx, q, limit)

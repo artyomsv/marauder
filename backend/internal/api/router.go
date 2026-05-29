@@ -97,12 +97,7 @@ func NewRouter(d Deps) http.Handler {
 	}
 	sysH := &handlers.System{BaseURL: d.Cfg.PublicBaseURL, Scheduler: d.Scheduler, Audit: d.Audit}
 	trackersH := &handlers.Trackers{BaseURL: d.Cfg.PublicBaseURL}
-	credsH := &handlers.Credentials{
-		Creds:   d.Creds,
-		Master:  d.Master,
-		Audit:   d.AuditLog,
-		BaseURL: d.Cfg.PublicBaseURL,
-	}
+	credsH := handlers.NewCredentials(d.Creds, d.Master, d.AuditLog, d.Cfg.PublicBaseURL)
 
 	r.Route("/api/v1", func(r chi.Router) {
 		// Public auth endpoints
@@ -123,10 +118,12 @@ func NewRouter(d Deps) http.Handler {
 			r.Post("/auth/me/password", authH.ChangePassword)
 			r.Get("/system/status", sysH.Status)
 			r.Get("/trackers/match", trackersH.Match)
+			r.Get("/trackers/seasons", trackersH.Seasons)
 
 			r.Get("/topics", topicsH.List)
 			r.Post("/topics", topicsH.Create)
 			r.Get("/topics/{id}", topicsH.Get)
+			r.Put("/topics/{id}", topicsH.Update)
 			r.Delete("/topics/{id}", topicsH.Delete)
 			r.Post("/topics/{id}/pause", topicsH.Pause)
 			r.Post("/topics/{id}/resume", topicsH.Resume)
@@ -148,6 +145,11 @@ func NewRouter(d Deps) http.Handler {
 			r.Put("/credentials/{id}", credsH.Update)
 			r.Delete("/credentials/{id}", credsH.Delete)
 			r.Post("/credentials/{id}/test", credsH.Test)
+			r.Post("/credentials/interactive/begin", credsH.BeginInteractive)
+			r.Post("/credentials/interactive/complete", credsH.CompleteInteractive)
+			r.Post("/credentials/interactive/refresh", credsH.RefreshInteractive)
+			r.Post("/credentials/{id}/reauth/begin", credsH.ReauthBegin)
+			r.Post("/credentials/{id}/reauth/complete", credsH.ReauthComplete)
 
 			// Admin-only
 			r.Group(func(r chi.Router) {
