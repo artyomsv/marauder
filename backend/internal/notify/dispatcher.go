@@ -48,6 +48,7 @@ func (d *Dispatcher) Send(ctx context.Context, userID uuid.UUID, msg domain.Mess
 		plugin := registry.GetNotifier(n.NotifierName)
 		if plugin == nil {
 			d.log.Warn().Str("notifier", n.NotifierName).Msg("notify: unknown notifier plugin")
+			metrics.NotificationsSentTotal.WithLabelValues(n.NotifierName, "error").Inc()
 			continue
 		}
 		raw, derr := d.master.Decrypt(n.ConfigEnc, n.ConfigNonce)

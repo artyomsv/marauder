@@ -149,3 +149,20 @@ func TestSend_ListError_ReturnsZero(t *testing.T) {
 		t.Errorf("want 0 on list error, got %d", got)
 	}
 }
+
+func TestSend_DecryptError_Skipped(t *testing.T) {
+	uid := uuid.New()
+	repo := &fakeRepo{}
+	d, enc, nonce := newTestDispatcher(t, repo)
+
+	repo.items = []*domain.Notifier{
+		{ID: uuid.New(), UserID: uid, NotifierName: okPlugin.Name(), ConfigEnc: []byte("not-encrypted"), ConfigNonce: []byte("bad")},
+		{ID: uuid.New(), UserID: uid, NotifierName: okPlugin.Name(), ConfigEnc: enc, ConfigNonce: nonce},
+	}
+
+	got := d.Send(context.Background(), uid, domain.Message{Title: "t"})
+	// decrypt failure is skipped; the sibling ok notifier still fires
+	if got != 1 {
+		t.Errorf("want 1, got %d", got)
+	}
+}
