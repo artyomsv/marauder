@@ -27,9 +27,22 @@ vi.mock("@/lib/api", async () => {
   };
 });
 
+// Each test sets the selected tracker's interactive-login capability via
+// this flag; the form gates the captcha flow on it (sourced by name from
+// the /system/info tracker list, same list that populates the dropdown).
+let supportsInteractiveLogin = true;
+
 vi.mock("@/lib/hooks/useSystemInfo", () => ({
   useSystemInfo: () => ({
-    data: { trackers: [{ name: "lostfilm", display_name: "LostFilm" }] },
+    data: {
+      trackers: [
+        {
+          name: "lostfilm",
+          display_name: "LostFilm",
+          supports_interactive_login: supportsInteractiveLogin,
+        },
+      ],
+    },
   }),
 }));
 
@@ -63,6 +76,8 @@ async function fillAndSubmit(user: ReturnType<typeof userEvent.setup>) {
 describe("CredentialsPage — interactive captcha flow", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // Default to an interactive-capable tracker; the fallback test flips it.
+    supportsInteractiveLogin = true;
     // Empty credentials list so the add form's tracker is available.
     mockApi.get.mockResolvedValue({ credentials: [] });
   });
@@ -149,15 +164,9 @@ describe("CredentialsPage — interactive captcha flow", () => {
     );
   });
 
-  it("falls back to the plain create flow for non-interactive trackers", async () => {
+  it("uses the plain create flow directly for non-interactive trackers", async () => {
+    supportsInteractiveLogin = false;
     const user = userEvent.setup();
-    mockApi.interactiveBegin.mockRejectedValue(
-      new ApiError({
-        title: "Unprocessable",
-        status: 422,
-        detail: "tracker 'lostfilm' does not support interactive login",
-      }),
-    );
     const post = api.post as unknown as ReturnType<typeof vi.fn>;
     post.mockResolvedValue({ id: "x" });
 
@@ -171,7 +180,9 @@ describe("CredentialsPage — interactive captcha flow", () => {
         password: "hunter2",
       }),
     );
-    // No captcha UI for the fallback path.
+    // Gated on the flag: the interactive begin endpoint is never called,
+    // and no captcha UI appears.
+    expect(mockApi.interactiveBegin).not.toHaveBeenCalled();
     expect(screen.queryByRole("img", { name: /captcha/i })).not.toBeInTheDocument();
   });
 });

@@ -23,15 +23,6 @@ import { Badge } from "@/components/ui/badge";
 import { DeleteConfirm } from "@/components/shared/DeleteConfirm";
 import { ResourceCard } from "@/components/shared/ResourceCard";
 
-// Detail string the backend returns (422) when a tracker plugin does not
-// implement WithInteractiveLogin. The add-credential form has no URL to
-// run /trackers/match against (it selects trackers by name), so it can't
-// know up-front whether a tracker supports interactive login. Instead it
-// optimistically tries the interactive flow and falls back to the plain
-// create flow when it sees this exact detail — keeping non-interactive
-// trackers' behaviour byte-for-byte unchanged.
-const NOT_INTERACTIVE_DETAIL = "does not support interactive login";
-
 /**
  * Tracker accounts page (route: /accounts).
  *
@@ -213,7 +204,7 @@ export function CredentialsPage() {
 
 // ---------------------------------------------------------------------
 
-type Tracker = { name: string; display_name: string };
+type Tracker = { name: string; display_name: string; supports_interactive_login: boolean };
 
 // CaptchaState groups every captcha-step field into ONE useState object
 // so AddCredentialCard stays within the project's 8-useState limit.
@@ -248,9 +239,13 @@ function AddCredentialCard({
   // null until a tracker hands back a captcha challenge.
   const [captcha, setCaptcha] = useState<CaptchaState | null>(null);
 
+  // Capability is sourced by name from the same /system/info tracker list
+  // that populates the dropdown — no extra request, no error-string
+  // sniffing. True → interactive (captcha) flow; false → plain create.
+  const supportsInteractiveLogin =
+    available.find((tr) => tr.name === trackerName)?.supports_interactive_login ?? false;
+
   // Plain create — used for trackers that don't support interactive login.
-  // The interactive begin call falls through to this when it learns the
-  // tracker isn't interactive, so this path stays unchanged for them.
   const create = useMutation({
     mutationFn: () =>
       api.post<CredentialView>("/credentials", {
@@ -262,8 +257,8 @@ function AddCredentialCard({
     onError: (err) => setError(problemDetail(err)),
   });
 
-  // Step 1: try interactive begin. logged_in → done; captcha → show the
-  // challenge; "not interactive" 422 → fall back to the plain create.
+  // Step 1 of the interactive flow: begin. logged_in → done; captcha →
+  // show the challenge. Only reached for interactive-capable trackers.
   const begin = useMutation({
     mutationFn: () =>
       api.interactiveBegin({ tracker_name: trackerName, username, password }),
@@ -279,13 +274,7 @@ function AddCredentialCard({
         error: null,
       });
     },
-    onError: (err) => {
-      if (err instanceof ApiError && err.problem.detail?.includes(NOT_INTERACTIVE_DETAIL)) {
-        create.mutate();
-        return;
-      }
-      setError(problemDetail(err));
-    },
+    onError: (err) => setError(problemDetail(err)),
   });
 
   // Step 2: submit the captcha answer. Wrong answer → inline message AND a
@@ -349,7 +338,11 @@ function AddCredentialCard({
           onSubmit={(e) => {
             e.preventDefault();
             setError(null);
-            begin.mutate();
+            if (supportsInteractiveLogin) {
+              begin.mutate();
+            } else {
+              create.mutate();
+            }
           }}
           className="space-y-4 p-6"
         >

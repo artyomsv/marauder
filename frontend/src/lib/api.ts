@@ -211,7 +211,7 @@ export type Topic = {
 
 export type SystemInfo = {
   version: { version: string; commit: string; buildDate: string };
-  trackers: { name: string; display_name: string }[];
+  trackers: { name: string; display_name: string; supports_interactive_login: boolean }[];
   clients: { name: string; display_name: string }[];
   notifiers: { name: string; display_name: string }[];
 };
