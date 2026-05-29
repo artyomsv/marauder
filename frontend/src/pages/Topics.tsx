@@ -428,6 +428,15 @@ export function AddTopicCard({ onClose, onCreated }: AddTopicCardProps) {
     }
   }, [match, quality]);
 
+  // Reset the season/episode selection whenever the series URL changes.
+  // Otherwise a stale value (e.g. Season 2 from a previous series) could
+  // linger as a `<select>` value with no matching `<option>` — and submit
+  // a season the newly-pasted series doesn't actually have.
+  useEffect(() => {
+    setStartSeason("");
+    setStartEpisode("");
+  }, [debouncedUrl]);
+
   const create = useMutation({
     mutationFn: () =>
       api.post<Topic>("/topics", {
