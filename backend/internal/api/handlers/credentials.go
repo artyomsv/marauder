@@ -57,12 +57,13 @@ func NewCredentials(creds credentialStore, master *crypto.MasterKey, auditLog *a
 
 // credentialView is the safe-to-return shape — never includes the secret.
 type credentialView struct {
-	ID          string `json:"id"`
-	TrackerName string `json:"tracker_name"`
-	DisplayName string `json:"display_name"`
-	Username    string `json:"username"`
-	CreatedAt   string `json:"created_at"`
-	UpdatedAt   string `json:"updated_at"`
+	ID             string `json:"id"`
+	TrackerName    string `json:"tracker_name"`
+	DisplayName    string `json:"display_name"`
+	Username       string `json:"username"`
+	SessionExpired bool   `json:"session_expired"`
+	CreatedAt      string `json:"created_at"`
+	UpdatedAt      string `json:"updated_at"`
 }
 
 // loginAndVerify runs the plugin's Login + Verify sequence and fails if
@@ -99,12 +100,13 @@ func toCredView(c *domain.TrackerCredential) credentialView {
 		display = t.DisplayName()
 	}
 	return credentialView{
-		ID:          c.ID.String(),
-		TrackerName: c.TrackerName,
-		DisplayName: display,
-		Username:    c.Username,
-		CreatedAt:   c.CreatedAt.UTC().Format("2006-01-02T15:04:05Z"),
-		UpdatedAt:   c.UpdatedAt.UTC().Format("2006-01-02T15:04:05Z"),
+		ID:             c.ID.String(),
+		TrackerName:    c.TrackerName,
+		DisplayName:    display,
+		Username:       c.Username,
+		SessionExpired: c.SessionExpiredAt != nil,
+		CreatedAt:      c.CreatedAt.UTC().Format("2006-01-02T15:04:05Z"),
+		UpdatedAt:      c.UpdatedAt.UTC().Format("2006-01-02T15:04:05Z"),
 	}
 }
 
