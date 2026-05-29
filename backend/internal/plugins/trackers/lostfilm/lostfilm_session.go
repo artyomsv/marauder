@@ -70,7 +70,23 @@ func (p *plugin) captchaConfig() captchalogin.Config {
 // error 4 — that misclassification would loop the user on a captcha.
 // Success is parsed as `any` because LostFilm returns either
 // {"success":true} or a user object; non-nil means logged in.
-func classifyLostfilmLogin(body []byte) captchalogin.Outcome {
+func classifyLostfilmLogin(body []byte) (outcome captchalogin.Outcome) {
+	// Debug-only: log the classified outcome + the raw ajaxik response so
+	// login failures are diagnosable. The body carries only the username +
+	// result flags ({"name":...,"success":true} / {"error":N} /
+	// {"need_captcha":true}); the password is never echoed and the
+	// lf_session cookie travels in a Set-Cookie header, not the body — so
+	// no secret is logged. Capped to keep an unexpected HTML error page
+	// from flooding the log.
+	defer func() {
+		b := body
+		if len(b) > 300 {
+			b = b[:300]
+		}
+		log.Debug().Str("plugin", pluginName).Str("step", "classify").
+			Int("outcome", int(outcome)).Str("body", string(b)).
+			Msg("login response classified")
+	}()
 	var r struct {
 		Success     any  `json:"success"`
 		Error       *int `json:"error"`
