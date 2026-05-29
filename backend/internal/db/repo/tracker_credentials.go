@@ -120,7 +120,7 @@ func (r *TrackerCredentials) SetSession(ctx context.Context, id, userID uuid.UUI
 		return err
 	}
 	if ct.RowsAffected() == 0 {
-		return pgx.ErrNoRows
+		return ErrNotFound
 	}
 	return nil
 }
