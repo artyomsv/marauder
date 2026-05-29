@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -16,9 +17,22 @@ import (
 	"github.com/artyomsv/marauder/backend/internal/problem"
 )
 
+// topicStore is the consumer-side seam over *repo.Topics so the handler
+// is unit-testable with a fake store (mirrors credentialStore and the
+// scheduler's consumer-interface pattern). *repo.Topics satisfies it, so
+// production wiring is unchanged.
+type topicStore interface {
+	Create(ctx context.Context, t *domain.Topic) (*domain.Topic, error)
+	GetByID(ctx context.Context, id uuid.UUID, userID *uuid.UUID) (*domain.Topic, error)
+	ListForUser(ctx context.Context, userID uuid.UUID) ([]*domain.Topic, error)
+	Delete(ctx context.Context, id, userID uuid.UUID) error
+	UpdateStatus(ctx context.Context, id, userID uuid.UUID, status domain.TopicStatus) error
+	Update(ctx context.Context, id, userID uuid.UUID, displayName string, clientID *uuid.UUID, downloadDir, category string, extra map[string]any) (*domain.Topic, error)
+}
+
 // Topics is the handler group for /topics.
 type Topics struct {
-	Topics  *repo.Topics
+	Topics  topicStore
 	BaseURL string
 }
 
@@ -183,6 +197,10 @@ func (h *Topics) Update(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		problem.Write(w, r, h.BaseURL, problem.ErrInternal(gerr.Error()))
+		return
+	}
+	if existing == nil {
+		problem.Write(w, r, h.BaseURL, problem.ErrNotFound("topic not found"))
 		return
 	}
 

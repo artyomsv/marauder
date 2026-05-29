@@ -347,8 +347,6 @@ func TestTopics_Create_RoundTripsCategory(t *testing.T) {
 		).
 		WillReturnRows(rows)
 
-	t.Logf("now=%v", now)
-
 	in := &domain.Topic{
 		UserID:           userID,
 		TrackerName:      "faketracker",
