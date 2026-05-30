@@ -38,6 +38,10 @@ import (
 type Config struct {
 	URL      string `json:"url"` // e.g. http://deluge:8112
 	Password string `json:"password"`
+	// DownloadDir is the base save folder. A topic's category nests under it
+	// (see registry.EffectiveDownloadDir); a topic's explicit DownloadDir
+	// overrides both.
+	DownloadDir string `json:"download_dir"`
 }
 
 type plugin struct {
@@ -62,8 +66,9 @@ func (p *plugin) ConfigSchema() map[string]any {
 		"$schema": "https://json-schema.org/draft/2020-12/schema",
 		"type":    "object",
 		"properties": map[string]any{
-			"url":      map[string]any{"type": "string", "title": "Web URL", "format": "uri"},
-			"password": map[string]any{"type": "string", "title": "Password", "format": "password"},
+			"url":          map[string]any{"type": "string", "title": "Web URL", "format": "uri"},
+			"password":     map[string]any{"type": "string", "title": "Password", "format": "password"},
+			"download_dir": map[string]any{"type": "string", "title": "Base download folder (optional)"},
 		},
 		"required": []string{"url", "password"},
 	}
@@ -92,8 +97,8 @@ func (p *plugin) Add(ctx context.Context, rawConfig []byte, payload *domain.Payl
 	}
 
 	dlOpts := map[string]any{}
-	if opts.DownloadDir != "" {
-		dlOpts["download_location"] = opts.DownloadDir
+	if dir := registry.EffectiveDownloadDir(c.DownloadDir, opts.DownloadDir, opts.Category); dir != "" {
+		dlOpts["download_location"] = dir
 	}
 	if opts.Paused {
 		dlOpts["add_paused"] = true

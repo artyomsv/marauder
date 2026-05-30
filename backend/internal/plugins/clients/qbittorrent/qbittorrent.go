@@ -30,7 +30,10 @@ type Config struct {
 	URL      string `json:"url"` // e.g. http://qbittorrent:8080
 	Username string `json:"username"`
 	Password string `json:"password"`
-	Category string `json:"category"`
+	// DownloadDir is the base save folder. A topic's category nests under it
+	// (see registry.EffectiveDownloadDir); a topic's explicit DownloadDir
+	// overrides both.
+	DownloadDir string `json:"download_dir"`
 }
 
 type plugin struct {
@@ -57,10 +60,10 @@ func (p *plugin) ConfigSchema() map[string]any {
 		"$schema": "https://json-schema.org/draft/2020-12/schema",
 		"type":    "object",
 		"properties": map[string]any{
-			"url":      map[string]any{"type": "string", "format": "uri", "title": "URL"},
-			"username": map[string]any{"type": "string", "title": "Username"},
-			"password": map[string]any{"type": "string", "title": "Password", "format": "password"},
-			"category": map[string]any{"type": "string", "title": "Category (optional)"},
+			"url":          map[string]any{"type": "string", "format": "uri", "title": "URL"},
+			"username":     map[string]any{"type": "string", "title": "Username"},
+			"password":     map[string]any{"type": "string", "title": "Password", "format": "password"},
+			"download_dir": map[string]any{"type": "string", "title": "Base download folder (optional)"},
 		},
 		"required": []string{"url", "username", "password"},
 	}
@@ -116,11 +119,8 @@ func (p *plugin) Add(ctx context.Context, rawConfig []byte, payload *domain.Payl
 	default:
 		return errors.New("empty payload (no magnet and no torrent file)")
 	}
-	if opts.DownloadDir != "" {
-		_ = mw.WriteField("savepath", opts.DownloadDir)
-	}
-	if cfg.Category != "" {
-		_ = mw.WriteField("category", cfg.Category)
+	if dir := registry.EffectiveDownloadDir(cfg.DownloadDir, opts.DownloadDir, opts.Category); dir != "" {
+		_ = mw.WriteField("savepath", dir)
 	}
 	if opts.Paused {
 		_ = mw.WriteField("paused", "true")
