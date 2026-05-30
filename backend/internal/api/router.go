@@ -119,6 +119,7 @@ func NewRouter(d Deps) http.Handler {
 			r.Get("/system/status", sysH.Status)
 			r.Get("/trackers/match", trackersH.Match)
 			r.Get("/trackers/seasons", trackersH.Seasons)
+			r.Get("/trackers/preview", trackersH.Preview)
 
 			r.Get("/topics", topicsH.List)
 			r.Post("/topics", topicsH.Create)

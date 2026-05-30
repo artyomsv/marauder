@@ -197,12 +197,14 @@ func TestTopics_MarkEpisodeDownloaded_DBError(t *testing.T) {
 // ---------- scanTopic malformed extra ----------
 
 // topicRow returns a pgxmock row slice that matches topicColumns exactly
-// (19 columns as of migration 0004). Callers override individual fields as
-// needed. The helper centralises column-order so tests don't drift.
+// (20 columns as of migration 0005, which added image_url after
+// display_name). Callers override individual fields as needed. The helper
+// centralises column-order so tests don't drift.
 func topicRow(id, userID uuid.UUID, now time.Time) []any {
 	return []any{
 		id, userID, "faketracker", "https://example.invalid/t/1",
-		"My Topic", (*uuid.UUID)(nil),
+		"My Topic", "", // display_name, image_url
+		(*uuid.UUID)(nil),
 		"",                            // download_dir
 		"",                            // category
 		[]byte(`{"quality":"1080p"}`), // extra
@@ -213,9 +215,9 @@ func topicRow(id, userID uuid.UUID, now time.Time) []any {
 	}
 }
 
-// topicColumns19 mirrors the header slice for pgxmock.NewRows (19 cols).
-var topicColumns19 = []string{
-	"id", "user_id", "tracker_name", "url", "display_name", "client_id",
+// topicColumnsAll mirrors the header slice for pgxmock.NewRows (20 cols).
+var topicColumnsAll = []string{
+	"id", "user_id", "tracker_name", "url", "display_name", "image_url", "client_id",
 	"download_dir", "category", "extra", "last_hash",
 	"last_checked_at", "last_updated_at", "next_check_at",
 	"check_interval_sec", "consecutive_errors", "status",
@@ -235,9 +237,10 @@ func TestTopics_ScanTopic_MalformedExtra(t *testing.T) {
 	now := time.Now().UTC()
 
 	// Build a row that matches topicColumns exactly (19 columns).
-	rows := pgxmock.NewRows(topicColumns19).AddRow(
+	rows := pgxmock.NewRows(topicColumnsAll).AddRow(
 		id, userID, "faketracker", "https://example.invalid/t/1",
-		"My Topic", (*uuid.UUID)(nil),
+		"My Topic", "", // display_name, image_url
+		(*uuid.UUID)(nil),
 		"", "",
 		[]byte("{not valid json"), "",
 		(*time.Time)(nil), (*time.Time)(nil), now,
@@ -269,7 +272,7 @@ func TestTopics_ScanTopic_ValidExtra(t *testing.T) {
 	userID := uuid.New()
 	now := time.Now().UTC()
 
-	rows := pgxmock.NewRows(topicColumns19).AddRow(topicRow(id, userID, now)...)
+	rows := pgxmock.NewRows(topicColumnsAll).AddRow(topicRow(id, userID, now)...)
 
 	mock.ExpectQuery(`SELECT .* FROM topics WHERE id = \$1`).
 		WithArgs(id).
@@ -297,7 +300,7 @@ func TestTopics_DueForCheck_IncludesErrorStatus(t *testing.T) {
 	userID := uuid.New()
 	now := time.Now().UTC()
 
-	rows := pgxmock.NewRows(topicColumns19).AddRow(topicRow(id, userID, now)...)
+	rows := pgxmock.NewRows(topicColumnsAll).AddRow(topicRow(id, userID, now)...)
 
 	// The regex asserts the IN clause is present.
 	mock.ExpectQuery(`status IN \('active', 'error'\)`).
@@ -330,16 +333,18 @@ func TestTopics_Create_RoundTripsCategory(t *testing.T) {
 
 	// Build the RETURNING row with category="movies".
 	row := topicRow(id, userID, now)
-	// column index 7 is category (0-based: id,user_id,tracker_name,url,display_name,client_id,download_dir,category,...)
-	row[7] = "movies"
+	// column index 8 is category (0-based: id,user_id,tracker_name,url,
+	// display_name,image_url,client_id,download_dir,category,...)
+	row[8] = "movies"
 
-	rows := pgxmock.NewRows(topicColumns19).AddRow(row...)
+	rows := pgxmock.NewRows(topicColumnsAll).AddRow(row...)
 
 	// Match INSERT containing the category column.
 	mock.ExpectQuery(`INSERT INTO topics.*category.*RETURNING`).
 		WithArgs(
 			userID, "faketracker", "https://example.invalid/t/1",
-			"My Topic", (*uuid.UUID)(nil),
+			"My Topic", "", // display_name, image_url
+			(*uuid.UUID)(nil),
 			"",               // download_dir
 			"movies",         // category
 			pgxmock.AnyArg(), // extra (JSON)
@@ -385,10 +390,10 @@ func TestTopics_Update_HappyPath(t *testing.T) {
 	// Build the RETURNING row reflecting the updated values.
 	row := topicRow(id, userID, now)
 	row[4] = "Updated Name"                                // display_name
-	row[7] = "series"                                      // category
-	row[8] = []byte(`{"quality":"720p","start_season":2}`) // extra
+	row[8] = "series"                                      // category
+	row[9] = []byte(`{"quality":"720p","start_season":2}`) // extra
 
-	rows := pgxmock.NewRows(topicColumns19).AddRow(row...)
+	rows := pgxmock.NewRows(topicColumnsAll).AddRow(row...)
 
 	mock.ExpectQuery(`UPDATE topics SET`).
 		WithArgs(

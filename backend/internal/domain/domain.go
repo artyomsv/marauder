@@ -70,6 +70,7 @@ type Topic struct {
 	TrackerName       string
 	URL               string
 	DisplayName       string
+	ImageURL          string
 	ClientID          *uuid.UUID
 	DownloadDir       string
 	Category          string

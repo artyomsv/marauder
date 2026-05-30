@@ -41,11 +41,11 @@ techdebt/       Debt-tracking files (one per issue, see global rule)
 | `crypto` | AES-256-GCM for tracker credentials and client config blobs |
 | `db` / `db/repo` | pgxpool wrapper + repository structs (`Topics`, `Clients`, `Notifiers`, `Users`, `TrackerCredentials`, `Audit`, `Settings`). `TrackerCredentials` carries encrypted `secret_enc` (password) **and** `session_enc`/`session_nonce` (cookie-session blob; migration `0002`), plus a nullable `session_expired_at` marker (migration `0003`) the scheduler uses to dedupe expiry notifications (atomic `MarkSessionExpired`, cleared by `SetSession` on re-auth) |
 | **`notify`** | reusable notification dispatcher — `Send(userID, domain.Message)` fans out to all of a user's configured notifiers (best-effort, metered). First/only consumer: scheduler session-expiry alerts. The single event→notifier fan-out point |
-| `domain` | core types: `Topic` (incl. per-topic `ClientID`, `DownloadDir`, `Category`), `Check`, `Payload`, `TrackerCredential`, `AddOptions` (`DownloadDir` + `Category`) |
+| `domain` | core types: `Topic` (incl. per-topic `ClientID`, `DownloadDir`, `Category`, `ImageURL`), `Check`, `Payload`, `TrackerCredential`, `AddOptions` (`DownloadDir` + `Category`) |
 | **`extra`** | shared `extra.Int / StringSlice / String` helpers for the untyped `map[string]any` blobs in `Topic.Extra` and `Check.Extra` (added 2026-04-07; **use this instead of writing local helpers**) |
 | `logging` | zerolog setup (JSON in prod, pretty in dev) |
 | `metrics` | Prometheus collectors (HTTP, scheduler, tracker, client) |
-| `plugins/registry` | plugin interfaces + global registry + capability interfaces (`WithQuality`, `WithEpisodeFilter`, `WithCredentials`, `WithCloudflare`, `WithInteractiveLogin`, `WithSeasonCatalog`) + typed sentinels **`registry.ErrNoPendingEpisodes`**, `ErrCaptchaRequired`, `ErrSessionExpired` |
+| `plugins/registry` | plugin interfaces + global registry + capability interfaces (`WithQuality`, `WithEpisodeFilter`, `WithCredentials`, `WithCloudflare`, `WithInteractiveLogin`, `WithSeasonCatalog`, `WithMetadata`) + the `registry.EffectiveDownloadDir(base, override, category)` save-path helper + typed sentinels **`registry.ErrNoPendingEpisodes`**, `ErrCaptchaRequired`, `ErrSessionExpired` |
 | **`plugins/captchalogin`** | reusable human-in-the-loop interactive captcha-login engine (`Begin`/`Complete`/`Refresh` + TTL pending-session store). A tracker supplies a `Config` (LoginURL, CaptchaURL, CookieNames, BuildForm, Classify); first consumer is LostFilm. See `WithInteractiveLogin` |
 | `plugins/trackers/<name>` | one package per tracker plugin (16 plugins as of v1.0.0+) |
 | `plugins/clients/<name>` | one package per torrent client (qBittorrent, Transmission, Deluge, µTorrent, downloadfolder) |
@@ -251,7 +251,7 @@ unit test plus an e2e test using `plugins/e2etest.HostRewriteTransport`.
 
 Optional capability interfaces: `WithQuality`, `WithEpisodeFilter`,
 `WithCredentials`, `WithCloudflare`, `WithInteractiveLogin`,
-`WithSeasonCatalog`. The frontend AddTopic form discovers most via
+`WithSeasonCatalog`, `WithMetadata`. The frontend AddTopic form discovers most via
 `GET /api/v1/trackers/match?url=`; `supports_interactive_login` is
 **also** surfaced per-tracker in `GET /api/v1/system/info` because the
 add-credential form selects a tracker by name and has no URL.
@@ -260,6 +260,16 @@ seasons/episodes from `GET /api/v1/trackers/seasons?url=` (fetches the
 public `/series/<slug>/seasons` page, reuses the episode parser); the
 AddTopic form uses it to constrain the "start from" season/episode
 selectors to released values.
+
+`WithMetadata` (RuTracker, LostFilm) resolves a real title + poster image
+from a topic URL. It is called best-effort (fail-open, short timeout) at add
+time so a new topic shows a real name + image immediately instead of a
+"RuTracker topic 123" placeholder, and powers `GET /api/v1/trackers/preview?url=`
+for the AddTopic form's preview card. The scheduler additionally self-heals the
+title on each check (`displayNamePersister` → `Topics.UpdateDisplayName`) when a
+plugin's `Check` reports a `DisplayName` that differs from what's stored. The
+image is stored in `topics.image_url` (migration `0005`) and rendered as a
+graceful `<img>` (hidden on load error — no fake fallback).
 
 For per-episode trackers (currently only LostFilm), `Download` must
 return `fmt.Errorf("...: %w", registry.ErrNoPendingEpisodes)` when the

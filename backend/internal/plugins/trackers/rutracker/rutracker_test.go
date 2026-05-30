@@ -131,6 +131,86 @@ func TestDownloadReturnsMagnet(t *testing.T) {
 	}
 }
 
+func TestResolveMetadata_OgImagePreferred(t *testing.T) {
+	// Page carries both an og:image meta tag and a postImg <var> — og:image
+	// must win as the most robust source.
+	html := `<html><head>
+<title>Some Show / Сериал [s01e01-12] [WEBRip] [1080p] :: RuTracker.org</title>
+<meta property="og:image" content="https://static.rutracker.cc/templates/img/og-poster.jpg">
+</head><body>
+<div id="logged-in-username">alice</div>
+<var class="postImg postImgAligned img-right" title="https://i.fastpic.org/lazy-poster.jpg" src="https://static.rutracker.cc/spacer.gif"></var>
+</body></html>`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(html))
+	}))
+	t.Cleanup(srv.Close)
+	hostNoScheme := strings.TrimPrefix(srv.URL, "http://")
+	p := &plugin{
+		sessions:  forumcommon.New(),
+		domain:    hostNoScheme,
+		transport: &schemeRewrite{target: hostNoScheme},
+	}
+
+	meta, err := p.ResolveMetadata(context.Background(), "https://"+p.domain+"/forum/viewtopic.php?t=987654", nil)
+	if err != nil {
+		t.Fatalf("ResolveMetadata: %v", err)
+	}
+	wantTitle := "Some Show / Сериал [s01e01-12] [WEBRip] [1080p]"
+	if meta.Title != wantTitle {
+		t.Errorf("title = %q, want %q", meta.Title, wantTitle)
+	}
+	if meta.ImageURL != "https://static.rutracker.cc/templates/img/og-poster.jpg" {
+		t.Errorf("image URL = %q, want og:image", meta.ImageURL)
+	}
+}
+
+func TestResolveMetadata_PostVarTitleFallback(t *testing.T) {
+	// No og:image — the real image lives in the lazy-loaded postImg <var>
+	// title attribute (src is a placeholder gif).
+	html := `<html><head><title>Another Show :: RuTracker.org</title></head><body>
+<var class="postImg postImgAligned img-right" title="https://i.fastpic.org/real-poster.jpg" src="https://static.rutracker.cc/spacer.gif"></var>
+</body></html>`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(html))
+	}))
+	t.Cleanup(srv.Close)
+	hostNoScheme := strings.TrimPrefix(srv.URL, "http://")
+	p := &plugin{
+		sessions:  forumcommon.New(),
+		domain:    hostNoScheme,
+		transport: &schemeRewrite{target: hostNoScheme},
+	}
+
+	meta, err := p.ResolveMetadata(context.Background(), "https://"+p.domain+"/forum/viewtopic.php?t=1", nil)
+	if err != nil {
+		t.Fatalf("ResolveMetadata: %v", err)
+	}
+	if meta.Title != "Another Show" {
+		t.Errorf("title = %q, want %q", meta.Title, "Another Show")
+	}
+	if meta.ImageURL != "https://i.fastpic.org/real-poster.jpg" {
+		t.Errorf("image URL = %q, want the <var title> URL", meta.ImageURL)
+	}
+}
+
+func TestResolveMetadata_NoImageReturnsEmpty(t *testing.T) {
+	// The existing fixture has no poster — ImageURL must be "" (never fabricated).
+	p, _ := newTestPlugin(t)
+	meta, err := p.ResolveMetadata(context.Background(), "https://"+p.domain+"/forum/viewtopic.php?t=987654", nil)
+	if err != nil {
+		t.Fatalf("ResolveMetadata: %v", err)
+	}
+	if !strings.Contains(meta.Title, "Some Show") {
+		t.Errorf("title = %q, want it to contain 'Some Show'", meta.Title)
+	}
+	if meta.ImageURL != "" {
+		t.Errorf("image URL = %q, want empty", meta.ImageURL)
+	}
+}
+
 func TestLogin(t *testing.T) {
 	p, _ := newTestPlugin(t)
 	creds := &domain.TrackerCredential{

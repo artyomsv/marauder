@@ -156,7 +156,40 @@ var (
 	magnetRe        = regexp.MustCompile(`(magnet:\?xt=urn:btih:[A-Fa-f0-9]+[^"'&\s]*)`)
 	dlHrefRe        = regexp.MustCompile(`href="(dl\.php\?t=\d+)"`)
 	hashLooksLikeRe = regexp.MustCompile(`urn:btih:([A-Fa-f0-9]+)`)
+
+	// ogImageRe matches <meta property="og:image" content="..."> — the most
+	// robust poster source when RuTracker emits it.
+	ogImageRe = regexp.MustCompile(`(?i)<meta[^>]+property="og:image"[^>]+content="([^"]+)"`)
+	// postVarImgRe matches RuTracker's lazy-loaded poster:
+	// <var class="postImg postImgAligned img-right" title="https://...jpg">.
+	// The real URL lives in the title attribute (src is a placeholder).
+	postVarImgRe = regexp.MustCompile(`(?i)<var[^>]+class="[^"]*postImg[^"]*"[^>]+title="([^"]+)"`)
+	// postImgSrcRe matches the eager form: <img class="postImg" src="...">.
+	postImgSrcRe = regexp.MustCompile(`(?i)<img[^>]+class="[^"]*postImg[^"]*"[^>]+src="([^"]+)"`)
 )
+
+// cleanTitle trims a raw <title> match and strips RuTracker's site suffix.
+// Shared by Check and ResolveMetadata so both stay consistent.
+func cleanTitle(raw string) string {
+	t := strings.TrimSpace(raw)
+	return strings.TrimSuffix(t, " :: RuTracker.org")
+}
+
+// extractImageURL returns the first poster image URL from a topic page body,
+// preferring og:image, then the lazy-loaded postImg <var title=...>, then an
+// eager <img class="postImg" src=...>. Returns "" when none is present.
+func extractImageURL(body []byte) string {
+	if m := ogImageRe.FindSubmatch(body); m != nil {
+		return strings.TrimSpace(string(m[1]))
+	}
+	if m := postVarImgRe.FindSubmatch(body); m != nil {
+		return strings.TrimSpace(string(m[1]))
+	}
+	if m := postImgSrcRe.FindSubmatch(body); m != nil {
+		return strings.TrimSpace(string(m[1]))
+	}
+	return ""
+}
 
 // Check fetches the topic page and extracts a hash. The hash is the
 // torrent BTIH from the magnet link, which changes whenever the uploader
@@ -168,8 +201,7 @@ func (p *plugin) Check(ctx context.Context, topic *domain.Topic, creds *domain.T
 	}
 	check := &domain.Check{}
 	if m := titleRe.FindSubmatch(body); m != nil {
-		check.DisplayName = strings.TrimSpace(string(m[1]))
-		check.DisplayName = strings.TrimSuffix(check.DisplayName, " :: RuTracker.org")
+		check.DisplayName = cleanTitle(string(m[1]))
 	}
 	if m := hashLooksLikeRe.FindSubmatch(body); m != nil {
 		check.Hash = strings.ToLower(string(m[1]))
@@ -177,6 +209,29 @@ func (p *plugin) Check(ctx context.Context, topic *domain.Topic, creds *domain.T
 		return nil, errors.New("rutracker: no infohash found in topic page")
 	}
 	return check, nil
+}
+
+// --- WithMetadata ------------------------------------------------------
+
+var _ registry.WithMetadata = (*plugin)(nil)
+
+// ResolveMetadata fetches the topic page and extracts a human-readable
+// title (the <title> tag minus the site suffix) and a poster image URL.
+// creds may be nil — the public topic page is fetched without a session,
+// mirroring how Check handles nil creds via fetchTopicPage. Image URL is
+// "" when the page exposes no poster; the caller treats errors as fail-open.
+func (p *plugin) ResolveMetadata(ctx context.Context, rawURL string, creds *domain.TrackerCredential) (*registry.Metadata, error) {
+	topic := &domain.Topic{URL: rawURL}
+	body, err := p.fetchTopicPage(ctx, topic, creds)
+	if err != nil {
+		return nil, fmt.Errorf("resolve metadata: %w", err)
+	}
+	meta := &registry.Metadata{}
+	if m := titleRe.FindSubmatch(body); m != nil {
+		meta.Title = cleanTitle(string(m[1]))
+	}
+	meta.ImageURL = extractImageURL(body)
+	return meta, nil
 }
 
 // Download returns the magnet URI for the current topic. RuTracker also

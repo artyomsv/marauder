@@ -159,7 +159,19 @@ export const api = {
   // downloaded_episodes. 404 unknown/foreign, 422 bad quality.
   updateTopic: (id: string, body: UpdateTopicBody) =>
     request<Topic>("PUT", `/topics/${id}`, body),
+
+  // Resolve a real title + poster image from a tracker URL for the AddTopic
+  // form preview. Returns empty fields (never an error) when the tracker
+  // can't resolve metadata, so callers can render unconditionally.
+  previewTracker: (url: string) =>
+    request<TrackerPreview>("GET", `/trackers/preview?url=${encodeURIComponent(url)}`),
 };
+
+// Response of GET /trackers/preview. Either field may be empty.
+export interface TrackerPreview {
+  title: string;
+  image_url: string;
+}
 
 // Body of PUT /topics/{id}. Mirrors the backend updateTopicReq.
 export interface UpdateTopicBody {
@@ -241,6 +253,7 @@ export type Topic = {
   TrackerName: string;
   URL: string;
   DisplayName: string;
+  ImageURL: string;
   ClientID: string | null;
   DownloadDir: string;
   Category: string;

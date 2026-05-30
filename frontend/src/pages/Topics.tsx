@@ -27,6 +27,7 @@ import { useArmedConfirm } from "@/lib/hooks/useArmedConfirm";
 import { AddTopicCard } from "@/components/topics/AddTopicCard";
 import { EditTopicCard } from "@/components/topics/EditTopicCard";
 import { ClientBadge, type ClientRef } from "@/components/topics/ClientBadge";
+import { PosterImage } from "@/components/topics/PosterImage";
 
 // Re-exported so existing imports (and tests) that reference AddTopicCard
 // from this page module keep resolving after the extraction.
@@ -186,6 +187,13 @@ export function TopicsPage() {
                     aria-label="Select topic"
                   />
                   <StatusIndicator status={t.Status} />
+                  {!compact && (
+                    <PosterImage
+                      src={t.ImageURL}
+                      alt={t.DisplayName}
+                      className="h-12 w-9 shrink-0 rounded object-cover"
+                    />
+                  )}
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
                       <span className="truncate font-medium">{t.DisplayName}</span>

@@ -9,6 +9,7 @@ import { Label } from "@/components/ui/label";
 import { QK } from "@/lib/queryKeys";
 import { useDebouncedValue } from "@/lib/hooks/useDebouncedValue";
 import { SeasonEpisodePicker, SELECT_CLASS } from "./SeasonEpisodePicker";
+import { PosterImage } from "./PosterImage";
 
 // Shape of GET /trackers/match. Drives which optional sections the form
 // renders (quality, season/episode filter, credentials hint).
@@ -100,6 +101,18 @@ export function TopicForm({
   });
   const match = trackerMatchQuery.data ?? null;
 
+  // Resolve a real title + poster image for the preview card. Only fired once
+  // a tracker actually claimed the URL (match present), to avoid a wasted
+  // page fetch on every keystroke of an unrecognised URL.
+  const previewQuery = useQuery({
+    queryKey: QK.trackerPreview(debouncedUrl),
+    queryFn: () => api.previewTracker(debouncedUrl),
+    enabled: !isEdit && debouncedUrl.length >= 8 && !!match,
+    staleTime: 60_000,
+    retry: false,
+  });
+  const preview = previewQuery.data ?? null;
+
   const seasonsQuery = useQuery({
     queryKey: QK.trackerSeasons(debouncedUrl),
     queryFn: () =>
@@ -135,6 +148,14 @@ export function TopicForm({
       setQuality(match.default_quality);
     }
   }, [match, quality]);
+
+  // Prefill the display name from the resolved preview title, but never
+  // overwrite a name the user typed or one prefilled from an existing topic.
+  useEffect(() => {
+    if (!isEdit && preview?.title && !displayName) {
+      setDisplayName(preview.title);
+    }
+  }, [preview, isEdit, displayName]);
 
   // Reset the season/episode selection whenever the URL changes in the add
   // flow. Skipped in edit mode where the URL is fixed and the initial
@@ -191,6 +212,20 @@ export function TopicForm({
         )}
         {matchError && <p className="text-xs text-muted-foreground">{matchError}</p>}
       </div>
+
+      {!isEdit && preview && (preview.title || preview.image_url) && (
+        <div className="flex items-center gap-3 rounded-md border border-border/60 bg-muted/30 p-3">
+          <PosterImage
+            src={preview.image_url}
+            alt={preview.title || "preview"}
+            className="h-16 w-12 shrink-0 rounded object-cover"
+          />
+          <div className="min-w-0">
+            <div className="text-xs text-muted-foreground">Preview</div>
+            <div className="truncate text-sm font-medium">{preview.title || "—"}</div>
+          </div>
+        </div>
+      )}
 
       <div className="space-y-1.5">
         <Label htmlFor="display">Display name (optional)</Label>
