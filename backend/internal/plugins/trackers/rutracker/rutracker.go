@@ -243,14 +243,26 @@ var _ registry.WithMetadata = (*plugin)(nil)
 // mirroring how Check handles nil creds via fetchTopicPage. Image URL is
 // "" when the page exposes no poster; the caller treats errors as fail-open.
 func (p *plugin) ResolveMetadata(ctx context.Context, rawURL string, creds *domain.TrackerCredential) (*registry.Metadata, error) {
-	topic := &domain.Topic{URL: rawURL}
-	body, err := p.fetchTopicPage(ctx, topic, creds)
+	m := urlPattern.FindStringSubmatch(strings.TrimSpace(rawURL))
+	if m == nil {
+		return nil, errors.New("resolve metadata: not a rutracker viewtopic URL")
+	}
+	id, err := strconv.Atoi(m[1])
+	if err != nil {
+		return nil, fmt.Errorf("resolve metadata: topic id: %w", err)
+	}
+	// Fetch a URL rebuilt from the trusted host (p.domain) + the numeric topic
+	// id, never the raw user-supplied URL, so a crafted URL cannot redirect the
+	// request to an arbitrary host (CodeQL go/request-forgery). Mirrors how
+	// Download constructs its dl.php URL.
+	canonical := fmt.Sprintf("https://%s/forum/viewtopic.php?t=%d", p.domain, id)
+	body, err := p.fetchBytes(ctx, nil, creds, canonical)
 	if err != nil {
 		return nil, fmt.Errorf("resolve metadata: %w", err)
 	}
 	meta := &registry.Metadata{}
-	if m := titleRe.FindSubmatch(body); m != nil {
-		meta.Title = cleanTitle(string(m[1]))
+	if mt := titleRe.FindSubmatch(body); mt != nil {
+		meta.Title = cleanTitle(string(mt[1]))
 	}
 	meta.ImageURL = extractImageURL(body)
 	return meta, nil

@@ -168,7 +168,7 @@ func TestResolveMetadata_OgImagePreferred(t *testing.T) {
 		transport: &schemeRewrite{target: hostNoScheme},
 	}
 
-	meta, err := p.ResolveMetadata(context.Background(), "https://"+p.domain+"/forum/viewtopic.php?t=987654", nil)
+	meta, err := p.ResolveMetadata(context.Background(), "https://rutracker.org/forum/viewtopic.php?t=987654", nil)
 	if err != nil {
 		t.Fatalf("ResolveMetadata: %v", err)
 	}
@@ -199,7 +199,7 @@ func TestResolveMetadata_PostVarTitleFallback(t *testing.T) {
 		transport: &schemeRewrite{target: hostNoScheme},
 	}
 
-	meta, err := p.ResolveMetadata(context.Background(), "https://"+p.domain+"/forum/viewtopic.php?t=1", nil)
+	meta, err := p.ResolveMetadata(context.Background(), "https://rutracker.org/forum/viewtopic.php?t=1", nil)
 	if err != nil {
 		t.Fatalf("ResolveMetadata: %v", err)
 	}
@@ -214,7 +214,7 @@ func TestResolveMetadata_PostVarTitleFallback(t *testing.T) {
 func TestResolveMetadata_NoImageReturnsEmpty(t *testing.T) {
 	// The existing fixture has no poster — ImageURL must be "" (never fabricated).
 	p, _ := newTestPlugin(t)
-	meta, err := p.ResolveMetadata(context.Background(), "https://"+p.domain+"/forum/viewtopic.php?t=987654", nil)
+	meta, err := p.ResolveMetadata(context.Background(), "https://rutracker.org/forum/viewtopic.php?t=987654", nil)
 	if err != nil {
 		t.Fatalf("ResolveMetadata: %v", err)
 	}

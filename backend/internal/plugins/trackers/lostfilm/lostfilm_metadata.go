@@ -74,7 +74,16 @@ func (p *plugin) absoluteImageURL(raw string) string {
 // series page exposes both. Relative image URLs are made absolute against
 // p.domain. The caller treats any error as fail-open.
 func (p *plugin) ResolveMetadata(ctx context.Context, rawURL string, creds *domain.TrackerCredential) (*registry.Metadata, error) {
-	body, err := p.fetch(ctx, rawURL, creds)
+	m := urlPattern.FindStringSubmatch(strings.TrimSpace(rawURL))
+	if m == nil {
+		return nil, fmt.Errorf("resolve metadata: not a lostfilm series URL")
+	}
+	// Rebuild the series URL from the trusted host (p.domain) + the parsed
+	// slug rather than fetching the raw user-supplied URL, so a crafted URL
+	// cannot redirect the request to an arbitrary host (CodeQL
+	// go/request-forgery). Mirrors SeasonCatalog.
+	seriesURL := "https://" + p.domain + "/series/" + m[1] + "/"
+	body, err := p.fetch(ctx, seriesURL, creds)
 	if err != nil {
 		return nil, fmt.Errorf("resolve metadata: %w", err)
 	}
