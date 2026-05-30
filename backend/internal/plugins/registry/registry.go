@@ -137,6 +137,38 @@ type Client interface {
 	Add(ctx context.Context, rawConfig []byte, payload *domain.Payload, opts domain.AddOptions) error
 }
 
+// TorrentStatus is a client's live report for one torrent, keyed by its
+// BitTorrent v1 infohash (lowercase hex). PercentDone is 0..1. State is a
+// normalised lifecycle word (see the State* constants) so the frontend can
+// translate it uniformly regardless of which client produced it.
+type TorrentStatus struct {
+	Hash        string  `json:"hash"`
+	PercentDone float64 `json:"percent_done"`
+	State       string  `json:"state"`
+}
+
+// Normalised torrent lifecycle states. Each WithStatus implementation maps
+// its client's native states onto this small shared vocabulary.
+const (
+	StateDownloading = "downloading"
+	StateSeeding     = "seeding"
+	StateStopped     = "stopped"
+	StateChecking    = "checking"
+	StateQueued      = "queued"
+	StateError       = "error"
+	StateUnknown     = "unknown"
+)
+
+// WithStatus is an optional client capability: report live download status
+// for a set of infohashes. Clients that can't (µTorrent, downloadfolder)
+// simply don't implement it, and callers fall back to "delivered" labels.
+// The returned slice only includes hashes the client currently knows about;
+// a hash the client has forgotten (removed torrent) is silently absent.
+type WithStatus interface {
+	Client
+	Status(ctx context.Context, rawConfig []byte, hashes []string) ([]TorrentStatus, error)
+}
+
 // Notifier is a notification target plugin.
 type Notifier interface {
 	Name() string

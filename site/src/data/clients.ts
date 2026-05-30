@@ -7,22 +7,22 @@ export type Client = {
 
 export const clients: Client[] = [
   {
-    slug: "qbittorrent",
-    name: "qBittorrent",
-    description: "WebUI API v2 — qBittorrent 4.5+ and 5.x.",
+    slug: "transmission",
+    name: "Transmission",
+    description: "RPC with the X-Transmission-Session-Id 409 dance. Live download status by infohash.",
     status: "validated",
   },
   {
-    slug: "transmission",
-    name: "Transmission",
-    description: "RPC with the X-Transmission-Session-Id 409 dance.",
-    status: "validated",
+    slug: "qbittorrent",
+    name: "qBittorrent",
+    description: "WebUI API v2 — qBittorrent 4.5+ and 5.x. Live download status by infohash.",
+    status: "alpha",
   },
   {
     slug: "deluge",
     name: "Deluge",
     description: "Web JSON-RPC at /json. auth.login + web.connect + core.add_torrent_*.",
-    status: "validated",
+    status: "alpha",
   },
   {
     slug: "utorrent",
@@ -34,6 +34,6 @@ export const clients: Client[] = [
     slug: "downloadfolder",
     name: "Download folder",
     description: "Write the .torrent or .magnet to a folder. Pair with SABnzbd / NZBGet for Usenet.",
-    status: "validated",
+    status: "alpha",
   },
 ];

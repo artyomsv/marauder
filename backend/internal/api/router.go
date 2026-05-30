@@ -23,20 +23,21 @@ import (
 
 // Deps is the bag of dependencies handed to NewRouter.
 type Deps struct {
-	Cfg       *config.Config
-	Log       zerolog.Logger
-	Pool      *pgxpool.Pool
-	Manager   *auth.Manager
-	Master    *crypto.MasterKey
-	Users     *repo.Users
-	Topics    *repo.Topics
-	Clients   *repo.Clients
-	Notifiers *repo.Notifiers
-	Creds     *repo.TrackerCredentials
-	Audit     *repo.Audit
-	AuditLog  *audit.Logger
-	OIDC      *auth.OIDCProvider
-	Scheduler *scheduler.Scheduler
+	Cfg        *config.Config
+	Log        zerolog.Logger
+	Pool       *pgxpool.Pool
+	Manager    *auth.Manager
+	Master     *crypto.MasterKey
+	Users      *repo.Users
+	Topics     *repo.Topics
+	Clients    *repo.Clients
+	Notifiers  *repo.Notifiers
+	Creds      *repo.TrackerCredentials
+	Deliveries *repo.Deliveries
+	Audit      *repo.Audit
+	AuditLog   *audit.Logger
+	OIDC       *auth.OIDCProvider
+	Scheduler  *scheduler.Scheduler
 }
 
 // NewRouter builds the HTTP handler tree.
@@ -81,8 +82,11 @@ func NewRouter(d Deps) http.Handler {
 		BaseURL: d.Cfg.PublicBaseURL,
 	}
 	topicsH := &handlers.Topics{
-		Topics:  d.Topics,
-		BaseURL: d.Cfg.PublicBaseURL,
+		Topics:     d.Topics,
+		Deliveries: d.Deliveries,
+		Clients:    d.Clients,
+		Master:     d.Master,
+		BaseURL:    d.Cfg.PublicBaseURL,
 	}
 	clientsH := &handlers.Clients{
 		Clients: d.Clients,
@@ -126,6 +130,7 @@ func NewRouter(d Deps) http.Handler {
 			r.Get("/topics/{id}", topicsH.Get)
 			r.Put("/topics/{id}", topicsH.Update)
 			r.Delete("/topics/{id}", topicsH.Delete)
+			r.Get("/topics/{id}/status", topicsH.Status)
 			r.Post("/topics/{id}/pause", topicsH.Pause)
 			r.Post("/topics/{id}/resume", topicsH.Resume)
 

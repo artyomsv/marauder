@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/artyomsv/marauder/backend/internal/domain"
+	"github.com/artyomsv/marauder/backend/internal/plugins/registry"
 )
 
 type fakeServer struct {
@@ -50,6 +51,13 @@ func newFakeServer(t *testing.T) (*httptest.Server, *fakeServer) {
 			}
 			w.WriteHeader(200)
 			w.Write([]byte(`{"result":"success","arguments":{"torrent-added":{"id":1,"hashString":"abc"}}}`))
+		case "torrent-get":
+			// Mixed-case hashString to prove the plugin lower-cases it; one
+			// downloading (status 4) and one seeding (status 6).
+			w.WriteHeader(200)
+			w.Write([]byte(`{"result":"success","arguments":{"torrents":[` +
+				`{"hashString":"ABC123","percentDone":0.5,"status":4},` +
+				`{"hashString":"def456","percentDone":1,"status":6}]}}`))
 		default:
 			w.WriteHeader(500)
 		}
@@ -140,6 +148,41 @@ func TestAddExplicitDirOverridesBase(t *testing.T) {
 	}
 	if fake.lastDownload != "/explicit" {
 		t.Errorf("download-dir = %q, want /explicit", fake.lastDownload)
+	}
+}
+
+func TestStatusMapsHashesAndStates(t *testing.T) {
+	srv, _ := newFakeServer(t)
+	p := newPlugin()
+	cfg, _ := json.Marshal(Config{URL: srv.URL})
+	got, err := p.Status(context.Background(), cfg, []string{"abc123", "def456"})
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("got %d statuses, want 2", len(got))
+	}
+	byHash := map[string]registry.TorrentStatus{}
+	for _, s := range got {
+		byHash[s.Hash] = s
+	}
+	if s := byHash["abc123"]; s.State != registry.StateDownloading || s.PercentDone != 0.5 {
+		t.Errorf("abc123 = %+v, want downloading @ 0.5 (lower-cased hash)", s)
+	}
+	if s := byHash["def456"]; s.State != registry.StateSeeding || s.PercentDone != 1 {
+		t.Errorf("def456 = %+v, want seeding @ 1", s)
+	}
+}
+
+func TestStatusEmptyHashesNoCall(t *testing.T) {
+	p := newPlugin()
+	cfg, _ := json.Marshal(Config{URL: "http://unused.invalid"})
+	got, err := p.Status(context.Background(), cfg, nil)
+	if err != nil {
+		t.Fatalf("Status(nil): %v", err)
+	}
+	if got != nil {
+		t.Errorf("expected nil result for no hashes, got %+v", got)
 	}
 }
 

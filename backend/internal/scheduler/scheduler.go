@@ -35,6 +35,7 @@ import (
 	"github.com/artyomsv/marauder/backend/internal/db/repo"
 	"github.com/artyomsv/marauder/backend/internal/domain"
 	"github.com/artyomsv/marauder/backend/internal/extra"
+	"github.com/artyomsv/marauder/backend/internal/infohash"
 	"github.com/artyomsv/marauder/backend/internal/metrics"
 	"github.com/artyomsv/marauder/backend/internal/plugins/registry"
 )
@@ -82,17 +83,26 @@ type credentialsRepo interface {
 	MarkSessionExpired(ctx context.Context, id, userID uuid.UUID) (bool, error)
 }
 
-// sessionNotifier is the subset of *notify.Dispatcher that the scheduler
-// uses to fire a one-time session-expiry alert. Defined as an interface
-// so the scheduler package does not need to import notify (avoiding any
-// potential import cycle).
-type sessionNotifier interface {
-	Send(ctx context.Context, userID uuid.UUID, msg domain.Message) int
+// eventNotifier is the subset of *notify.Dispatcher that the scheduler
+// uses to fire notifications (a new-release "updated" alert, a one-time
+// session-expiry "error" alert). Defined as an interface so the scheduler
+// package does not need to import notify (avoiding any potential import
+// cycle). The dispatcher filters by each notifier's event subscription.
+type eventNotifier interface {
+	Send(ctx context.Context, userID uuid.UUID, event string, msg domain.Message) int
 }
 
 // decryptor is the subset of *crypto.MasterKey that the scheduler uses.
 type decryptor interface {
 	Decrypt(ct, nonce []byte) ([]byte, error)
+}
+
+// deliveriesRecorder is the subset of *repo.Deliveries the scheduler uses
+// to log what it pushed to a client. Best-effort: a failure here is logged
+// and never affects the download/check outcome. Defined as an interface so
+// it's nil-safe in unit tests that don't exercise delivery tracking.
+type deliveriesRecorder interface {
+	Record(ctx context.Context, d *domain.TopicDelivery) (bool, error)
 }
 
 // trackerLookupFn is a test seam: the scheduler resolves a tracker by
@@ -114,13 +124,14 @@ type RunSummary struct {
 
 // Scheduler is the running scheduler service.
 type Scheduler struct {
-	cfg      *config.Config
-	log      zerolog.Logger
-	topics   topicsRepo
-	clients  clientsRepo
-	creds    credentialsRepo
-	master   decryptor
-	notifier sessionNotifier // nil-safe; fires once per session expiry
+	cfg        *config.Config
+	log        zerolog.Logger
+	topics     topicsRepo
+	clients    clientsRepo
+	creds      credentialsRepo
+	deliveries deliveriesRecorder // nil-safe; records what was pushed to a client
+	master     decryptor
+	notifier   eventNotifier // nil-safe; fires new-release + session-expiry alerts
 
 	// Test seams (default to registry.GetTracker / registry.GetClient).
 	lookupTracker trackerLookupFn
@@ -141,13 +152,14 @@ type Scheduler struct {
 }
 
 // New constructs a scheduler.
-func New(cfg *config.Config, log zerolog.Logger, topics *repo.Topics, clients *repo.Clients, creds *repo.TrackerCredentials, master *crypto.MasterKey, notifier sessionNotifier) *Scheduler {
+func New(cfg *config.Config, log zerolog.Logger, topics *repo.Topics, clients *repo.Clients, creds *repo.TrackerCredentials, deliveries *repo.Deliveries, master *crypto.MasterKey, notifier eventNotifier) *Scheduler {
 	return &Scheduler{
 		cfg:           cfg,
 		log:           log.With().Str("component", "scheduler").Logger(),
 		topics:        topics,
 		clients:       clients,
 		creds:         creds,
+		deliveries:    deliveries,
 		master:        master,
 		notifier:      notifier,
 		lookupTracker: registry.GetTracker,
@@ -351,12 +363,14 @@ func (s *Scheduler) runCheck(ctx context.Context, log zerolog.Logger, t *domain.
 
 	updated := check.Hash != "" && check.Hash != t.LastHash
 	var anySubmitted bool
+	var delivered []string
 	if updated {
 		log.Info().Str("old_hash", t.LastHash).Str("new_hash", check.Hash).Msg("topic updated")
 		metrics.TrackerUpdatesTotal.WithLabelValues(t.TrackerName).Inc()
 
 		var dlErr error
-		anySubmitted, dlErr = s.downloadAllPending(ctx, log, t, tr, check, creds)
+		delivered, dlErr = s.downloadAllPending(ctx, log, t, tr, check, creds)
+		anySubmitted = len(delivered) > 0
 		if dlErr != nil {
 			// A failed download loop must NOT advance the persisted hash.
 			// If it did, the next check would see check.Hash == LastHash,
@@ -391,9 +405,40 @@ func (s *Scheduler) runCheck(ctx context.Context, log zerolog.Logger, t *domain.
 		}
 	}
 
+	// New releases were pushed to a client this tick — notify the user's
+	// notifiers subscribed to the "updated" event (best-effort).
+	if anySubmitted {
+		s.notifyUpdated(ctx, t, delivered)
+	}
+
 	metrics.SchedulerTopicChecksTotal.WithLabelValues(t.TrackerName, "ok").Inc()
 	s.recordResult(ctx, log, t.ID, check.Hash, updated || anySubmitted, s.backoff(t, false, nil), "")
 	s.recordChecked(updated || anySubmitted, false)
+}
+
+// notifyUpdated fires a single "new release" notification summarising what
+// was delivered this tick. Best-effort: a nil notifier or zero deliveries
+// is a no-op, and the dispatcher itself swallows per-notifier failures.
+func (s *Scheduler) notifyUpdated(ctx context.Context, t *domain.Topic, labels []string) {
+	if s.notifier == nil || len(labels) == 0 {
+		return
+	}
+	const maxList = 10
+	shown := labels
+	overflow := 0
+	if len(shown) > maxList {
+		overflow = len(shown) - maxList
+		shown = shown[:maxList]
+	}
+	body := "Downloaded: " + strings.Join(shown, ", ")
+	if overflow > 0 {
+		body += fmt.Sprintf(" (+%d more)", overflow)
+	}
+	s.notifier.Send(ctx, t.UserID, "updated", domain.Message{
+		Title: t.DisplayName,
+		Body:  body,
+		Link:  s.cfg.PublicBaseURL + "/topics",
+	})
 }
 
 // loadCredentials fetches and decrypts the per-user tracker credential
@@ -441,7 +486,7 @@ func (s *Scheduler) loadCredentials(ctx context.Context, checkCtx context.Contex
 				log.Warn().Err(merr).Msg("mark session expired failed")
 			}
 			if transitioned && s.notifier != nil {
-				s.notifier.Send(ctx, stored.UserID, domain.Message{
+				s.notifier.Send(ctx, stored.UserID, "error", domain.Message{
 					Title: "Tracker session expired",
 					Body:  t.TrackerName + " needs re-authentication — solve the captcha in Marauder.",
 					Link:  s.cfg.PublicBaseURL + "/credentials",
@@ -460,25 +505,37 @@ func (s *Scheduler) loadCredentials(ctx context.Context, checkCtx context.Contex
 // downloadAllPending drains every pending episode for a topic in one
 // tick. The loop runs at most cfg.SchedulerMaxEpisodesPerTick times.
 //
-// Returns (anySubmitted, error). error is non-nil if the loop
-// terminated abnormally; anySubmitted reports whether at least one
-// payload was successfully handed off to the client. The caller uses
-// the pair to decide whether to record an "updated" timestamp even
-// when an error occurred mid-loop.
+// Returns (delivered, error) where delivered is the human label of every
+// payload successfully handed off to the client this tick (episodic:
+// "s05e01"; single-torrent: the topic display name). error is non-nil if
+// the loop terminated abnormally. The caller uses len(delivered) > 0 to
+// decide whether to record an "updated" timestamp and notify even when an
+// error occurred mid-loop.
 //
 // Each iteration uses its own context derived from ctx with a
 // TrackerHTTPTimeout deadline so a slow download cannot starve the
 // remaining iterations. Persistence calls (MarkEpisodeDownloaded) use
 // the parent ctx so they survive a per-iteration deadline expiry.
-func (s *Scheduler) downloadAllPending(ctx context.Context, log zerolog.Logger, t *domain.Topic, tr registry.Tracker, check *domain.Check, creds *domain.TrackerCredential) (bool, error) {
+func (s *Scheduler) downloadAllPending(ctx context.Context, log zerolog.Logger, t *domain.Topic, tr registry.Tracker, check *domain.Check, creds *domain.TrackerCredential) ([]string, error) {
 	maxPerTick := s.cfg.SchedulerMaxEpisodesPerTick
 	if maxPerTick <= 0 {
 		maxPerTick = 25
 	}
 
-	var anySubmitted bool
+	var delivered []string
 	var i int
 	for i = 0; i < maxPerTick; i++ {
+		// The human label for the episode about to be downloaded. The
+		// plugin keeps pending_human aligned with pending_episodes (oldest
+		// first), so human[0] names pending_episodes[0] — the one Download
+		// fetches this iteration. Single-payload trackers have no pending
+		// list; their label falls back to the topic display name.
+		human := extra.StringSlice(check.Extra, "pending_human")
+		label := ""
+		if len(human) > 0 {
+			label = human[0]
+		}
+
 		// Per-iteration ctx so each download has its own clock.
 		iterCtx, cancel := context.WithTimeout(ctx, s.cfg.TrackerHTTPTimeout)
 		payload, derr := tr.Download(iterCtx, t, check, creds)
@@ -493,16 +550,23 @@ func (s *Scheduler) downloadAllPending(ctx context.Context, log zerolog.Logger, 
 				// episode) is a legitimate no-op, not a failure; returning
 				// nil lets runCheck advance the hash to the now-current
 				// state instead of erroring and stranding the topic.
-				return anySubmitted, nil
+				return delivered, nil
 			}
-			return anySubmitted, derr
+			return delivered, derr
 		}
 
-		if err := s.submitToClient(ctx, log, t, payload); err != nil {
+		if err := s.submitToClient(ctx, log, t, payload, label); err != nil {
 			metrics.SchedulerTopicChecksTotal.WithLabelValues(t.TrackerName, "submit_error").Inc()
-			return anySubmitted, fmt.Errorf("submit: %w", err)
+			return delivered, fmt.Errorf("submit: %w", err)
 		}
-		anySubmitted = true
+		// Record the human label of what was just delivered. Episodic
+		// trackers supply it via pending_human; single-torrent trackers fall
+		// back to the topic display name (same label recordDelivery uses).
+		if label != "" {
+			delivered = append(delivered, label)
+		} else {
+			delivered = append(delivered, t.DisplayName)
+		}
 
 		// Mark this episode downloaded. Use the parent ctx (not the
 		// per-iteration one) so persistence survives even if the
@@ -510,25 +574,31 @@ func (s *Scheduler) downloadAllPending(ctx context.Context, log zerolog.Logger, 
 		pending := extra.StringSlice(check.Extra, "pending_episodes")
 		if len(pending) == 0 {
 			// Single-payload plugin (most trackers) — done.
-			return anySubmitted, nil
+			return delivered, nil
 		}
 		if err := s.markDownloaded(ctx, t, pending[0]); err != nil {
-			return anySubmitted, fmt.Errorf("persist downloaded: %w", err)
+			return delivered, fmt.Errorf("persist downloaded: %w", err)
 		}
 		log.Info().Str("packed", pending[0]).Msg("marked episode downloaded")
 
 		// Derive remaining locally; no second tr.Check call needed.
 		if len(pending) <= 1 {
-			return anySubmitted, nil
+			return delivered, nil
 		}
 		check.Extra["pending_episodes"] = pending[1:]
+		// Keep the human labels aligned with the packed list as we consume.
+		if len(human) > 1 {
+			check.Extra["pending_human"] = human[1:]
+		} else {
+			check.Extra["pending_human"] = []string{}
+		}
 	}
 
 	if i >= maxPerTick {
 		log.Warn().Int("max_per_tick", maxPerTick).Msg("scheduler hit per-tick episode cap")
 		metrics.SchedulerEpisodesPerTickCappedTotal.WithLabelValues(t.TrackerName).Inc()
 	}
-	return anySubmitted, nil
+	return delivered, nil
 }
 
 // markDownloaded persists the fact that one packed episode id was
@@ -558,8 +628,7 @@ func isNoPendingError(err error) bool {
 	return errors.Is(err, registry.ErrNoPendingEpisodes)
 }
 
-func (s *Scheduler) submitToClient(ctx context.Context, log zerolog.Logger, t *domain.Topic, payload *domain.Payload) error {
-	_ = log
+func (s *Scheduler) submitToClient(ctx context.Context, log zerolog.Logger, t *domain.Topic, payload *domain.Payload, label string) error {
 	if t.ClientID == nil {
 		// No explicit client — fall back to the user's default client,
 		// if any.
@@ -567,16 +636,16 @@ func (s *Scheduler) submitToClient(ctx context.Context, log zerolog.Logger, t *d
 		if err != nil {
 			return errors.New("no client configured for this topic and no default client")
 		}
-		return s.sendViaClient(ctx, def, t, payload)
+		return s.sendViaClient(ctx, log, def, t, payload, label)
 	}
 	cfg, err := s.clients.GetByID(ctx, *t.ClientID, t.UserID)
 	if err != nil {
 		return fmt.Errorf("load client: %w", err)
 	}
-	return s.sendViaClient(ctx, cfg, t, payload)
+	return s.sendViaClient(ctx, log, cfg, t, payload, label)
 }
 
-func (s *Scheduler) sendViaClient(ctx context.Context, cfg *domain.Client, t *domain.Topic, payload *domain.Payload) error {
+func (s *Scheduler) sendViaClient(ctx context.Context, log zerolog.Logger, cfg *domain.Client, t *domain.Topic, payload *domain.Payload, label string) error {
 	clientPlugin := s.lookupClient(cfg.ClientName)
 	if clientPlugin == nil {
 		metrics.ClientSubmitTotal.WithLabelValues(cfg.ClientName, "no_plugin").Inc()
@@ -595,7 +664,38 @@ func (s *Scheduler) sendViaClient(ctx context.Context, cfg *domain.Client, t *do
 		return err
 	}
 	metrics.ClientSubmitTotal.WithLabelValues(cfg.ClientName, "ok").Inc()
+	s.recordDelivery(ctx, log, t, cfg, payload, label)
 	return nil
+}
+
+// recordDelivery logs what was just pushed to a client into
+// topic_deliveries so the UI can show delivered items and (where the
+// client supports it) live download status. The BitTorrent infohash of the
+// payload is the key that links this record to the client's own torrent
+// list. This is best-effort Tier-1 tracking: any failure (no recorder
+// wired, an undecodable payload, a DB error) is logged and swallowed — it
+// must never turn a successful download into a failed check.
+func (s *Scheduler) recordDelivery(ctx context.Context, log zerolog.Logger, t *domain.Topic, cfg *domain.Client, payload *domain.Payload, label string) {
+	if s.deliveries == nil {
+		return
+	}
+	hash, err := infohash.FromPayload(payload.MagnetURI, payload.TorrentFile)
+	if err != nil {
+		log.Debug().Err(err).Msg("could not derive infohash; skipping delivery record")
+		return
+	}
+	if label == "" {
+		label = t.DisplayName
+	}
+	clientID := cfg.ID
+	if _, err := s.deliveries.Record(ctx, &domain.TopicDelivery{
+		TopicID:  t.ID,
+		Infohash: hash,
+		Label:    label,
+		ClientID: &clientID,
+	}); err != nil {
+		log.Warn().Err(err).Msg("record delivery failed")
+	}
 }
 
 // transientRetryDelay is how soon a topic is re-checked after a transient

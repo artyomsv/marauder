@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/artyomsv/marauder/backend/internal/domain"
+	"github.com/artyomsv/marauder/backend/internal/plugins/registry"
 )
 
 // fakeQBit is a tiny stand-in for the qBittorrent WebUI API v2.
@@ -40,6 +41,16 @@ func (f *fakeQBit) handler() http.Handler {
 	mux.HandleFunc("/api/v2/app/version", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(200)
 		w.Write([]byte("v4.6.0"))
+	})
+	mux.HandleFunc("/api/v2/torrents/info", func(w http.ResponseWriter, r *http.Request) {
+		f.mu.Lock()
+		f.lastBody = r.URL.Query().Get("hashes")
+		f.mu.Unlock()
+		w.WriteHeader(200)
+		// One downloading, one finished-seeding torrent.
+		w.Write([]byte(`[` +
+			`{"hash":"ABC123","progress":0.42,"state":"downloading"},` +
+			`{"hash":"def456","progress":1,"state":"stalledUP"}]`))
 	})
 	mux.HandleFunc("/api/v2/torrents/add", func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
@@ -149,6 +160,34 @@ func TestSessionReuseAcrossCalls(t *testing.T) {
 	}
 	if fake.addCalls != 3 {
 		t.Errorf("addCalls = %d, want 3", fake.addCalls)
+	}
+}
+
+func TestStatusMapsHashesAndStates(t *testing.T) {
+	srv, fake := newServer(t)
+	p := &plugin{sessions: map[string]*session{}}
+	cfg, _ := json.Marshal(Config{URL: srv.URL, Username: "admin", Password: "secret"})
+
+	got, err := p.Status(context.Background(), cfg, []string{"abc123", "def456"})
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("got %d statuses, want 2", len(got))
+	}
+	// The plugin pipe-joins requested hashes into the hashes= filter.
+	if fake.lastBody != "abc123|def456" {
+		t.Errorf("hashes filter = %q, want abc123|def456", fake.lastBody)
+	}
+	byHash := map[string]registry.TorrentStatus{}
+	for _, s := range got {
+		byHash[s.Hash] = s
+	}
+	if s := byHash["abc123"]; s.State != registry.StateDownloading || s.PercentDone != 0.42 {
+		t.Errorf("abc123 = %+v, want downloading @ 0.42 (lower-cased hash)", s)
+	}
+	if s := byHash["def456"]; s.State != registry.StateSeeding || s.PercentDone != 1 {
+		t.Errorf("def456 = %+v, want seeding @ 1", s)
 	}
 }
 

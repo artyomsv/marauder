@@ -34,10 +34,11 @@ func New(notifiers notifiersRepo, master *crypto.MasterKey, log zerolog.Logger) 
 	return &Dispatcher{notifiers: notifiers, master: master, log: log, timeout: 15 * time.Second}
 }
 
-// Send delivers msg to every notifier configured by userID. Best-effort:
-// each notifier is attempted independently; failures are logged and
-// metered but never abort the others. Returns the count of successes.
-func (d *Dispatcher) Send(ctx context.Context, userID uuid.UUID, msg domain.Message) int {
+// Send delivers msg to every notifier configured by userID that is
+// subscribed to the given event ("updated", "error", …). Best-effort: each
+// notifier is attempted independently; failures are logged and metered but
+// never abort the others. Returns the count of successes.
+func (d *Dispatcher) Send(ctx context.Context, userID uuid.UUID, event string, msg domain.Message) int {
 	list, err := d.notifiers.ListForUser(ctx, userID)
 	if err != nil {
 		d.log.Warn().Err(err).Str("user_id", userID.String()).Msg("notify: list notifiers failed")
@@ -45,6 +46,9 @@ func (d *Dispatcher) Send(ctx context.Context, userID uuid.UUID, msg domain.Mess
 	}
 	sent := 0
 	for _, n := range list {
+		if !subscribed(n.Events, event) {
+			continue
+		}
 		plugin := registry.GetNotifier(n.NotifierName)
 		if plugin == nil {
 			d.log.Warn().Str("notifier", n.NotifierName).Msg("notify: unknown notifier plugin")
@@ -69,4 +73,20 @@ func (d *Dispatcher) Send(ctx context.Context, userID uuid.UUID, msg domain.Mess
 		sent++
 	}
 	return sent
+}
+
+// subscribed reports whether a notifier with the given event subscription
+// list should receive an event. An empty list (or empty event) means "all
+// events" — a defensive default so a notifier created before event
+// filtering, or a caller that doesn't categorise, still delivers.
+func subscribed(events []string, event string) bool {
+	if len(events) == 0 || event == "" {
+		return true
+	}
+	for _, e := range events {
+		if e == event {
+			return true
+		}
+	}
+	return false
 }

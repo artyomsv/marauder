@@ -103,6 +103,7 @@ func run() error {
 	clientsRepo := repo.NewClients(pool)
 	notifiersRepo := repo.NewNotifiers(pool)
 	credsRepo := repo.NewTrackerCredentials(pool)
+	deliveriesRepo := repo.NewDeliveries(pool)
 	auditRepo := repo.NewAudit(pool)
 	auditLogger := audit.NewLogger(rootCtx, auditRepo, logger)
 
@@ -138,7 +139,7 @@ func run() error {
 
 	// Scheduler
 	disp := notify.New(notifiersRepo, master, logger)
-	sch := scheduler.New(cfg, logger, topicsRepo, clientsRepo, credsRepo, master, disp)
+	sch := scheduler.New(cfg, logger, topicsRepo, clientsRepo, credsRepo, deliveriesRepo, master, disp)
 	go func() {
 		if err := sch.Start(rootCtx); err != nil {
 			logger.Error().Err(err).Msg("scheduler exited with error")
@@ -147,20 +148,21 @@ func run() error {
 
 	// HTTP server
 	router := api.NewRouter(api.Deps{
-		Cfg:       cfg,
-		Log:       logger,
-		Pool:      pool,
-		Manager:   mgr,
-		Master:    master,
-		Users:     users,
-		Topics:    topicsRepo,
-		Clients:   clientsRepo,
-		Notifiers: notifiersRepo,
-		Creds:     credsRepo,
-		Audit:     auditRepo,
-		AuditLog:  auditLogger,
-		OIDC:      oidcProvider,
-		Scheduler: sch,
+		Cfg:        cfg,
+		Log:        logger,
+		Pool:       pool,
+		Manager:    mgr,
+		Master:     master,
+		Users:      users,
+		Topics:     topicsRepo,
+		Clients:    clientsRepo,
+		Notifiers:  notifiersRepo,
+		Creds:      credsRepo,
+		Deliveries: deliveriesRepo,
+		Audit:      auditRepo,
+		AuditLog:   auditLogger,
+		OIDC:       oidcProvider,
+		Scheduler:  sch,
 	})
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,

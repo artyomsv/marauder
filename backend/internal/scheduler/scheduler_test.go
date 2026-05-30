@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"testing"
 	"time"
 
@@ -176,14 +177,16 @@ func (f *fakeCredsSession) MarkSessionExpired(_ context.Context, _, _ uuid.UUID)
 
 // fakeNotifier records Send calls.
 type fakeNotifier struct {
-	calls   int
-	lastID  uuid.UUID
-	lastMsg domain.Message
+	calls     int
+	lastID    uuid.UUID
+	lastEvent string
+	lastMsg   domain.Message
 }
 
-func (f *fakeNotifier) Send(_ context.Context, userID uuid.UUID, msg domain.Message) int {
+func (f *fakeNotifier) Send(_ context.Context, userID uuid.UUID, event string, msg domain.Message) int {
 	f.calls++
 	f.lastID = userID
+	f.lastEvent = event
 	f.lastMsg = msg
 	return 1
 }
@@ -192,6 +195,17 @@ func (f *fakeNotifier) Send(_ context.Context, userID uuid.UUID, msg domain.Mess
 type fakeDecryptor struct{}
 
 func (f *fakeDecryptor) Decrypt(ct, _ []byte) ([]byte, error) { return ct, nil }
+
+// fakeDeliveries records every delivery the scheduler logs.
+type fakeDeliveries struct {
+	recorded []*domain.TopicDelivery
+	err      error
+}
+
+func (f *fakeDeliveries) Record(_ context.Context, d *domain.TopicDelivery) (bool, error) {
+	f.recorded = append(f.recorded, d)
+	return f.err == nil, f.err
+}
 
 // fakeClientPlugin satisfies registry.Client and records every Add call.
 type fakeClientPlugin struct {
@@ -220,6 +234,8 @@ type fixture struct {
 	topics       *fakeTopics
 	atomicTopics *fakeTopicsAtomic
 	clientPlugin *fakeClientPlugin
+	deliveries   *fakeDeliveries
+	notifier     *fakeNotifier
 	tracker      *fakeTracker
 	topic        *domain.Topic
 }
@@ -257,12 +273,16 @@ func newFixture(t *testing.T, tracker *fakeTracker, atomic bool) *fixture {
 		topicsImpl = plain
 	}
 
+	deliveries := &fakeDeliveries{}
+	notifier := &fakeNotifier{}
 	s := &Scheduler{
 		cfg:           cfg,
 		log:           zerolog.New(io.Discard),
 		topics:        topicsImpl,
 		clients:       &fakeClients{client: client},
 		creds:         &fakeCreds{},
+		deliveries:    deliveries,
+		notifier:      notifier,
 		master:        &fakeDecryptor{},
 		lookupTracker: func(name string) registry.Tracker { return tracker },
 		lookupClient:  func(name string) registry.Client { return clientPlugin },
@@ -290,6 +310,8 @@ func newFixture(t *testing.T, tracker *fakeTracker, atomic bool) *fixture {
 		topics:       plain,
 		atomicTopics: atomicImpl,
 		clientPlugin: clientPlugin,
+		deliveries:   deliveries,
+		notifier:     notifier,
 		tracker:      tracker,
 		topic:        topic,
 	}
@@ -365,6 +387,163 @@ func TestRunCheck_SinglePayload_HappyPath(t *testing.T) {
 	}
 	if rec.hash != "new-hash" {
 		t.Errorf("expected hash=new-hash, got %q", rec.hash)
+	}
+}
+
+func TestRunCheck_SinglePayload_RecordsDelivery(t *testing.T) {
+	const hash = "c12fe1c06bba254a9dc9f519b335aa7c1367a88a"
+	tr := &fakeTracker{
+		name: "faketracker",
+		checks: []checkResult{
+			{check: &domain.Check{Hash: "new-hash"}, err: nil},
+		},
+		downloads: []downloadResult{
+			{payload: &domain.Payload{MagnetURI: "magnet:?xt=urn:btih:" + hash}, err: nil},
+			{err: registry.ErrNoPendingEpisodes},
+		},
+	}
+	f := newFixture(t, tr, false)
+
+	f.s.runCheck(context.Background(), f.s.log, f.topic)
+
+	if got := len(f.deliveries.recorded); got != 1 {
+		t.Fatalf("expected 1 delivery recorded, got %d", got)
+	}
+	d := f.deliveries.recorded[0]
+	if d.Infohash != hash {
+		t.Errorf("infohash = %q, want %q", d.Infohash, hash)
+	}
+	// Single-payload topics label the delivery with the topic display name.
+	if d.Label != "Fake Topic" {
+		t.Errorf("label = %q, want the topic display name", d.Label)
+	}
+	if d.TopicID != f.topic.ID {
+		t.Errorf("topic id mismatch")
+	}
+}
+
+func TestRunCheck_SinglePayload_NotifiesUpdated(t *testing.T) {
+	const hash = "c12fe1c06bba254a9dc9f519b335aa7c1367a88a"
+	tr := &fakeTracker{
+		name: "faketracker",
+		checks: []checkResult{
+			{check: &domain.Check{Hash: "new-hash"}, err: nil},
+		},
+		downloads: []downloadResult{
+			{payload: &domain.Payload{MagnetURI: "magnet:?xt=urn:btih:" + hash}, err: nil},
+			{err: registry.ErrNoPendingEpisodes},
+		},
+	}
+	f := newFixture(t, tr, false)
+
+	f.s.runCheck(context.Background(), f.s.log, f.topic)
+
+	if f.notifier.calls != 1 {
+		t.Fatalf("expected 1 notification, got %d", f.notifier.calls)
+	}
+	if f.notifier.lastEvent != "updated" {
+		t.Errorf("event = %q, want updated", f.notifier.lastEvent)
+	}
+	if f.notifier.lastID != f.topic.UserID {
+		t.Errorf("notification sent to wrong user")
+	}
+	// Single-payload topics summarise with the topic display name.
+	if !strings.Contains(f.notifier.lastMsg.Body, "Fake Topic") {
+		t.Errorf("body = %q, want it to mention the topic name", f.notifier.lastMsg.Body)
+	}
+}
+
+func TestRunCheck_NoDownload_DoesNotNotify(t *testing.T) {
+	tr := &fakeTracker{
+		name:   "faketracker",
+		checks: []checkResult{{check: &domain.Check{Hash: "old-hash"}, err: nil}}, // unchanged
+	}
+	f := newFixture(t, tr, false)
+
+	f.s.runCheck(context.Background(), f.s.log, f.topic)
+
+	if f.notifier.calls != 0 {
+		t.Errorf("expected no notification when nothing downloaded, got %d", f.notifier.calls)
+	}
+}
+
+func TestRunCheck_Episodes_NotifiesWithEpisodeLabels(t *testing.T) {
+	const h1 = "1111111111111111111111111111111111111111"
+	const h2 = "2222222222222222222222222222222222222222"
+	tr := &fakeTracker{
+		name: "faketracker",
+		checks: []checkResult{
+			{
+				check: &domain.Check{
+					Hash: "new-hash",
+					Extra: map[string]any{
+						"pending_episodes": []string{"791001001", "791001002"},
+						"pending_human":    []string{"s01e01", "s01e02"},
+					},
+				},
+			},
+		},
+		downloads: []downloadResult{
+			{payload: &domain.Payload{MagnetURI: "magnet:?xt=urn:btih:" + h1}},
+			{payload: &domain.Payload{MagnetURI: "magnet:?xt=urn:btih:" + h2}},
+			{err: registry.ErrNoPendingEpisodes},
+		},
+	}
+	f := newFixture(t, tr, true)
+
+	f.s.runCheck(context.Background(), f.s.log, f.topic)
+
+	if f.notifier.calls != 1 {
+		t.Fatalf("expected 1 summary notification, got %d", f.notifier.calls)
+	}
+	body := f.notifier.lastMsg.Body
+	if !strings.Contains(body, "s01e01") || !strings.Contains(body, "s01e02") {
+		t.Errorf("body = %q, want both episode labels", body)
+	}
+}
+
+func TestRunCheck_Episodes_RecordsDeliveryWithEpisodeLabel(t *testing.T) {
+	const h1 = "1111111111111111111111111111111111111111"
+	const h2 = "2222222222222222222222222222222222222222"
+	tr := &fakeTracker{
+		name: "faketracker",
+		checks: []checkResult{
+			{
+				check: &domain.Check{
+					Hash: "new-hash",
+					Extra: map[string]any{
+						"pending_episodes": []string{"791001001", "791001002"},
+						"pending_human":    []string{"s01e01", "s01e02"},
+					},
+				},
+			},
+		},
+		downloads: []downloadResult{
+			{payload: &domain.Payload{MagnetURI: "magnet:?xt=urn:btih:" + h1}},
+			{payload: &domain.Payload{MagnetURI: "magnet:?xt=urn:btih:" + h2}},
+			{err: registry.ErrNoPendingEpisodes},
+		},
+	}
+	f := newFixture(t, tr, true)
+
+	f.s.runCheck(context.Background(), f.s.log, f.topic)
+
+	if got := len(f.deliveries.recorded); got != 2 {
+		t.Fatalf("expected 2 deliveries recorded, got %d", got)
+	}
+	// Labels come from pending_human, aligned with the packed list.
+	want := []struct{ hash, label string }{
+		{h1, "s01e01"},
+		{h2, "s01e02"},
+	}
+	for i, w := range want {
+		d := f.deliveries.recorded[i]
+		if d.Infohash != w.hash {
+			t.Errorf("delivery %d infohash = %q, want %q", i, d.Infohash, w.hash)
+		}
+		if d.Label != w.label {
+			t.Errorf("delivery %d label = %q, want %q", i, d.Label, w.label)
+		}
 	}
 }
 
@@ -768,7 +947,7 @@ func (f *fakeTrackerWithCreds) Verify(_ context.Context, _ *domain.TrackerCreden
 
 // newSessionFixture builds a scheduler wired for session-expiry tests.
 // creds is injected as the credentials repo; notifier is the fake notifier.
-func newSessionFixture(t *testing.T, creds credentialsRepo, notifier sessionNotifier) (*Scheduler, *domain.Topic) {
+func newSessionFixture(t *testing.T, creds credentialsRepo, notifier eventNotifier) (*Scheduler, *domain.Topic) {
 	t.Helper()
 	cfg := &config.Config{
 		SchedulerEnabled:            true,

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -30,10 +31,33 @@ type topicStore interface {
 	Update(ctx context.Context, id, userID uuid.UUID, displayName string, clientID *uuid.UUID, downloadDir, category string, extra map[string]any) (*domain.Topic, error)
 }
 
+// deliveriesStore is the consumer seam over *repo.Deliveries for the
+// status endpoint. Nil-safe: when unset, the status endpoint reports no
+// deliveries rather than failing.
+type deliveriesStore interface {
+	ListForTopic(ctx context.Context, topicID uuid.UUID) ([]*domain.TopicDelivery, error)
+}
+
+// clientsLookup is the consumer seam over *repo.Clients used to resolve a
+// topic's client so its live torrent status can be queried.
+type clientsLookup interface {
+	GetByID(ctx context.Context, id uuid.UUID, userID uuid.UUID) (*domain.Client, error)
+	GetDefault(ctx context.Context, userID uuid.UUID) (*domain.Client, error)
+}
+
+// configDecryptor is the subset of *crypto.MasterKey used to decrypt a
+// client config blob before handing it to the plugin's Status call.
+type configDecryptor interface {
+	Decrypt(ct, nonce []byte) ([]byte, error)
+}
+
 // Topics is the handler group for /topics.
 type Topics struct {
-	Topics  topicStore
-	BaseURL string
+	Topics     topicStore
+	Deliveries deliveriesStore
+	Clients    clientsLookup
+	Master     configDecryptor
+	BaseURL    string
 }
 
 type createTopicReq struct {
@@ -291,6 +315,136 @@ func (h *Topics) Get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, t)
+}
+
+// deliveryStatusItem is one row in the topic status response. State is the
+// normalised client lifecycle word, or "delivered" when the client can't
+// report live status (no capability) or no longer knows the torrent.
+// PercentDone is nil unless the client reported a live figure (0..1).
+type deliveryStatusItem struct {
+	Label       string    `json:"label"`
+	Infohash    string    `json:"infohash"`
+	DeliveredAt time.Time `json:"delivered_at"`
+	State       string    `json:"state"`
+	PercentDone *float64  `json:"percent_done"`
+}
+
+// Status handles GET /topics/{id}/status. It lists what the topic has
+// delivered to its client and, when that client supports live status
+// (qBittorrent, Transmission), augments each item with download percent
+// and state. Live status is fail-open enhancement: a query error degrades
+// to "delivered" labels rather than failing the request.
+func (h *Topics) Status(w http.ResponseWriter, r *http.Request) {
+	uid, perr := currentUserID(r)
+	if perr != nil {
+		problem.Write(w, r, h.BaseURL, perr)
+		return
+	}
+	id, ierr := uuid.Parse(chi.URLParam(r, "id"))
+	if ierr != nil {
+		problem.Write(w, r, h.BaseURL, problem.ErrBadRequest("invalid id"))
+		return
+	}
+
+	// Ownership check (and gives us the topic's client + display name).
+	topic, gerr := h.Topics.GetByID(r.Context(), id, &uid)
+	if gerr != nil {
+		if errors.Is(gerr, repo.ErrNotFound) {
+			problem.Write(w, r, h.BaseURL, problem.ErrNotFound("topic not found"))
+			return
+		}
+		problem.Write(w, r, h.BaseURL, problem.ErrInternal(gerr.Error()))
+		return
+	}
+
+	var deliveries []*domain.TopicDelivery
+	if h.Deliveries != nil {
+		var derr error
+		deliveries, derr = h.Deliveries.ListForTopic(r.Context(), id)
+		if derr != nil {
+			problem.Write(w, r, h.BaseURL, problem.ErrInternal(derr.Error()))
+			return
+		}
+	}
+
+	supportsStatus, live := h.liveStatus(r.Context(), topic, uid, deliveries)
+
+	items := make([]deliveryStatusItem, 0, len(deliveries))
+	for _, d := range deliveries {
+		item := deliveryStatusItem{
+			Label:       d.Label,
+			Infohash:    d.Infohash,
+			DeliveredAt: d.DeliveredAt,
+			State:       "delivered",
+		}
+		if st, ok := live[strings.ToLower(d.Infohash)]; ok {
+			pct := st.PercentDone
+			item.PercentDone = &pct
+			item.State = st.State
+		}
+		items = append(items, item)
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"client_supports_status": supportsStatus,
+		"deliveries":             items,
+	})
+}
+
+// liveStatus resolves the topic's client and, if it supports WithStatus,
+// queries live torrent status for the delivered infohashes. Returns
+// whether the client supports status and a map keyed by lowercase
+// infohash. Every failure path is fail-open: it returns (supports, empty)
+// or (false, nil) so the caller still renders delivered labels.
+func (h *Topics) liveStatus(ctx context.Context, topic *domain.Topic, uid uuid.UUID, deliveries []*domain.TopicDelivery) (bool, map[string]registry.TorrentStatus) {
+	empty := map[string]registry.TorrentStatus{}
+	if len(deliveries) == 0 || h.Clients == nil || h.Master == nil {
+		return false, empty
+	}
+	client := h.resolveClient(ctx, topic, uid)
+	if client == nil {
+		return false, empty
+	}
+	ws, ok := registry.GetClient(client.ClientName).(registry.WithStatus)
+	if !ok {
+		return false, empty
+	}
+	rawCfg, derr := h.Master.Decrypt(client.ConfigEnc, client.ConfigNonce)
+	if derr != nil {
+		return true, empty // capability exists, config unreadable — degrade gracefully
+	}
+	hashes := make([]string, 0, len(deliveries))
+	for _, d := range deliveries {
+		hashes = append(hashes, d.Infohash)
+	}
+	qctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	statuses, serr := ws.Status(qctx, rawCfg, hashes)
+	if serr != nil {
+		return true, empty // client unreachable — still report capability, no live data
+	}
+	out := make(map[string]registry.TorrentStatus, len(statuses))
+	for _, st := range statuses {
+		out[strings.ToLower(st.Hash)] = st
+	}
+	return true, out
+}
+
+// resolveClient returns the topic's explicit client, or the user's default
+// client when the topic has none. Returns nil when neither resolves.
+func (h *Topics) resolveClient(ctx context.Context, topic *domain.Topic, uid uuid.UUID) *domain.Client {
+	if topic.ClientID != nil {
+		c, err := h.Clients.GetByID(ctx, *topic.ClientID, uid)
+		if err != nil {
+			return nil
+		}
+		return c
+	}
+	c, err := h.Clients.GetDefault(ctx, uid)
+	if err != nil {
+		return nil
+	}
+	return c
 }
 
 // Delete handles DELETE /topics/{id}.

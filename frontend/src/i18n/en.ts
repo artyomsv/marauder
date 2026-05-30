@@ -123,6 +123,18 @@ const en: Record<string, string> = {
   "settings.about.license": "License",
   "settings.about.links": "Links",
 
+  // Topic delivery status
+  "topics.delivery.delivered": "Delivered",
+  "topics.delivery.downloading": "Downloading",
+  "topics.delivery.finished": "Finished",
+  "topics.delivery.count": "{n} delivered",
+  "topics.delivery.season": "Season {n}",
+
+  // Notifier event subscriptions (which events a notifier fires on)
+  "notifiers.events.prefix": "Notifies on",
+  "notifiers.event.updated": "new releases",
+  "notifiers.event.error": "errors",
+
   // Generic
   "common.loading": "Loading...",
   "common.justNow": "just now",

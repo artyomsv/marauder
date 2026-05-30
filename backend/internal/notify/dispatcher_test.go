@@ -89,9 +89,29 @@ func TestSend_AllSucceed_ReturnsCorrectCount(t *testing.T) {
 		{ID: uuid.New(), UserID: uid, NotifierName: okPlugin.Name(), ConfigEnc: enc, ConfigNonce: nonce},
 	}
 
-	got := d.Send(context.Background(), uid, domain.Message{Title: "t", Body: "b"})
+	got := d.Send(context.Background(), uid, "updated", domain.Message{Title: "t", Body: "b"})
 	if got != 2 {
 		t.Errorf("want 2 successes, got %d", got)
+	}
+}
+
+func TestSend_FiltersByEventSubscription(t *testing.T) {
+	uid := uuid.New()
+	repo := &fakeRepo{}
+	d, enc, nonce := newTestDispatcher(t, repo)
+
+	repo.items = []*domain.Notifier{
+		// Subscribed only to "error" — must NOT receive an "updated" event.
+		{ID: uuid.New(), UserID: uid, NotifierName: okPlugin.Name(), Events: []string{"error"}, ConfigEnc: enc, ConfigNonce: nonce},
+		// Subscribed to "updated" — must receive it.
+		{ID: uuid.New(), UserID: uid, NotifierName: okPlugin.Name(), Events: []string{"updated"}, ConfigEnc: enc, ConfigNonce: nonce},
+		// Empty subscription list — defensive default: receives all events.
+		{ID: uuid.New(), UserID: uid, NotifierName: okPlugin.Name(), ConfigEnc: enc, ConfigNonce: nonce},
+	}
+
+	got := d.Send(context.Background(), uid, "updated", domain.Message{Title: "t"})
+	if got != 2 {
+		t.Errorf("want 2 (updated-subscribed + catch-all), got %d", got)
 	}
 }
 
@@ -105,7 +125,7 @@ func TestSend_OneFailOneOk_ReturnsOne(t *testing.T) {
 		{ID: uuid.New(), UserID: uid, NotifierName: failPlugin.Name(), ConfigEnc: enc, ConfigNonce: nonce},
 	}
 
-	got := d.Send(context.Background(), uid, domain.Message{Title: "t", Body: "b"})
+	got := d.Send(context.Background(), uid, "updated", domain.Message{Title: "t", Body: "b"})
 	if got != 1 {
 		t.Errorf("want 1 success, got %d", got)
 	}
@@ -116,7 +136,7 @@ func TestSend_EmptyList_ReturnsZero(t *testing.T) {
 	repo := &fakeRepo{items: []*domain.Notifier{}}
 	d, _, _ := newTestDispatcher(t, repo)
 
-	got := d.Send(context.Background(), uid, domain.Message{Title: "t"})
+	got := d.Send(context.Background(), uid, "updated", domain.Message{Title: "t"})
 	if got != 0 {
 		t.Errorf("want 0, got %d", got)
 	}
@@ -132,7 +152,7 @@ func TestSend_UnknownPlugin_Skipped(t *testing.T) {
 		{ID: uuid.New(), UserID: uid, NotifierName: okPlugin.Name(), ConfigEnc: enc, ConfigNonce: nonce},
 	}
 
-	got := d.Send(context.Background(), uid, domain.Message{Title: "t"})
+	got := d.Send(context.Background(), uid, "updated", domain.Message{Title: "t"})
 	// unknown plugin is skipped; the ok one still runs
 	if got != 1 {
 		t.Errorf("want 1, got %d", got)
@@ -144,7 +164,7 @@ func TestSend_ListError_ReturnsZero(t *testing.T) {
 	repo := &fakeRepo{err: errors.New("db error")}
 	d, _, _ := newTestDispatcher(t, repo)
 
-	got := d.Send(context.Background(), uid, domain.Message{Title: "t"})
+	got := d.Send(context.Background(), uid, "updated", domain.Message{Title: "t"})
 	if got != 0 {
 		t.Errorf("want 0 on list error, got %d", got)
 	}
@@ -160,7 +180,7 @@ func TestSend_DecryptError_Skipped(t *testing.T) {
 		{ID: uuid.New(), UserID: uid, NotifierName: okPlugin.Name(), ConfigEnc: enc, ConfigNonce: nonce},
 	}
 
-	got := d.Send(context.Background(), uid, domain.Message{Title: "t"})
+	got := d.Send(context.Background(), uid, "updated", domain.Message{Title: "t"})
 	// decrypt failure is skipped; the sibling ok notifier still fires
 	if got != 1 {
 		t.Errorf("want 1, got %d", got)

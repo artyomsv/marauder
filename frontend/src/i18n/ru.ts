@@ -125,6 +125,18 @@ const ru: Record<string, string> = {
   "settings.about.license": "Лицензия",
   "settings.about.links": "Ссылки",
 
+  // Topic delivery status
+  "topics.delivery.delivered": "Доставлено",
+  "topics.delivery.downloading": "Загружается",
+  "topics.delivery.finished": "Завершено",
+  "topics.delivery.count": "Доставлено: {n}",
+  "topics.delivery.season": "Сезон {n}",
+
+  // Notifier event subscriptions (which events a notifier fires on)
+  "notifiers.events.prefix": "Уведомлять о",
+  "notifiers.event.updated": "новых релизах",
+  "notifiers.event.error": "ошибках",
+
   // Generic
   "common.loading": "Загрузка...",
   "common.justNow": "только что",

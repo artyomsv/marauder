@@ -4,6 +4,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { Plus, Loader2, CheckCircle2, Bell, AlertCircle } from "lucide-react";
 
 import { api } from "@/lib/api";
+import { useT } from "@/i18n";
 import { useSystemInfo } from "@/lib/hooks/useSystemInfo";
 import { QK } from "@/lib/queryKeys";
 import { Button } from "@/components/ui/button";
@@ -24,7 +25,20 @@ type NotifierView = {
 };
 type NotifiersList = { notifiers: NotifierView[] | null };
 
+// eventLabel maps a notifier's subscribed event key to a human phrase, so a
+// card reads "Notifies on: new releases, errors" instead of bare "updated"
+// / "error" chips that look like a status. Unknown events fall back to the
+// raw key.
+function eventLabel(event: string, t: (key: string) => string): string {
+  const known: Record<string, string> = {
+    updated: t("notifiers.event.updated"),
+    error: t("notifiers.event.error"),
+  };
+  return known[event] ?? event;
+}
+
 export function NotifiersPage() {
+  const t = useT();
   const qc = useQueryClient();
   const { data, isLoading } = useQuery({
     queryKey: QK.notifiers,
@@ -110,9 +124,17 @@ export function NotifiersPage() {
                   <Badge variant="outline" className="font-mono">
                     {n.notifier_name}
                   </Badge>
+                  <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+                    <Bell className="size-3" />
+                    {t("notifiers.events.prefix")}:
+                  </span>
                   {n.events.map((e) => (
-                    <Badge key={e} variant="secondary">
-                      {e}
+                    <Badge
+                      key={e}
+                      variant="secondary"
+                      title={`${t("notifiers.events.prefix")}: ${eventLabel(e, t)}`}
+                    >
+                      {eventLabel(e, t)}
                     </Badge>
                   ))}
                 </>

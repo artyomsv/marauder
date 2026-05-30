@@ -45,4 +45,8 @@ export const QK = {
   // /trackers/preview?url=… resolved title + poster image. Used by the
   // AddTopic form to show a preview card before the topic is created.
   trackerPreview: (url: string) => ["trackerPreview", url] as const,
+
+  // /topics/{id}/status — delivered torrents + live download progress.
+  // Polled while a topic has an in-progress download and the row is shown.
+  topicStatus: (id: string) => ["topicStatus", id] as const,
 } as const;

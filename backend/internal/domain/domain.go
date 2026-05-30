@@ -104,6 +104,20 @@ type TrackerCredential struct {
 	UpdatedAt        time.Time
 }
 
+// TopicDelivery records one torrent Marauder pushed to a client for a
+// topic. Infohash is the BitTorrent v1 infohash of the pushed payload —
+// the key used to query the client for live download status. Label is the
+// human-readable form: "s02e06" for episodic trackers, the release/display
+// name for single-torrent topics.
+type TopicDelivery struct {
+	ID          uuid.UUID
+	TopicID     uuid.UUID
+	Infohash    string
+	Label       string
+	ClientID    *uuid.UUID
+	DeliveredAt time.Time
+}
+
 // TopicEvent is a single entry in a topic's history.
 type TopicEvent struct {
 	ID        int64
