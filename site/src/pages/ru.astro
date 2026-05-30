@@ -1,0 +1,221 @@
+---
+import Page from "@/layouts/Page.astro";
+import Icon from "@/components/Icon.astro";
+import { SITE } from "@/data/seo";
+import { trackers } from "@/data/trackers";
+import { softwareApplicationSchema, faqSchema } from "@/data/schemas";
+
+// Russian-language landing page. The trackers Marauder uniquely serves
+// (RuTracker, LostFilm, Kinozal, NNM-Club) are Russian, so the highest-intent
+// searches happen in Russian. hreflang ties this page to the English home.
+const seo = {
+  title: "Самостоятельный мониторинг торрент-трекеров",
+  description:
+    "Marauder — self-hosted приложение, которое следит за темами на RuTracker, LostFilm, Kinozal и NNM-Club и автоматически скачивает новые серии в qBittorrent, Transmission или Deluge. Современная замена monitorrent.",
+  path: "/ru",
+  lang: "ru",
+  ogLocale: "ru_RU",
+  keywords: [
+    "мониторинг торрентов",
+    "автоматическая загрузка сериалов",
+    "rutracker автоскачивание",
+    "lostfilm автозагрузка",
+    "monitorrent аналог",
+    "самостоятельный торрент мониторинг",
+  ],
+  alternates: [
+    { hreflang: "en", path: "/" },
+    { hreflang: "ru", path: "/ru" },
+    { hreflang: "x-default", path: "/" },
+  ],
+};
+
+const ruFaq = [
+  {
+    question: "Что такое Marauder?",
+    answer:
+      "Marauder — это self-hosted (запускаемое на вашем сервере) приложение, которое следит за темами форумных торрент-трекеров и автоматически передаёт новый торрент или magnet-ссылку в ваш торрент-клиент. Бэкенд написан на Go, фронтенд — на React; запускается как Docker compose стек.",
+  },
+  {
+    question: "Это замена monitorrent?",
+    answer:
+      "Да. Marauder — современная, независимо разработанная замена monitorrent, того самого Python-приложения для слежения за торрент-темами, которое многие до сих пор используют, но которое больше активно не развивается (последний релиз — v1.4.0, июль 2023). Marauder покрывает тот же набор трекеров и клиентов на современном стеке: шифрование учётных данных, OIDC, метрики Prometheus, отслеживание загрузки по infohash.",
+  },
+  {
+    question: "Чем Marauder отличается от Sonarr?",
+    answer:
+      "Sonarr и Radarr работают через Torznab-индексаторы и не умеют следить за темой на форуме RuTracker, LostFilm или NNM-Club — это форумы, а не API-индексаторы. Marauder создан именно для слежения за форумными темами: он входит под вашей учётной записью, разбирает страницу темы и замечает, когда загрузивший заменил .torrent. При этом Marauder понимает Torznab и Newznab, так что работает и поверх Jackett или Prowlarr.",
+  },
+  {
+    question: "Какие трекеры поддерживаются?",
+    answer:
+      "16 трекеров в v1.0: RuTracker, Kinozal, NNM-Club, LostFilm, Anilibria, Anidub, Rutor, Toloka, Unionpeer, Tapochek, Free-Torrents, HD-Club, а также произвольные .torrent и magnet-ссылки и индексаторы Torznab/Newznab (это ещё 500+ сайтов через Jackett, Prowlarr, NZBHydra2).",
+  },
+  {
+    question: "Marauder бесплатный?",
+    answer:
+      "Да. Marauder — открытый исходный код под лицензией MIT. Нет платных тарифов, нет облачной версии, нет телеметрии. Вы запускаете его на своём оборудовании.",
+  },
+];
+
+const cisTrackers = trackers.filter((t) => t.category === "forum-cis");
+const schemas = [softwareApplicationSchema(), faqSchema(ruFaq)];
+
+const installCmd = `git clone https://github.com/artyomsv/marauder.git
+cd marauder/deploy
+cp .env.example .env
+
+# сгенерировать мастер-ключ шифрования
+sed -i "s|MARAUDER_MASTER_KEY=.*|MARAUDER_MASTER_KEY=$(openssl rand -base64 32)|" .env
+
+# поднять стек
+docker compose --env-file .env up -d
+open http://localhost:34080`;
+---
+<Page {...seo} schemas={schemas}>
+  <!-- HERO -->
+  <section class="relative overflow-hidden">
+    <div class="pointer-events-none absolute inset-0 -z-10" aria-hidden="true">
+      <div class="absolute inset-0 opacity-[0.06]"
+           style="background-image: linear-gradient(hsl(var(--foreground)) 1px, transparent 1px), linear-gradient(90deg, hsl(var(--foreground)) 1px, transparent 1px); background-size: 56px 56px; mask-image: radial-gradient(ellipse 60% 50% at 50% 30%, black 30%, transparent 80%);">
+      </div>
+    </div>
+
+    <div class="mx-auto max-w-6xl px-6 pt-20 pb-20 text-center sm:pt-28">
+      <p class="mb-4 inline-flex items-center gap-2 rounded-full border border-warning/40 bg-warning/10 px-3 py-1 text-xs font-medium text-warning">
+        <span class="size-1.5 rounded-full bg-warning animate-pulse"></span>
+        Open source · MIT · Self-hosted
+      </p>
+      <h1 class="mx-auto max-w-3xl text-4xl font-bold tracking-tight text-foreground sm:text-6xl">
+        Следите за каждой торрент-темой.
+        <span class="block text-foreground/70">Скучную часть оставьте нам.</span>
+      </h1>
+      <p class="mx-auto mt-6 max-w-2xl text-lg text-muted-foreground sm:text-xl">
+        Marauder — это self-hosted монитор торрент-тем для форумных трекеров,
+        до которых не дотягивается *arr-стек. Он следит за темой на RuTracker,
+        LostFilm, Kinozal или NNM-Club и автоматически скачивает новые серии в
+        ваш торрент-клиент.
+      </p>
+      <div class="mt-10 flex flex-wrap items-center justify-center gap-3">
+        <a href="/install" class="btn-primary">
+          Установить за 5 минут
+          <Icon name="arrow-right" size={16} />
+        </a>
+        <a href={SITE.github} rel="noopener external" class="btn-outline">
+          <Icon name="github" size={16} />
+          Исходный код на GitHub
+        </a>
+      </div>
+      <p class="mt-6 text-sm text-muted-foreground">
+        <a href="/" class="underline decoration-foreground/40 underline-offset-4 hover:text-foreground">English version →</a>
+      </p>
+    </div>
+  </section>
+
+  <!-- ЧТО ЭТО -->
+  <section class="mx-auto max-w-6xl px-6 py-16" aria-labelledby="what-heading">
+    <div class="mb-12 text-center">
+      <h2 id="what-heading" class="text-3xl font-bold tracking-tight sm:text-4xl">
+        Создан для трекеров, до которых не дотянуться ничему другому
+      </h2>
+      <p class="mx-auto mt-3 max-w-2xl text-muted-foreground">
+        Форумные трекеры — это не Torznab-индексаторы. Нужно войти под учётной
+        записью, открыть тему и заметить, когда .torrent заменили. Именно это
+        Marauder делает за вас.
+      </p>
+    </div>
+
+    <div class="grid gap-5 md:grid-cols-3">
+      <article class="glass-card rounded-xl p-6">
+        <h3 class="text-lg font-semibold text-foreground">Любой форумный трекер</h3>
+        <p class="mt-2 text-sm text-muted-foreground">
+          Вставьте ссылку на тему RuTracker, Kinozal, NNM-Club, LostFilm или
+          другую — Marauder войдёт, разберёт страницу и поймает замену файла.
+        </p>
+      </article>
+      <article class="glass-card rounded-xl p-6">
+        <h3 class="text-lg font-semibold text-foreground">Сразу в торрент-клиент</h3>
+        <p class="mt-2 text-sm text-muted-foreground">
+          Как только тема обновилась, торрент уходит прямо в qBittorrent,
+          Transmission, Deluge или µTorrent — без копирования magnet-ссылок.
+        </p>
+      </article>
+      <article class="glass-card rounded-xl p-6">
+        <h3 class="text-lg font-semibold text-foreground">Безопасность по умолчанию</h3>
+        <p class="mt-2 text-sm text-muted-foreground">
+          Пароли Argon2id, шифрование AES-256-GCM для учётных данных,
+          вход через OIDC (Keycloak) и журнал аудита из коробки.
+        </p>
+      </article>
+    </div>
+  </section>
+
+  <!-- ТРЕКЕРЫ -->
+  <section class="mx-auto max-w-6xl px-6 py-16" aria-labelledby="trackers-heading">
+    <div class="mb-10 text-center">
+      <h2 id="trackers-heading" class="text-3xl font-bold tracking-tight sm:text-4xl">
+        Поддерживаемые трекеры
+      </h2>
+      <p class="mx-auto mt-3 max-w-2xl text-muted-foreground">
+        Весь набор форумных трекеров СНГ плюс 500+ индексаторов через Torznab и Newznab.
+      </p>
+    </div>
+    <div class="flex flex-wrap justify-center gap-2">
+      {cisTrackers.map((t) => (
+        <span class="pill pill-primary">{t.name}</span>
+      ))}
+    </div>
+    <div class="mt-8 text-center">
+      <a href="/trackers" class="btn-outline">Все трекеры и их статус</a>
+    </div>
+  </section>
+
+  <!-- БЫСТРЫЙ СТАРТ -->
+  <section class="mx-auto max-w-6xl px-6 py-16" aria-labelledby="quickstart-heading">
+    <div class="grid gap-12 lg:grid-cols-2 lg:items-center">
+      <div>
+        <h2 id="quickstart-heading" class="text-3xl font-bold tracking-tight sm:text-4xl">
+          От нуля до первого торрента — за пять минут
+        </h2>
+        <p class="mt-4 text-muted-foreground">
+          Marauder поставляется как Docker compose стек из четырёх контейнеров:
+          PostgreSQL, бэкенд, фронтенд и nginx-шлюз. На хосте нужен только Docker —
+          ни Go, ни Node, ни Postgres ставить не надо.
+        </p>
+        <div class="mt-8 flex flex-wrap gap-3">
+          <a href="/install" class="btn-primary">Полная инструкция</a>
+          <a href="/integrations" class="btn-outline">Интеграции</a>
+        </div>
+      </div>
+      <div class="glass-card rounded-xl overflow-hidden">
+        <div class="flex items-center gap-2 border-b border-border/60 px-4 py-2.5 bg-background/40">
+          <span class="size-2.5 rounded-full bg-destructive/70"></span>
+          <span class="size-2.5 rounded-full bg-warning/70"></span>
+          <span class="size-2.5 rounded-full bg-success/70"></span>
+          <span class="ml-3 font-mono text-xs text-muted-foreground">install.sh</span>
+        </div>
+        <pre class="text-xs sm:text-sm leading-relaxed !rounded-none !border-0"><code>{installCmd}</code></pre>
+      </div>
+    </div>
+  </section>
+
+  <!-- FAQ -->
+  <section class="mx-auto max-w-3xl px-6 py-16" aria-labelledby="faq-heading">
+    <div class="mb-10 text-center">
+      <h2 id="faq-heading" class="text-3xl font-bold tracking-tight sm:text-4xl">Частые вопросы</h2>
+    </div>
+    <dl class="space-y-3">
+      {ruFaq.map((item, i) => (
+        <details class="glass-card group rounded-xl overflow-hidden" open={i === 0}>
+          <summary class="flex cursor-pointer items-center justify-between gap-4 p-5 text-left font-medium text-foreground">
+            <span>{item.question}</span>
+            <svg class="size-4 shrink-0 text-muted-foreground transition-transform group-open:rotate-180" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M6 9l6 6 6-6"/>
+            </svg>
+          </summary>
+          <dd class="px-5 pb-5 text-sm text-muted-foreground">{item.answer}</dd>
+        </details>
+      ))}
+    </dl>
+  </section>
+</Page>

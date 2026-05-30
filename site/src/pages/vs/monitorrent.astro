@@ -1,0 +1,176 @@
+---
+import Page from "@/layouts/Page.astro";
+import { breadcrumbSchema } from "@/data/schemas";
+
+const seo = {
+  title: "Marauder vs monitorrent — the modern monitorrent successor",
+  description:
+    "monitorrent is the Python torrent-topic monitor many self-hosters still run; its last release was v1.4.0 in July 2023. Marauder is a modern Go reimplementation covering the same trackers and clients, plus Torznab/Newznab, encryption, OIDC, and metrics.",
+  path: "/vs/monitorrent",
+  keywords: [
+    "monitorrent alternative",
+    "monitorrent successor",
+    "monitorrent replacement",
+    "monitorrent docker",
+    "monitorrent lostfilm rutracker",
+    "marauder vs monitorrent",
+  ],
+};
+
+const schemas = [
+  breadcrumbSchema([
+    { name: "Marauder",        path: "/" },
+    { name: "Compare",         path: "/" },
+    { name: "vs monitorrent",  path: "/vs/monitorrent" },
+  ]),
+];
+
+// Trackers monitorrent ships, per its README:
+// lostfilm.tv, rutor.org, free-torrents.org, rutracker.org, tapochek.net,
+// unionpeer.org, nnmclub.to, tr.anidub.com, kinozal.tv, hdclub.org,
+// anilibria.tv, toloka.to — every one of which Marauder also ships.
+const sharedTrackers = [
+  "RuTracker", "LostFilm", "Kinozal", "NNM-Club", "Rutor", "Anilibria",
+  "Anidub", "Toloka", "Unionpeer", "Tapochek", "Free-Torrents", "HD-Club",
+];
+
+const matrix = [
+  { feature: "Forum-tracker topic monitoring",        mt: "yes (its core job)",        ma: "yes (its core job)" },
+  { feature: "CIS forum trackers bundled",            mt: "12",                        ma: "12 (same set)" },
+  { feature: "Torznab indexer support",               mt: "no",                        ma: "yes (torznab plugin)" },
+  { feature: "Newznab / Usenet indexer support",      mt: "no",                        ma: "yes (newznab plugin)" },
+  { feature: "Torrent clients",                       mt: "Transmission, Deluge, µTorrent, qBittorrent", ma: "Transmission, Deluge, µTorrent, qBittorrent + watch folder" },
+  { feature: "Language / runtime",                    mt: "Python",                    ma: "Go (single static binary)" },
+  { feature: "Latest release",                        mt: "v1.4.0 — July 2023",        ma: "v1.0.0 — 2026, active" },
+  { feature: "AES-256-GCM encrypted credentials",     mt: "no",                        ma: "yes" },
+  { feature: "OpenID Connect / SSO",                  mt: "no",                        ma: "yes (Keycloak bundled)" },
+  { feature: "Multi-user with per-user isolation",    mt: "no (single user)",          ma: "yes" },
+  { feature: "Prometheus /metrics",                   mt: "no",                        ma: "yes (built-in)" },
+  { feature: "Audit log",                             mt: "no",                        ma: "yes" },
+  { feature: "Live per-episode download tracking",    mt: "no",                        ma: "yes (by infohash)" },
+];
+---
+<Page {...seo} schemas={schemas}>
+  <article class="mx-auto max-w-4xl px-6 py-16">
+    <nav aria-label="Breadcrumb" class="mb-4 text-sm text-muted-foreground">
+      <ol class="flex items-center gap-2">
+        <li><a href="/" class="hover:text-foreground">Marauder</a></li>
+        <li aria-hidden="true">›</li>
+        <li class="text-foreground">vs monitorrent</li>
+      </ol>
+    </nav>
+
+    <header class="mb-12">
+      <p class="mb-2 text-xs font-mono uppercase tracking-wider text-muted-foreground">comparison</p>
+      <h1 class="text-4xl font-bold tracking-tight sm:text-5xl">
+        Marauder vs monitorrent
+      </h1>
+      <p class="mt-4 text-lg text-muted-foreground">
+        <strong class="text-foreground">monitorrent</strong> is the Python tool that
+        pioneered this whole idea: watch a forum-tracker topic — a LostFilm or
+        RuTracker thread — and grab the new <code>.torrent</code> the moment an
+        uploader replaces it. It still works, and plenty of people still run it.
+        Its most recent release, <strong class="text-foreground">v1.4.0, was in July 2023</strong>.
+        Marauder is the same idea, rebuilt in Go for 2026.
+      </p>
+    </header>
+
+    <section class="mb-12" aria-labelledby="tldr">
+      <div class="glass-card rounded-2xl p-8">
+        <h2 id="tldr" class="text-xl font-semibold tracking-tight">TL;DR</h2>
+        <p class="mt-3 text-muted-foreground">
+          If you already run monitorrent and it does everything you need, there's
+          no urgency to move. But if you want the <strong class="text-foreground">same
+          trackers and the same torrent clients</strong> on a modern, actively
+          maintained stack — with encrypted credential storage, OIDC sign-in,
+          Prometheus metrics, multi-user isolation, and Torznab/Newznab indexer
+          support that monitorrent never had — Marauder is the natural upgrade path.
+        </p>
+      </div>
+    </section>
+
+    <section class="mb-12" aria-labelledby="same">
+      <h2 id="same" class="mb-4 text-2xl font-semibold tracking-tight">Same trackers, same clients</h2>
+      <p class="text-muted-foreground">
+        Marauder deliberately covers monitorrent's entire CIS tracker set — every
+        forum tracker monitorrent ships, Marauder ships too:
+      </p>
+      <div class="mt-5 flex flex-wrap gap-2">
+        {sharedTrackers.map((t) => (
+          <span class="pill pill-primary">{t}</span>
+        ))}
+      </div>
+      <p class="mt-5 text-muted-foreground">
+        It also pushes to the same download clients monitorrent supports —
+        Transmission, Deluge, µTorrent, and qBittorrent — and adds a
+        download-to-folder fallback for SABnzbd / NZBGet. So a migration doesn't
+        cost you any trackers or any clients; it only adds.
+      </p>
+    </section>
+
+    <section class="mb-12" aria-labelledby="newer">
+      <h2 id="newer" class="mb-4 text-2xl font-semibold tracking-tight">What Marauder adds on top</h2>
+      <ul class="space-y-2 text-muted-foreground">
+        <li>• <strong class="text-foreground">Torznab and Newznab</strong> — reach the entire *arr-stack indexer ecosystem (Jackett, Prowlarr, NZBHydra2) that monitorrent never spoke.</li>
+        <li>• <strong class="text-foreground">Encryption at rest</strong> — tracker credentials and client configs are stored AES-256-GCM encrypted, keyed by a master key you supply.</li>
+        <li>• <strong class="text-foreground">OpenID Connect sign-in</strong> — drop Marauder behind Keycloak, Authentik, Authelia, or any OIDC provider.</li>
+        <li>• <strong class="text-foreground">Observability</strong> — a Prometheus <code>/metrics</code> endpoint, structured JSON logs, <code>/health</code> and <code>/ready</code>, and a built-in audit log.</li>
+        <li>• <strong class="text-foreground">Multi-user</strong> — separate accounts with strict per-user data isolation, rather than a single shared install.</li>
+        <li>• <strong class="text-foreground">Live download tracking</strong> — the Topics view shows real per-episode progress fed back from the client by infohash, not just "sent".</li>
+      </ul>
+    </section>
+
+    <section class="mb-12" aria-labelledby="matrix">
+      <h2 id="matrix" class="mb-4 text-2xl font-semibold tracking-tight">Feature matrix</h2>
+      <div class="overflow-x-auto rounded-xl border border-border/60">
+        <table class="w-full text-sm">
+          <thead class="bg-muted/40 text-xs uppercase tracking-wider text-muted-foreground">
+            <tr>
+              <th scope="col" class="px-4 py-3 text-left">Feature</th>
+              <th scope="col" class="px-4 py-3 text-left">monitorrent</th>
+              <th scope="col" class="px-4 py-3 text-left">Marauder</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-border/60">
+            {matrix.map((row) => (
+              <tr class="hover:bg-muted/20">
+                <td class="px-4 py-3 font-medium text-foreground">{row.feature}</td>
+                <td class="px-4 py-3 text-muted-foreground">{row.mt}</td>
+                <td class="px-4 py-3 text-muted-foreground">{row.ma}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p class="mt-4 text-xs text-muted-foreground">
+        monitorrent details are from its public README and release history
+        (latest release v1.4.0, July 2023). Marauder is in active development;
+        see the <a href="/trackers" class="underline decoration-foreground/40 underline-offset-4 hover:text-foreground">tracker status page</a> for which plugins are end-to-end validated versus alpha.
+      </p>
+    </section>
+
+    <section class="mb-12" aria-labelledby="switch">
+      <h2 id="switch" class="mb-4 text-2xl font-semibold tracking-tight">Switching from monitorrent</h2>
+      <p class="text-muted-foreground">
+        There's no automatic importer — monitorrent and Marauder use different
+        databases — but moving over is mostly copy-paste:
+      </p>
+      <ol class="mt-4 space-y-2 text-muted-foreground">
+        <li>1. Stand up Marauder with <a href="/install" class="underline decoration-foreground/40 underline-offset-4 hover:text-foreground">one docker compose command</a>.</li>
+        <li>2. Add the same tracker accounts under <strong class="text-foreground">Credentials</strong>.</li>
+        <li>3. Point Marauder at the same torrent client you already use.</li>
+        <li>4. Re-add each topic URL you were watching in monitorrent. Marauder resolves the title and poster automatically.</li>
+        <li>5. Run both in parallel for a week if you want, then retire monitorrent.</li>
+      </ol>
+    </section>
+
+    <section class="glass-card rounded-2xl p-8 text-center" aria-labelledby="cta">
+      <h2 id="cta" class="text-2xl font-semibold tracking-tight">Give your monitorrent setup a 2026 rebuild</h2>
+      <p class="mt-3 text-muted-foreground">Same trackers, same clients, modern stack. Runs in one docker compose file.</p>
+      <div class="mt-6 flex flex-wrap justify-center gap-3">
+        <a href="/install" class="btn-primary">Install in 5 minutes</a>
+        <a href="/trackers" class="btn-outline">See supported trackers</a>
+      </div>
+    </section>
+  </article>
+</Page>

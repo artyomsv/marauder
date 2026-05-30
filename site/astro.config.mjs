@@ -18,7 +18,11 @@ import tailwindcss from "@tailwindcss/vite";
 
 export default defineConfig({
   site: "https://marauder.cc",
-  trailingSlash: "never",
+  // GitHub Pages serves directory-format pages WITH a trailing slash and
+  // 301-redirects the non-slash form. "always" keeps Astro's canonical URLs
+  // and the generated sitemap aligned with what is actually served, so Google
+  // stops treating pages as "redirect" duplicates and picking its own canonical.
+  trailingSlash: "always",
   prefetch: {
     prefetchAll: true,
     defaultStrategy: "viewport",

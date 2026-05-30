@@ -3,6 +3,7 @@ import Page from "@/layouts/Page.astro";
 import Icon from "@/components/Icon.astro";
 import { SITE } from "@/data/seo";
 import { trackers, trackerCount } from "@/data/trackers";
+import { trackerPageSlugs } from "@/data/trackerPages";
 import { clients } from "@/data/clients";
 import { notifiers } from "@/data/notifiers";
 import { homeFaq } from "@/data/faq";
@@ -16,10 +17,17 @@ const seo = {
   keywords: [
     "marauder torrent",
     "self-hosted torrent monitor",
+    "monitorrent alternative",
+    "monitorrent docker",
     "rutracker auto download",
     "torrent topic monitor",
     "sonarr forum tracker",
     "torznab newznab self-hosted",
+  ],
+  alternates: [
+    { hreflang: "en", path: "/" },
+    { hreflang: "ru", path: "/ru" },
+    { hreflang: "x-default", path: "/" },
   ],
 };
 
@@ -271,7 +279,7 @@ open http://localhost:34080`;
 
     <div class="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4">
       {trackers.map((t) => (
-        <a href={`/trackers#${t.slug}`} class="glass-card rounded-lg p-4 transition-all hover:-translate-y-0.5 hover:border-foreground/30">
+        <a href={trackerPageSlugs.includes(t.slug) ? `/trackers/${t.slug}` : `/trackers#${t.slug}`} class="glass-card rounded-lg p-4 transition-all hover:-translate-y-0.5 hover:border-foreground/30">
           <div class="flex items-center justify-between gap-2">
             <span class="font-mono text-sm font-semibold text-foreground">{t.name}</span>
             {t.status === "validated"

@@ -1,6 +1,7 @@
 ---
 import Page from "@/layouts/Page.astro";
 import { trackers, validatedCount, alphaCount, trackerCount } from "@/data/trackers";
+import { trackerPageSlugs } from "@/data/trackerPages";
 import { breadcrumbSchema } from "@/data/schemas";
 
 const seo = {
@@ -97,7 +98,11 @@ const indexers = trackers.filter((t) => t.category === "indexer");
           <tbody class="divide-y divide-border/60">
             {cis.map((t) => (
               <tr id={t.slug} class="hover:bg-muted/20">
-                <td class="px-4 py-3 font-mono text-foreground">{t.name}</td>
+                <td class="px-4 py-3 font-mono text-foreground">
+                  {trackerPageSlugs.includes(t.slug)
+                    ? <a href={`/trackers/${t.slug}`} class="underline decoration-foreground/30 underline-offset-4 hover:decoration-foreground">{t.name}</a>
+                    : t.name}
+                </td>
                 <td class="px-4 py-3 text-muted-foreground">{t.region}</td>
                 <td class="px-4 py-3 text-muted-foreground capitalize">{t.auth}</td>
                 <td class="px-4 py-3">

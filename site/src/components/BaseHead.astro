@@ -9,11 +9,12 @@ import { SITE, canonical, type Page } from "@/data/seo";
 
 interface Props extends Page {}
 
-const { title, description, path, ogImage, keywords } = Astro.props;
+const { title, description, path, ogImage, keywords, alternates, ogLocale } = Astro.props;
 
 const fullTitle = `${title} | ${SITE.name}`;
 const url = canonical(path);
 const og = ogImage ? `${SITE.url}${ogImage}` : `${SITE.url}${SITE.defaultOgImage}`;
+const locale = ogLocale ?? SITE.locale;
 ---
 <!-- Charset + viewport -->
 <meta charset="UTF-8" />
@@ -26,6 +27,11 @@ const og = ogImage ? `${SITE.url}${ogImage}` : `${SITE.url}${SITE.defaultOgImage
 
 <!-- Canonical -->
 <link rel="canonical" href={url} />
+
+<!-- hreflang alternates (multilingual pages only) -->
+{alternates?.map((a) => (
+  <link rel="alternate" hreflang={a.hreflang} href={canonical(a.path)} />
+))}
 
 <!-- Robots: index, follow, allow large image previews -->
 <meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1" />
@@ -48,7 +54,7 @@ const og = ogImage ? `${SITE.url}${ogImage}` : `${SITE.url}${SITE.defaultOgImage
 <meta property="og:image:width" content="1200" />
 <meta property="og:image:height" content="630" />
 <meta property="og:site_name" content={SITE.name} />
-<meta property="og:locale" content={SITE.locale} />
+<meta property="og:locale" content={locale} />
 
 <!-- Twitter / X -->
 <meta name="twitter:card" content="summary_large_image" />

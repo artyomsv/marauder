@@ -1,0 +1,115 @@
+---
+import Page from "@/layouts/Page.astro";
+import { breadcrumbSchema, faqSchema } from "@/data/schemas";
+import { trackers } from "@/data/trackers";
+import { trackerPages } from "@/data/trackerPages";
+
+// One page per enriched tracker. getStaticPaths joins the page copy
+// (trackerPages.ts) with the tracker's structured facts (trackers.ts).
+export function getStaticPaths() {
+  return trackerPages.map((tp) => {
+    const tracker = trackers.find((t) => t.slug === tp.slug);
+    if (!tracker) {
+      throw new Error(
+        `trackerPages slug "${tp.slug}" has no matching tracker in trackers.ts`,
+      );
+    }
+    return { params: { slug: tp.slug }, props: { tp, tracker } };
+  });
+}
+
+const { tp, tracker } = Astro.props;
+
+const seo = {
+  title: `Monitor ${tracker.name} automatically`,
+  description: tp.description,
+  path: `/trackers/${tp.slug}`,
+  keywords: tp.keywords,
+};
+
+const schemas = [
+  breadcrumbSchema([
+    { name: "Marauder", path: "/" },
+    { name: "Trackers", path: "/trackers" },
+    { name: tracker.name, path: `/trackers/${tp.slug}` },
+  ]),
+  faqSchema(tp.faq),
+];
+---
+<Page {...seo} schemas={schemas}>
+  <article class="mx-auto max-w-4xl px-6 py-16">
+    <nav aria-label="Breadcrumb" class="mb-4 text-sm text-muted-foreground">
+      <ol class="flex items-center gap-2">
+        <li><a href="/" class="hover:text-foreground">Marauder</a></li>
+        <li aria-hidden="true">›</li>
+        <li><a href="/trackers" class="hover:text-foreground">Trackers</a></li>
+        <li aria-hidden="true">›</li>
+        <li class="text-foreground">{tracker.name}</li>
+      </ol>
+    </nav>
+
+    <header class="mb-12">
+      <p class="mb-2 text-xs font-mono uppercase tracking-wider text-muted-foreground">tracker plugin</p>
+      <div class="flex flex-wrap items-center gap-3">
+        <h1 class="text-4xl font-bold tracking-tight sm:text-5xl">
+          Monitor {tracker.name} automatically
+        </h1>
+        {tracker.status === "validated"
+          ? <span class="pill pill-success">stable</span>
+          : <span class="pill pill-warning">alpha</span>}
+      </div>
+      <p class="mt-4 text-lg text-muted-foreground">{tp.intro}</p>
+      <div class="mt-5 flex flex-wrap gap-2 text-xs">
+        <span class="pill pill-primary">Region: {tracker.region}</span>
+        <span class="pill pill-primary capitalize">Auth: {tracker.auth}</span>
+        {tracker.cloudflare && <span class="pill pill-primary">Cloudflare bypass</span>}
+        {tracker.quality && <span class="pill pill-primary">Quality selection</span>}
+      </div>
+    </header>
+
+    <section class="mb-12" aria-labelledby="how">
+      <h2 id="how" class="mb-4 text-2xl font-semibold tracking-tight">How Marauder monitors {tracker.name}</h2>
+      <ul class="space-y-2 text-muted-foreground">
+        {tp.howItWorks.map((b) => (
+          <li class="flex items-start gap-3">
+            <span class="mt-1.5 size-1.5 shrink-0 rounded-full bg-foreground/40"></span>
+            <span>{b}</span>
+          </li>
+        ))}
+      </ul>
+    </section>
+
+    <section class="mb-12" aria-labelledby="setup">
+      <h2 id="setup" class="mb-4 text-2xl font-semibold tracking-tight">Setting it up</h2>
+      <ol class="space-y-3 text-muted-foreground">
+        {tp.setup.map((step, i) => (
+          <li class="flex items-start gap-3">
+            <span class="mt-0.5 inline-flex size-6 shrink-0 items-center justify-center rounded-full bg-foreground/[0.06] text-xs font-semibold text-foreground ring-1 ring-foreground/15">{i + 1}</span>
+            <span>{step}</span>
+          </li>
+        ))}
+      </ol>
+      <div class="mt-6 flex flex-wrap gap-3">
+        <a href="/install" class="btn-primary">Install Marauder</a>
+        <a href="/trackers" class="btn-outline">All supported trackers</a>
+      </div>
+    </section>
+
+    <section class="mb-4" aria-labelledby="faq">
+      <h2 id="faq" class="mb-6 text-2xl font-semibold tracking-tight">{tracker.name} FAQ</h2>
+      <dl class="space-y-3">
+        {tp.faq.map((item, i) => (
+          <details class="glass-card group rounded-xl overflow-hidden" open={i === 0}>
+            <summary class="flex cursor-pointer items-center justify-between gap-4 p-5 text-left font-medium text-foreground">
+              <span>{item.question}</span>
+              <svg class="size-4 shrink-0 text-muted-foreground transition-transform group-open:rotate-180" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M6 9l6 6 6-6"/>
+              </svg>
+            </summary>
+            <dd class="px-5 pb-5 text-sm text-muted-foreground">{item.answer}</dd>
+          </details>
+        ))}
+      </dl>
+    </section>
+  </article>
+</Page>

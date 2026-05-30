@@ -1,0 +1,138 @@
+---
+import Page from "@/layouts/Page.astro";
+import { breadcrumbSchema } from "@/data/schemas";
+
+const seo = {
+  title: "Marauder vs FlexGet — focused UI vs scriptable engine",
+  description:
+    "FlexGet is a powerful, YAML-configured universal automation engine with 300+ plugins. Marauder is a focused, UI-driven forum-tracker topic monitor with no config files. When to reach for which, and how they differ.",
+  path: "/vs/flexget",
+  keywords: [
+    "flexget alternative",
+    "flexget vs marauder",
+    "flexget rutracker",
+    "flexget gui",
+    "self-hosted torrent automation",
+  ],
+};
+
+const schemas = [
+  breadcrumbSchema([
+    { name: "Marauder",     path: "/" },
+    { name: "Compare",      path: "/" },
+    { name: "vs FlexGet",   path: "/vs/flexget" },
+  ]),
+];
+
+const matrix = [
+  { feature: "Philosophy",                          fg: "universal scriptable engine",        ma: "focused topic monitor" },
+  { feature: "Configuration",                       fg: "YAML config files",                  ma: "web UI — no files to edit" },
+  { feature: "Learning curve",                      fg: "steep (powerful, scriptable)",       ma: "minimal (paste a URL)" },
+  { feature: "Login-gated forum trackers in-place", fg: "not its model (feed/RSS oriented)",  ma: "purpose-built (login + scrape)" },
+  { feature: "Torznab / Newznab indexers",          fg: "via RSS / plugins",                  ma: "native plugins" },
+  { feature: "First-class web UI",                  fg: "optional / limited",                 ma: "yes (React 19)" },
+  { feature: "Plugin ecosystem breadth",            fg: "300+ (very broad)",                  ma: "focused (trackers / clients / notifiers)" },
+  { feature: "AES-256-GCM encrypted credentials",   fg: "no",                                 ma: "yes" },
+  { feature: "OpenID Connect / SSO",                fg: "no",                                 ma: "yes (Keycloak bundled)" },
+  { feature: "Prometheus /metrics",                 fg: "no",                                 ma: "yes (built-in)" },
+  { feature: "Multi-user with isolation",           fg: "no",                                 ma: "yes" },
+  { feature: "Language / runtime",                  fg: "Python",                             ma: "Go (single binary)" },
+];
+---
+<Page {...seo} schemas={schemas}>
+  <article class="mx-auto max-w-4xl px-6 py-16">
+    <nav aria-label="Breadcrumb" class="mb-4 text-sm text-muted-foreground">
+      <ol class="flex items-center gap-2">
+        <li><a href="/" class="hover:text-foreground">Marauder</a></li>
+        <li aria-hidden="true">›</li>
+        <li class="text-foreground">vs FlexGet</li>
+      </ol>
+    </nav>
+
+    <header class="mb-12">
+      <p class="mb-2 text-xs font-mono uppercase tracking-wider text-muted-foreground">comparison</p>
+      <h1 class="text-4xl font-bold tracking-tight sm:text-5xl">
+        Marauder vs FlexGet
+      </h1>
+      <p class="mt-4 text-lg text-muted-foreground">
+        <strong class="text-foreground">FlexGet</strong> is a universal,
+        Python-based automation engine: 300+ plugins, a powerful YAML config
+        language, and the ability to wire together RSS, HTML, torrents, NZBs,
+        podcasts, and more. <strong class="text-foreground">Marauder</strong> does
+        one job — monitor forum-tracker topics and hand new releases to your
+        download client — and does it from a UI, with no config files.
+      </p>
+    </header>
+
+    <section class="mb-12" aria-labelledby="tldr">
+      <div class="glass-card rounded-2xl p-8">
+        <h2 id="tldr" class="text-xl font-semibold tracking-tight">TL;DR</h2>
+        <p class="mt-3 text-muted-foreground">
+          Reach for <strong class="text-foreground">FlexGet</strong> when you want a
+          single scriptable engine to automate anything and you're comfortable
+          living in YAML. Reach for <strong class="text-foreground">Marauder</strong>
+          when the specific thing you want is "watch this RuTracker / LostFilm
+          thread and auto-download new episodes," you want a UI instead of a
+          config file, and you want encryption, SSO, metrics, and multi-user
+          out of the box.
+        </p>
+      </div>
+    </section>
+
+    <section class="mb-12" aria-labelledby="forum">
+      <h2 id="forum" class="mb-4 text-2xl font-semibold tracking-tight">Where they really differ: forum trackers</h2>
+      <p class="text-muted-foreground">
+        FlexGet is built around <strong class="text-foreground">feeds</strong> — give it
+        an RSS or HTML source and it filters and acts on entries. That's a great
+        fit for sources that publish a feed. Forum trackers like RuTracker,
+        LostFilm, NNM-Club, and Kinozal don't work that way: you log in with a
+        session cookie, browse a topic thread, and the same topic URL quietly gets
+        a <strong class="text-foreground">new <code>.torrent</code> attachment</strong> when a
+        new episode drops. There's no per-episode feed item to catch.
+      </p>
+      <p class="mt-3 text-muted-foreground">
+        Marauder is built specifically for that pattern — log in, scrape the topic
+        page, detect the in-place file swap, and hand the result to your client.
+        It also speaks Torznab and Newznab, so the feed-shaped sources FlexGet
+        excels at are reachable too.
+      </p>
+    </section>
+
+    <section class="mb-12" aria-labelledby="matrix">
+      <h2 id="matrix" class="mb-4 text-2xl font-semibold tracking-tight">Feature matrix</h2>
+      <div class="overflow-x-auto rounded-xl border border-border/60">
+        <table class="w-full text-sm">
+          <thead class="bg-muted/40 text-xs uppercase tracking-wider text-muted-foreground">
+            <tr>
+              <th scope="col" class="px-4 py-3 text-left">Feature</th>
+              <th scope="col" class="px-4 py-3 text-left">FlexGet</th>
+              <th scope="col" class="px-4 py-3 text-left">Marauder</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-border/60">
+            {matrix.map((row) => (
+              <tr class="hover:bg-muted/20">
+                <td class="px-4 py-3 font-medium text-foreground">{row.feature}</td>
+                <td class="px-4 py-3 text-muted-foreground">{row.fg}</td>
+                <td class="px-4 py-3 text-muted-foreground">{row.ma}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p class="mt-4 text-xs text-muted-foreground">
+        FlexGet is a mature, broadly capable tool; this page contrasts approach
+        and defaults, not quality. Both are open source and self-hosted.
+      </p>
+    </section>
+
+    <section class="glass-card rounded-2xl p-8 text-center" aria-labelledby="cta">
+      <h2 id="cta" class="text-2xl font-semibold tracking-tight">Want the forum-tracker job done without YAML?</h2>
+      <p class="mt-3 text-muted-foreground">Paste a topic URL, pick a client, walk away.</p>
+      <div class="mt-6 flex flex-wrap justify-center gap-3">
+        <a href="/install" class="btn-primary">Install in 5 minutes</a>
+        <a href="/vs/monitorrent" class="btn-outline">Coming from monitorrent?</a>
+      </div>
+    </section>
+  </article>
+</Page>

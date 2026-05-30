@@ -2,7 +2,7 @@
 // Each builder takes structured input and returns a plain object that
 // the <JsonLd> component serializes.
 
-import { SITE } from "@/data/seo";
+import { SITE, canonical } from "@/data/seo";
 
 export function organizationSchema() {
   return {
@@ -73,7 +73,9 @@ export function breadcrumbSchema(items: { name: string; path: string }[]) {
       "@type": "ListItem",
       position: index + 1,
       name: item.name,
-      item: item.path === "/" ? SITE.url : `${SITE.url}${item.path}`,
+      // Use the same canonical builder as <link rel="canonical"> so the
+      // breadcrumb URLs match the indexed (trailing-slash) page URLs exactly.
+      item: canonical(item.path),
     })),
   };
 }

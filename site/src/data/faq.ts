@@ -15,6 +15,11 @@ export const homeFaq: FaqItem[] = [
       "Sonarr and Radarr are built around Torznab indexers. They cannot monitor a forum thread on RuTracker, LostFilm, or NNM-Club because those sites are forums, not API-driven indexers. Marauder is built specifically to watch forum threads, log in with your credentials, scrape topic pages, and detect when an uploader replaces the .torrent attachment. It also speaks Torznab and Newznab so you can use it on top of Jackett or Prowlarr if you want.",
   },
   {
+    question: "Is Marauder a replacement for monitorrent?",
+    answer:
+      "Yes. Marauder is a modern, independently built successor to monitorrent — the Python torrent-topic monitor many self-hosters still run but which is no longer actively maintained. It keeps monitorrent's core idea (watch a forum-tracker topic such as a LostFilm or RuTracker thread, and grab the new .torrent the moment an uploader replaces it) and rebuilds it in Go with a React UI, AES-256-GCM encrypted credential storage, OIDC sign-in, Prometheus metrics, and live per-episode download tracking. If you run monitorrent today, Marauder covers the same job on a modern, actively maintained, Docker-native stack.",
+  },
+  {
     question: "Which trackers does Marauder support?",
     answer:
       "16 trackers in v1.0: RuTracker, Kinozal, NNM-Club, LostFilm, Anilibria, Anidub, Rutor, Toloka, Unionpeer, Tapochek, Free-Torrents, HD-Club, plus generic .torrent and magnet URLs, plus Torznab and Newznab indexers (which together cover 500+ sites via Jackett, Prowlarr, NZBHydra2).",

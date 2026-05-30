@@ -31,7 +31,7 @@ export const SITE = {
 
   /** Software metadata for SoftwareApplication JSON-LD. */
   software: {
-    version: "0.4.0-alpha",
+    version: "1.0.0",
     license: "MIT",
     operatingSystem: "Linux, Docker, macOS, Windows",
     applicationCategory: "Utility",
@@ -53,10 +53,24 @@ export type Page = {
   ogImage?: string;
   /** Optional: keywords array — not used by Google but useful for Bing/Yandex. */
   keywords?: string[];
+  /** Optional hreflang alternates for multilingual pages. Each `path` is run
+   *  through canonical() so the slash matches the indexed URL. Include an
+   *  "x-default" entry pointing at the default-language page. */
+  alternates?: { hreflang: string; path: string }[];
+  /** Optional <html lang> override (defaults to SITE.htmlLang = "en"). */
+  lang?: string;
+  /** Optional og:locale override (defaults to SITE.locale = "en_US"). */
+  ogLocale?: string;
 };
 
-/** Helper to build the canonical URL for a page. */
+/** Helper to build the canonical URL for a page.
+ *
+ *  Must emit a trailing slash to match what GitHub Pages serves for
+ *  directory-format pages (and the trailingSlash:"always" sitemap). If the
+ *  canonical tag and the served URL disagree on the slash, Google ignores the
+ *  declared canonical and chooses the redirect target itself. */
 export function canonical(path: string): string {
-  if (path === "/") return SITE.url;
-  return SITE.url + path.replace(/\/$/, "");
+  if (path === "/") return SITE.url + "/";
+  const withSlash = path.endsWith("/") ? path : path + "/";
+  return SITE.url + withSlash;
 }
