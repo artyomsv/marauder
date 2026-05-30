@@ -326,6 +326,18 @@ func (h *Credentials) Test(w http.ResponseWriter, r *http.Request) {
 		Username:    c.Username,
 		SecretEnc:   plain,
 	}
+	// Session/captcha trackers (e.g. LostFilm) validate the stored session
+	// cookie, not the password — Login reports "no stored session" unless we
+	// attach it. Decrypt and pass it through, mirroring the scheduler's
+	// per-check credential load so Test reflects the real session state.
+	if len(c.SessionEnc) > 0 {
+		sess, derr := h.Master.Decrypt(c.SessionEnc, c.SessionNonce)
+		if derr != nil {
+			problem.Write(w, r, h.BaseURL, problem.ErrInternal("decrypt session: "+derr.Error()))
+			return
+		}
+		transient.SessionEnc = sess
+	}
 	if err := loginAndVerify(r.Context(), wc, transient); err != nil {
 		problem.Write(w, r, h.BaseURL, problem.ErrUnprocessable(err.Error()))
 		return
