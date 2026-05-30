@@ -29,7 +29,7 @@ export function ClientBadge({ topic, clientById, defaultClient }: ClientBadgePro
   // Explicit client picked on the topic.
   if (explicit) {
     return (
-      <Badge variant="outline" className="gap-1 font-normal">
+      <Badge variant="outline" className="shrink-0 gap-1 font-normal">
         <Server className="size-3" />
         {explicit.display_name}
       </Badge>
@@ -39,7 +39,7 @@ export function ClientBadge({ topic, clientById, defaultClient }: ClientBadgePro
   // ClientID set but the client no longer exists (deleted after assignment).
   if (topic.ClientID) {
     return (
-      <Badge variant="outline" className="gap-1 font-normal text-destructive">
+      <Badge variant="outline" className="shrink-0 gap-1 font-normal text-destructive">
         <Server className="size-3" />
         unknown client
       </Badge>
@@ -51,7 +51,7 @@ export function ClientBadge({ topic, clientById, defaultClient }: ClientBadgePro
     <Badge
       variant="outline"
       className={cn(
-        "gap-1 font-normal text-muted-foreground",
+        "shrink-0 gap-1 font-normal text-muted-foreground",
         !defaultClient && "text-destructive",
       )}
     >

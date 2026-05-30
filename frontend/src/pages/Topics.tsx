@@ -195,9 +195,11 @@ export function TopicsPage() {
                     />
                   )}
                   <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2">
-                      <span className="truncate font-medium">{t.DisplayName}</span>
-                      <Badge variant="outline" className="font-mono">
+                    <div className="flex items-start gap-2">
+                      <span className="min-w-0 break-words font-medium">
+                        {t.DisplayName}
+                      </span>
+                      <Badge variant="outline" className="shrink-0 font-mono">
                         {t.TrackerName}
                       </Badge>
                       <ClientBadge
