@@ -332,6 +332,17 @@ type Field = {
   helpText?: string;
 };
 
+// Shared across every client that honours a base save folder. A topic's
+// category nests under it and a topic's own download folder overrides it —
+// see registry.EffectiveDownloadDir on the backend.
+const DOWNLOAD_DIR_FIELD: Field = {
+  key: "download_dir",
+  label: "Base download folder (optional)",
+  placeholder: "/downloads",
+  helpText:
+    "Torrents save here. A topic's category nests under this folder (e.g. /downloads/Movies); a topic's own download folder overrides it.",
+};
+
 // Hard-coded field hints. The backend ConfigSchema is the source of truth;
 // this is just a UX shortcut so the form renders without a JSON-Schema
 // renderer. v0.5 will switch to schema-driven rendering.
@@ -348,7 +359,7 @@ function fieldsForPlugin(name: string): Field[] {
         },
         { key: "username", label: "Username", placeholder: "admin" },
         { key: "password", label: "Password", password: true },
-        { key: "category", label: "Category (optional)" },
+        DOWNLOAD_DIR_FIELD,
       ];
     case "downloadfolder":
       return [
@@ -357,7 +368,7 @@ function fieldsForPlugin(name: string): Field[] {
           label: "Folder path",
           placeholder: "/downloads",
           helpText:
-            "Filesystem path the backend can write to. SABnzbd / NZBGet watch folders work here too.",
+            "Base filesystem path the backend can write to. A topic's category nests under it (e.g. /downloads/Movies). SABnzbd / NZBGet watch folders work here too.",
         },
       ];
     case "transmission":
@@ -371,6 +382,7 @@ function fieldsForPlugin(name: string): Field[] {
         },
         { key: "username", label: "Username (optional)" },
         { key: "password", label: "Password (optional)", password: true },
+        DOWNLOAD_DIR_FIELD,
       ];
     case "deluge":
       return [
@@ -382,6 +394,7 @@ function fieldsForPlugin(name: string): Field[] {
             "Host and port of the Deluge Web UI. Default port is 8112. The plugin appends /json automatically.",
         },
         { key: "password", label: "Password", password: true },
+        DOWNLOAD_DIR_FIELD,
       ];
     case "utorrent":
       return [

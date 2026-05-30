@@ -30,6 +30,11 @@ type Config struct {
 	URL      string `json:"url"`
 	Username string `json:"username"`
 	Password string `json:"password"`
+	// DownloadDir is the base save folder. A topic's category nests under it
+	// (see registry.EffectiveDownloadDir); a topic's explicit DownloadDir
+	// overrides both. This is how a category reaches Transmission, which has
+	// no native category concept of its own.
+	DownloadDir string `json:"download_dir"`
 }
 
 type plugin struct {
@@ -53,9 +58,10 @@ func (p *plugin) ConfigSchema() map[string]any {
 		"$schema": "https://json-schema.org/draft/2020-12/schema",
 		"type":    "object",
 		"properties": map[string]any{
-			"url":      map[string]any{"type": "string", "title": "RPC URL", "format": "uri"},
-			"username": map[string]any{"type": "string", "title": "Username (optional)"},
-			"password": map[string]any{"type": "string", "title": "Password (optional)", "format": "password"},
+			"url":          map[string]any{"type": "string", "title": "RPC URL", "format": "uri"},
+			"username":     map[string]any{"type": "string", "title": "Username (optional)"},
+			"password":     map[string]any{"type": "string", "title": "Password (optional)", "format": "password"},
+			"download_dir": map[string]any{"type": "string", "title": "Base download folder (optional)"},
 		},
 		"required": []string{"url"},
 	}
@@ -88,8 +94,8 @@ func (p *plugin) Add(ctx context.Context, rawConfig []byte, payload *domain.Payl
 	default:
 		return errors.New("empty payload")
 	}
-	if opts.DownloadDir != "" {
-		args["download-dir"] = opts.DownloadDir
+	if dir := registry.EffectiveDownloadDir(c.DownloadDir, opts.DownloadDir, opts.Category); dir != "" {
+		args["download-dir"] = dir
 	}
 	if opts.Paused {
 		args["paused"] = true

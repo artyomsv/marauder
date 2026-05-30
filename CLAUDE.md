@@ -79,9 +79,15 @@ techdebt/       Debt-tracking files (one per issue, see global rule)
    on errors, capped at 6h) and writes the run summary metrics.
 
 **Per-topic delivery:** `sendViaClient` passes `domain.AddOptions{DownloadDir:
-t.DownloadDir, Category: t.Category}` to the client plugin, so each topic can
-target its own save folder and (qBittorrent) category. Transmission ignores
-`Category`. Both fields are editable via `PUT /topics/{id}`.
+t.DownloadDir, Category: t.Category}` to the client plugin. Category is a
+**path segment, not a client-native label**: each client config carries an
+optional base `download_dir`, and every client resolves the save path via
+`registry.EffectiveDownloadDir(base, opts.DownloadDir, opts.Category)` —
+`topic.DownloadDir` (explicit full path) overrides, else
+`path.Join(clientBase, category)`. This works uniformly across qBittorrent,
+Transmission, Deluge and downloadfolder (µTorrent still can't set a per-add
+path). qBittorrent's old native-`category` config field was removed. Both
+fields are editable via `PUT /topics/{id}`.
 
 **Errored-topic retry:** `DueForCheck` selects `WHERE status IN
 ('active','error')`, so a topic that errors keeps retrying on its already-

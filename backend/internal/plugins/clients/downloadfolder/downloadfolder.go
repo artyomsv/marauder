@@ -65,9 +65,12 @@ func (p *plugin) Add(_ context.Context, rawConfig []byte, payload *domain.Payloa
 	if err := json.Unmarshal(rawConfig, &c); err != nil {
 		return fmt.Errorf("bad config: %w", err)
 	}
-	dir := c.Path
-	if opts.DownloadDir != "" {
-		dir = opts.DownloadDir
+	// c.Path is the base folder; a topic's category nests under it and an
+	// explicit per-topic DownloadDir overrides both — uniform with the
+	// networked clients.
+	dir := registry.EffectiveDownloadDir(c.Path, opts.DownloadDir, opts.Category)
+	if dir == "" {
+		dir = c.Path
 	}
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return err

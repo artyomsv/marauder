@@ -13,9 +13,10 @@ import (
 )
 
 type fakeServer struct {
-	sessionID   string
-	addCalls    int32
-	requireAuth bool
+	sessionID    string
+	addCalls     int32
+	requireAuth  bool
+	lastDownload string
 }
 
 func newFakeServer(t *testing.T) (*httptest.Server, *fakeServer) {
@@ -44,6 +45,9 @@ func newFakeServer(t *testing.T) (*httptest.Server, *fakeServer) {
 			w.Write([]byte(`{"result":"success","arguments":{"version":"4.0.6"}}`))
 		case "torrent-add":
 			atomic.AddInt32(&f.addCalls, 1)
+			if args, ok := req["arguments"].(map[string]any); ok {
+				f.lastDownload, _ = args["download-dir"].(string)
+			}
 			w.WriteHeader(200)
 			w.Write([]byte(`{"result":"success","arguments":{"torrent-added":{"id":1,"hashString":"abc"}}}`))
 		default:
@@ -110,6 +114,32 @@ func TestAddTorrentFile(t *testing.T) {
 	}
 	if atomic.LoadInt32(&fake.addCalls) != 1 {
 		t.Errorf("addCalls = %d", fake.addCalls)
+	}
+}
+
+func TestAddNestsCategoryUnderBaseDownloadDir(t *testing.T) {
+	srv, fake := newFakeServer(t)
+	p := newPlugin()
+	cfg, _ := json.Marshal(Config{URL: srv.URL, DownloadDir: "/downloads"})
+	payload := &domain.Payload{MagnetURI: "magnet:?xt=urn:btih:abc"}
+	if err := p.Add(context.Background(), cfg, payload, domain.AddOptions{Category: "Movies"}); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	if fake.lastDownload != "/downloads/Movies" {
+		t.Errorf("download-dir = %q, want /downloads/Movies", fake.lastDownload)
+	}
+}
+
+func TestAddExplicitDirOverridesBase(t *testing.T) {
+	srv, fake := newFakeServer(t)
+	p := newPlugin()
+	cfg, _ := json.Marshal(Config{URL: srv.URL, DownloadDir: "/downloads"})
+	payload := &domain.Payload{MagnetURI: "magnet:?xt=urn:btih:abc"}
+	if err := p.Add(context.Background(), cfg, payload, domain.AddOptions{DownloadDir: "/explicit", Category: "Movies"}); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	if fake.lastDownload != "/explicit" {
+		t.Errorf("download-dir = %q, want /explicit", fake.lastDownload)
 	}
 }
 

@@ -285,6 +285,9 @@ export function TopicForm({
             }
             placeholder="/downloads/tv"
           />
+          <p className="text-xs text-muted-foreground">
+            Full path; overrides the client folder and category below.
+          </p>
         </div>
         <div className="space-y-1.5">
           <Label htmlFor="category">Category (optional)</Label>
@@ -294,7 +297,9 @@ export function TopicForm({
             onChange={(e) => setDelivery((d) => ({ ...d, category: e.target.value }))}
             placeholder="tv"
           />
-          <p className="text-xs text-muted-foreground">Applies to qBittorrent.</p>
+          <p className="text-xs text-muted-foreground">
+            Nested under the client's base download folder.
+          </p>
         </div>
       </div>
 

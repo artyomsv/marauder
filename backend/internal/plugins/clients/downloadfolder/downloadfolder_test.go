@@ -69,6 +69,19 @@ func TestAddMagnet(t *testing.T) {
 	}
 }
 
+func TestAddNestsCategoryUnderBase(t *testing.T) {
+	p := &plugin{}
+	base := t.TempDir()
+	cfg, _ := json.Marshal(Config{Path: base})
+	payload := &domain.Payload{TorrentFile: []byte("xx"), FileName: "f.torrent"}
+	if err := p.Add(context.Background(), cfg, payload, domain.AddOptions{Category: "Movies"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(base, "Movies", "f.torrent")); err != nil {
+		t.Fatalf("file not nested under category: %v", err)
+	}
+}
+
 func TestAddRespectsOptOverrideDir(t *testing.T) {
 	p := &plugin{}
 	defaultDir := t.TempDir()
