@@ -104,6 +104,24 @@ type WithSeasonCatalog interface {
 	SeasonCatalog(ctx context.Context, url string) ([]Season, error)
 }
 
+// Metadata is human-facing descriptive data a tracker can resolve from a
+// topic URL: a real display title and a poster/preview image. Either field
+// may be empty when the tracker can't determine it.
+type Metadata struct {
+	Title    string `json:"title"`
+	ImageURL string `json:"image_url"`
+}
+
+// WithMetadata is implemented by trackers that can resolve a human-readable
+// title and a poster/preview image from a topic URL. It powers the real
+// display name (replacing "RuTracker topic 123" placeholders) and the topic
+// image. creds may be nil — implementations should fall back to whatever the
+// public page exposes when no credentials are available.
+type WithMetadata interface {
+	Tracker
+	ResolveMetadata(ctx context.Context, rawURL string, creds *domain.TrackerCredential) (*Metadata, error)
+}
+
 // --- Client & Notifier interfaces ---------------------------------------
 
 // Client is a torrent client plugin.

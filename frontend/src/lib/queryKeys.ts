@@ -41,4 +41,8 @@ export const QK = {
   // /trackers/seasons?url=… released-season catalog. Used by AddTopicCard
   // to populate the dependent season → episode dropdowns.
   trackerSeasons: (url: string) => ["trackerSeasons", url] as const,
+
+  // /trackers/preview?url=… resolved title + poster image. Used by the
+  // AddTopic form to show a preview card before the topic is created.
+  trackerPreview: (url: string) => ["trackerPreview", url] as const,
 } as const;

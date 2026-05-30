@@ -76,6 +76,37 @@ func (h *Trackers) Match(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
+// Preview handles GET /api/v1/trackers/preview?url=<encoded> — a real title
+// and poster image resolved from the page, for the AddTopic form preview.
+// Returns 200 with empty fields (not an error) when the tracker can't resolve
+// metadata or doesn't implement the capability, so the form degrades quietly.
+func (h *Trackers) Preview(w http.ResponseWriter, r *http.Request) {
+	rawURL := strings.TrimSpace(r.URL.Query().Get("url"))
+	if rawURL == "" {
+		problem.Write(w, r, h.BaseURL, problem.ErrBadRequest("url query parameter is required"))
+		return
+	}
+	t := registry.FindTrackerForURL(rawURL)
+	if t == nil {
+		problem.Write(w, r, h.BaseURL, problem.ErrNotFound("no tracker plugin matches this URL"))
+		return
+	}
+	wm, ok := t.(registry.WithMetadata)
+	if !ok {
+		writeJSON(w, http.StatusOK, registry.Metadata{})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+	meta, err := wm.ResolveMetadata(ctx, rawURL, nil)
+	if err != nil || meta == nil {
+		// Fail-open: the preview is cosmetic, never a hard error for the user.
+		writeJSON(w, http.StatusOK, registry.Metadata{})
+		return
+	}
+	writeJSON(w, http.StatusOK, meta)
+}
+
 // Seasons handles GET /api/v1/trackers/seasons?url=<encoded> — the
 // released season/episode catalog for the matched tracker.
 func (h *Trackers) Seasons(w http.ResponseWriter, r *http.Request) {

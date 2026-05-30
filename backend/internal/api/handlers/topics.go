@@ -110,6 +110,25 @@ func (h *Topics) Create(w http.ResponseWriter, r *http.Request) {
 		displayName = parsed.DisplayName
 	}
 
+	// Best-effort metadata resolution: ask the tracker for a real title and a
+	// poster image straight from the page so a freshly-added topic shows them
+	// immediately instead of a "RuTracker topic 123" placeholder. This is
+	// fail-open — metadata is enhancement, not core: any error (timeout, login
+	// wall, parse miss) leaves the placeholder in place and never blocks the
+	// add. The scheduler later self-heals the title on the first check.
+	var imageURL string
+	if wm, ok := tracker.(registry.WithMetadata); ok {
+		mctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
+		meta, merr := wm.ResolveMetadata(mctx, req.URL, nil)
+		cancel()
+		if merr == nil && meta != nil {
+			if req.DisplayName == "" && meta.Title != "" {
+				displayName = meta.Title
+			}
+			imageURL = meta.ImageURL
+		}
+	}
+
 	// Overlay any user-supplied capability fields onto the Extra map
 	// the plugin's Parse() returned. The plugin's defaults stay in
 	// place for any field the user didn't specify.
@@ -147,6 +166,7 @@ func (h *Topics) Create(w http.ResponseWriter, r *http.Request) {
 		TrackerName:      tracker.Name(),
 		URL:              req.URL,
 		DisplayName:      displayName,
+		ImageURL:         imageURL,
 		ClientID:         req.ClientID,
 		DownloadDir:      req.DownloadDir,
 		Category:         req.Category,

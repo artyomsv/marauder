@@ -59,6 +59,14 @@ type markEpisodeDownloader interface {
 	MarkEpisodeDownloaded(ctx context.Context, id uuid.UUID, packed string) error
 }
 
+// displayNamePersister is an optional capability of topicsRepo: it lets the
+// scheduler upgrade a topic's stored title to the real one a tracker resolved
+// during Check (self-healing placeholder names). Best-effort — a failure here
+// never affects the check result.
+type displayNamePersister interface {
+	UpdateDisplayName(ctx context.Context, id uuid.UUID, displayName string) error
+}
+
 // clientsRepo is the subset of *repo.Clients that the scheduler uses.
 type clientsRepo interface {
 	GetByID(ctx context.Context, id uuid.UUID, userID uuid.UUID) (*domain.Client, error)
@@ -367,6 +375,17 @@ func (s *Scheduler) runCheck(ctx context.Context, log zerolog.Logger, t *domain.
 			s.recordResult(ctx, log, t.ID, t.LastHash, anySubmitted, s.backoff(t, true), dlErr.Error())
 			s.recordChecked(true, true)
 			return
+		}
+	}
+
+	// Self-heal the display name: a tracker's Check often resolves the real
+	// title (e.g. RuTracker's <title>) that wasn't available at add time.
+	// Persist it when it changed so placeholder names upgrade themselves.
+	if check.DisplayName != "" && check.DisplayName != t.DisplayName {
+		if p, ok := s.topics.(displayNamePersister); ok {
+			if err := p.UpdateDisplayName(ctx, t.ID, check.DisplayName); err != nil {
+				log.Warn().Err(err).Msg("UpdateDisplayName failed")
+			}
 		}
 	}
 
