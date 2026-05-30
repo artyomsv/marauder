@@ -23,17 +23,27 @@ var (
 	// (?s) so the <img> can sit on a following line from the opening div.
 	mainPosterImgRe = regexp.MustCompile(`(?is)<div[^>]+class="[^"]*main_poster[^"]*"[^>]*>.*?<img[^>]+src="([^"]+)"`)
 
-	// titleSuffixRe strips the trailing site suffix LostFilm appends to the
-	// <title>, e.g. "Monarch (сериал) - LostFilm.TV" or
-	// "The Boys :: LostFilm.tv". Matches " - LostFilm…" or " :: LostFilm…".
-	titleSuffixRe = regexp.MustCompile(`(?i)\s*(?:-|::)\s*LostFilm.*$`)
+	// ogTitleRe matches <meta property="og:title" content="..."> — LostFilm's
+	// clean show name, preferred over the SEO-bloated <title> tag.
+	ogTitleRe = regexp.MustCompile(`(?i)<meta[^>]+property="og:title"[^>]+content="([^"]+)"`)
+
+	// titleSuffixRe strips the trailing site suffix LostFilm appends, e.g.
+	// "Monarch (сериал) - LostFilm.TV", "The Boys :: LostFilm.tv", or with an
+	// en-dash "… – LostFilm.TV." Matches " - / – / :: LostFilm…".
+	titleSuffixRe = regexp.MustCompile(`(?i)\s*(?:-|–|::)\s*LostFilm.*$`)
 )
 
-// cleanSeriesTitle trims the raw <title> match and strips the LostFilm site
-// suffix so only the show name remains.
+// cleanSeriesTitle reduces a raw title to just the show name. LostFilm's
+// <title> is a full SEO sentence ("<Name>. Сериал <Name> … – LostFilm.TV."),
+// so we strip the site suffix and keep only the leading segment before the
+// first sentence boundary. An og:title (already just the name) passes through
+// unchanged because it has neither.
 func cleanSeriesTitle(raw string) string {
 	t := strings.TrimSpace(raw)
 	t = titleSuffixRe.ReplaceAllString(t, "")
+	if i := strings.Index(t, ". "); i > 0 {
+		t = t[:i]
+	}
 	return strings.TrimSpace(t)
 }
 
@@ -69,7 +79,11 @@ func (p *plugin) ResolveMetadata(ctx context.Context, rawURL string, creds *doma
 		return nil, fmt.Errorf("resolve metadata: %w", err)
 	}
 	meta := &registry.Metadata{}
-	if m := titleRe.FindSubmatch(body); m != nil {
+	// Prefer og:title (already the bare show name); fall back to the bloated
+	// <title> tag, which cleanSeriesTitle trims down to the leading segment.
+	if m := ogTitleRe.FindSubmatch(body); m != nil {
+		meta.Title = cleanSeriesTitle(string(m[1]))
+	} else if m := titleRe.FindSubmatch(body); m != nil {
 		meta.Title = cleanSeriesTitle(string(m[1]))
 	}
 	if m := ogImageRe.FindSubmatch(body); m != nil {

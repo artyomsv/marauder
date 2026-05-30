@@ -8,10 +8,25 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"golang.org/x/text/encoding/charmap"
 
 	"github.com/artyomsv/marauder/backend/internal/domain"
 	"github.com/artyomsv/marauder/backend/internal/plugins/trackers/forumcommon"
 )
+
+// TestCleanTitle_DecodesWindows1251 feeds real cp1251-encoded bytes (the
+// encoding RuTracker actually serves) through cleanTitle and asserts they come
+// back as correct UTF-8. Guards the SQLSTATE 22021 bug where undecoded cp1251
+// Cyrillic was rejected by Postgres on write.
+func TestCleanTitle_DecodesWindows1251(t *testing.T) {
+	cp1251, err := charmap.Windows1251.NewEncoder().String("Голод / Hunger :: RuTracker.org")
+	if err != nil {
+		t.Fatalf("encode cp1251: %v", err)
+	}
+	if got := cleanTitle(cp1251); got != "Голод / Hunger" {
+		t.Errorf("cleanTitle(cp1251) = %q, want %q", got, "Голод / Hunger")
+	}
+}
 
 const fixtureTopicHTML = `<html>
 <head><title>Some Show / Сериал [s01e01-12] [WEBRip] [1080p] :: RuTracker.org</title></head>
