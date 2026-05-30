@@ -20,6 +20,7 @@ function topicWith(clientID: string | null): Topic {
     TrackerName: "lostfilm",
     URL: "https://example.test",
     DisplayName: "Some Show",
+    ImageURL: "",
     ClientID: clientID,
     DownloadDir: "",
     Category: "",

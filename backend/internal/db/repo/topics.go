@@ -35,7 +35,8 @@ func NewTopics(pool *pgxpool.Pool) *Topics {
 	return &Topics{pool: pool}
 }
 
-const topicColumns = `id, user_id, tracker_name, url, display_name, client_id,
+const topicColumns = `id, user_id, tracker_name, url, display_name,
+		COALESCE(image_url,''), client_id,
 		COALESCE(download_dir,''), COALESCE(category,''), extra, COALESCE(last_hash,''),
 		last_checked_at, last_updated_at, next_check_at,
 		check_interval_sec, consecutive_errors, status,
@@ -49,7 +50,7 @@ func scanTopic(row pgx.Row) (*domain.Topic, error) {
 	var clientID *uuid.UUID
 	err := row.Scan(
 		&t.ID, &t.UserID, &t.TrackerName, &t.URL, &t.DisplayName,
-		&clientID, &t.DownloadDir, &t.Category, &extraRaw, &t.LastHash,
+		&t.ImageURL, &clientID, &t.DownloadDir, &t.Category, &extraRaw, &t.LastHash,
 		&lastChecked, &lastUpdated, &t.NextCheckAt,
 		&t.CheckIntervalSec, &t.ConsecutiveErrors, &status,
 		&t.LastError, &t.CreatedAt, &t.UpdatedAt,
@@ -80,12 +81,12 @@ func scanTopic(row pgx.Row) (*domain.Topic, error) {
 func (r *Topics) Create(ctx context.Context, t *domain.Topic) (*domain.Topic, error) {
 	extra, _ := json.Marshal(t.Extra)
 	q := `
-INSERT INTO topics (user_id, tracker_name, url, display_name, client_id,
+INSERT INTO topics (user_id, tracker_name, url, display_name, image_url, client_id,
                     download_dir, category, extra, check_interval_sec, next_check_at, status)
-VALUES ($1,$2,$3,$4,$5,NULLIF($6,''),NULLIF($7,''),$8,$9,$10,$11)
+VALUES ($1,$2,$3,$4,NULLIF($5,''),$6,NULLIF($7,''),NULLIF($8,''),$9,$10,$11,$12)
 RETURNING ` + topicColumns
 	row := r.pool.QueryRow(ctx, q,
-		t.UserID, t.TrackerName, t.URL, t.DisplayName, t.ClientID,
+		t.UserID, t.TrackerName, t.URL, t.DisplayName, t.ImageURL, t.ClientID,
 		t.DownloadDir, t.Category, extra, t.CheckIntervalSec, t.NextCheckAt, string(t.Status),
 	)
 	return scanTopic(row)
@@ -259,6 +260,23 @@ func (r *Topics) Update(ctx context.Context, id, userID uuid.UUID, displayName s
 		return nil, ErrNotFound
 	}
 	return t, err
+}
+
+// UpdateDisplayName persists a freshly-resolved title for a topic. The
+// scheduler calls this when a tracker's Check reports a DisplayName that
+// differs from what's stored — upgrading placeholder names (e.g. "RuTracker
+// topic 123") to the real title without the user editing anything. A blank
+// name is ignored so a tracker that didn't resolve a title can't wipe a good
+// one.
+func (r *Topics) UpdateDisplayName(ctx context.Context, id uuid.UUID, displayName string) error {
+	if displayName == "" {
+		return nil
+	}
+	_, err := r.pool.Exec(ctx,
+		`UPDATE topics SET display_name = $2, updated_at = now() WHERE id = $1`,
+		id, displayName,
+	)
+	return err
 }
 
 // DueForCheck returns up to `limit` topics whose next_check_at is in the past

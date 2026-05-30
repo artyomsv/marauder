@@ -86,6 +86,7 @@ const EXISTING_TOPIC: Topic = {
   TrackerName: "lostfilm",
   URL: LOSTFILM_URL,
   DisplayName: "Some Show",
+  ImageURL: "",
   ClientID: "c2",
   DownloadDir: "/downloads/shows",
   Category: "series",
