@@ -39,11 +39,11 @@ export const trackers: Tracker[] = [
   {
     slug: "rutracker",
     name: "RuTracker.org",
-    description: "The largest Russian-language forum tracker.",
+    description: "The largest Russian-language forum tracker. Verified end-to-end against a live account.",
     category: "forum-cis",
     region: "RU",
     auth: "account",
-    status: "alpha",
+    status: "validated",
   },
   {
     slug: "kinozal",
@@ -67,11 +67,11 @@ export const trackers: Tracker[] = [
   {
     slug: "lostfilm",
     name: "LostFilm.tv",
-    description: "Russian-dubbed TV series with quality selection (SD / 1080p_mp4 / 1080p) and start-from-episode filter. Walks the full v_search redirector chain.",
+    description: "Russian-dubbed TV series with quality selection (SD / 1080p_mp4 / 1080p) and start-from-episode filter. Walks the full v_search redirector chain. Verified end-to-end against a live account, including interactive captcha login.",
     category: "forum-cis",
     region: "RU",
     auth: "account",
-    status: "alpha",
+    status: "validated",
     quality: true,
   },
   {

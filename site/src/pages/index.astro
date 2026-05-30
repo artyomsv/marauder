@@ -57,7 +57,7 @@ const featureCards: { icon: IconName; title: string; body: string }[] = [
   {
     icon: "activity",
     title: "Observable from day one",
-    body: "Prometheus /metrics endpoint, structured JSON logs, /health and /ready, a live System status page, and per-topic event history. Monitor your monitor.",
+    body: "Prometheus /metrics endpoint, structured JSON logs, /health and /ready, a live System status page, and per-topic delivery tracking with live download progress by infohash. Monitor your monitor.",
   },
   {
     icon: "blocks",
@@ -132,6 +132,57 @@ open http://localhost:34080`;
         ))}
       </dl>
     </div>
+  </section>
+
+  <!-- ============================================================ SCREENSHOTS -->
+  <section class="mx-auto max-w-6xl px-6 pt-4 pb-16" aria-labelledby="screens-heading">
+    <div class="mb-10 text-center">
+      <p class="mb-2 text-xs font-mono uppercase tracking-wider text-muted-foreground">see it working</p>
+      <h2 id="screens-heading" class="text-3xl font-bold tracking-tight sm:text-4xl">
+        Your watchlist, with live download status.
+      </h2>
+      <p class="mx-auto mt-3 max-w-2xl text-muted-foreground">
+        Once a release ships, Marauder pushes it to your client and tracks it by infohash —
+        so the Topics view shows real per-episode download progress straight from
+        Transmission or qBittorrent, not just "sent".
+      </p>
+    </div>
+
+    <figure class="mx-auto max-w-5xl">
+      <div class="glass-card overflow-hidden rounded-2xl p-2 sm:p-3">
+        <img
+          src="/screenshots/topics.png"
+          width="1242"
+          height="569"
+          loading="lazy"
+          decoding="async"
+          class="h-auto w-full rounded-xl"
+          alt="Marauder Topics list: monitored series with live per-episode download progress bars (E01–E05) delivered through Transmission, each tagged transmission-live."
+        />
+      </div>
+      <figcaption class="mt-3 text-center text-sm text-muted-foreground">
+        The Topics list — each monitored series shows its delivered episodes with
+        live progress bars fed back from the download client by infohash.
+      </figcaption>
+    </figure>
+
+    <figure class="mx-auto mt-10 max-w-5xl">
+      <div class="glass-card overflow-hidden rounded-2xl p-2 sm:p-3">
+        <img
+          src="/screenshots/dashboard.png"
+          width="1248"
+          height="651"
+          loading="lazy"
+          decoding="async"
+          class="h-auto w-full rounded-xl"
+          alt="Marauder dashboard: active-topics, updates-in-24h, errored, and total-tracked tiles above a recent-activity feed of monitored topics."
+        />
+      </div>
+      <figcaption class="mt-3 text-center text-sm text-muted-foreground">
+        The dashboard — active topics, 24-hour updates, errors, and total tracked
+        at a glance, with the latest activity underneath.
+      </figcaption>
+    </figure>
   </section>
 
   <!-- ============================================================ FEATURES -->
