@@ -194,11 +194,18 @@ func (p *plugin) Parse(_ context.Context, rawURL string) (*domain.Topic, error) 
 // start_season/start_episode floor, and returns a hash that flips both
 // when new episodes appear AND when we catch up.
 func (p *plugin) Check(ctx context.Context, topic *domain.Topic, creds *domain.TrackerCredential) (*domain.Check, error) {
-	body, err := p.fetch(ctx, topic.URL, creds)
+	// Parse the full per-season catalog (/series/<slug>/seasons), NOT the
+	// series landing page (topic.URL). The landing page only renders the
+	// most recent episodes, so older already-aired episodes have scrolled
+	// off it — a mid-season "start from S05E01" floor would then silently
+	// skip S05E01–E03 because Check never sees them. The seasons page lists
+	// every released episode, matching what the add-form catalog offered.
+	pageURL := p.seasonsURL(topic.URL)
+	body, err := p.fetch(ctx, pageURL, creds)
 	if err != nil {
 		return nil, err
 	}
-	log.Debug().Str("plugin", pluginName).Str("step", "check").Str("url", topic.URL).Int("body_len", len(body)).Msg("series page fetched")
+	log.Debug().Str("plugin", pluginName).Str("step", "check").Str("url", pageURL).Int("body_len", len(body)).Msg("series page fetched")
 
 	check := &domain.Check{Extra: map[string]any{}}
 	if m := titleRe.FindSubmatch(body); m != nil {

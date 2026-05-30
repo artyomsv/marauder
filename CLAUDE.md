@@ -39,16 +39,17 @@ techdebt/       Debt-tracking files (one per issue, see global rule)
 | `cfsolver` | in-process client to the standalone `cfsolver/` service |
 | `config` | env-driven config struct (caarlos0/env) — **add new env vars here** |
 | `crypto` | AES-256-GCM for tracker credentials and client config blobs |
-| `db` / `db/repo` | pgxpool wrapper + repository structs (`Topics`, `Clients`, `Notifiers`, `Users`, `TrackerCredentials`, `Audit`, `Settings`). `TrackerCredentials` carries encrypted `secret_enc` (password) **and** `session_enc`/`session_nonce` (cookie-session blob; migration `0002`), plus a nullable `session_expired_at` marker (migration `0003`) the scheduler uses to dedupe expiry notifications (atomic `MarkSessionExpired`, cleared by `SetSession` on re-auth) |
+| `db` / `db/repo` | pgxpool wrapper + repository structs (`Topics`, `Clients`, `Notifiers`, `Users`, `TrackerCredentials`, `Deliveries`, `Audit`, `Settings`). `TrackerCredentials` carries encrypted `secret_enc` (password) **and** `session_enc`/`session_nonce` (cookie-session blob; migration `0002`), plus a nullable `session_expired_at` marker (migration `0003`) the scheduler uses to dedupe expiry notifications (atomic `MarkSessionExpired`, cleared by `SetSession` on re-auth). `Deliveries` (migration `0006`, `topic_deliveries`) records every torrent pushed to a client — `{topic_id, infohash, label, client_id, delivered_at}`, unique on `(topic_id, infohash)` so `Record` is idempotent (`ON CONFLICT DO NOTHING`) |
 | **`notify`** | reusable notification dispatcher — `Send(userID, domain.Message)` fans out to all of a user's configured notifiers (best-effort, metered). First/only consumer: scheduler session-expiry alerts. The single event→notifier fan-out point |
-| `domain` | core types: `Topic` (incl. per-topic `ClientID`, `DownloadDir`, `Category`, `ImageURL`), `Check`, `Payload`, `TrackerCredential`, `AddOptions` (`DownloadDir` + `Category`) |
+| `domain` | core types: `Topic` (incl. per-topic `ClientID`, `DownloadDir`, `Category`, `ImageURL`), `Check`, `Payload`, `TrackerCredential`, `TopicDelivery`, `AddOptions` (`DownloadDir` + `Category`) |
+| **`infohash`** | derives the BitTorrent v1 infohash (lowercase hex) from a `Payload` — `FromMagnet` (parses `xt=urn:btih:`, hex or base32) / `FromTorrent` (SHA-1 of the bencoded `info` dict via a length-based scanner) / `FromPayload`. The universal key linking a delivery to a client's live torrent status |
 | **`extra`** | shared `extra.Int / StringSlice / String` helpers for the untyped `map[string]any` blobs in `Topic.Extra` and `Check.Extra` (added 2026-04-07; **use this instead of writing local helpers**) |
 | `logging` | zerolog setup (JSON in prod, pretty in dev) |
 | `metrics` | Prometheus collectors (HTTP, scheduler, tracker, client) |
-| `plugins/registry` | plugin interfaces + global registry + capability interfaces (`WithQuality`, `WithEpisodeFilter`, `WithCredentials`, `WithCloudflare`, `WithInteractiveLogin`, `WithSeasonCatalog`, `WithMetadata`) + the `registry.EffectiveDownloadDir(base, override, category)` save-path helper + typed sentinels **`registry.ErrNoPendingEpisodes`**, `ErrCaptchaRequired`, `ErrSessionExpired` |
+| `plugins/registry` | plugin interfaces + global registry + tracker capability interfaces (`WithQuality`, `WithEpisodeFilter`, `WithCredentials`, `WithCloudflare`, `WithInteractiveLogin`, `WithSeasonCatalog`, `WithMetadata`) + client capability `WithStatus` (`Status(ctx, rawConfig, hashes) []TorrentStatus` — live download status by infohash; normalised `State*` vocabulary) + the `registry.EffectiveDownloadDir(base, override, category)` save-path helper + typed sentinels **`registry.ErrNoPendingEpisodes`**, `ErrCaptchaRequired`, `ErrSessionExpired` |
 | **`plugins/captchalogin`** | reusable human-in-the-loop interactive captcha-login engine (`Begin`/`Complete`/`Refresh` + TTL pending-session store). A tracker supplies a `Config` (LoginURL, CaptchaURL, CookieNames, BuildForm, Classify); first consumer is LostFilm. See `WithInteractiveLogin` |
 | `plugins/trackers/<name>` | one package per tracker plugin (16 plugins as of v1.0.0+) |
-| `plugins/clients/<name>` | one package per torrent client (qBittorrent, Transmission, Deluge, µTorrent, downloadfolder) |
+| `plugins/clients/<name>` | one package per torrent client (qBittorrent, Transmission, Deluge, µTorrent, downloadfolder). qBittorrent + Transmission also implement `registry.WithStatus` for live progress |
 | `plugins/notifiers/<name>` | telegram, email, webhook, pushover |
 | `plugins/torznabcommon` / `torznab` / `newznab` | shared scaffolding for the Torznab/Newznab indexer adapters |
 | `plugins/forumcommon` | shared cookie-jar `Session` type for forum-tracker plugins |
@@ -89,15 +90,26 @@ Transmission, Deluge and downloadfolder (µTorrent still can't set a per-add
 path). qBittorrent's old native-`category` config field was removed. Both
 fields are editable via `PUT /topics/{id}`.
 
+**Delivery tracking:** after each successful `Add`, `recordDelivery` logs the
+push into `topic_deliveries` — the payload's infohash (via the `infohash`
+package), a human label (episodic: `pending_human[0]` e.g. `s01e06`, kept
+aligned with `pending_episodes` as the loop consumes; single-torrent: the
+topic display name), and the resolving client's id. Best-effort/fail-open: a
+missing recorder, undecodable payload, or DB error is logged and never fails
+the check. `GET /api/v1/topics/{id}/status` reads these rows and, when the
+topic's client implements `registry.WithStatus`, augments each with live
+percent/state by infohash (10s timeout, fail-open to "delivered" labels);
+no background poller — the scheduler stays a pure monitor.
+
 **Errored-topic retry:** `DueForCheck` selects `WHERE status IN
 ('active','error')`, so a topic that errors keeps retrying on its already-
 persisted backoff `next_check_at` (≤6h) instead of parking permanently. A
 successful check flips the status back to `active` (`paused` stays excluded).
 
 The scheduler depends on small **consumer-side interfaces** (`topicsRepo`,
-`markEpisodeDownloader`, `clientsRepo`, `credentialsRepo`, `decryptor`)
-plus two lookup-fn seams (`trackerLookupFn`, `clientLookupFn`) so it's
-unit-testable without DB or registry. Tests live in `scheduler_test.go`.
+`markEpisodeDownloader`, `clientsRepo`, `credentialsRepo`, `deliveriesRecorder`,
+`decryptor`) plus two lookup-fn seams (`trackerLookupFn`, `clientLookupFn`) so
+it's unit-testable without DB or registry. Tests live in `scheduler_test.go`.
 
 ## Frontend (`frontend/src/...`)
 

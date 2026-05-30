@@ -48,6 +48,9 @@ type session struct {
 	expiresAt time.Time
 }
 
+// Compile-time guarantee the plugin reports live status.
+var _ registry.WithStatus = (*plugin)(nil)
+
 func init() {
 	registry.RegisterClient(&plugin{sessions: map[string]*session{}})
 }
@@ -149,6 +152,77 @@ func (p *plugin) Add(ctx context.Context, rawConfig []byte, payload *domain.Payl
 		return fmt.Errorf("qbittorrent rejected torrent: %s", string(b))
 	}
 	return nil
+}
+
+// Status implements registry.WithStatus. It queries
+// /api/v2/torrents/info filtered to the requested infohashes and maps
+// qBittorrent's native state strings onto Marauder's normalised vocabulary.
+func (p *plugin) Status(ctx context.Context, rawConfig []byte, hashes []string) ([]registry.TorrentStatus, error) {
+	if len(hashes) == 0 {
+		return nil, nil
+	}
+	var cfg Config
+	if err := json.Unmarshal(rawConfig, &cfg); err != nil {
+		return nil, fmt.Errorf("bad config: %w", err)
+	}
+	s, err := p.session(ctx, cfg)
+	if err != nil {
+		return nil, err
+	}
+	endpoint := strings.TrimRight(cfg.URL, "/") + "/api/v2/torrents/info?hashes=" +
+		url.QueryEscape(strings.Join(hashes, "|"))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("qbit status: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		b, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("qbit status %d: %s", resp.StatusCode, string(b))
+	}
+	var list []struct {
+		Hash     string  `json:"hash"`
+		Progress float64 `json:"progress"`
+		State    string  `json:"state"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&list); err != nil {
+		return nil, fmt.Errorf("decode qbit info: %w", err)
+	}
+	out := make([]registry.TorrentStatus, 0, len(list))
+	for _, it := range list {
+		out = append(out, registry.TorrentStatus{
+			Hash:        strings.ToLower(it.Hash),
+			PercentDone: it.Progress,
+			State:       qbitState(it.State),
+		})
+	}
+	return out, nil
+}
+
+// qbitState maps a qBittorrent native state string to the normalised
+// lifecycle vocabulary. See the WebUI API torrent-management docs for the
+// full state list.
+func qbitState(state string) string {
+	switch state {
+	case "error", "missingFiles":
+		return registry.StateError
+	case "uploading", "stalledUP", "forcedUP":
+		return registry.StateSeeding
+	case "pausedUP", "pausedDL", "stoppedUP", "stoppedDL":
+		return registry.StateStopped
+	case "queuedUP", "queuedDL":
+		return registry.StateQueued
+	case "checkingUP", "checkingDL", "checkingResumeData", "allocating", "moving":
+		return registry.StateChecking
+	case "downloading", "metaDL", "forcedDL", "stalledDL":
+		return registry.StateDownloading
+	default:
+		return registry.StateUnknown
+	}
 }
 
 // session returns a logged-in session, logging in if necessary.

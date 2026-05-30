@@ -292,6 +292,20 @@ func (p *plugin) SeasonCatalog(ctx context.Context, rawURL string) ([]registry.S
 	return out, nil
 }
 
+// seasonsURL maps a series landing URL to its full per-season episode
+// listing (/series/<slug>/seasons) — the same page SeasonCatalog reads.
+// Check uses this (not the landing page) so it sees every released episode,
+// including older ones that have scrolled off the landing page's
+// recent-episodes widget. Falls back to the raw URL if the slug can't be
+// extracted (defensive; urlPattern already gated CanParse at add time).
+func (p *plugin) seasonsURL(rawURL string) string {
+	m := urlPattern.FindStringSubmatch(rawURL)
+	if m == nil {
+		return rawURL
+	}
+	return "https://" + p.domain + "/series/" + m[1] + "/seasons"
+}
+
 // fetch is the simpler GET used by Check to retrieve the series page.
 // Like session(), it re-applies the transport hook on every call so the
 // test rewriter survives session-jar refreshes.

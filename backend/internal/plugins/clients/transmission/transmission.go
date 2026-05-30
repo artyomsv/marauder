@@ -43,6 +43,9 @@ type plugin struct {
 	client   *http.Client
 }
 
+// Compile-time guarantee the plugin reports live status.
+var _ registry.WithStatus = (*plugin)(nil)
+
 func init() {
 	registry.RegisterClient(&plugin{
 		sessions: map[string]string{},
@@ -110,6 +113,70 @@ func (p *plugin) Add(ctx context.Context, rawConfig []byte, payload *domain.Payl
 		return fmt.Errorf("transmission rejected torrent: %v", result)
 	}
 	return nil
+}
+
+// Status implements registry.WithStatus. It asks Transmission's torrent-get
+// for each requested infohash and maps the numeric status to Marauder's
+// normalised vocabulary. Hashes the daemon no longer knows about are simply
+// absent from the result.
+func (p *plugin) Status(ctx context.Context, rawConfig []byte, hashes []string) ([]registry.TorrentStatus, error) {
+	if len(hashes) == 0 {
+		return nil, nil
+	}
+	var c Config
+	if err := json.Unmarshal(rawConfig, &c); err != nil {
+		return nil, fmt.Errorf("bad config: %w", err)
+	}
+	// Transmission's `ids` accepts torrent hash strings directly.
+	ids := make([]any, len(hashes))
+	for i, h := range hashes {
+		ids[i] = h
+	}
+	resp, err := p.do(ctx, c, "torrent-get", map[string]any{
+		"fields": []string{"hashString", "percentDone", "status"},
+		"ids":    ids,
+	})
+	if err != nil {
+		return nil, err
+	}
+	args, _ := resp["arguments"].(map[string]any)
+	rawList, _ := args["torrents"].([]any)
+	out := make([]registry.TorrentStatus, 0, len(rawList))
+	for _, item := range rawList {
+		m, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		hash, _ := m["hashString"].(string)
+		pct, _ := m["percentDone"].(float64)
+		code, _ := m["status"].(float64)
+		out = append(out, registry.TorrentStatus{
+			Hash:        strings.ToLower(hash),
+			PercentDone: pct,
+			State:       transmissionState(int(code)),
+		})
+	}
+	return out, nil
+}
+
+// transmissionState maps Transmission's TR_STATUS_* code to the normalised
+// lifecycle vocabulary. Codes per the RPC spec: 0 stopped, 1 check-wait,
+// 2 checking, 3 download-wait, 4 downloading, 5 seed-wait, 6 seeding.
+func transmissionState(code int) string {
+	switch code {
+	case 0:
+		return registry.StateStopped
+	case 1, 2:
+		return registry.StateChecking
+	case 3, 5:
+		return registry.StateQueued
+	case 4:
+		return registry.StateDownloading
+	case 6:
+		return registry.StateSeeding
+	default:
+		return registry.StateUnknown
+	}
 }
 
 // do performs a single RPC call, transparently handling the

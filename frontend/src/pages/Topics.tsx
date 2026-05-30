@@ -27,6 +27,7 @@ import { useArmedConfirm } from "@/lib/hooks/useArmedConfirm";
 import { AddTopicCard } from "@/components/topics/AddTopicCard";
 import { EditTopicCard } from "@/components/topics/EditTopicCard";
 import { ClientBadge, type ClientRef } from "@/components/topics/ClientBadge";
+import { DeliveryStatus } from "@/components/topics/DeliveryStatus";
 import { PosterImage } from "@/components/topics/PosterImage";
 
 // Re-exported so existing imports (and tests) that reference AddTopicCard
@@ -219,6 +220,7 @@ export function TopicsPage() {
                         {t.LastError}
                       </div>
                     )}
+                    {!compact && <DeliveryStatus topicId={t.ID} />}
                   </div>
                   {!compact && (
                     <div className="hidden lg:block text-right">

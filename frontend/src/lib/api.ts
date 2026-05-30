@@ -165,7 +165,31 @@ export const api = {
   // can't resolve metadata, so callers can render unconditionally.
   previewTracker: (url: string) =>
     request<TrackerPreview>("GET", `/trackers/preview?url=${encodeURIComponent(url)}`),
+
+  // List what a topic has delivered to its client, with live download
+  // status when the client supports it (qBittorrent, Transmission). Safe to
+  // poll: it degrades to "delivered" labels for clients without status.
+  topicStatus: (id: string) =>
+    request<TopicStatus>("GET", `/topics/${id}/status`),
 };
+
+// One delivered torrent in GET /topics/{id}/status. state is the normalised
+// client lifecycle word ("downloading", "seeding", …) or "delivered" when
+// no live status is available. percent_done is null unless the client
+// reported a live figure (0..1).
+export interface DeliveryStatus {
+  label: string;
+  infohash: string;
+  delivered_at: string;
+  state: string;
+  percent_done: number | null;
+}
+
+// Response of GET /topics/{id}/status.
+export interface TopicStatus {
+  client_supports_status: boolean;
+  deliveries: DeliveryStatus[];
+}
 
 // Response of GET /trackers/preview. Either field may be empty.
 export interface TrackerPreview {
