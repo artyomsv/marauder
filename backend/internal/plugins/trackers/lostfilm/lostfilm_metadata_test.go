@@ -77,6 +77,34 @@ func TestResolveMetadata_MainPosterFallbackMadeAbsolute(t *testing.T) {
 	}
 }
 
+func TestResolveMetadata_PrefersOgTitleOverBloatedTitle(t *testing.T) {
+	// Real LostFilm shape: a SEO-bloated <title> with an en-dash site suffix,
+	// plus a clean og:title. og:title wins.
+	html := `<html><head>
+<title>Пацаны (The Boys). Сериал Пацаны (The Boys) Amazon Prime Video (США): гид по сериям – LostFilm.TV.</title>
+<meta property="og:title" content="Пацаны (The Boys)">
+<meta property="og:image" content="https://www.lostfilm.tv/Static/Images/442/Posters/poster.jpg">
+</head><body><a href="/logout">logout</a></body></html>`
+	p := newMetadataTestPlugin(t, html)
+
+	meta, err := p.ResolveMetadata(context.Background(), "https://www.lostfilm.tv/series/The_Boys/", nil)
+	if err != nil {
+		t.Fatalf("ResolveMetadata: %v", err)
+	}
+	if meta.Title != "Пацаны (The Boys)" {
+		t.Errorf("title = %q, want %q", meta.Title, "Пацаны (The Boys)")
+	}
+}
+
+func TestCleanSeriesTitle_TrimsBloatedTitleAndEnDash(t *testing.T) {
+	// Fallback path: no og:title, so the bloated <title> with an en-dash suffix
+	// is trimmed to the leading show-name segment.
+	raw := "Пацаны (The Boys). Сериал Пацаны (The Boys) Amazon Prime Video (США): гид – LostFilm.TV."
+	if got := cleanSeriesTitle(raw); got != "Пацаны (The Boys)" {
+		t.Errorf("cleanSeriesTitle = %q, want %q", got, "Пацаны (The Boys)")
+	}
+}
+
 func TestResolveMetadata_NoImageReturnsEmpty(t *testing.T) {
 	html := `<html><head><title>No Poster Show - LostFilm.TV</title></head><body>
 <a href="/logout">logout</a></body></html>`
