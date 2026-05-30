@@ -202,7 +202,10 @@ func (p *plugin) Check(ctx context.Context, topic *domain.Topic, creds *domain.T
 
 	check := &domain.Check{Extra: map[string]any{}}
 	if m := titleRe.FindSubmatch(body); m != nil {
-		check.DisplayName = strings.TrimSpace(string(m[1]))
+		// Clean the SEO-bloated <title> down to the show name so the
+		// scheduler's self-heal persists e.g. "Пацаны (The Boys)", not the
+		// full sentence. Same helper the metadata path uses.
+		check.DisplayName = cleanSeriesTitle(string(m[1]))
 	}
 
 	episodes := parseEpisodes(body)

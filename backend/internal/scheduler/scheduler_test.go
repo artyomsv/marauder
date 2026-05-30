@@ -654,6 +654,7 @@ func TestBackoff_TableTest(t *testing.T) {
 		name              string
 		consecutiveErrors int
 		failure           bool
+		cause             error
 		minBackoff        time.Duration
 		maxBackoff        time.Duration
 		expectCapped      bool
@@ -664,6 +665,24 @@ func TestBackoff_TableTest(t *testing.T) {
 			failure:           false,
 			minBackoff:        base,
 			maxBackoff:        base + 50*time.Millisecond,
+		},
+		{
+			name:              "transient error retries fast (60s), not exponential",
+			consecutiveErrors: 3,
+			failure:           true,
+			cause:             errors.New(`Get "https://x/t": context deadline exceeded`),
+			minBackoff:        transientRetryDelay,
+			maxBackoff:        transientRetryDelay + 50*time.Millisecond,
+		},
+		{
+			// At transientRetryMax consecutive failures the fast-retry stops
+			// and exponential backoff resumes: 2^(5+1) * 60s = 64m (< 6h cap).
+			name:              "transient error falls back to exponential once persistent",
+			consecutiveErrors: transientRetryMax,
+			failure:           true,
+			cause:             errors.New("dial tcp: i/o timeout"),
+			minBackoff:        64 * base,
+			maxBackoff:        64*base + 50*time.Millisecond,
 		},
 		{
 			name:              "first failure: 2x base",
@@ -717,7 +736,7 @@ func TestBackoff_TableTest(t *testing.T) {
 				ConsecutiveErrors: tt.consecutiveErrors,
 			}
 			before := time.Now().UTC()
-			got := s.backoff(topic, tt.failure)
+			got := s.backoff(topic, tt.failure, tt.cause)
 			delta := got.Sub(before)
 			if delta < tt.minBackoff {
 				t.Errorf("backoff = %v, want >= %v", delta, tt.minBackoff)

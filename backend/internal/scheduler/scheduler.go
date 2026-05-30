@@ -22,6 +22,8 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net"
+	"strings"
 	"sync"
 	"time"
 
@@ -320,7 +322,7 @@ func (s *Scheduler) runCheck(ctx context.Context, log zerolog.Logger, t *domain.
 	if tr == nil {
 		log.Error().Msg("no registered tracker")
 		metrics.SchedulerTopicChecksTotal.WithLabelValues(t.TrackerName, "no_plugin").Inc()
-		s.recordResult(ctx, log, t.ID, "", false, s.backoff(t, true), "tracker plugin not installed")
+		s.recordResult(ctx, log, t.ID, "", false, s.backoff(t, true, nil), "tracker plugin not installed")
 		s.recordChecked(false, true)
 		return
 	}
@@ -342,7 +344,7 @@ func (s *Scheduler) runCheck(ctx context.Context, log zerolog.Logger, t *domain.
 	if err != nil {
 		log.Warn().Err(err).Msg("check failed")
 		metrics.SchedulerTopicChecksTotal.WithLabelValues(t.TrackerName, "error").Inc()
-		s.recordResult(ctx, log, t.ID, "", false, s.backoff(t, true), err.Error())
+		s.recordResult(ctx, log, t.ID, "", false, s.backoff(t, true, err), err.Error())
 		s.recordChecked(false, true)
 		return
 	}
@@ -372,7 +374,7 @@ func (s *Scheduler) runCheck(ctx context.Context, log zerolog.Logger, t *domain.
 				log.Warn().Err(dlErr).Msg("download failed")
 				metrics.SchedulerTopicChecksTotal.WithLabelValues(t.TrackerName, "download_error").Inc()
 			}
-			s.recordResult(ctx, log, t.ID, t.LastHash, anySubmitted, s.backoff(t, true), dlErr.Error())
+			s.recordResult(ctx, log, t.ID, t.LastHash, anySubmitted, s.backoff(t, true, dlErr), dlErr.Error())
 			s.recordChecked(true, true)
 			return
 		}
@@ -390,7 +392,7 @@ func (s *Scheduler) runCheck(ctx context.Context, log zerolog.Logger, t *domain.
 	}
 
 	metrics.SchedulerTopicChecksTotal.WithLabelValues(t.TrackerName, "ok").Inc()
-	s.recordResult(ctx, log, t.ID, check.Hash, updated || anySubmitted, s.backoff(t, false), "")
+	s.recordResult(ctx, log, t.ID, check.Hash, updated || anySubmitted, s.backoff(t, false, nil), "")
 	s.recordChecked(updated || anySubmitted, false)
 }
 
@@ -448,7 +450,7 @@ func (s *Scheduler) loadCredentials(ctx context.Context, checkCtx context.Contex
 		}
 		log.Warn().Err(loginErr).Msg("tracker login failed")
 		metrics.SchedulerTopicChecksTotal.WithLabelValues(t.TrackerName, "auth_error").Inc()
-		s.recordResult(ctx, log, t.ID, "", false, s.backoff(t, true), "auth failed: "+loginErr.Error())
+		s.recordResult(ctx, log, t.ID, "", false, s.backoff(t, true, loginErr), "auth failed: "+loginErr.Error())
 		s.recordChecked(false, true)
 		return nil, false
 	}
@@ -596,11 +598,26 @@ func (s *Scheduler) sendViaClient(ctx context.Context, cfg *domain.Client, t *do
 	return nil
 }
 
+// transientRetryDelay is how soon a topic is re-checked after a transient
+// network failure (timeout, DNS blip, Cloudflare challenge hang). Short, so a
+// momentary glitch self-heals in about a minute instead of parking the topic
+// on the long exponential backoff meant for durable errors.
+const transientRetryDelay = 60 * time.Second
+
+// transientRetryMax bounds how many consecutive transient failures keep the
+// fast-retry behaviour before falling back to exponential backoff, so a tracker
+// that is genuinely down isn't hammered once a minute forever.
+const transientRetryMax = 5
+
 // backoff computes the next_check_at timestamp. On success we use the topic's
-// configured interval. On failure we exponentially back off up to the cap.
-func (s *Scheduler) backoff(t *domain.Topic, failure bool) time.Time {
+// configured interval. On a *transient* failure (network blip) we retry quickly
+// so it auto-recovers; on a durable failure we exponentially back off to the cap.
+func (s *Scheduler) backoff(t *domain.Topic, failure bool, cause error) time.Time {
 	if !failure {
 		return time.Now().UTC().Add(time.Duration(t.CheckIntervalSec) * time.Second)
+	}
+	if isTransientError(cause) && t.ConsecutiveErrors < transientRetryMax {
+		return time.Now().UTC().Add(transientRetryDelay)
 	}
 	attempt := t.ConsecutiveErrors + 1
 	base := time.Duration(t.CheckIntervalSec) * time.Second
@@ -610,4 +627,40 @@ func (s *Scheduler) backoff(t *domain.Topic, failure bool) time.Time {
 		d = s.cfg.CheckMaxBackoff
 	}
 	return time.Now().UTC().Add(d)
+}
+
+// isTransientError reports whether err is a transient network/infra failure —
+// a timeout, DNS blip, refused/reset connection, or a Cloudflare challenge that
+// hung the request — as opposed to a durable error (bad credentials, an
+// unparseable page, a missing plugin). Transient failures clear on their own,
+// so the scheduler retries them quickly instead of backing off.
+func isTransientError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	for _, marker := range []string{
+		"context deadline exceeded",
+		"timeout",
+		"i/o timeout",
+		"connection refused",
+		"connection reset",
+		"server misbehaving", // docker embedded-DNS blip
+		"no such host",
+		"temporary failure",
+		"eof",
+		"tls handshake",
+	} {
+		if strings.Contains(msg, marker) {
+			return true
+		}
+	}
+	return false
 }
