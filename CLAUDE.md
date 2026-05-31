@@ -22,7 +22,8 @@ Public site: https://marauder.cc · GitHub: artyomsv/marauder
 backend/        Go services (main backend + cfsolver sidecar)
 frontend/       React 19.2 + Vite + Tailwind 4 + shadcn admin UI
 cfsolver/       Standalone Go service: chromedp-based Cloudflare solver
-deploy/         docker-compose stacks (base + dev + sso overlays)
+deploy/         docker-compose stacks (source-build base + prebuilt-image
+                ghcr stack + dev + sso overlays)
 docs/           ROADMAP, PRD, VISION, COMPETITORS, per-feature guides
 site/           Astro 5 marketing site published to marauder.cc
 techdebt/       Debt-tracking files (one per issue, see global rule)

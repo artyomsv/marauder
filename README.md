@@ -98,24 +98,42 @@ for the per-plugin status table.
 
 ## Quick start
 
-> The full stack is designed to run on any machine with Docker installed.
-> No Go, Node, or Postgres toolchains required on the host.
+> Marauder runs as a Docker Compose stack. The only thing you need on the
+> host is Docker — no Go, Node, or Postgres toolchain. Full walkthrough:
+> **[docs/getting-started.md](docs/getting-started.md)**.
+
+### Run it — prebuilt images (recommended)
+
+Pull the published, multi-arch, signed images from GitHub Container Registry.
+No clone, no local build:
 
 ```bash
-# 1. Clone the repo
+mkdir marauder && cd marauder
+
+# 1. Compose file + example env
+curl -fsSLO https://raw.githubusercontent.com/artyomsv/marauder/main/deploy/docker-compose.ghcr.yml
+curl -fsSL  https://raw.githubusercontent.com/artyomsv/marauder/main/deploy/.env.example -o .env
+
+# 2. Generate the required 32-byte master key
+sed -i "s|MARAUDER_MASTER_KEY=.*|MARAUDER_MASTER_KEY=$(openssl rand -base64 32)|" .env
+
+# 3. Pull + start
+docker compose -f docker-compose.ghcr.yml --env-file .env up -d
+
+# 4. Open http://localhost:34080
+```
+
+Requires Docker Compose **v2.23.1+**. Pin the release with `MARAUDER_VERSION`
+in `.env` (defaults to `1.0.0`); `latest` also exists.
+
+### Build from source (contributors)
+
+```bash
 git clone https://github.com/artyomsv/marauder.git
-cd marauder
-
-# 2. Generate a master encryption key and set up env
-cp deploy/.env.example deploy/.env
-# Fill MARAUDER_MASTER_KEY with the output of:
-openssl rand -base64 32
-
-# 3. Bring the stack up
-docker compose -f deploy/docker-compose.yml --env-file deploy/.env up -d
-
-# 4. Open the UI
-open http://localhost:34080
+cd marauder/deploy
+cp .env.example .env
+sed -i "s|MARAUDER_MASTER_KEY=.*|MARAUDER_MASTER_KEY=$(openssl rand -base64 32)|" .env
+docker compose --env-file .env up -d   # first run compiles the images
 ```
 
 On first start, Marauder creates an admin user from
