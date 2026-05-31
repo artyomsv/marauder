@@ -8,7 +8,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Release: v1.0.0](https://img.shields.io/badge/release-v1.0.0-success.svg)](CHANGELOG.md)
-[![Go](https://img.shields.io/badge/backend-Go%201.23-00ADD8.svg)](backend/)
+[![Go](https://img.shields.io/badge/backend-Go%201.25-00ADD8.svg)](backend/)
 [![React 19](https://img.shields.io/badge/frontend-React%2019.2-61DAFB.svg)](frontend/)
 [![Postgres 18](https://img.shields.io/badge/database-Postgres%2018-336791.svg)](deploy/)
 [![16 trackers](https://img.shields.io/badge/trackers-16-blue.svg)](docs/plugin-development.md)
@@ -71,7 +71,7 @@ What works **today**:
   rotation, master-key-encrypted secrets at rest.
 - OIDC sign-in via Keycloak (or any OIDC provider). Bring up the
   bundled Keycloak realm with the `sso` compose profile.
-- 11 tracker plugins, 5 torrent-client plugins, 4 notifier plugins.
+- 16 tracker plugins, 5 torrent-client plugins, 4 notifier plugins.
 - Generic-magnet → qBittorrent end-to-end pipeline validated against
   a real qBittorrent docker container — see
   [`docs/test-e2e-magnet.md`](docs/test-e2e-magnet.md).
@@ -81,14 +81,18 @@ What works **today**:
   page.
 - English + Russian UI.
 
-What's still **alpha**: the seven CIS forum-tracker plugins
-(RuTracker, Kinozal, NNM-Club, LostFilm, Anidub, Toloka, Unionpeer,
-Tapochek) are structurally complete with fixture-based tests but have
-not been validated against live sites in this development cycle —
+**Validated end-to-end**: the generic magnet and `.torrent`-URL paths,
+the Torznab/Newznab indexer adapters, and the **RuTracker** and
+**LostFilm** plugins (the latter including interactive captcha login),
+each against a live target.
+
+What's still **alpha**: the other 10 CIS forum-tracker plugins
+(Kinozal, NNM-Club, Anilibria, Anidub, Rutor, Toloka, Unionpeer,
+Tapochek, Free-Torrents, HD-Club) are structurally complete with
+fixture-based tests but have not been validated against live sites —
 that requires real account credentials and is the first thing
-community contributors will help with. Anilibria and Rutor use public
-APIs and should validate cleanly. See [CHANGELOG.md](CHANGELOG.md) for
-the per-plugin status table.
+community contributors will help with. See [CHANGELOG.md](CHANGELOG.md)
+for the per-plugin status table.
 
 ---
 
