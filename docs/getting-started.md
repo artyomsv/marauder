@@ -56,7 +56,7 @@ docker compose -f docker-compose.ghcr.yml --env-file .env up -d
 ```
 
 The compose file pins to a specific release via `MARAUDER_VERSION` (default
-`1.0.0`). See [Pinning a version](#pinning-a-version) below.
+`1.0.1`). See [Pinning a version](#pinning-a-version) below.
 
 > **macOS note:** the BSD `sed` in step 2 needs `sed -i ''` instead of `sed -i`.
 > Or just open `.env` in an editor and paste the output of `openssl rand -base64 32`
@@ -157,11 +157,11 @@ curl -sS -X POST http://localhost:34080/api/v1/auth/login \
 
 ## Pinning a version
 
-The prebuilt stack reads `MARAUDER_VERSION` from `.env` (default `1.0.0`):
+The prebuilt stack reads `MARAUDER_VERSION` from `.env` (default `1.0.1`):
 
 ```bash
 # .env
-MARAUDER_VERSION=1.0.0     # pinned — reproducible
+MARAUDER_VERSION=1.0.1     # pinned — reproducible
 # MARAUDER_VERSION=latest  # floats to the newest release
 ```
 
@@ -217,5 +217,5 @@ Verify an anonymous pull works (expect HTTP `200`):
 tok=$(curl -s "https://ghcr.io/token?scope=repository:artyomsv/marauder-backend:pull" \
   | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
 curl -s -o /dev/null -w "%{http_code}\n" -H "Authorization: Bearer $tok" \
-  https://ghcr.io/v2/artyomsv/marauder-backend/manifests/1.0.0
+  https://ghcr.io/v2/artyomsv/marauder-backend/manifests/1.0.1
 ```

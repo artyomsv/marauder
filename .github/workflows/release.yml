@@ -76,6 +76,10 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=raw,value=latest
 
+      - name: Compute build date
+        id: bm
+        run: echo "date=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> "$GITHUB_OUTPUT"
+
       - name: Build and push
         id: push
         uses: docker/build-push-action@v6
@@ -85,6 +89,12 @@ jobs:
           platforms: linux/amd64,linux/arm64
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # Stamp version metadata into the binary. The backend Dockerfile
+          # consumes these; frontend/cfsolver ignore unused build args.
+          build-args: |
+            VERSION=${{ steps.meta.outputs.version }}
+            COMMIT=${{ github.sha }}
+            BUILD_DATE=${{ steps.bm.outputs.date }}
           provenance: true
           sbom: true
           cache-from: type=gha,scope=release-${{ matrix.image.name }}

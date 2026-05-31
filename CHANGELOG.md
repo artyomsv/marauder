@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-06-01
+
+### Added
+
+- Prebuilt container images published to GitHub Container Registry
+  (`ghcr.io/artyomsv/marauder-{backend,frontend,cfsolver}`) and a no-clone
+  `deploy/docker-compose.ghcr.yml` pull stack that ships the gateway nginx
+  config inline via Compose `configs:`. This is the first release to publish
+  images — v1.0.0 was tagged before the release pipeline existed.
+- `docs/getting-started.md`: a full guide covering both the prebuilt-image
+  and build-from-source install paths, version pinning, and troubleshooting.
+
+### Fixed
+
+- `release.yml` now stamps the build version, commit, and date into the
+  published images via build args; previously the released binary reported
+  `0.0.0-dev` from `/api/v1/system/info`.
+
 ### Changed (Phase 7 — host port migration to 34xxx range)
 
 Marauder previously exposed the gateway on host port `6688`, the dev
