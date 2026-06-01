@@ -12,7 +12,11 @@ abandoned `monitorrent` Python project. Users add tracker URLs (forum
 threads, indexer feeds), Marauder polls them on a schedule, detects
 new releases, and pushes the resulting torrents into one of several
 download clients (qBittorrent, Transmission, Deluge, µTorrent). v1.0.0
-shipped 2026-04-07.
+shipped 2026-04-07; v1.0.1 (2026-06-01) is the first release to publish
+multi-arch container images to GHCR
+(`ghcr.io/artyomsv/marauder-{backend,frontend,cfsolver}`), enabling a
+no-clone "pull prebuilt" install. User-facing setup guide:
+`docs/getting-started.md`.
 
 Public site: https://marauder.cc · GitHub: artyomsv/marauder
 
@@ -177,9 +181,20 @@ docker run --rm -v "E:/Projects/Stukans/Marauder/backend:/backend" -w //backend 
 # Frontend
 docker run --rm -v "E:/Projects/Stukans/Marauder/frontend:/frontend" -w //frontend node:20-alpine sh -c "npm run typecheck && npm test && npm run build"
 
-# Stack up (compose)
+# Stack up — dev (source-build base + dev overlay: ports + qbit/transmission)
 docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.dev.yml up -d
+
+# Run prebuilt GHCR images (no clone/build; pin tag via MARAUDER_VERSION in .env)
+docker compose -f deploy/docker-compose.ghcr.yml --env-file deploy/.env up -d
 ```
+
+`deploy/docker-compose.ghcr.yml` is the end-user "pull prebuilt" stack:
+image-only (`ghcr.io/artyomsv/marauder-*:${MARAUDER_VERSION:-1.0.1}`), and it
+ships the gateway nginx config **inline** via Compose top-level `configs:`
+(needs Compose v2.23.1+) so it's a single downloadable file — no bind mount.
+The inline block is a copy of `deploy/nginx/gateway.conf` with nginx's `$`
+escaped as `$$`; **keep the two in sync**. The source-build `docker-compose.yml`
+(+ dev/sso overlays) is unchanged and still bind-mounts `gateway.conf`.
 
 ## Ports (per `~/.claude/rules/local-port-ranges.md` — host ports must be 30000-49999)
 
@@ -250,6 +265,7 @@ container is the backend itself.
 
 - `MARAUDER_MASTER_KEY` — AES-256 key for credential/config encryption (REQUIRED)
 - `MARAUDER_DB_URL` — pgx connection string
+- `MARAUDER_VERSION` — image tag the prebuilt `docker-compose.ghcr.yml` stack pulls (default `1.0.1`); ignored by the source-build stack
 - `MARAUDER_SCHEDULER_WORKERS` — worker pool size (default 8)
 - `MARAUDER_SCHEDULER_MAX_EPISODES_PER_TICK` — per-episode loop cap (default 25)
 - `MARAUDER_OIDC_*` — Keycloak settings (optional, gated by `MARAUDER_OIDC_ENABLED`)
