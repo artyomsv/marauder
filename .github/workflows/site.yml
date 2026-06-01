@@ -73,7 +73,7 @@ jobs:
           echo "all SEO assets present"
 
       - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v5
         with:
           path: site/dist
 

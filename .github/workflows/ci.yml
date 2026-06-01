@@ -67,10 +67,12 @@ jobs:
       # stdlib CVEs we cannot resolve.
       - name: govulncheck
         continue-on-error: true
-        uses: golang/govulncheck-action@v1
-        with:
-          go-version-input: ${{ matrix.go }}
-          work-dir: backend
+        # Run govulncheck directly rather than via golang/govulncheck-action,
+        # whose v1 (latest) internals still pin Node 20 actions
+        # (checkout@v4.1.1, setup-go@v5.0.0) with no Node 24 release. This job
+        # already checked out the repo and set up Go above, so the action's
+        # internal setup was redundant anyway.
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 
   # ---------------------------------------------------------------- backend lint
   backend-lint:
