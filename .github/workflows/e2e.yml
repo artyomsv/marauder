@@ -128,10 +128,21 @@ jobs:
           echo "$BODY"
           echo "$BODY" | grep -q "0123456789abcdef0123456789abcdef01234567"
 
-      - name: Print backend logs on failure
+      - name: Print stack logs on failure
         if: failure()
         working-directory: deploy
-        run: docker compose -f docker-compose.yml -f docker-compose.dev.yml logs backend
+        run: |
+          echo "::group::container status"
+          docker compose -f docker-compose.yml -f docker-compose.dev.yml ps -a
+          echo "::endgroup::"
+          # db first: a depends_on:service_healthy failure aborts the
+          # whole `up`, and the db is the usual culprit — but its logs
+          # were never dumped, which hid postgres#1259 for 60 runs.
+          for svc in db backend frontend gateway; do
+            echo "::group::$svc logs"
+            docker compose -f docker-compose.yml -f docker-compose.dev.yml logs "$svc" || true
+            echo "::endgroup::"
+          done
 
       - name: Tear down
         if: always()
