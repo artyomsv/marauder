@@ -90,7 +90,7 @@ func (p *plugin) Test(ctx context.Context, rawConfig []byte) error {
 		return fmt.Errorf("ping qbit: %w", err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != 200 {
+	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("unexpected status %d from version endpoint", resp.StatusCode)
 	}
 	return nil
@@ -141,7 +141,7 @@ func (p *plugin) Add(ctx context.Context, rawConfig []byte, payload *domain.Payl
 		return fmt.Errorf("add torrent: %w", err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != 200 {
+	if resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("unexpected status %d: %s", resp.StatusCode, string(b))
 	}
@@ -180,7 +180,7 @@ func (p *plugin) Status(ctx context.Context, rawConfig []byte, hashes []string) 
 		return nil, fmt.Errorf("qbit status: %w", err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != 200 {
+	if resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(resp.Body)
 		return nil, fmt.Errorf("qbit status %d: %s", resp.StatusCode, string(b))
 	}
@@ -253,13 +253,32 @@ func (p *plugin) session(ctx context.Context, cfg Config) (*session, error) {
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != 200 || !strings.EqualFold(strings.TrimSpace(string(body)), "ok.") {
+	if !loginSucceeded(resp.StatusCode, body) {
 		return nil, fmt.Errorf("login failed: status=%d body=%q", resp.StatusCode, string(body))
 	}
 	s.loggedIn = true
 	s.expiresAt = time.Now().Add(10 * time.Minute)
 	p.sessions[cfg.URL] = s
 	return s, nil
+}
+
+// loginSucceeded reports whether a /api/v2/auth/login response indicates a
+// successful authentication. qBittorrent changed its contract across versions:
+//   - <=5.1.x: 200 OK with body "Ok." (and "Fails." on bad credentials)
+//   - >=5.2.x: 204 No Content with an empty body
+//
+// Both are accepted; everything else (including a 204 carrying an unexpected
+// body) is treated as a failure. See issue #38.
+func loginSucceeded(status int, body []byte) bool {
+	trimmed := strings.TrimSpace(string(body))
+	switch status {
+	case http.StatusNoContent:
+		return trimmed == ""
+	case http.StatusOK:
+		return strings.EqualFold(trimmed, "ok.")
+	default:
+		return false
+	}
 }
 
 func nonEmpty(s, fallback string) string {
