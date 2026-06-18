@@ -33,3 +33,51 @@ jobs:
         uses: actions/checkout@v6
       - name: Acceptance (pinned baseline)
         run: bash deploy/acceptance/acceptance.sh ${{ matrix.client }} pinned
+
+  latest:
+    name: latest-canary / ${{ matrix.client }}
+    # Canary only — never gate releases, so skip on tag pushes.
+    if: github.event_name != 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      issues: write
+    strategy:
+      fail-fast: false
+      matrix:
+        client: [qbittorrent, transmission, deluge]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Acceptance (latest image)
+        id: acc
+        continue-on-error: true
+        run: bash deploy/acceptance/acceptance.sh ${{ matrix.client }} latest
+      - name: File deduped canary issue on failure
+        if: steps.acc.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CLIENT: ${{ matrix.client }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          gh label create client-canary --color FBCA04 \
+            --description "An upstream client latest release broke acceptance" \
+            2>/dev/null || true
+          TITLE="[client-canary] ${CLIENT} latest acceptance failing"
+          NUM=$(gh issue list --label client-canary --state open \
+            --json number,title \
+            --jq ".[] | select(.title == \"${TITLE}\") | .number" | head -1)
+          if [ -n "${NUM}" ]; then
+            gh issue comment "${NUM}" \
+              --body "Still failing on the latest image. Run: ${RUN_URL}"
+          else
+            gh issue create --title "${TITLE}" --label client-canary --body \
+          "The acceptance test for \`${CLIENT}\` against its **latest** image failed while the pinned baseline is expected green. A new upstream release likely changed the client's API contract. Investigate and, if confirmed, adapt the plugin and bump the pinned baseline. Run: ${RUN_URL}"
+          fi
+      - name: Surface canary failure as a red (non-blocking) check
+        if: steps.acc.outcome == 'failure'
+        run: |
+          echo "::warning::${{ matrix.client }} latest canary failed — issue filed"
+          exit 1
