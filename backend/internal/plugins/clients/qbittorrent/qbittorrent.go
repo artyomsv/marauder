@@ -145,11 +145,32 @@ func (p *plugin) Add(ctx context.Context, rawConfig []byte, payload *domain.Payl
 		b, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("unexpected status %d: %s", resp.StatusCode, string(b))
 	}
-	// qBittorrent returns 200 "Ok." on success, 200 "Fails." on invalid
-	// torrent (yes really). Check the body.
+	// qBittorrent's /torrents/add success contract varies by version:
+	//   - legacy: 200 with body "Ok." (and "Fails." on a rejected torrent).
+	//   - newer:  200 with a JSON summary, e.g.
+	//     {"added_torrent_ids":[..],"failure_count":0,"pending_count":0,"success_count":1}
+	// Detect failure precisely. A naive substring check for "fail" trips on
+	// the JSON field name "failure_count" and turns a success into a false
+	// rejection (observed against linuxserver/qbittorrent on the multipart
+	// add path).
 	b, _ := io.ReadAll(resp.Body)
-	if strings.Contains(strings.ToLower(string(b)), "fail") {
-		return fmt.Errorf("qbittorrent rejected torrent: %s", string(b))
+	respBody := strings.TrimSpace(string(b))
+	if strings.HasPrefix(respBody, "{") {
+		var summary struct {
+			SuccessCount int `json:"success_count"`
+			FailureCount int `json:"failure_count"`
+			PendingCount int `json:"pending_count"`
+		}
+		if err := json.Unmarshal([]byte(respBody), &summary); err == nil {
+			if summary.FailureCount > 0 || (summary.SuccessCount == 0 && summary.PendingCount == 0) {
+				return fmt.Errorf("qbittorrent rejected torrent: %s", respBody)
+			}
+			return nil
+		}
+		// Unparseable JSON falls through to the legacy string check below.
+	}
+	if strings.Contains(strings.ToLower(respBody), "fails") {
+		return fmt.Errorf("qbittorrent rejected torrent: %s", respBody)
 	}
 	return nil
 }

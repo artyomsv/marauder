@@ -21,7 +21,12 @@ type fakeQBit struct {
 	// login204 mimics qBittorrent >=5.2.x, which answers a successful login
 	// with 204 No Content and an empty body instead of 200 "Ok.".
 	login204 bool
-	mu       sync.Mutex
+	// addJSON mimics qBittorrent's newer /torrents/add, which answers with a
+	// JSON summary ({"success_count":1,"failure_count":0,...}) instead of the
+	// legacy "Ok." string. The JSON contains the substring "fail" in
+	// "failure_count", which must NOT be read as a rejection.
+	addJSON bool
+	mu      sync.Mutex
 }
 
 func (f *fakeQBit) handler() http.Handler {
@@ -78,7 +83,14 @@ func (f *fakeQBit) handler() http.Handler {
 				}
 			}
 		}
+		// f.mu is already held for the duration of this handler (deferred
+		// unlock at the top), so read addJSON directly — do not re-lock.
+		useJSON := f.addJSON
 		w.WriteHeader(http.StatusOK)
+		if useJSON {
+			w.Write([]byte(`{"added_torrent_ids":["abc"],"failure_count":0,"pending_count":0,"success_count":1}`))
+			return
+		}
 		w.Write([]byte("Ok."))
 	})
 	return mux
@@ -162,6 +174,23 @@ func TestAdd_MagnetURI_SubmitsURLField(t *testing.T) {
 	}
 	if fake.lastBody != payload.MagnetURI {
 		t.Errorf("urls form field = %q", fake.lastBody)
+	}
+}
+
+// TestAdd_JSONSuccessResponse_NotRejected guards against a regression where
+// newer qBittorrent answers /torrents/add with a JSON summary whose
+// "failure_count" field contains the substring "fail". A naive substring
+// check turned that success into a false "qbittorrent rejected torrent"
+// error, so deliveries were never recorded and the scheduler retried forever.
+func TestAdd_JSONSuccessResponse_NotRejected(t *testing.T) {
+	srv, fake := newServer(t)
+	fake.addJSON = true
+	p := &plugin{sessions: map[string]*session{}}
+
+	cfg, _ := json.Marshal(Config{URL: srv.URL, Username: "admin", Password: "secret"})
+	payload := &domain.Payload{MagnetURI: "magnet:?xt=urn:btih:abc"}
+	if err := p.Add(context.Background(), cfg, payload, domain.AddOptions{}); err != nil {
+		t.Fatalf("Add against a JSON-summary server: %v", err)
 	}
 }
 
