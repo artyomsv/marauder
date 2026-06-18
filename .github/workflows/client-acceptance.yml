@@ -1,0 +1,35 @@
+name: Client acceptance (pinned + latest canary)
+
+# Broad, shallow matrix: every supported client is created through the
+# Marauder API against a REAL container, on a pinned baseline and (nightly)
+# on the client's latest image. Complements the deep qBittorrent pipeline in
+# e2e.yml. Not run per-PR — too slow; PRs rely on unit tests.
+
+on:
+  schedule:
+    - cron: '0 5 * * *'   # 05:00 UTC nightly (after e2e at 04:00)
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+concurrency:
+  group: client-acceptance-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  pinned:
+    name: pinned / ${{ matrix.client }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        client: [qbittorrent, transmission, deluge, utorrent]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Acceptance (pinned baseline)
+        run: bash deploy/acceptance/acceptance.sh ${{ matrix.client }} pinned
