@@ -109,24 +109,37 @@ jobs:
           test -n "$CLIENT_ID"
 
           echo "[3] add magnet topic"
-          MAG='magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567&dn=marauder-e2e'
-          curl -sS -X POST http://localhost:34080/api/v1/topics \
+          INFOHASH=0123456789abcdef0123456789abcdef01234567
+          MAG="magnet:?xt=urn:btih:${INFOHASH}&dn=marauder-e2e"
+          TOPIC_JSON=$(curl -sS -X POST http://localhost:34080/api/v1/topics \
             -H "Authorization: Bearer $TOK" \
             -H "Content-Type: application/json" \
-            -d "{\"url\":\"$MAG\",\"client_id\":\"$CLIENT_ID\"}"
+            -d "{\"url\":\"$MAG\",\"client_id\":\"$CLIENT_ID\"}")
+          echo "$TOPIC_JSON"
+          TOPIC_ID=$(echo "$TOPIC_JSON" | awk -F'"ID":"' '{print $2}' | awk -F'"' '{print $1}')
+          test -n "$TOPIC_ID"
 
-          echo "[4] wait for one scheduler tick (75s)"
+          echo "[4] wait for the scheduler to push the torrent (up to ~135s)"
+          # Verify through Marauder's own API, which exercises the real
+          # backend -> qBittorrent delivery path and records topic_deliveries.
+          # We deliberately do NOT poke the qBittorrent WebUI directly:
+          # qBittorrent 5.x rejects requests whose Host-header port differs
+          # from its WebUI port, which the published host port (34611 -> 6611)
+          # does, so a host-side login returns 401.
           sleep 75
-
-          echo "[5] verify in qBittorrent"
-          COOKIE=$(curl -sS -i -X POST "http://localhost:34611/api/v2/auth/login" \
-            -H "Referer: http://localhost:34611" \
-            --data-urlencode "username=admin" \
-            --data-urlencode "password=${QBIT_PASSWORD}" | \
-            grep -i "^set-cookie:" | sed 's/Set-Cookie: //i' | cut -d';' -f1)
-          BODY=$(curl -sS -H "Cookie: $COOKIE" "http://localhost:34611/api/v2/torrents/info")
-          echo "$BODY"
-          echo "$BODY" | grep -q "0123456789abcdef0123456789abcdef01234567"
+          echo "[5] verify delivery via Marauder topic status API"
+          for _ in $(seq 1 6); do
+            STATUS=$(curl -sS -H "Authorization: Bearer $TOK" \
+              "http://localhost:34080/api/v1/topics/$TOPIC_ID/status")
+            echo "$STATUS"
+            if echo "$STATUS" | grep -q "$INFOHASH"; then
+              echo "delivery recorded for $INFOHASH"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "torrent $INFOHASH never appeared in topic status"
+          exit 1
 
       - name: Print stack logs on failure
         if: failure()
