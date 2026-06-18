@@ -42,7 +42,13 @@ jobs:
           (github.event.action == 'opened' || github.event.action == 'reopened') &&
           (steps.meta.outputs.update-type == 'version-update:semver-minor' ||
            steps.meta.outputs.update-type == 'version-update:semver-patch')
-        run: gh pr review --approve "$PR_URL"
+        # Fail-soft: if "Allow GitHub Actions to create and approve pull
+        # requests" is not enabled, approval is unavailable. Log it instead
+        # of failing the check, so the workflow degrades gracefully until the
+        # repo settings are turned on.
+        run: |
+          gh pr review --approve "$PR_URL" \
+            || echo "::warning::approve unavailable — enable 'Allow GitHub Actions to create and approve pull requests'"
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -51,7 +57,12 @@ jobs:
         if: >-
           steps.meta.outputs.update-type == 'version-update:semver-minor' ||
           steps.meta.outputs.update-type == 'version-update:semver-patch'
-        run: gh pr merge --auto --squash "$PR_URL"
+        # Fail-soft: if "Allow auto-merge" is not enabled on the repo, this
+        # errors. Log instead of failing so a missing setting doesn't paint a
+        # red check on every Dependabot PR.
+        run: |
+          gh pr merge --auto --squash "$PR_URL" \
+            || echo "::warning::auto-merge unavailable — enable repo setting 'Allow auto-merge'"
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
