@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.7
 
 # --- Build stage --------------------------------------------------------
-FROM golang:1.25-alpine AS builder
+FROM golang:1.26-alpine AS builder
 
 RUN apk add --no-cache git ca-certificates build-base
 
@@ -26,7 +26,7 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
     -o /out/marauder ./cmd/server
 
 # --- Runtime stage ------------------------------------------------------
-FROM alpine:3.21
+FROM alpine:3.24
 
 RUN apk add --no-cache ca-certificates tzdata wget \
  && addgroup -S -g 10001 marauder \
