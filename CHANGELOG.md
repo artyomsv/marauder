@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `deploy/docker-compose.test-clients.yml`: a client-only integration test
+  matrix that spins up every supported download client across versions —
+  qBittorrent `5.2.1` and `5.1.4`, Transmission `4.1.2` and `4.0.6`, Deluge
+  `2.2.0`, and a profile-gated µTorrent `v2.1.0` — each with a healthcheck and
+  a pinned image tag, host ports bound to `127.0.0.1` in the 34xxx range. It
+  composes standalone (poke clients on their host ports) or layered onto the
+  base stack so the backend reaches each client by Docker service DNS. All
+  five client plugins were verified end-to-end against their real containers
+  via the Marauder API (create-client → plugin `Test()` login/connect).
+- Client acceptance CI (`.github/workflows/client-acceptance.yml` +
+  `deploy/acceptance/acceptance.sh`): nightly matrix that creates every
+  supported client through the Marauder API against a real container, on a
+  pinned baseline (blocking, also runs on tags to gate releases) and on each
+  client's latest image (non-blocking canary that auto-files a deduped issue
+  when an upstream release breaks a client — the early warning that issue #38
+  lacked).
+
+### Fixed
+
+- qBittorrent client setup failing against qBittorrent 5.2.x with
+  `client test failed: login failed: status=204 body=""` (#38). qBittorrent
+  5.2.0 changed the WebUI `/api/v2/auth/login` success response from
+  `200 "Ok."` to `204 No Content`; the plugin previously accepted only the
+  legacy form and rejected valid logins. Login success is now decided by a
+  `loginSucceeded` helper that accepts both contracts while still rejecting
+  failures — including a `204` carrying an unexpected body. Verified
+  empirically against linuxserver/qbittorrent `5.1.4` (200 `Ok.`) and `5.2.1`
+  (204, empty).
+
 ## [1.0.1] - 2026-06-01
 
 ### Added

@@ -27,7 +27,7 @@ backend/        Go services (main backend + cfsolver sidecar)
 frontend/       React 19.2 + Vite + Tailwind 4 + shadcn admin UI
 cfsolver/       Standalone Go service: chromedp-based Cloudflare solver
 deploy/         docker-compose stacks (source-build base + prebuilt-image
-                ghcr stack + dev + sso overlays)
+                ghcr stack + dev + sso overlays + test-clients matrix)
 docs/           ROADMAP, PRD, VISION, COMPETITORS, per-feature guides
 site/           Astro 5 marketing site published to marauder.cc
 techdebt/       Debt-tracking files (one per issue, see global rule)
@@ -186,6 +186,10 @@ docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.dev.yml up 
 
 # Run prebuilt GHCR images (no clone/build; pin tag via MARAUDER_VERSION in .env)
 docker compose -f deploy/docker-compose.ghcr.yml --env-file deploy/.env up -d
+
+# Torrent-client test matrix (multi-version qBit + transmission/deluge/µTorrent)
+# Standalone (host ports); or stack on base so the backend reaches clients by DNS.
+docker compose -f deploy/docker-compose.test-clients.yml up -d
 ```
 
 `deploy/docker-compose.ghcr.yml` is the end-user "pull prebuilt" stack:
@@ -195,6 +199,32 @@ ships the gateway nginx config **inline** via Compose top-level `configs:`
 The inline block is a copy of `deploy/nginx/gateway.conf` with nginx's `$`
 escaped as `$$`; **keep the two in sync**. The source-build `docker-compose.yml`
 (+ dev/sso overlays) is unchanged and still bind-mounts `gateway.conf`.
+
+`deploy/docker-compose.test-clients.yml` is a **client-only** matrix (no
+db/backend/frontend) for exercising the client plugins against real clients
+across versions — born out of issue #38 (qBittorrent 5.2.x switched login from
+`200 "Ok."` to `204 No Content`). It ships two qBittorrent versions
+(`5.2.1`→204, `5.1.4`→200), two Transmission (`4.1.2`/`4.0.6`), Deluge `2.2.0`,
+and a profile-gated legacy µTorrent (`ekho/utorrent:v2.1.0`, amd64-only, opt-in
+via `--profile utorrent`). Every service has a `curl`-based healthcheck (so
+`up -d --wait` gates on real readiness); host ports bind to `127.0.0.1` in the
+34xxx range (34621/34622 qbit, 34121/34122 transmission, 34112 deluge, 34608
+µTorrent); image tags are all pinned and registry-verified — no `latest`.
+Distinct service names let it compose either standalone or layered onto the
+base stack for service-DNS access. All four networked client plugins
+(qBittorrent, Transmission, Deluge, and µTorrent — default creds `admin`/empty)
+were verified end-to-end against these real containers via the Marauder API
+(create-client → plugin `Test()`). The non-networked `downloadfolder` client
+is not part of this matrix.
+
+`.github/workflows/client-acceptance.yml` drives `deploy/acceptance/acceptance.sh
+<client> <pinned|latest>` as a nightly matrix (also on tag push for the pinned
+baseline). The runner brings up the base stack plus one client under the
+isolated `marauder-acceptance` Compose project (so it never touches a running
+`deploy` dev stack or `deploy/.env`) and asserts `POST /api/v1/clients`
+succeeds — i.e. the plugin `Test()` passed. The `latest` channel overrides the
+client image tag via `MARAUDER_TEST_*_TAG=latest`; on failure the workflow files
+a deduped `client-canary` GitHub issue.
 
 ## Ports (per `~/.claude/rules/local-port-ranges.md` — host ports must be 30000-49999)
 

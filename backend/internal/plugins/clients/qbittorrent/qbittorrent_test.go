@@ -4,10 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"io"
-	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"sync"
 	"testing"
 
@@ -20,7 +18,10 @@ type fakeQBit struct {
 	loginCalls int
 	addCalls   int
 	lastBody   string
-	mu         sync.Mutex
+	// login204 mimics qBittorrent >=5.2.x, which answers a successful login
+	// with 204 No Content and an empty body instead of 200 "Ok.".
+	login204 bool
+	mu       sync.Mutex
 }
 
 func (f *fakeQBit) handler() http.Handler {
@@ -28,25 +29,32 @@ func (f *fakeQBit) handler() http.Handler {
 	mux.HandleFunc("/api/v2/auth/login", func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
 		f.loginCalls++
+		use204 := f.login204
 		f.mu.Unlock()
 		_ = r.ParseForm()
 		if r.Form.Get("username") == "admin" && r.Form.Get("password") == "secret" {
-			w.WriteHeader(200)
+			if use204 {
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+			w.WriteHeader(http.StatusOK)
 			w.Write([]byte("Ok."))
 			return
 		}
-		w.WriteHeader(200)
+		// Bad credentials are rejected the same way in both contracts:
+		// 200 with a "Fails." body. The login204 flag only governs success.
+		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("Fails."))
 	})
 	mux.HandleFunc("/api/v2/app/version", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(200)
+		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("v4.6.0"))
 	})
 	mux.HandleFunc("/api/v2/torrents/info", func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
 		f.lastBody = r.URL.Query().Get("hashes")
 		f.mu.Unlock()
-		w.WriteHeader(200)
+		w.WriteHeader(http.StatusOK)
 		// One downloading, one finished-seeding torrent.
 		w.Write([]byte(`[` +
 			`{"hash":"ABC123","progress":0.42,"state":"downloading"},` +
@@ -70,7 +78,7 @@ func (f *fakeQBit) handler() http.Handler {
 				}
 			}
 		}
-		w.WriteHeader(200)
+		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("Ok."))
 	})
 	return mux
@@ -84,7 +92,7 @@ func newServer(t *testing.T) (*httptest.Server, *fakeQBit) {
 	return srv, f
 }
 
-func TestTestSucceedsOnGoodCreds(t *testing.T) {
+func TestTest_ValidCredentials_Succeeds(t *testing.T) {
 	srv, _ := newServer(t)
 	p := &plugin{sessions: map[string]*session{}}
 
@@ -96,7 +104,7 @@ func TestTestSucceedsOnGoodCreds(t *testing.T) {
 	}
 }
 
-func TestTestFailsOnBadCreds(t *testing.T) {
+func TestTest_InvalidCredentials_ReturnsError(t *testing.T) {
 	srv, _ := newServer(t)
 	p := &plugin{sessions: map[string]*session{}}
 
@@ -108,7 +116,39 @@ func TestTestFailsOnBadCreds(t *testing.T) {
 	}
 }
 
-func TestAddMagnet(t *testing.T) {
+// TestTest_204LoginResponse_Succeeds is the regression test for issue #38:
+// qBittorrent 5.2.x answers a successful login with 204 No Content (empty
+// body). The whole Test() flow — which goes through session() — must accept it.
+func TestTest_204LoginResponse_Succeeds(t *testing.T) {
+	srv, fake := newServer(t)
+	fake.login204 = true
+	p := &plugin{sessions: map[string]*session{}}
+
+	cfg, _ := json.Marshal(Config{
+		URL: srv.URL, Username: "admin", Password: "secret",
+	})
+	if err := p.Test(context.Background(), cfg); err != nil {
+		t.Fatalf("Test against a 204-login server: %v", err)
+	}
+}
+
+// TestTest_InvalidCredentialsOn204Server_ReturnsError guards that the 204
+// success contract does not turn a rejected login into a false success: a
+// 5.2.x-style server still answers bad credentials with 200 "Fails.".
+func TestTest_InvalidCredentialsOn204Server_ReturnsError(t *testing.T) {
+	srv, fake := newServer(t)
+	fake.login204 = true
+	p := &plugin{sessions: map[string]*session{}}
+
+	cfg, _ := json.Marshal(Config{
+		URL: srv.URL, Username: "admin", Password: "wrong",
+	})
+	if err := p.Test(context.Background(), cfg); err == nil {
+		t.Fatal("expected login failure on a 204-mode server with bad creds")
+	}
+}
+
+func TestAdd_MagnetURI_SubmitsURLField(t *testing.T) {
 	srv, fake := newServer(t)
 	p := &plugin{sessions: map[string]*session{}}
 
@@ -125,7 +165,7 @@ func TestAddMagnet(t *testing.T) {
 	}
 }
 
-func TestAddTorrentFile(t *testing.T) {
+func TestAdd_TorrentFile_Succeeds(t *testing.T) {
 	srv, fake := newServer(t)
 	p := &plugin{sessions: map[string]*session{}}
 
@@ -142,7 +182,7 @@ func TestAddTorrentFile(t *testing.T) {
 	}
 }
 
-func TestSessionReuseAcrossCalls(t *testing.T) {
+func TestSession_RepeatedCalls_LogsInOnce(t *testing.T) {
 	srv, fake := newServer(t)
 	p := &plugin{sessions: map[string]*session{}}
 
@@ -163,7 +203,7 @@ func TestSessionReuseAcrossCalls(t *testing.T) {
 	}
 }
 
-func TestStatusMapsHashesAndStates(t *testing.T) {
+func TestStatus_MultipleHashes_MapsStatesAndProgress(t *testing.T) {
 	srv, fake := newServer(t)
 	p := &plugin{sessions: map[string]*session{}}
 	cfg, _ := json.Marshal(Config{URL: srv.URL, Username: "admin", Password: "secret"})
@@ -191,7 +231,35 @@ func TestStatusMapsHashesAndStates(t *testing.T) {
 	}
 }
 
-// nonUsedDeclarations stops the linter complaining about unused imports
-// when this file is the entry point.
-var _ = strings.Builder{}
-var _ = multipart.NewWriter
+// TestLoginSucceeded covers both qBittorrent WebUI login response contracts:
+//   - legacy (<=5.1.x): 200 OK with body "Ok." on success, "Fails." on bad creds
+//   - current (>=5.2.x): 204 No Content with an empty body on success
+//
+// Verified empirically against linuxserver/qbittorrent 5.1.4 (200 "Ok.") and
+// 5.2.1 (204, empty) — see issue #38.
+func TestLoginSucceeded(t *testing.T) {
+	tests := []struct {
+		name   string
+		status int
+		body   string
+		want   bool
+	}{
+		{"legacy 200 Ok.", 200, "Ok.", true},
+		{"legacy 200 Ok. with trailing newline", 200, "Ok.\n", true},
+		{"legacy 200 case-insensitive ok.", 200, "OK.", true},
+		{"current 204 empty body", 204, "", true},
+		{"current 204 with whitespace body", 204, "  \n", true},
+		{"bad creds 200 Fails.", 200, "Fails.", false},
+		{"200 empty body", 200, "", false},
+		{"204 with unexpected non-empty body", 204, "nope", false},
+		{"403 banned empty body", 403, "", false},
+		{"500 server error", 500, "Ok.", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := loginSucceeded(tt.status, []byte(tt.body)); got != tt.want {
+				t.Errorf("loginSucceeded(%d, %q) = %v, want %v", tt.status, tt.body, got, tt.want)
+			}
+		})
+	}
+}
