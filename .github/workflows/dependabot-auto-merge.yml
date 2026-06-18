@@ -1,0 +1,69 @@
+name: Dependabot auto-merge
+
+# Auto-approve and enable auto-merge for low-risk Dependabot PRs — minor
+# and patch bumps across every ecosystem (incl. docker base-image patch/
+# minor like alpine 3.21->3.24 or nginx 1.27->1.31). Major bumps are left
+# for a human, matching dependabot.yml's "majors individual so reviewers
+# can read each one carefully" policy; this workflow only flags them.
+#
+# `gh pr merge --auto` queues the merge and GitHub completes it once the
+# required status checks (the CI workflow) pass — so nothing merges red.
+# Note: E2E runs nightly/on-tag, NOT per-PR, so auto-merged deps are only
+# stack-tested by the next nightly E2E. CI (build/test/lint/codeql) gates.
+#
+# ONE-TIME repo settings required for this to work (Settings ->):
+#   * Actions -> General -> Workflow permissions ->
+#       "Allow GitHub Actions to create and approve pull requests"  (approve step)
+#   * General -> Pull Requests -> "Allow auto-merge"                (--auto)
+#   * Branch protection on `main` -> require the CI status checks    (gates merge)
+# Without branch protection requiring checks, --auto may merge immediately.
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+
+# Dependabot-triggered runs get a read-only token by default; the
+# permissions block below elevates it for this workflow only.
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  auto-merge:
+    runs-on: ubuntu-latest
+    if: github.actor == 'dependabot[bot]'
+    steps:
+      - name: Fetch Dependabot metadata
+        id: meta
+        uses: dependabot/fetch-metadata@v2
+
+      - name: Approve (minor/patch, on open)
+        if: >-
+          (github.event.action == 'opened' || github.event.action == 'reopened') &&
+          (steps.meta.outputs.update-type == 'version-update:semver-minor' ||
+           steps.meta.outputs.update-type == 'version-update:semver-patch')
+        run: gh pr review --approve "$PR_URL"
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Enable auto-merge (minor/patch)
+        if: >-
+          steps.meta.outputs.update-type == 'version-update:semver-minor' ||
+          steps.meta.outputs.update-type == 'version-update:semver-patch'
+        run: gh pr merge --auto --squash "$PR_URL"
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Flag majors for manual review (on open)
+        if: >-
+          (github.event.action == 'opened' || github.event.action == 'reopened') &&
+          steps.meta.outputs.update-type == 'version-update:semver-major'
+        run: |
+          gh pr comment "$PR_URL" --body \
+            "🔍 **Major bump** (\`${DEP_NAMES}\`) — not auto-merged. Left for manual review per the majors-individual policy in \`dependabot.yml\`."
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          DEP_NAMES: ${{ steps.meta.outputs.dependency-names }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
