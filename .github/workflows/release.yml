@@ -172,3 +172,44 @@ jobs:
           files: sboms/**/*.cdx.json
           draft: false
           prerelease: ${{ contains(steps.changelog.outputs.tag, '-rc') || contains(steps.changelog.outputs.tag, '-alpha') || contains(steps.changelog.outputs.tag, '-beta') }}
+
+  # ----------------------------------------------- bump source-build version
+  # Keep the source-build (dev) stack's stamped version in sync with the
+  # latest release, so a local `docker compose up --build` reports the real
+  # released version instead of a hand-maintained marker. Commits the bump
+  # back to main with [skip ci] so it doesn't re-trigger CI.
+  bump-dev-version:
+    name: Bump dev stack version
+    needs: [release]
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Set dev stack version to the released version
+        run: |
+          set -euo pipefail
+          VER="${GITHUB_REF_NAME#v}"
+
+          # Update the source-build VERSION build arg and the marauder-* image
+          # tags in the base compose file. Other images (postgres, nginx) are
+          # left untouched by the marauder- prefix anchor.
+          sed -i -E "s|(VERSION: \")[^\"]+(\")|\1${VER}\2|" deploy/docker-compose.yml
+          sed -i -E "s#(image: marauder-(backend|frontend|cfsolver):).*#\1${VER}#" deploy/docker-compose.yml
+
+          if git diff --quiet -- deploy/docker-compose.yml; then
+            echo "deploy/docker-compose.yml already at ${VER}, nothing to do"
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add deploy/docker-compose.yml
+          git commit -m "chore: set dev stack version to ${VER} [skip ci]"
+          git push origin main
