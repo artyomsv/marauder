@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.2] - 2026-06-18
+
 ### Added
 
 - `deploy/docker-compose.test-clients.yml`: a client-only integration test
