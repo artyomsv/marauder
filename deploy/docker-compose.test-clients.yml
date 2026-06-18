@@ -77,7 +77,7 @@ services:
   # 5.2.1 answers a successful login with 204 No Content (empty body).
   qbittorrent-521:
     <<: *qbit-common
-    image: lscr.io/linuxserver/qbittorrent:5.2.1
+    image: lscr.io/linuxserver/qbittorrent:${MARAUDER_TEST_QBIT_TAG:-5.2.1}
     environment: *qbit-env
     volumes:
       - qbit_521_config:/config
@@ -99,7 +99,7 @@ services:
   # --- Transmission: current + previous major ---------------------------
   # RPC at /transmission/rpc on 9091. No auth by default in this image.
   transmission-412:
-    image: lscr.io/linuxserver/transmission:4.1.2
+    image: lscr.io/linuxserver/transmission:${MARAUDER_TEST_TRANSMISSION_TAG:-4.1.2}
     restart: unless-stopped
     environment:
       PUID: "1000"
@@ -136,7 +136,7 @@ services:
   # The plugin talks to the web daemon, not the classic daemon RPC (58846).
   # Default web UI password is "deluge".
   deluge-220:
-    image: lscr.io/linuxserver/deluge:2.2.0
+    image: lscr.io/linuxserver/deluge:${MARAUDER_TEST_DELUGE_TAG:-2.2.0}
     restart: unless-stopped
     environment:
       PUID: "1000"
@@ -160,7 +160,7 @@ services:
   # Pinned to v2.1.0 (last tagged release); credentials are the image's
   # defaults — check its logs/README; this file does not assert them.
   utorrent:
-    image: ekho/utorrent:v2.1.0
+    image: ekho/utorrent:${MARAUDER_TEST_UTORRENT_TAG:-v2.1.0}
     profiles: ["utorrent"]
     restart: unless-stopped
     volumes:
