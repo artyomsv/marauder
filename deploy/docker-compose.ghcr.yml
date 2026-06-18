@@ -36,6 +36,10 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-marauder}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-marauder}
       POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+      # PG18 hard-errors when a volume sits at the legacy
+      # /var/lib/postgresql/data path (docker-library/postgres#1259).
+      # Pin PGDATA there so the layout stays valid and the db boots.
+      PGDATA: /var/lib/postgresql/data
     volumes:
       - marauder_pgdata:/var/lib/postgresql/data
     healthcheck:
