@@ -149,8 +149,11 @@ jobs:
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
           # Pull the [VER] block out of CHANGELOG.md, stopping at the next ## heading.
-          awk -v v="[$VER]" '
-            $0 ~ "^## "v {flag=1; next}
+          # Match the heading by literal prefix (index), not a regex — the
+          # version is bracketed (e.g. "## [1.0.2]") and "[1.0.2]" in a regex
+          # is a character class, which never matches the real heading.
+          awk -v v="## [$VER]" '
+            index($0, v) == 1 {flag=1; next}
             /^## / && flag {flag=0}
             flag {print}
           ' CHANGELOG.md > release-notes.md
