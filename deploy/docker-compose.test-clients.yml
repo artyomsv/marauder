@@ -1,0 +1,186 @@
+# Torrent-client test matrix for Marauder.
+#
+# Spins up every download client Marauder supports, across multiple
+# versions, so the client plugins can be exercised against REAL clients —
+# not just the in-process httptest fakes. Born out of issue #38, where
+# qBittorrent 5.2.x changed its login response from `200 "Ok."` to
+# `204 No Content` and the legacy-only check rejected a valid login.
+#
+# This file defines ONLY client services (no db/backend/frontend), so it
+# composes two ways:
+#
+#   1. Standalone — bring the matrix up and poke each client on its host
+#      port directly (curl, browser, plugin e2e tests):
+#
+#        docker compose -f deploy/docker-compose.test-clients.yml up -d
+#
+#   2. Stacked on the full stack — the backend then reaches each client by
+#      Docker service DNS (the URLs in the table below), so you can add
+#      them as clients inside a running Marauder and test end-to-end:
+#
+#        docker compose -f deploy/docker-compose.yml \
+#                       -f deploy/docker-compose.test-clients.yml up -d
+#
+# Every service declares a healthcheck, so `docker compose up -d --wait`
+# blocks until each client's WebUI/RPC is actually serving — handy for
+# gating an e2e script.
+#
+# Tear down + wipe all client state:
+#   docker compose -f deploy/docker-compose.test-clients.yml down -v
+#
+# Host ports stay in the 34xxx range (local-port-ranges rule); they don't
+# overlap the dev overlay's 34611/34091, and they bind to 127.0.0.1 only
+# so the (auth-less) test clients are never exposed on the LAN. Container-
+# internal ports keep their conventional values. Every image tag below was
+# verified to resolve before being pinned (no `latest`, no guesses).
+#
+# | Service           | Host port (127.0.0.1) | Internal | URL to enter in Marauder (stacked) |
+# |-------------------|-----------------------|----------|------------------------------------|
+# | qbittorrent-521   | 34621                 | 6611     | http://qbittorrent-521:6611                    |
+# | qbittorrent-514   | 34622                 | 6611     | http://qbittorrent-514:6611                    |
+# | transmission-412  | 34121                 | 9091     | http://transmission-412:9091/transmission/rpc  |
+# | transmission-406  | 34122                 | 9091     | http://transmission-406:9091/transmission/rpc  |
+# | deluge-220        | 34112                 | 8112     | http://deluge-220:8112                         |
+# | utorrent          | 34608                 | 8080     | http://utorrent:8080                           |
+#
+# qBittorrent has no fixed password — the linuxserver image mints a random
+# temporary one on each start until you set your own in the WebUI. Read it
+# with, e.g.:
+#   docker logs deploy-qbittorrent-521-1 2>&1 | grep "temporary password"
+
+x-health: &health
+  interval: 15s
+  timeout: 5s
+  retries: 5
+  start_period: 40s
+
+x-qbit-common: &qbit-common
+  restart: unless-stopped
+  environment: &qbit-env
+    PUID: "1000"
+    PGID: "1000"
+    TZ: "Etc/UTC"
+    WEBUI_PORT: "6611"
+  logging: &log-opts
+    driver: json-file
+    options:
+      max-size: "5m"
+      max-file: "2"
+  # `curl -s` (no -f) exits 0 for any HTTP response, so the probe tolerates
+  # the WebUI's unauthenticated 401 — it only fails on connection refused.
+  healthcheck:
+    <<: *health
+    test: ["CMD-SHELL", "curl -s -o /dev/null http://localhost:6611/ || exit 1"]
+
+services:
+  # --- qBittorrent: the two sides of the issue #38 login contract --------
+  # 5.2.1 answers a successful login with 204 No Content (empty body).
+  qbittorrent-521:
+    <<: *qbit-common
+    image: lscr.io/linuxserver/qbittorrent:5.2.1
+    environment: *qbit-env
+    volumes:
+      - qbit_521_config:/config
+      - qbit_521_downloads:/downloads
+    ports:
+      - "127.0.0.1:${MARAUDER_TEST_QBIT_521_PORT:-34621}:6611"
+
+  # 5.1.4 answers a successful login the legacy way: 200 OK, body "Ok.".
+  qbittorrent-514:
+    <<: *qbit-common
+    image: lscr.io/linuxserver/qbittorrent:5.1.4
+    environment: *qbit-env
+    volumes:
+      - qbit_514_config:/config
+      - qbit_514_downloads:/downloads
+    ports:
+      - "127.0.0.1:${MARAUDER_TEST_QBIT_514_PORT:-34622}:6611"
+
+  # --- Transmission: current + previous major ---------------------------
+  # RPC at /transmission/rpc on 9091. No auth by default in this image.
+  transmission-412:
+    image: lscr.io/linuxserver/transmission:4.1.2
+    restart: unless-stopped
+    environment:
+      PUID: "1000"
+      PGID: "1000"
+      TZ: "Etc/UTC"
+    volumes:
+      - transmission_412_config:/config
+      - transmission_412_downloads:/downloads
+    ports:
+      - "127.0.0.1:${MARAUDER_TEST_TRANSMISSION_412_PORT:-34121}:9091"
+    logging: *log-opts
+    healthcheck:
+      <<: *health
+      test: ["CMD-SHELL", "curl -s -o /dev/null http://localhost:9091/transmission/rpc || exit 1"]
+
+  transmission-406:
+    image: lscr.io/linuxserver/transmission:4.0.6
+    restart: unless-stopped
+    environment:
+      PUID: "1000"
+      PGID: "1000"
+      TZ: "Etc/UTC"
+    volumes:
+      - transmission_406_config:/config
+      - transmission_406_downloads:/downloads
+    ports:
+      - "127.0.0.1:${MARAUDER_TEST_TRANSMISSION_406_PORT:-34122}:9091"
+    logging: *log-opts
+    healthcheck:
+      <<: *health
+      test: ["CMD-SHELL", "curl -s -o /dev/null http://localhost:9091/transmission/rpc || exit 1"]
+
+  # --- Deluge: web UI JSON-RPC at /json on 8112 -------------------------
+  # The plugin talks to the web daemon, not the classic daemon RPC (58846).
+  # Default web UI password is "deluge".
+  deluge-220:
+    image: lscr.io/linuxserver/deluge:2.2.0
+    restart: unless-stopped
+    environment:
+      PUID: "1000"
+      PGID: "1000"
+      TZ: "Etc/UTC"
+    volumes:
+      - deluge_220_config:/config
+      - deluge_220_downloads:/downloads
+    ports:
+      - "127.0.0.1:${MARAUDER_TEST_DELUGE_220_PORT:-34112}:8112"
+    logging: *log-opts
+    healthcheck:
+      <<: *health
+      test: ["CMD-SHELL", "curl -s -o /dev/null http://localhost:8112/ || exit 1"]
+
+  # --- µTorrent: WebUI at /gui on 8080 (HTTP basic auth) ----------------
+  # No maintained official image exists; ekho/utorrent wraps the legacy
+  # Linux utserver. It is amd64-only, so it is kept behind the "utorrent"
+  # profile and a default `up` skips it on arm64 hosts. Enable with:
+  #   docker compose --profile utorrent ... up -d
+  # Pinned to v2.1.0 (last tagged release); credentials are the image's
+  # defaults — check its logs/README; this file does not assert them.
+  utorrent:
+    image: ekho/utorrent:v2.1.0
+    profiles: ["utorrent"]
+    restart: unless-stopped
+    volumes:
+      - utorrent_data:/utorrent/settings
+    ports:
+      - "127.0.0.1:${MARAUDER_TEST_UTORRENT_PORT:-34608}:8080"
+    logging: *log-opts
+    healthcheck:
+      <<: *health
+      test: ["CMD-SHELL", "curl -s -o /dev/null http://localhost:8080/gui/ || exit 1"]
+
+volumes:
+  qbit_521_config:
+  qbit_521_downloads:
+  qbit_514_config:
+  qbit_514_downloads:
+  transmission_412_config:
+  transmission_412_downloads:
+  transmission_406_config:
+  transmission_406_downloads:
+  deluge_220_config:
+  deluge_220_downloads:
+  utorrent_data:
