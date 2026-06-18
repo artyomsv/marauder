@@ -18,6 +18,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   base stack so the backend reaches each client by Docker service DNS. All
   five client plugins were verified end-to-end against their real containers
   via the Marauder API (create-client → plugin `Test()` login/connect).
+- Client acceptance CI (`.github/workflows/client-acceptance.yml` +
+  `deploy/acceptance/acceptance.sh`): nightly matrix that creates every
+  supported client through the Marauder API against a real container, on a
+  pinned baseline (blocking, also runs on tags to gate releases) and on each
+  client's latest image (non-blocking canary that auto-files a deduped issue
+  when an upstream release breaks a client — the early warning that issue #38
+  lacked).
 
 ### Fixed
 

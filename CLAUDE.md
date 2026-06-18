@@ -217,6 +217,15 @@ were verified end-to-end against these real containers via the Marauder API
 (create-client → plugin `Test()`). The non-networked `downloadfolder` client
 is not part of this matrix.
 
+`.github/workflows/client-acceptance.yml` drives `deploy/acceptance/acceptance.sh
+<client> <pinned|latest>` as a nightly matrix (also on tag push for the pinned
+baseline). The runner brings up the base stack plus one client under the
+isolated `marauder-acceptance` Compose project (so it never touches a running
+`deploy` dev stack or `deploy/.env`) and asserts `POST /api/v1/clients`
+succeeds — i.e. the plugin `Test()` passed. The `latest` channel overrides the
+client image tag via `MARAUDER_TEST_*_TAG=latest`; on failure the workflow files
+a deduped `client-canary` GitHub issue.
+
 ## Ports (per `~/.claude/rules/local-port-ranges.md` — host ports must be 30000-49999)
 
 Host-facing ports — all in the 34xxx range, overrideable via env vars:
