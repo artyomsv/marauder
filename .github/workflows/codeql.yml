@@ -48,7 +48,8 @@ jobs:
         if: matrix.language == 'go'
         uses: actions/setup-go@v6
         with:
-          go-version: '1.25'
+          # autobuild compiles both modules; cfsolver/go.mod requires 1.26.
+          go-version: '1.26'
           cache: false
 
       - name: Autobuild
