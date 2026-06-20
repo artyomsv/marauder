@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Kinozal metadata resolution** (`WithMetadata`): the AddTopic form now
+  resolves a real title + poster from a Kinozal topic URL (cp1251-decoded
+  `<title>` + `og:image`), matching the RuTracker/LostFilm experience.
+
+### Changed
+
+- **Kinozal is now validated end-to-end** and promoted from `alpha` to
+  `validated` on marauder.cc. Verified against a live account: login,
+  infohash resolution, metadata, and download → torrent-client delivery.
+
+### Fixed
+
+- **Kinozal checks reported `no infohash found in topic page`** (#48): the
+  plugin scraped the details page, which doesn't carry the hash. It now reads
+  the infohash from the authenticated `get_srv_details.php?id=<id>&action=2`
+  endpoint and tolerates both `Инфо хеш` / `Инфо хэш` spellings.
+- **AddTopic display name** kept the previous tracker's title when the URL was
+  changed; an auto-filled name now refreshes on URL change while a user-typed
+  name is preserved.
+
 ## [1.0.2] - 2026-06-18
 
 ### Added
