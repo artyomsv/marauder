@@ -4,10 +4,9 @@
 // RuTracker but the URL pattern is /details.php?id=<topic_id> and the
 // download link is /download.php?id=<topic_id>.
 //
-// **Validation status:** structurally complete with fixture-based unit
-// tests. Live validation requires Kinozal credentials and was not
-// performed in the original implementation session — see CONTRIBUTING.md
-// for the procedure to validate against a real account.
+// **Validation status:** verified end-to-end against a live Kinozal account
+// (2026-06) — login, infohash resolution via get_srv_details.php, metadata
+// (title + poster), and download → torrent-client delivery all confirmed.
 package kinozal
 
 import (
@@ -25,6 +24,9 @@ import (
 	"github.com/artyomsv/marauder/backend/internal/plugins/registry"
 	"github.com/artyomsv/marauder/backend/internal/plugins/trackers/forumcommon"
 )
+
+// siteSuffix is the " :: Кинозал.ТВ" tail Kinozal appends to every <title>.
+const siteSuffix = " :: Кинозал.ТВ"
 
 const (
 	pluginName    = "kinozal"
@@ -120,7 +122,7 @@ func (p *plugin) Verify(ctx context.Context, creds *domain.TrackerCredential) (b
 	req.Header.Set("User-Agent", userAgent)
 	resp, err := sess.Client.Do(req)
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("kinozal verify: %w", err)
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 16*1024))
@@ -134,11 +136,55 @@ func (p *plugin) Verify(ctx context.Context, creds *domain.TrackerCredential) (b
 // --- Check / Download --------------------------------------------------
 
 var (
-	titleRe   = regexp.MustCompile(`(?s)<title>([^<]+)</title>`)
-	hashRe    = regexp.MustCompile(`(?i)Инфо хэш[^A-Z0-9]+([A-Fa-f0-9]{40})`)
-	hashAltRe = regexp.MustCompile(`(?i)Info[\s_-]?hash[^A-Z0-9]+([A-Fa-f0-9]{40})`)
+	titleRe = regexp.MustCompile(`(?s)<title>([^<]+)</title>`)
+	// hashRe matches the live label "Инфо хеш" (хеш, Cyrillic е) and tolerates
+	// the older "Инфо хэш" (э) spelling + variable spacing before the hash.
+	hashRe    = regexp.MustCompile(`(?i)Инфо\s*х[эе]ш[^A-Za-z0-9]+([A-Fa-f0-9]{40})`)
+	hashAltRe = regexp.MustCompile(`(?i)Info[\s_-]?hash[^A-Za-z0-9]+([A-Fa-f0-9]{40})`)
+
+	// ogImageRe matches <meta property="og:image" content="..."> — the poster
+	// source Kinozal emits in the page head (commonly a relative /i/poster/... URL).
+	ogImageRe = regexp.MustCompile(`(?i)<meta[^>]+property="og:image"[^>]+content="([^"]+)"`)
 )
 
+// cleanTitle decodes a raw <title> match from cp1251 and strips the site
+// suffix. Thin wrapper over the shared forumcommon helper so Check and
+// ResolveMetadata stay consistent. Decoding is mandatory: undecoded cp1251
+// Cyrillic is invalid UTF-8 and Postgres rejects it (SQLSTATE 22021) on write.
+func cleanTitle(raw string) string {
+	return forumcommon.CleanTitle(raw, siteSuffix)
+}
+
+// extractImageURL returns the og:image poster from a topic page body, made
+// absolute against the trusted host (Kinozal emits relative /i/poster/...
+// paths). Returns "" when the page exposes no poster — never fabricated.
+func extractImageURL(body []byte, host string) string {
+	m := ogImageRe.FindSubmatch(body)
+	if m == nil {
+		return ""
+	}
+	raw := strings.TrimSpace(string(m[1]))
+	switch {
+	case raw == "":
+		return ""
+	case strings.HasPrefix(raw, "http://"), strings.HasPrefix(raw, "https://"):
+		return raw
+	case strings.HasPrefix(raw, "//"):
+		return "https:" + raw
+	case strings.HasPrefix(raw, "/"):
+		return "https://" + host + raw
+	default:
+		return "https://" + host + "/" + raw
+	}
+}
+
+// Check makes TWO requests per tick: the details page for the display title,
+// then get_srv_details.php for the infohash (Kinozal exposes the hash only
+// there, not on the details page). Both run under the scheduler's single
+// checkCtx, so they share one TrackerHTTPTimeout budget. The hash is the
+// load-bearing field, so a hash-fetch failure fails the whole Check and the
+// already-fetched title is intentionally discarded — title self-heal simply
+// retries next tick rather than persisting a title with no matching hash.
 func (p *plugin) Check(ctx context.Context, topic *domain.Topic, creds *domain.TrackerCredential) (*domain.Check, error) {
 	body, err := p.fetch(ctx, topic.URL, creds)
 	if err != nil {
@@ -146,17 +192,76 @@ func (p *plugin) Check(ctx context.Context, topic *domain.Topic, creds *domain.T
 	}
 	check := &domain.Check{}
 	if m := titleRe.FindSubmatch(body); m != nil {
-		check.DisplayName = strings.TrimSpace(string(m[1]))
-		check.DisplayName = strings.TrimSuffix(check.DisplayName, " / Кинозал.ТВ")
+		check.DisplayName = cleanTitle(string(m[1]))
+	}
+	hash, err := p.fetchInfohash(ctx, topic.URL, creds)
+	if err != nil {
+		return nil, err
+	}
+	check.Hash = hash
+	return check, nil
+}
+
+// fetchInfohash pulls the torrent infohash from get_srv_details.php?id=...&action=2.
+// Kinozal does NOT render the hash on the details page — it lives only in this
+// authenticated AJAX endpoint's response ("Инфо хеш: <40 hex>"). The URL is
+// rebuilt from the trusted domain + numeric id (never the raw user URL) to
+// avoid request forgery (CodeQL go/request-forgery), mirroring Download.
+func (p *plugin) fetchInfohash(ctx context.Context, rawURL string, creds *domain.TrackerCredential) (string, error) {
+	u, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil {
+		return "", fmt.Errorf("kinozal: parse url: %w", err)
+	}
+	id, err := strconv.Atoi(u.Query().Get("id"))
+	if err != nil {
+		return "", fmt.Errorf("kinozal: topic id: %w", err)
+	}
+	srvURL := fmt.Sprintf("https://%s/get_srv_details.php?id=%d&action=2", p.domain, id)
+	body, err := p.fetch(ctx, srvURL, creds)
+	if err != nil {
+		return "", fmt.Errorf("kinozal: get_srv_details: %w", err)
 	}
 	if m := hashRe.FindSubmatch(body); m != nil {
-		check.Hash = strings.ToLower(string(m[1]))
-	} else if m := hashAltRe.FindSubmatch(body); m != nil {
-		check.Hash = strings.ToLower(string(m[1]))
-	} else {
-		return nil, errors.New("kinozal: no infohash found in topic page")
+		return strings.ToLower(string(m[1])), nil
 	}
-	return check, nil
+	if m := hashAltRe.FindSubmatch(body); m != nil {
+		return strings.ToLower(string(m[1])), nil
+	}
+	return "", errors.New("kinozal: no infohash found in topic page")
+}
+
+// --- WithMetadata ------------------------------------------------------
+
+var _ registry.WithMetadata = (*plugin)(nil)
+
+// ResolveMetadata fetches the public details page and extracts a human-readable
+// title (the <title> tag, cp1251-decoded, minus the " :: Кинозал.ТВ" suffix)
+// and the og:image poster (made absolute). creds may be nil — the details page
+// is publicly viewable, so a session isn't required. Image URL is "" when the
+// page exposes no poster; the caller treats errors as fail-open.
+func (p *plugin) ResolveMetadata(ctx context.Context, rawURL string, creds *domain.TrackerCredential) (*registry.Metadata, error) {
+	m := urlPattern.FindStringSubmatch(strings.TrimSpace(rawURL))
+	if m == nil {
+		return nil, errors.New("resolve metadata: not a kinozal details URL")
+	}
+	id, err := strconv.Atoi(m[1])
+	if err != nil {
+		return nil, fmt.Errorf("resolve metadata: topic id: %w", err)
+	}
+	// Rebuild the URL from the trusted host (p.domain) + the numeric id, never
+	// the raw user-supplied URL, so a crafted URL cannot redirect the request
+	// to an arbitrary host (CodeQL go/request-forgery). Mirrors Download.
+	canonical := fmt.Sprintf("https://%s/details.php?id=%d", p.domain, id)
+	body, err := p.fetch(ctx, canonical, creds)
+	if err != nil {
+		return nil, fmt.Errorf("resolve metadata: %w", err)
+	}
+	meta := &registry.Metadata{}
+	if mt := titleRe.FindSubmatch(body); mt != nil {
+		meta.Title = cleanTitle(string(mt[1]))
+	}
+	meta.ImageURL = extractImageURL(body, p.domain)
+	return meta, nil
 }
 
 func (p *plugin) Download(ctx context.Context, topic *domain.Topic, _ *domain.Check, creds *domain.TrackerCredential) (*domain.Payload, error) {
@@ -199,7 +304,7 @@ func (p *plugin) fetch(ctx context.Context, target string, creds *domain.Tracker
 	req.Header.Set("User-Agent", userAgent)
 	resp, err := sess.Client.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("kinozal GET: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
