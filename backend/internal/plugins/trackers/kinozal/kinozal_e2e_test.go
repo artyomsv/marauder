@@ -14,11 +14,14 @@ import (
 	"github.com/artyomsv/marauder/backend/internal/plugins/trackers/forumcommon"
 )
 
-const e2eDetailsHTML = `<html><head><title>The Movie / Кино (2026) [BDRip] [1080p] / Кинозал.ТВ</title></head>
+const e2eDetailsHTML = `<html><head><title>The Movie / Кино (2026) [BDRip] [1080p] :: Кинозал.ТВ</title></head>
 <body>
 <a href="/logout.php">Выход</a>
-<div>Инфо хэш: 0123456789ABCDEF0123456789ABCDEF01234567</div>
 </body></html>`
+
+// e2eSrvDetailsHTML mirrors the real get_srv_details.php?id=...&action=2 body —
+// the only place Kinozal exposes the infohash ("Инфо хеш: <40 hex>").
+const e2eSrvDetailsHTML = `<ul><li>Инфо хеш: 6FADE7192D2257460B7793C9096A79FE6D5012A9</li><li>Размер части торрента: 8 МБ</li></ul>`
 
 func TestE2E(t *testing.T) {
 	e2etest.RunFullPipeline(t, e2etest.Case{
@@ -30,6 +33,9 @@ func TestE2E(t *testing.T) {
 					http.SetCookie(w, &http.Cookie{Name: "uid", Value: "42"})
 					w.WriteHeader(200)
 					_, _ = w.Write([]byte(`<a href="/logout.php">Выход</a>`))
+				case strings.HasPrefix(r.URL.Path, "/get_srv_details.php"):
+					w.WriteHeader(200)
+					_, _ = w.Write([]byte(e2eSrvDetailsHTML))
 				case strings.HasPrefix(r.URL.Path, "/details.php"):
 					w.WriteHeader(200)
 					_, _ = w.Write([]byte(e2eDetailsHTML))
@@ -63,7 +69,7 @@ func TestE2E(t *testing.T) {
 			Username:  "alice",
 			SecretEnc: []byte("password123"),
 		},
-		ExpectedHash:         "0123456789abcdef0123456789abcdef01234567",
+		ExpectedHash:         "6fade7192d2257460b7793c9096a79fe6d5012a9",
 		ExpectedNameContains: "The Movie",
 	})
 }

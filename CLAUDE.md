@@ -320,7 +320,7 @@ public `/series/<slug>/seasons` page, reuses the episode parser); the
 AddTopic form uses it to constrain the "start from" season/episode
 selectors to released values.
 
-`WithMetadata` (RuTracker, LostFilm) resolves a real title + poster image
+`WithMetadata` (RuTracker, LostFilm, Kinozal) resolves a real title + poster image
 from a topic URL. It is called best-effort (fail-open, short timeout) at add
 time so a new topic shows a real name + image immediately instead of a
 "RuTracker topic 123" placeholder, and powers `GET /api/v1/trackers/preview?url=`

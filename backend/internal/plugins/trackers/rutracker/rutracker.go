@@ -28,9 +28,6 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"unicode/utf8"
-
-	"golang.org/x/text/encoding/charmap"
 
 	"github.com/artyomsv/marauder/backend/internal/domain"
 	"github.com/artyomsv/marauder/backend/internal/plugins/registry"
@@ -171,30 +168,12 @@ var (
 	postImgSrcRe = regexp.MustCompile(`(?i)<img[^>]+class="[^"]*postImg[^"]*"[^>]+src="([^"]+)"`)
 )
 
-// cleanTitle decodes a raw <title> match from windows-1251 (the encoding
-// RuTracker serves its pages in), trims it, and strips the site suffix.
-// Shared by Check and ResolveMetadata so both stay consistent. Without the
-// decode the Cyrillic bytes are invalid UTF-8 — they render as mojibake and
-// Postgres rejects them (SQLSTATE 22021) on write.
+// cleanTitle decodes a raw <title> match from cp1251 and strips the site
+// suffix. Thin wrapper over the shared forumcommon helper so Check and
+// ResolveMetadata stay consistent. Decoding is mandatory: undecoded cp1251
+// Cyrillic is invalid UTF-8 and Postgres rejects it (SQLSTATE 22021) on write.
 func cleanTitle(raw string) string {
-	t := strings.TrimSpace(decodeWindows1251(raw))
-	return strings.TrimSuffix(t, " :: RuTracker.org")
-}
-
-// decodeWindows1251 converts a windows-1251 (Cyrillic) byte string into UTF-8.
-// RuTracker serves cp1251, whose Cyrillic high bytes are invalid UTF-8 — so we
-// only transcode when the input is NOT already valid UTF-8. That keeps ASCII
-// and any already-UTF-8 source untouched while fixing real cp1251 titles. On a
-// decode error the input is returned as-is rather than dropped.
-func decodeWindows1251(s string) string {
-	if utf8.ValidString(s) {
-		return s
-	}
-	out, err := charmap.Windows1251.NewDecoder().String(s)
-	if err != nil {
-		return s
-	}
-	return out
+	return forumcommon.CleanTitle(raw, " :: RuTracker.org")
 }
 
 // extractImageURL returns the first poster image URL from a topic page body,
