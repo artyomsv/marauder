@@ -1,0 +1,165 @@
+name: Auto release on merge
+
+# Cuts a release automatically when a PR is squash-merged to main.
+#
+# It does NOT build anything itself — it derives the next semantic version from
+# the merged PR's Conventional Commit title, rolls CHANGELOG.md, and pushes an
+# annotated tag. The existing release.yml fires on that v* tag and does the
+# heavy lifting (multi-arch build, cosign, SBOM, GitHub Release, issue notify).
+#
+# The PR description and the linked issue numbers travel forward to release.yml
+# inside the annotated tag message (read there via `git tag -l --format`), so
+# the release notes can include the PR body and the linked issues can be
+# notified only AFTER the artifacts actually exist.
+#
+# Version policy (only version-bumping Conventional Commit types release):
+#   feat!/BREAKING CHANGE -> major   feat -> minor   fix/perf -> patch
+#   chore/docs/ci/test/refactor/build (incl. dependabot) -> no release.
+#
+# ONE-TIME SETUP — required for the tag push to trigger release.yml:
+#   GitHub suppresses workflow re-triggering for events raised by the built-in
+#   GITHUB_TOKEN, so a tag pushed with it would NOT start release.yml. Create a
+#   repo (or org) secret `RELEASE_PAT` — a fine-grained PAT with `contents:
+#   write` on this repo — and the tag push below uses it so release.yml fires.
+#   Without the secret the workflow still rolls the CHANGELOG and creates the
+#   tag (using GITHUB_TOKEN), but release.yml must then be started manually via
+#   its workflow_dispatch. A startup step warns when the secret is absent.
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [main]
+
+# Serialize merges so two PRs landing back-to-back can't compute the same next
+# version off the same latest tag. Never cancel — every merge must be processed.
+concurrency:
+  group: auto-release
+  cancel-in-progress: false
+
+permissions:
+  contents: write   # commit the CHANGELOG roll + push the tag to main
+
+jobs:
+  tag:
+    name: Compute version and tag
+    # Only real merges, never a closed-without-merge.
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main (full history + tags)
+        uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+          # Persist a PAT (if configured) so the `git push` of the tag below
+          # triggers release.yml. Falls back to GITHUB_TOKEN (tag created, but
+          # release.yml won't auto-start — see the header setup note).
+          token: ${{ secrets.RELEASE_PAT || secrets.GITHUB_TOKEN }}
+
+      - name: Warn if RELEASE_PAT is missing
+        # secrets can't be used in a step `if:`, so map presence to env and
+        # branch inside the script.
+        env:
+          HAS_PAT: ${{ secrets.RELEASE_PAT != '' }}
+        run: |
+          if [ "$HAS_PAT" != "true" ]; then
+            echo "::warning::RELEASE_PAT secret is not set. The tag will be created with GITHUB_TOKEN, which will NOT trigger release.yml. Start release.yml manually via workflow_dispatch, or add the RELEASE_PAT secret (see auto-release.yml header)."
+          fi
+
+      - name: Determine bump and next version
+        id: ver
+        # PR title/body are attacker-controllable; pass them through env (never
+        # inline ${{ }} in run:) to avoid shell injection.
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          set -euo pipefail
+          chmod +x .github/scripts/release-helpers.sh
+          H=.github/scripts/release-helpers.sh
+
+          LEVEL="$("$H" bump-level "$PR_TITLE" "${PR_BODY:-}")"
+          echo "Bump level for '$PR_TITLE': $LEVEL"
+          if [ "$LEVEL" = "none" ]; then
+            echo "Non-version-bumping PR — no release."
+            echo "release=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          LATEST="$(git tag --sort=-v:refname | head -1)"
+          echo "Latest tag: ${LATEST:-<none>}"
+          VER="$("$H" next-version "${LATEST:-}" "$LEVEL")"
+          echo "Next version: $VER"
+
+          if git rev-parse -q --verify "refs/tags/v$VER" >/dev/null; then
+            echo "Tag v$VER already exists — skipping (idempotent re-run)."
+            echo "release=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "release=true" >> "$GITHUB_OUTPUT"
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+          echo "level=$LEVEL" >> "$GITHUB_OUTPUT"
+
+      - name: Roll CHANGELOG.md
+        if: steps.ver.outputs.release == 'true'
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          set -euo pipefail
+          H=.github/scripts/release-helpers.sh
+          VER="${{ steps.ver.outputs.version }}"
+          LEVEL="${{ steps.ver.outputs.level }}"
+          DATE="$(date -u +'%Y-%m-%d')"
+
+          # If the developer forgot to fill in [Unreleased], synthesize a single
+          # bullet from the real PR title so the release notes are never blank.
+          BODY="$("$H" unreleased-body < CHANGELOG.md | tr -d '[:space:]')"
+          if [ -z "$BODY" ]; then
+            case "$LEVEL" in
+              major|minor) HEADING="Added" ;;
+              *)           HEADING="Fixed" ;;
+            esac
+            echo "::warning::[Unreleased] was empty — synthesizing a bullet from the PR title."
+            "$H" roll-changelog "$VER" "$DATE" "$HEADING" "$PR_TITLE" < CHANGELOG.md > CHANGELOG.new
+          else
+            "$H" roll-changelog "$VER" "$DATE" < CHANGELOG.md > CHANGELOG.new
+          fi
+          mv CHANGELOG.new CHANGELOG.md
+
+      - name: Commit, tag and push
+        if: steps.ver.outputs.release == 'true'
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_HEAD: ${{ github.event.pull_request.head.ref }}
+        run: |
+          set -euo pipefail
+          H=.github/scripts/release-helpers.sh
+          VER="${{ steps.ver.outputs.version }}"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # Commit the CHANGELOG roll to main (skip ci so it doesn't re-trigger).
+          git add CHANGELOG.md
+          git commit -m "chore(release): cut v$VER [skip ci]"
+
+          # Build the annotated-tag message: PR title + body, plus machine
+          # readable trailers release.yml parses (issue numbers + PR number).
+          ISSUES="$("$H" issue-refs "${PR_BODY:-}" "${PR_HEAD:-}" | sed 's/^/#/' | paste -sd' ' -)"
+          {
+            printf '%s\n\n' "$PR_TITLE"
+            printf '%s\n\n' "${PR_BODY:-}"
+            printf 'Issues: %s\n' "$ISSUES"
+            printf 'PR: #%s\n' "$PR_NUMBER"
+          } > .tagmsg
+
+          git tag -a "v$VER" -F .tagmsg
+          git push origin main
+          git push origin "v$VER"
+
+          echo "### :rocket: Tagged v$VER" >> "$GITHUB_STEP_SUMMARY"
+          echo "release.yml will build artifacts and publish the GitHub Release." >> "$GITHUB_STEP_SUMMARY"
+          [ -n "$ISSUES" ] && echo "Linked issues: $ISSUES" >> "$GITHUB_STEP_SUMMARY" || true
