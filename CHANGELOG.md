@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.5] - 2026-06-21
+
+### Fixed
+
+- fix(ci): stop suppressing release.yml on the release-cut commit
+
 ## [1.0.4] - 2026-06-21
 
 ### Fixed
