@@ -298,3 +298,29 @@ jobs:
           git add deploy/docker-compose.yml
           git commit -m "chore: set dev stack version to ${VER} [skip ci]"
           git push origin main
+
+      - name: Set marketing-site version to the released version
+        # Separate step (and separate commit) on purpose: the displayed site
+        # version lives in site/src/data/seo.ts, which is under site/**, so this
+        # commit deliberately does NOT carry [skip ci] — it must trigger
+        # site.yml to redeploy marauder.cc with the new version. The previous
+        # step may have exited early (compose already current), so re-establish
+        # git identity here.
+        run: |
+          set -euo pipefail
+          VER="${GITHUB_REF_NAME#v}"
+
+          # Replace the single `version: "X.Y.Z"` literal in the SITE.software
+          # block. releaseDate and other fields are left untouched.
+          sed -i -E "s|(version: \")[0-9]+\.[0-9]+\.[0-9]+(\")|\1${VER}\2|" site/src/data/seo.ts
+
+          if git diff --quiet -- site/src/data/seo.ts; then
+            echo "site/src/data/seo.ts already at ${VER}, nothing to do"
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add site/src/data/seo.ts
+          git commit -m "chore(site): set displayed version to ${VER}"
+          git push origin main

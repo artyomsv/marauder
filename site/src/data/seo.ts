@@ -29,9 +29,12 @@ export const SITE = {
     url: "https://github.com/artyomsv",
   },
 
-  /** Software metadata for SoftwareApplication JSON-LD. */
+  /** Software metadata for SoftwareApplication JSON-LD.
+   *  `version` is kept in sync with the latest GitHub release automatically by
+   *  release.yml's bump-dev-version job (sed + commit) — do not hand-edit it
+   *  except to correct drift. */
   software: {
-    version: "1.0.1",
+    version: "1.0.3",
     license: "MIT",
     operatingSystem: "Linux, Docker, macOS, Windows",
     applicationCategory: "Utility",
