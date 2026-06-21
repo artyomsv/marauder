@@ -31,7 +31,8 @@ deploy/         docker-compose stacks (source-build base + prebuilt-image
 docs/           ROADMAP, PRD, VISION, COMPETITORS, per-feature guides
 site/           Astro 5 marketing site published to marauder.cc
 techdebt/       Debt-tracking files (one per issue, see global rule)
-.github/        Workflows: ci, docker, e2e, release, codeql
+.github/        Workflows: ci, docker, e2e, release, auto-release, codeql
+                + scripts/ (release-helpers.sh: tested bump/version/issue logic)
 ```
 
 ## Backend (`backend/internal/...`)
@@ -225,6 +226,36 @@ isolated `marauder-acceptance` Compose project (so it never touches a running
 succeeds — i.e. the plugin `Test()` passed. The `latest` channel overrides the
 client image tag via `MARAUDER_TEST_*_TAG=latest`; on failure the workflow files
 a deduped `client-canary` GitHub issue.
+
+### Release automation (no manual version/tag)
+
+Releases are cut automatically on merge — **do not hand-pick versions or push
+`v*` tags manually** (manual `workflow_dispatch` on `release.yml` still works as
+an escape hatch). The flow:
+
+- **One-time setup:** a `RELEASE_PAT` repo secret (fine-grained PAT,
+  `contents: write`) is required — a tag pushed with the default `GITHUB_TOKEN`
+  will **not** trigger `release.yml` (GitHub's recursion guard). Without it the
+  tag is still created but `release.yml` must be dispatched manually.
+- `.github/workflows/auto-release.yml` runs on **PR merge to main**. It derives
+  the next semver from the merged PR's Conventional Commit **title** (squash
+  subject): `feat!`/`BREAKING CHANGE`→major, `feat`→minor, `fix`/`perf`→patch,
+  everything else (`chore`/`docs`/`ci`/`test`/`refactor`/`build`, incl.
+  dependabot)→**no release**. It then rolls `CHANGELOG.md` (`[Unreleased]` →
+  `[X.Y.Z]`, fresh empty `[Unreleased]`), commits `[skip ci]`, and pushes an
+  **annotated tag** whose message carries the PR title+body plus
+  `Issues:`/`PR:` trailers.
+- `release.yml` (unchanged trigger: `v*` tag push) builds/signs/SBOMs the
+  images, and composes the GitHub Release notes from the CHANGELOG section
+  **plus** the PR description read from the tag annotation. A `notify-issues`
+  job then comments on every linked issue (closing keywords in the PR body
+  **and** an issue-number branch prefix like `48-...`) once artifacts exist.
+- The version/bump/issue parsing lives in `.github/scripts/release-helpers.sh`
+  (pure functions, unit-tested by `release-helpers_test.sh`, run as the
+  `release-scripts` CI job). **Edit the script + its test, not inline YAML.**
+- Keep `CHANGELOG.md`'s `[Unreleased]` section filled as you work — it becomes
+  the release notes. If it's empty on a version-bumping merge, a single bullet
+  is synthesized from the PR title as a fallback.
 
 ## Ports (per `~/.claude/rules/local-port-ranges.md` — host ports must be 30000-49999)
 

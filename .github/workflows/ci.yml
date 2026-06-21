@@ -130,6 +130,20 @@ jobs:
       - name: go vet
         run: go vet ./...
 
+  # ------------------------------------------------------- release scripts
+  # Unit-test the pure helper logic behind the auto-release pipeline
+  # (Conventional Commit -> semver bump, next-version arithmetic, issue-ref
+  # extraction, CHANGELOG rolling). Pure bash, no toolchain needed.
+  release-scripts:
+    name: Release helper tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Run release-helpers tests
+        run: bash .github/scripts/release-helpers_test.sh
+
   # ---------------------------------------------------------------- frontend
   frontend:
     name: Frontend (Node ${{ matrix.node }})
