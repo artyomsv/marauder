@@ -451,6 +451,14 @@ func TestRunCheck_SinglePayload_NotifiesUpdated(t *testing.T) {
 	if !strings.Contains(f.notifier.lastMsg.Body, "Fake Topic") {
 		t.Errorf("body = %q, want it to mention the topic name", f.notifier.lastMsg.Body)
 	}
+	// The notification fires when the torrent is handed to the client (download
+	// START), not when it finishes. The body must not claim completion.
+	if strings.Contains(f.notifier.lastMsg.Body, "Downloaded") {
+		t.Errorf("body = %q, must not claim the torrent finished downloading", f.notifier.lastMsg.Body)
+	}
+	if !strings.Contains(f.notifier.lastMsg.Body, "Sent to client") {
+		t.Errorf("body = %q, want it to say the release was sent to the client", f.notifier.lastMsg.Body)
+	}
 }
 
 func TestRunCheck_NoDownload_DoesNotNotify(t *testing.T) {

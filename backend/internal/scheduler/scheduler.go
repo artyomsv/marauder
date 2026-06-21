@@ -430,7 +430,7 @@ func (s *Scheduler) notifyUpdated(ctx context.Context, t *domain.Topic, labels [
 		overflow = len(shown) - maxList
 		shown = shown[:maxList]
 	}
-	body := "Downloaded: " + strings.Join(shown, ", ")
+	body := "Sent to client: " + strings.Join(shown, ", ")
 	if overflow > 0 {
 		body += fmt.Sprintf(" (+%d more)", overflow)
 	}
