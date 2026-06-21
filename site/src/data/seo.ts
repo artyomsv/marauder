@@ -34,7 +34,7 @@ export const SITE = {
    *  release.yml's bump-dev-version job (sed + commit) — do not hand-edit it
    *  except to correct drift. */
   software: {
-    version: "1.0.3",
+    version: "1.0.4",
     license: "MIT",
     operatingSystem: "Linux, Docker, macOS, Windows",
     applicationCategory: "Utility",
