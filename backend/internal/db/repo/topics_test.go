@@ -197,8 +197,8 @@ func TestTopics_MarkEpisodeDownloaded_DBError(t *testing.T) {
 // ---------- scanTopic malformed extra ----------
 
 // topicRow returns a pgxmock row slice that matches topicColumns exactly
-// (20 columns as of migration 0005, which added image_url after
-// display_name). Callers override individual fields as needed. The helper
+// (21 columns as of migration 0007, which added notifier_id after
+// client_id). Callers override individual fields as needed. The helper
 // centralises column-order so tests don't drift.
 func topicRow(id, userID uuid.UUID, now time.Time) []any {
 	return []any{
