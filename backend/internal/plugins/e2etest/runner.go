@@ -53,6 +53,14 @@ type Case struct {
 	// Useful for trackers whose Download path is intentionally a stub
 	// (e.g., lostfilm in v1.0).
 	SkipQBitSubmit bool
+
+	// ExpectTorrentFile, when true, asserts Download returned a .torrent
+	// payload (bytes, no magnet). Without it the runner's payload checks
+	// are conditional, so a regression that silently returns a magnet
+	// instead of a torrent would still pass — set this for trackers (e.g.
+	// RuTracker, #52) whose contract is "submit the real torrent, not a
+	// hash-only magnet".
+	ExpectTorrentFile bool
 }
 
 // RunFullPipeline drives a tracker plugin from URL parse all the way
@@ -150,6 +158,14 @@ func RunFullPipeline(t *testing.T, c Case) {
 		}
 		if payload.MagnetURI == "" && len(payload.TorrentFile) == 0 {
 			t.Error("Download returned empty payload (no magnet, no torrent bytes)")
+		}
+		if c.ExpectTorrentFile {
+			if len(payload.TorrentFile) == 0 {
+				t.Fatalf("expected a .torrent payload, got magnet %q", payload.MagnetURI)
+			}
+			if payload.MagnetURI != "" {
+				t.Errorf("expected no magnet alongside the .torrent, got %q", payload.MagnetURI)
+			}
 		}
 
 		if c.SkipQBitSubmit {

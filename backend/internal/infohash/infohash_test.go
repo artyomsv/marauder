@@ -100,6 +100,19 @@ func TestFromTorrent_NotBencode(t *testing.T) {
 	}
 }
 
+// TestFromTorrent_DeeplyNested_ReturnsError guards against a stack-exhaustion
+// DoS: the bencode scanner recurses per nested container, and a tracker
+// response is now fed straight into FromTorrent (rutracker dl.php validation).
+// A pathologically nested payload must be rejected, not recursed into.
+func TestFromTorrent_DeeplyNested_ReturnsError(t *testing.T) {
+	// info value is a list nested far deeper than any real torrent.
+	const depth = 2000
+	data := "d4:info" + strings.Repeat("l", depth) + strings.Repeat("e", depth) + "e"
+	if _, err := FromTorrent([]byte(data)); err == nil {
+		t.Error("expected error for pathologically nested bencode, got nil")
+	}
+}
+
 func TestFromPayload_PrefersMagnet(t *testing.T) {
 	const h = "c12fe1c06bba254a9dc9f519b335aa7c1367a88a"
 	got, err := FromPayload("magnet:?xt=urn:btih:"+h, []byte("ignored"))

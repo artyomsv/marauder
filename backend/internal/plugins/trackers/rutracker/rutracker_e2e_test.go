@@ -25,7 +25,7 @@ const e2eTopicHTML = `<html>
 
 func TestE2E(t *testing.T) {
 	e2etest.RunFullPipeline(t, e2etest.Case{
-		Name: "rutracker/login-then-magnet-then-qbit",
+		Name: "rutracker/login-then-torrent-then-qbit",
 		Setup: func(t *testing.T, _ *e2etest.QBitFake) (registry.Tracker, string) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				switch {
@@ -71,5 +71,8 @@ func TestE2E(t *testing.T) {
 		},
 		ExpectedHash:         "0123456789abcdef0123456789abcdef01234567",
 		ExpectedNameContains: "Some Show",
+		// #52: an authenticated RuTracker download must submit the real
+		// .torrent (from dl.php), never the hash-only page magnet.
+		ExpectTorrentFile: true,
 	})
 }

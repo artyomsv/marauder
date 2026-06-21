@@ -19,6 +19,12 @@ import (
 // .torrent the infohash package can parse. The mock dl.php serves it so
 // tests can prove Download submits a real torrent (with announce URLs)
 // rather than RuTracker's hash-only page magnet (#52).
+//
+// Bencode length prefixes are hand-counted — if you edit a string segment,
+// recount its prefix or FromTorrent will reject it: "19:" = len of
+// "http://tracker/annc", "4:" = "test", "20:" = the 20 'a' piece bytes.
+// TestDownloadPrefersTorrentFileWhenAuthenticated asserts FromTorrent
+// accepts this, so a miscount fails loudly rather than silently.
 const validBencodedTorrent = "d8:announce19:http://tracker/annc4:infod6:lengthi100e4:name4:test12:piece lengthi16384e6:pieces20:aaaaaaaaaaaaaaaaaaaaee"
 
 // TestCleanTitle_DecodesWindows1251 feeds real cp1251-encoded bytes (the
@@ -93,7 +99,7 @@ func (s *schemeRewrite) RoundTrip(req *http.Request) (*http.Response, error) {
 	return http.DefaultTransport.RoundTrip(req)
 }
 
-func TestCanParse(t *testing.T) {
+func TestCanParse_ViewtopicURLs_MatchExpected(t *testing.T) {
 	p := &plugin{}
 	cases := map[string]bool{
 		"https://rutracker.org/forum/viewtopic.php?t=12345":     true,
@@ -110,7 +116,7 @@ func TestCanParse(t *testing.T) {
 	}
 }
 
-func TestParseExtractsTopicID(t *testing.T) {
+func TestParse_ValidURL_ExtractsTopicID(t *testing.T) {
 	p := &plugin{}
 	topic, err := p.Parse(context.Background(), "https://rutracker.org/forum/viewtopic.php?t=987654")
 	if err != nil {
@@ -124,7 +130,7 @@ func TestParseExtractsTopicID(t *testing.T) {
 	}
 }
 
-func TestCheckExtractsHashAndTitle(t *testing.T) {
+func TestCheck_AuthenticatedPage_ExtractsHashAndTitle(t *testing.T) {
 	p, _ := newTestPlugin(t)
 	topic := &domain.Topic{URL: "https://" + p.domain + "/forum/viewtopic.php?t=987654"}
 
@@ -183,6 +189,75 @@ func TestDownloadPrefersTorrentFileWhenAuthenticated(t *testing.T) {
 	if _, verr := infohash.FromTorrent(payload.TorrentFile); verr != nil {
 		t.Errorf("payload is not a valid bencoded torrent: %v", verr)
 	}
+	// FileName carries the topic id so deliveries are diagnosable.
+	if payload.FileName != "rutracker-987654.torrent" {
+		t.Errorf("FileName = %q, want %q", payload.FileName, "rutracker-987654.torrent")
+	}
+}
+
+// TestDownloadFallsBackToMagnetWhenDlPhpUnauthorized covers the
+// non-200 branch: dl.php returns 403/404 (e.g. a stale session) while the
+// page still has a magnet, so Download falls back to the magnet rather
+// than erroring.
+func TestDownloadFallsBackToMagnetWhenDlPhpUnauthorized(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/forum/viewtopic.php"):
+			w.WriteHeader(200)
+			w.Write([]byte(fixtureTopicHTML))
+		case strings.HasPrefix(r.URL.Path, "/forum/dl.php"):
+			w.WriteHeader(403)
+		default:
+			w.WriteHeader(404)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	hostNoScheme := strings.TrimPrefix(srv.URL, "http://")
+	p := &plugin{
+		sessions:  forumcommon.New(),
+		domain:    hostNoScheme,
+		transport: &schemeRewrite{target: hostNoScheme},
+	}
+	creds := &domain.TrackerCredential{UserID: uuid.New(), Username: "alice", SecretEnc: []byte("pw")}
+	topic := &domain.Topic{URL: "https://" + p.domain + "/forum/viewtopic.php?t=987654"}
+
+	payload, err := p.Download(context.Background(), topic, nil, creds)
+	if err != nil {
+		t.Fatalf("Download: %v", err)
+	}
+	if !strings.HasPrefix(payload.MagnetURI, "magnet:?xt=urn:btih:") {
+		t.Errorf("expected magnet fallback, got %q / %d torrent bytes", payload.MagnetURI, len(payload.TorrentFile))
+	}
+}
+
+// TestDownloadErrorsWhenNoTorrentAndNoMagnet covers the hard-error path:
+// creds present, dl.php absent from the page, and no magnet either (a
+// corrupt/stripped topic page). Download must return a descriptive error
+// rather than a nil payload.
+func TestDownloadErrorsWhenNoTorrentAndNoMagnet(t *testing.T) {
+	const barePage = `<html><head><title>Broken :: RuTracker.org</title></head>
+<body><div id="logged-in-username">alice</div></body></html>`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(200)
+		w.Write([]byte(barePage))
+	}))
+	t.Cleanup(srv.Close)
+	hostNoScheme := strings.TrimPrefix(srv.URL, "http://")
+	p := &plugin{
+		sessions:  forumcommon.New(),
+		domain:    hostNoScheme,
+		transport: &schemeRewrite{target: hostNoScheme},
+	}
+	creds := &domain.TrackerCredential{UserID: uuid.New(), Username: "alice", SecretEnc: []byte("pw")}
+	topic := &domain.Topic{URL: "https://" + p.domain + "/forum/viewtopic.php?t=987654"}
+
+	_, err := p.Download(context.Background(), topic, nil, creds)
+	if err == nil {
+		t.Fatal("expected an error when the page has no torrent and no magnet")
+	}
+	if !strings.Contains(err.Error(), "no downloadable torrent or magnet") {
+		t.Errorf("error = %q, want it to describe the missing payload neutrally", err.Error())
+	}
 }
 
 // TestDownloadFallsBackToMagnetWhenTorrentInvalid guards the fail-open
@@ -221,7 +296,7 @@ func TestDownloadFallsBackToMagnetWhenTorrentInvalid(t *testing.T) {
 	}
 }
 
-func TestResolveMetadata_OgImagePreferred(t *testing.T) {
+func TestResolveMetadata_OgImagePresent_ReturnsOgURL(t *testing.T) {
 	// Page carries both an og:image meta tag and a postImg <var> — og:image
 	// must win as the most robust source.
 	html := `<html><head>
@@ -256,7 +331,7 @@ func TestResolveMetadata_OgImagePreferred(t *testing.T) {
 	}
 }
 
-func TestResolveMetadata_PostVarTitleFallback(t *testing.T) {
+func TestResolveMetadata_NoOgImagePostVarPresent_ReturnsPostVarURL(t *testing.T) {
 	// No og:image — the real image lives in the lazy-loaded postImg <var>
 	// title attribute (src is a placeholder gif).
 	html := `<html><head><title>Another Show :: RuTracker.org</title></head><body>
@@ -286,7 +361,7 @@ func TestResolveMetadata_PostVarTitleFallback(t *testing.T) {
 	}
 }
 
-func TestResolveMetadata_NoImageReturnsEmpty(t *testing.T) {
+func TestResolveMetadata_NoPoster_ReturnsEmptyURL(t *testing.T) {
 	// The existing fixture has no poster — ImageURL must be "" (never fabricated).
 	p, _ := newTestPlugin(t)
 	meta, err := p.ResolveMetadata(context.Background(), "https://rutracker.org/forum/viewtopic.php?t=987654", nil)
@@ -301,7 +376,7 @@ func TestResolveMetadata_NoImageReturnsEmpty(t *testing.T) {
 	}
 }
 
-func TestLogin(t *testing.T) {
+func TestLogin_ValidCredentials_SetsLoggedIn(t *testing.T) {
 	p, _ := newTestPlugin(t)
 	creds := &domain.TrackerCredential{
 		UserID:    uuid.New(),
