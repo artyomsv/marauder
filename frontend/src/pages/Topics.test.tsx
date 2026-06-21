@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, within, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { type ReactNode } from "react";
@@ -21,6 +21,7 @@ vi.mock("@/lib/api", async () => {
       put: vi.fn(),
       del: vi.fn(),
       updateTopic: vi.fn(),
+      previewTracker: vi.fn(),
     },
   };
 });
@@ -31,6 +32,7 @@ const mockApi = api as unknown as {
   get: ReturnType<typeof vi.fn>;
   post: ReturnType<typeof vi.fn>;
   updateTopic: ReturnType<typeof vi.fn>;
+  previewTracker: ReturnType<typeof vi.fn>;
 };
 
 const LOSTFILM_URL = "https://www.lostfilm.tv/series/Some_Show/seasons";
@@ -171,6 +173,85 @@ describe("AddTopicCard — season/episode catalog dropdowns", () => {
     const episodeInput = screen.getByLabelText(/start from episode/i);
     expect(episodeInput.tagName).toBe("INPUT");
     expect(episodeInput).toHaveAttribute("type", "number");
+  });
+});
+
+describe("AddTopicCard — display name auto-fill on URL change", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  // Routes /trackers/match and /trackers/preview to tracker-specific values
+  // keyed off the URL, so switching the URL changes both responses.
+  function routeMatchAndPreviewByUrl() {
+    mockApi.get.mockImplementation((path: string) => {
+      if (path.startsWith("/trackers/match")) {
+        const tracker = path.includes("kinozal") ? "kinozal" : "rutracker";
+        return Promise.resolve({
+          tracker_name: tracker,
+          display_name: tracker,
+          supports_episode_filter: false,
+          supports_season_catalog: false,
+          requires_credentials: false,
+          uses_cloudflare: false,
+        });
+      }
+      if (path.startsWith("/clients")) return Promise.resolve(clientsList);
+      return Promise.resolve({ credentials: [] });
+    });
+    mockApi.previewTracker.mockImplementation((url: string) =>
+      Promise.resolve(
+        url.includes("kinozal")
+          ? { title: "Kinozal Show", image_url: "" }
+          : { title: "RuTracker Show", image_url: "" },
+      ),
+    );
+  }
+
+  const RUTRACKER_URL = "https://rutracker.org/forum/viewtopic.php?t=1";
+  const KINOZAL_URL = "https://kinozal.tv/details.php?id=2136770";
+
+  it("replaces an auto-filled name when the URL changes to a different tracker", async () => {
+    const user = userEvent.setup();
+    routeMatchAndPreviewByUrl();
+
+    renderCard();
+    const urlInput = screen.getByLabelText(/url or magnet link/i);
+    await user.type(urlInput, RUTRACKER_URL);
+
+    const displayInput = (await screen.findByLabelText(
+      /display name/i,
+    )) as HTMLInputElement;
+    await waitFor(() => expect(displayInput.value).toBe("RuTracker Show"));
+
+    await user.clear(urlInput);
+    await user.type(urlInput, KINOZAL_URL);
+
+    await waitFor(() => expect(displayInput.value).toBe("Kinozal Show"));
+  });
+
+  it("keeps a user-typed name even when the URL changes", async () => {
+    const user = userEvent.setup();
+    routeMatchAndPreviewByUrl();
+
+    renderCard();
+    const urlInput = screen.getByLabelText(/url or magnet link/i);
+    await user.type(urlInput, RUTRACKER_URL);
+
+    const displayInput = (await screen.findByLabelText(
+      /display name/i,
+    )) as HTMLInputElement;
+    await user.clear(displayInput);
+    await user.type(displayInput, "My Custom Name");
+
+    await user.clear(urlInput);
+    await user.type(urlInput, KINOZAL_URL);
+
+    // User intent wins: the auto-fill must not clobber a typed name.
+    await waitFor(() =>
+      expect(mockApi.previewTracker).toHaveBeenCalledWith(KINOZAL_URL),
+    );
+    expect(displayInput.value).toBe("My Custom Name");
   });
 });
 

@@ -52,7 +52,7 @@ export const trackers: Tracker[] = [
     category: "forum-cis",
     region: "RU",
     auth: "account",
-    status: "alpha",
+    status: "validated",
   },
   {
     slug: "nnmclub",

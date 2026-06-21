@@ -122,9 +122,9 @@ export const trackerPages: TrackerPageContent[] = [
     ],
     faq: [
       {
-        question: "What does the 'alpha' label on Kinozal mean?",
+        question: "Is the Kinozal integration ready to use?",
         answer:
-          "The Kinozal plugin is structurally complete and unit-tested against fixture HTML, but hasn't yet been validated end-to-end against a live account. It will work if the live page matches the fixtures; it may need a selector tweak if the site changed. Community validation is welcome.",
+          "Yes. The Kinozal plugin is verified end-to-end against a live account — login, infohash detection (read from Kinozal's get_srv_details endpoint), metadata (title + poster), and download to your torrent client are all confirmed working as of June 2026.",
       },
     ],
   },

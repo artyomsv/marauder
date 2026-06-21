@@ -160,7 +160,14 @@ on the next check.
 | **URL format** | `https://kinozal.tv/details.php?id=<id>` |
 
 Russian movie / TV tracker. Same one-thread-one-topic model as
-RuTracker. Hash is the modification timestamp on the page.
+RuTracker. The infohash is read from the authenticated
+`get_srv_details.php?id=<id>&action=2` endpoint (the details page itself
+doesn't expose it); the display title + poster come from the details
+page `<title>` (cp1251-decoded) and `og:image`.
+
+**Validation status:** verified end-to-end against a live Kinozal account
+(2026-06) — login, infohash resolution, metadata, and download → client
+delivery all confirmed.
 
 ### NNM-Club
 

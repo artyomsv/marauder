@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Loader2 } from "lucide-react";
 
@@ -72,6 +72,11 @@ export function TopicForm({
   const isEdit = mode === "edit";
   const [url] = useState(initial.url);
   const [displayName, setDisplayName] = useState(initial.displayName);
+  // Tracks whether the current display name came from auto-fill (vs typed by
+  // the user). A ref, not state, so it never triggers a re-render — it only
+  // gates whether a new preview may replace the name. Flipped false the moment
+  // the user edits the field, so a typed name is never clobbered.
+  const nameAutoFilled = useRef(false);
   const [quality, setQuality] = useState(initial.quality);
   const [startSeason, setStartSeason] = useState(initial.startSeason);
   const [startEpisode, setStartEpisode] = useState(initial.startEpisode);
@@ -149,21 +154,31 @@ export function TopicForm({
     }
   }, [match, quality]);
 
-  // Prefill the display name from the resolved preview title, but never
-  // overwrite a name the user typed or one prefilled from an existing topic.
+  // Prefill the display name from the resolved preview title. Fills when the
+  // field is empty OR still holds a previously auto-filled value (so switching
+  // the URL to a different tracker repopulates it), but never overwrites a name
+  // the user typed or one prefilled from an existing topic.
   useEffect(() => {
-    if (!isEdit && preview?.title && !displayName) {
+    if (isEdit || !preview?.title) return;
+    if (!displayName || nameAutoFilled.current) {
       setDisplayName(preview.title);
+      nameAutoFilled.current = true;
     }
   }, [preview, isEdit, displayName]);
 
-  // Reset the season/episode selection whenever the URL changes in the add
-  // flow. Skipped in edit mode where the URL is fixed and the initial
-  // season/episode must survive (otherwise prefill would be wiped).
+  // Reset URL-derived fields whenever the URL changes in the add flow: the
+  // season/episode selection, and any auto-filled display name (so a stale
+  // title doesn't linger before the new preview arrives). A user-typed name is
+  // preserved. Skipped in edit mode where the URL is fixed and the prefilled
+  // values must survive.
   useEffect(() => {
     if (isEdit) return;
     setStartSeason("");
     setStartEpisode("");
+    if (nameAutoFilled.current) {
+      setDisplayName("");
+      nameAutoFilled.current = false;
+    }
   }, [debouncedUrl, isEdit]);
 
   // Delivery field (client/dir/category) state lives in a single object to
@@ -232,7 +247,10 @@ export function TopicForm({
         <Input
           id="display"
           value={displayName}
-          onChange={(e) => setDisplayName(e.target.value)}
+          onChange={(e) => {
+            setDisplayName(e.target.value);
+            nameAutoFilled.current = false;
+          }}
           placeholder="Leave blank to auto-detect"
         />
       </div>

@@ -134,6 +134,10 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          # Full history + tags so the annotated tag object (carrying the PR
+          # description from auto-release.yml) is available to read locally.
+          fetch-depth: 0
 
       - name: Download SBOMs
         uses: actions/download-artifact@v8
@@ -163,6 +167,24 @@ jobs:
             echo "Marauder $TAG. See CHANGELOG.md for details." > release-notes.md
           fi
 
+          # Append the merged PR's description, carried in the annotated tag
+          # message by auto-release.yml. Everything except the machine-readable
+          # "Issues:"/"PR:" trailer lines is the PR title + body. A manually
+          # pushed tag or a workflow_dispatch run has no annotation, so this
+          # adds nothing and the behavior is unchanged.
+          PRDESC="$(git tag -l --format='%(contents)' "$TAG" 2>/dev/null \
+            | sed -E '/^(Issues|PR):[[:space:]]/d')"
+          if [ -n "$(printf '%s' "$PRDESC" | tr -d '[:space:]')" ]; then
+            {
+              echo ""
+              echo "---"
+              echo ""
+              echo "## Pull Request"
+              echo ""
+              printf '%s\n' "$PRDESC"
+            } >> release-notes.md
+          fi
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
         with:
@@ -173,13 +195,77 @@ jobs:
           draft: false
           prerelease: ${{ contains(steps.changelog.outputs.tag, '-rc') || contains(steps.changelog.outputs.tag, '-alpha') || contains(steps.changelog.outputs.tag, '-beta') }}
 
-  # ----------------------------------------------- bump source-build version
-  # Keep the source-build (dev) stack's stamped version in sync with the
-  # latest release, so a local `docker compose up --build` reports the real
-  # released version instead of a hand-maintained marker. Commits the bump
-  # back to main with [skip ci] so it doesn't re-trigger CI.
+  # --------------------------------------------------- notify linked issues
+  # Comment on every issue the released PR was linked to (closing keywords in
+  # the PR body and/or an issue-number branch prefix), telling the reporter the
+  # fix/feature shipped and how to test it. Issue numbers are read from the
+  # "Issues:" trailer in the annotated tag message that auto-release.yml wrote.
+  # Runs only AFTER the release is published, so the linked tag/images exist.
+  notify-issues:
+    name: Notify linked issues
+    needs: [release]
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Checkout (tags)
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Comment on linked issues
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          VER="${TAG#v}"
+
+          # Parse "Issues: #a #b" from the annotated tag message.
+          ISSUES="$(git tag -l --format='%(contents)' "$TAG" \
+            | sed -nE 's/^Issues:[[:space:]]*//p' \
+            | grep -oE '[0-9]+' || true)"
+
+          if [ -z "$ISSUES" ]; then
+            echo "No linked issues in tag $TAG — nothing to notify."
+            exit 0
+          fi
+
+          REL_URL="https://github.com/${REPO}/releases/tag/${TAG}"
+
+          # Build the comment body in a file (avoids flush-left heredocs that
+          # would break the YAML block scalar). printf keeps every line indented
+          # as run-block content while emitting unindented markdown.
+          {
+            printf ':rocket: **Released in [%s](%s).**\n\n' "$TAG" "$REL_URL"
+            printf 'This shipped in Marauder %s. Test it by pulling the prebuilt images:\n\n' "$TAG"
+            printf '```\n'
+            printf 'ghcr.io/%s/marauder-backend:%s\n'  "$OWNER" "$VER"
+            printf 'ghcr.io/%s/marauder-frontend:%s\n' "$OWNER" "$VER"
+            printf 'ghcr.io/%s/marauder-cfsolver:%s\n' "$OWNER" "$VER"
+            printf '```\n\n'
+            printf 'or set `MARAUDER_VERSION=%s` in your `deploy/.env` and re-pull the GHCR stack.\n\n' "$VER"
+            printf 'Please give it a try and let us know if it resolves the problem — thanks for the report! :pray:\n'
+          } > issue-comment.md
+
+          for n in $ISSUES; do
+            echo "Commenting on issue #$n"
+            gh issue comment "$n" --repo "$REPO" --body-file issue-comment.md \
+              || echo "::warning::Failed to comment on issue #$n (non-fatal)."
+          done
+
+  # -------------------------------------------- sync version references
+  # Stamp the released version into every file that mirrors it, so the source
+  # build, the prebuilt ghcr stack, the example env, and the marketing site all
+  # report the real released version instead of hand-maintained markers. The
+  # actual edits live in .github/scripts/bump-version-refs.sh (tested by
+  # bump-version-refs_test.sh).
   bump-dev-version:
-    name: Bump dev stack version
+    name: Sync version references
     needs: [release]
     if: github.ref_type == 'tag'
     runs-on: ubuntu-latest
@@ -192,24 +278,33 @@ jobs:
           ref: main
           fetch-depth: 0
 
-      - name: Set dev stack version to the released version
+      - name: Stamp released version and commit
         run: |
           set -euo pipefail
           VER="${GITHUB_REF_NAME#v}"
 
-          # Update the source-build VERSION build arg and the marauder-* image
-          # tags in the base compose file. Other images (postgres, nginx) are
-          # left untouched by the marauder- prefix anchor.
-          sed -i -E "s|(VERSION: \")[^\"]+(\")|\1${VER}\2|" deploy/docker-compose.yml
-          sed -i -E "s#(image: marauder-(backend|frontend|cfsolver):).*#\1${VER}#" deploy/docker-compose.yml
-
-          if git diff --quiet -- deploy/docker-compose.yml; then
-            echo "deploy/docker-compose.yml already at ${VER}, nothing to do"
-            exit 0
-          fi
+          bash .github/scripts/bump-version-refs.sh "$VER"
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add deploy/docker-compose.yml
-          git commit -m "chore: set dev stack version to ${VER} [skip ci]"
+
+          # Deploy/repo artifacts: nothing to redeploy -> [skip ci].
+          if ! git diff --quiet -- deploy/docker-compose.yml deploy/docker-compose.ghcr.yml deploy/.env.example; then
+            git add deploy/docker-compose.yml deploy/docker-compose.ghcr.yml deploy/.env.example
+            git commit -m "chore: pin deploy stack to ${VER} [skip ci]"
+          else
+            echo "deploy version references already at ${VER}"
+          fi
+
+          # Site content: must trigger site.yml to redeploy marauder.cc, so this
+          # commit deliberately does NOT carry [skip ci]. It is committed LAST so
+          # it is the push HEAD (GitHub evaluates [skip ci] on the head commit).
+          if ! git diff --quiet -- site/src/data/seo.ts site/src/pages/install.astro; then
+            git add site/src/data/seo.ts site/src/pages/install.astro
+            git commit -m "chore(site): set displayed version to ${VER}"
+          else
+            echo "site version references already at ${VER}"
+          fi
+
+          # Pushes any commits made above (no-op if both were already current).
           git push origin main
