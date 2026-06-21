@@ -255,8 +255,10 @@ an escape hatch). The flow:
   `.github/scripts/bump-version-refs.sh` (tested by `bump-version-refs_test.sh`):
   `deploy/docker-compose.yml` (source-build), `deploy/docker-compose.ghcr.yml`
   (`${MARAUDER_VERSION:-X.Y.Z}` defaults), `deploy/.env.example`,
-  `site/src/data/seo.ts` (`SITE.software.version`), and `site/src/pages/install.astro`
-  (example output + default note). It makes **two commits**: deploy/repo files
+  `site/src/data/seo.ts` (`SITE.software.version`), `site/src/pages/install.astro`
+  (example output + default note), and `README.md` (release badge, the bold
+  `**vX.Y.Z**` latest-release marker, and the `MARAUDER_VERSION` default note —
+  historical version mentions are left untouched). It makes **two commits**: deploy/repo files
   `[skip ci]`, then the `site/**` files **without** `[skip ci]` (committed last
   so it's the push HEAD) so `site.yml` redeploys marauder.cc. **Don't hand-edit
   these version literals** — and note `seo.ts` `releaseDate` is intentionally

@@ -35,6 +35,7 @@ cp "$REPO/deploy/docker-compose.ghcr.yml" "$TMP/deploy/"
 cp "$REPO/deploy/.env.example"            "$TMP/deploy/"
 cp "$REPO/site/src/data/seo.ts"           "$TMP/site/src/data/"
 cp "$REPO/site/src/pages/install.astro"   "$TMP/site/src/pages/"
+cp "$REPO/README.md"                       "$TMP/"
 
 # Capture releaseDate before the bump (must be unchanged after).
 RELDATE_BEFORE="$(grep -E 'releaseDate:' "$TMP/site/src/data/seo.ts")"
@@ -52,10 +53,18 @@ check "env.example pin"              "1" "$(count "MARAUDER_VERSION=$VER" "$TMP/
 check "seo.ts software version"      "1" "$(count "version: \"$VER\"" "$TMP/site/src/data/seo.ts")"
 check "install.astro example output" "1" "$(count "\"version\": \"$VER\"" "$TMP/site/src/pages/install.astro")"
 check "install.astro default note"   "1" "$(count "defaults to <code>$VER</code>" "$TMP/site/src/pages/install.astro")"
+check "README release badge alt"     "1" "$(count "Release: v$VER" "$TMP/README.md")"
+check "README release badge url"     "1" "$(count "badge/release-v$VER-success" "$TMP/README.md")"
+check "README latest-release marker" "1" "$(count "\*\*v$VER\*\*" "$TMP/README.md")"
+check "README install default"       "1" "$(count "defaults to \`$VER\`" "$TMP/README.md")"
 
 # ... and no stale 1.0.x version literals linger in the edited spots.
 check "no stale ghcr fallback"       "0" "$(count ":-1\.0\.[0-9]+}" "$TMP/deploy/docker-compose.ghcr.yml")"
 check "no stale env pin"             "0" "$(count "MARAUDER_VERSION=1\.0\.[0-9]+" "$TMP/deploy/.env.example")"
+
+# README HISTORICAL mentions must be preserved (anchored seds must not touch them).
+check "README keeps v1.0.0 history"  "1" "$(count "v1\.0\.0 was the initial production cut" "$TMP/README.md")"
+check "README keeps GHCR-first fact" "1" "$(count "v1\.0\.1 was the first release to publish" "$TMP/README.md")"
 
 # releaseDate (JSON-LD datePublished) must be untouched.
 check "releaseDate unchanged" "$RELDATE_BEFORE" "$(grep -E 'releaseDate:' "$TMP/site/src/data/seo.ts")"
