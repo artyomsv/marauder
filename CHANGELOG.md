@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.6] - 2026-06-21
+
+### Fixed
+
+- fix(rutracker): prefer authenticated .torrent over hash-only magnet
+
 ## [1.0.5] - 2026-06-21
 
 ### Fixed
