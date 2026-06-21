@@ -11,12 +11,19 @@ name: Dependabot auto-merge
 # Note: E2E runs nightly/on-tag, NOT per-PR, so auto-merged deps are only
 # stack-tested by the next nightly E2E. CI (build/test/lint/codeql) gates.
 #
+# Works with the `protect-default` branch ruleset as follows:
+#   * required_status_checks gates the merge (nothing merges red).
+#   * require_code_owner_review is OFF, so this bot's own approval satisfies
+#     the 1-approving-review rule (a bot can't be a CODEOWNER). Human PRs are
+#     unaffected — only the owner can approve them, and the bot only approves
+#     Dependabot PRs (the `github.actor == 'dependabot[bot]'` job guard).
+# The ruleset dismisses stale approvals on push, so the approve step also runs
+# on `synchronize` to re-approve Dependabot's rebases/regroups.
+#
 # ONE-TIME repo settings required for this to work (Settings ->):
 #   * Actions -> General -> Workflow permissions ->
 #       "Allow GitHub Actions to create and approve pull requests"  (approve step)
 #   * General -> Pull Requests -> "Allow auto-merge"                (--auto)
-#   * Branch protection on `main` -> require the CI status checks    (gates merge)
-# Without branch protection requiring checks, --auto may merge immediately.
 
 on:
   pull_request:
@@ -37,9 +44,10 @@ jobs:
         id: meta
         uses: dependabot/fetch-metadata@v2
 
-      - name: Approve (minor/patch, on open)
+      - name: Approve (minor/patch)
         if: >-
-          (github.event.action == 'opened' || github.event.action == 'reopened') &&
+          (github.event.action == 'opened' || github.event.action == 'reopened' ||
+           github.event.action == 'synchronize') &&
           (steps.meta.outputs.update-type == 'version-update:semver-minor' ||
            steps.meta.outputs.update-type == 'version-update:semver-patch')
         # Fail-soft: if "Allow GitHub Actions to create and approve pull

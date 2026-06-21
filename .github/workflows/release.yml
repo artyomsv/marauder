@@ -277,6 +277,12 @@ jobs:
         with:
           ref: main
           fetch-depth: 0
+          # Push as the owner (RELEASE_PAT) so these direct-to-main commits
+          # clear the branch ruleset's "require a pull request" rule — the
+          # default GITHUB_TOKEN (github-actions[bot]) is not a bypass actor and
+          # would be rejected. Falls back to GITHUB_TOKEN if the PAT is unset
+          # (works only if the ruleset is absent/relaxed).
+          token: ${{ secrets.RELEASE_PAT || secrets.GITHUB_TOKEN }}
 
       - name: Stamp released version and commit
         run: |
