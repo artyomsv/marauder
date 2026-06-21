@@ -90,6 +90,7 @@ type credentialsRepo interface {
 // cycle). The dispatcher filters by each notifier's event subscription.
 type eventNotifier interface {
 	Send(ctx context.Context, userID uuid.UUID, event string, msg domain.Message) int
+	SendVia(ctx context.Context, userID uuid.UUID, notifierID *uuid.UUID, event string, msg domain.Message) int
 }
 
 // decryptor is the subset of *crypto.MasterKey that the scheduler uses.
@@ -434,7 +435,7 @@ func (s *Scheduler) notifyUpdated(ctx context.Context, t *domain.Topic, labels [
 	if overflow > 0 {
 		body += fmt.Sprintf(" (+%d more)", overflow)
 	}
-	s.notifier.Send(ctx, t.UserID, "updated", domain.Message{
+	s.notifier.SendVia(ctx, t.UserID, t.NotifierID, "updated", domain.Message{
 		Title: t.DisplayName,
 		Body:  body,
 		Link:  s.cfg.PublicBaseURL + "/topics",
