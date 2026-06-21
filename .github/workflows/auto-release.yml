@@ -142,9 +142,15 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          # Commit the CHANGELOG roll to main (skip ci so it doesn't re-trigger).
+          # Commit the CHANGELOG roll to main. Do NOT add a CI-skip token to
+          # this message: the annotated tag below points at THIS commit, and
+          # GitHub evaluates the skip token on the tag's target commit — a skip
+          # token here silently suppresses the tag-triggered release.yml (the
+          # exact failure this comment guards against). The main-branch push of
+          # this commit therefore runs CI/Docker once per release; that
+          # redundancy is acceptable and infrequent.
           git add CHANGELOG.md
-          git commit -m "chore(release): cut v$VER [skip ci]"
+          git commit -m "chore(release): cut v$VER"
 
           # Build the annotated-tag message: PR title + body, plus machine
           # readable trailers release.yml parses (issue numbers + PR number).
