@@ -250,13 +250,17 @@ an escape hatch). The flow:
   **plus** the PR description read from the tag annotation. A `notify-issues`
   job then comments on every linked issue (closing keywords in the PR body
   **and** an issue-number branch prefix like `48-...`) once artifacts exist.
-- `release.yml`'s `bump-dev-version` job (runs on every tag) also keeps two
-  version markers in sync with the release: `deploy/docker-compose.yml`
-  (source-build stack, committed `[skip ci]`) **and** `site/src/data/seo.ts`
-  (`SITE.software.version`, the marketing-site version shown in the homepage
-  hero + `SoftwareApplication` JSON-LD). The `seo.ts` bump is a **separate
-  commit without `[skip ci]`** so it triggers `site.yml`, which redeploys
-  marauder.cc with the new version. Don't hand-edit `seo.ts`'s version.
+- `release.yml`'s `bump-dev-version` job (runs on every tag) stamps the released
+  version into **every** file that mirrors it, via
+  `.github/scripts/bump-version-refs.sh` (tested by `bump-version-refs_test.sh`):
+  `deploy/docker-compose.yml` (source-build), `deploy/docker-compose.ghcr.yml`
+  (`${MARAUDER_VERSION:-X.Y.Z}` defaults), `deploy/.env.example`,
+  `site/src/data/seo.ts` (`SITE.software.version`), and `site/src/pages/install.astro`
+  (example output + default note). It makes **two commits**: deploy/repo files
+  `[skip ci]`, then the `site/**` files **without** `[skip ci]` (committed last
+  so it's the push HEAD) so `site.yml` redeploys marauder.cc. **Don't hand-edit
+  these version literals** — and note `seo.ts` `releaseDate` is intentionally
+  NOT bumped (it's JSON-LD `datePublished`, the stable original publish date).
 - The version/bump/issue parsing lives in `.github/scripts/release-helpers.sh`
   (pure functions, unit-tested by `release-helpers_test.sh`, run as the
   `release-scripts` CI job). **Edit the script + its test, not inline YAML.**
