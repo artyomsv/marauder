@@ -16,7 +16,7 @@ export const clients: Client[] = [
     slug: "qbittorrent",
     name: "qBittorrent",
     description: "WebUI API v2 — qBittorrent 4.5+ and 5.x. Live download status by infohash.",
-    status: "alpha",
+    status: "validated",
   },
   {
     slug: "deluge",

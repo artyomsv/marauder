@@ -52,10 +52,10 @@ const schemas = [
       <h2 id="clients-heading" class="mb-2 text-2xl font-semibold tracking-tight">Torrent clients</h2>
       <p class="mb-6 text-muted-foreground">
         When a topic updates, Marauder hands the magnet URI or .torrent bytes
-        to one of these clients. Transmission is the end-to-end-validated
-        reference path; the others are in beta, pending live validation.
-        Transmission and qBittorrent also report live per-torrent download
-        progress back into the Topics view.
+        to one of these clients. Transmission and qBittorrent are the
+        end-to-end-validated reference paths; the others are in beta, pending
+        live validation. Transmission and qBittorrent also report live
+        per-torrent download progress back into the Topics view.
       </p>
       <div class="grid gap-4 md:grid-cols-2">
         {clients.map((c) => (

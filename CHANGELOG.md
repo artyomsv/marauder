@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **qBittorrent is now validated end-to-end** and promoted from `alpha` to
+  `validated` on marauder.cc. Verified against a real qBittorrent container:
+  login, magnet/.torrent submit, and live download status by infohash.
+
 ## [1.0.6] - 2026-06-21
 
 ### Fixed
