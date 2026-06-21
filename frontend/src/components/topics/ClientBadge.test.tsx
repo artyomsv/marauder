@@ -22,6 +22,7 @@ function topicWith(clientID: string | null): Topic {
     DisplayName: "Some Show",
     ImageURL: "",
     ClientID: clientID,
+    NotifierID: null,
     DownloadDir: "",
     Category: "",
     Extra: null,

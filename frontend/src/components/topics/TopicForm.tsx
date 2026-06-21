@@ -31,6 +31,12 @@ interface ClientOption {
   display_name: string;
 }
 
+// Minimal shape of a configured notifier for the picker — id + label only.
+interface NotifierOption {
+  id: string;
+  display_name: string;
+}
+
 // The mutable fields the user edits. Grouped into one object so the form
 // stays under the 8-useState component limit.
 export interface TopicFormValues {
@@ -40,6 +46,7 @@ export interface TopicFormValues {
   startSeason: string;
   startEpisode: string;
   clientId: string;
+  notifierId: string;
   downloadDir: string;
   category: string;
 }
@@ -92,6 +99,13 @@ export function TopicForm({
     staleTime: 60_000,
   });
   const clients = clientsQuery.data?.clients ?? [];
+
+  const notifiersQuery = useQuery({
+    queryKey: QK.notifiers,
+    queryFn: () => api.get<{ notifiers: NotifierOption[] | null }>("/notifiers"),
+    staleTime: 60_000,
+  });
+  const notifiers = notifiersQuery.data?.notifiers ?? [];
 
   // In edit mode the URL never changes, so the debounce is a no-op pass
   // through. In add mode it throttles the /trackers/match lookup.
@@ -185,6 +199,7 @@ export function TopicForm({
   // respect the useState ceiling.
   const [delivery, setDelivery] = useState({
     clientId: initial.clientId,
+    notifierId: initial.notifierId,
     downloadDir: initial.downloadDir,
     category: initial.category,
   });
@@ -198,6 +213,7 @@ export function TopicForm({
       startSeason,
       startEpisode,
       clientId: delivery.clientId,
+      notifierId: delivery.notifierId,
       downloadDir: delivery.downloadDir,
       category: delivery.category,
     });
@@ -325,6 +341,26 @@ export function TopicForm({
             </option>
           ))}
         </select>
+      </div>
+
+      <div className="space-y-1.5">
+        <Label htmlFor="notifier">Notifier (optional)</Label>
+        <select
+          id="notifier"
+          value={delivery.notifierId}
+          onChange={(e) => setDelivery((d) => ({ ...d, notifierId: e.target.value }))}
+          className={SELECT_CLASS}
+        >
+          <option value="">Use default notifiers</option>
+          {notifiers.map((n) => (
+            <option key={n.id} value={n.id}>
+              {n.display_name}
+            </option>
+          ))}
+        </select>
+        <p className="text-xs text-muted-foreground">
+          Route this topic's release alerts to one notifier instead of all of them.
+        </p>
       </div>
 
       <div className="grid gap-4 sm:grid-cols-2">

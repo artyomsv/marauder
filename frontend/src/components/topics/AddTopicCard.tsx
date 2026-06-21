@@ -18,6 +18,7 @@ const EMPTY: TopicFormValues = {
   startSeason: "",
   startEpisode: "",
   clientId: "",
+  notifierId: "",
   downloadDir: "",
   category: "",
 };
@@ -36,6 +37,7 @@ export function AddTopicCard({ onClose, onCreated }: AddTopicCardProps) {
         start_season: v.startSeason ? parseInt(v.startSeason, 10) : undefined,
         start_episode: v.startEpisode ? parseInt(v.startEpisode, 10) : undefined,
         client_id: v.clientId || undefined,
+        notifier_id: v.notifierId || undefined,
         download_dir: v.downloadDir || undefined,
         category: v.category || undefined,
       }),

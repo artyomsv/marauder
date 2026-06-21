@@ -90,6 +90,7 @@ const EXISTING_TOPIC: Topic = {
   DisplayName: "Some Show",
   ImageURL: "",
   ClientID: "c2",
+  NotifierID: null,
   DownloadDir: "/downloads/shows",
   Category: "series",
   Extra: { quality: "1080p", start_season: 2, start_episode: 3 },

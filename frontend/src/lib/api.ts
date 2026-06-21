@@ -201,6 +201,7 @@ export interface TrackerPreview {
 export interface UpdateTopicBody {
   display_name: string;
   client_id?: string | null;
+  notifier_id?: string | null;
   download_dir?: string;
   category?: string;
   quality?: string;
@@ -279,6 +280,7 @@ export type Topic = {
   DisplayName: string;
   ImageURL: string;
   ClientID: string | null;
+  NotifierID: string | null;
   DownloadDir: string;
   Category: string;
   Extra: TopicExtra | null;

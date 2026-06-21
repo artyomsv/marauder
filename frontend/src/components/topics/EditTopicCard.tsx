@@ -26,6 +26,7 @@ function initialFrom(topic: Topic): TopicFormValues {
     startSeason: season != null ? String(season) : "",
     startEpisode: episode != null ? String(episode) : "",
     clientId: topic.ClientID ?? "",
+    notifierId: topic.NotifierID ?? "",
     downloadDir: topic.DownloadDir ?? "",
     category: topic.Category ?? "",
   };
@@ -42,6 +43,7 @@ export function EditTopicCard({ topic, onClose, onSaved }: EditTopicCardProps) {
       api.updateTopic(topic.ID, {
         display_name: v.displayName,
         client_id: v.clientId || null,
+        notifier_id: v.notifierId || null,
         // Backend Update overwrites DownloadDir/Category as plain strings,
         // so send the raw values — "" unambiguously clears the column,
         // matching the always-overwrite semantics.
