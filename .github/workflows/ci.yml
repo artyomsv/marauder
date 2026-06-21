@@ -144,6 +144,9 @@ jobs:
       - name: Run release-helpers tests
         run: bash .github/scripts/release-helpers_test.sh
 
+      - name: Run bump-version-refs tests
+        run: bash .github/scripts/bump-version-refs_test.sh
+
   # ---------------------------------------------------------------- frontend
   frontend:
     name: Frontend (Node ${{ matrix.node }})

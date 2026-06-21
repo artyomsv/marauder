@@ -258,13 +258,14 @@ jobs:
               || echo "::warning::Failed to comment on issue #$n (non-fatal)."
           done
 
-  # ----------------------------------------------- bump source-build version
-  # Keep the source-build (dev) stack's stamped version in sync with the
-  # latest release, so a local `docker compose up --build` reports the real
-  # released version instead of a hand-maintained marker. Commits the bump
-  # back to main with [skip ci] so it doesn't re-trigger CI.
+  # -------------------------------------------- sync version references
+  # Stamp the released version into every file that mirrors it, so the source
+  # build, the prebuilt ghcr stack, the example env, and the marketing site all
+  # report the real released version instead of hand-maintained markers. The
+  # actual edits live in .github/scripts/bump-version-refs.sh (tested by
+  # bump-version-refs_test.sh).
   bump-dev-version:
-    name: Bump dev stack version
+    name: Sync version references
     needs: [release]
     if: github.ref_type == 'tag'
     runs-on: ubuntu-latest
@@ -277,24 +278,33 @@ jobs:
           ref: main
           fetch-depth: 0
 
-      - name: Set dev stack version to the released version
+      - name: Stamp released version and commit
         run: |
           set -euo pipefail
           VER="${GITHUB_REF_NAME#v}"
 
-          # Update the source-build VERSION build arg and the marauder-* image
-          # tags in the base compose file. Other images (postgres, nginx) are
-          # left untouched by the marauder- prefix anchor.
-          sed -i -E "s|(VERSION: \")[^\"]+(\")|\1${VER}\2|" deploy/docker-compose.yml
-          sed -i -E "s#(image: marauder-(backend|frontend|cfsolver):).*#\1${VER}#" deploy/docker-compose.yml
-
-          if git diff --quiet -- deploy/docker-compose.yml; then
-            echo "deploy/docker-compose.yml already at ${VER}, nothing to do"
-            exit 0
-          fi
+          bash .github/scripts/bump-version-refs.sh "$VER"
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add deploy/docker-compose.yml
-          git commit -m "chore: set dev stack version to ${VER} [skip ci]"
+
+          # Deploy/repo artifacts: nothing to redeploy -> [skip ci].
+          if ! git diff --quiet -- deploy/docker-compose.yml deploy/docker-compose.ghcr.yml deploy/.env.example; then
+            git add deploy/docker-compose.yml deploy/docker-compose.ghcr.yml deploy/.env.example
+            git commit -m "chore: pin deploy stack to ${VER} [skip ci]"
+          else
+            echo "deploy version references already at ${VER}"
+          fi
+
+          # Site content: must trigger site.yml to redeploy marauder.cc, so this
+          # commit deliberately does NOT carry [skip ci]. It is committed LAST so
+          # it is the push HEAD (GitHub evaluates [skip ci] on the head commit).
+          if ! git diff --quiet -- site/src/data/seo.ts site/src/pages/install.astro; then
+            git add site/src/data/seo.ts site/src/pages/install.astro
+            git commit -m "chore(site): set displayed version to ${VER}"
+          else
+            echo "site version references already at ${VER}"
+          fi
+
+          # Pushes any commits made above (no-op if both were already current).
           git push origin main
