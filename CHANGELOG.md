@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.7] - 2026-06-21
+
 ### Changed
 
 - **qBittorrent is now validated end-to-end** and promoted from `alpha` to
