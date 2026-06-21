@@ -27,6 +27,7 @@ import { useArmedConfirm } from "@/lib/hooks/useArmedConfirm";
 import { AddTopicCard } from "@/components/topics/AddTopicCard";
 import { EditTopicCard } from "@/components/topics/EditTopicCard";
 import { ClientBadge, type ClientRef } from "@/components/topics/ClientBadge";
+import { NotifierBadge, type NotifierRef } from "@/components/topics/NotifierBadge";
 import { DeliveryStatus } from "@/components/topics/DeliveryStatus";
 import { PosterImage } from "@/components/topics/PosterImage";
 
@@ -36,6 +37,7 @@ export { AddTopicCard } from "@/components/topics/AddTopicCard";
 
 type TopicsList = { topics: Topic[] | null };
 type ClientsList = { clients: ClientRef[] | null };
+type NotifiersList = { notifiers: NotifierRef[] | null };
 
 export function TopicsPage() {
   const qc = useQueryClient();
@@ -50,6 +52,11 @@ export function TopicsPage() {
   const clients = clientsData?.clients ?? [];
   const clientById = new Map(clients.map((c) => [c.id, c]));
   const defaultClient = clients.find((c) => c.is_default) ?? null;
+  const { data: notifiersData } = useQuery({
+    queryKey: QK.notifiers,
+    queryFn: () => api.get<NotifiersList>("/notifiers"),
+  });
+  const notifierById = new Map((notifiersData?.notifiers ?? []).map((n) => [n.id, n]));
   const density = usePrefs((s) => s.density);
   const setDensity = usePrefs((s) => s.setDensity);
   const [showAdd, setShowAdd] = useState(false);
@@ -208,6 +215,7 @@ export function TopicsPage() {
                         clientById={clientById}
                         defaultClient={defaultClient}
                       />
+                      <NotifierBadge topic={t} notifierById={notifierById} />
                     </div>
                     {!compact && (
                       <div className="truncate font-mono text-xs text-muted-foreground">
