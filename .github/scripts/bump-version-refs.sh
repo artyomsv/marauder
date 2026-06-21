@@ -43,4 +43,14 @@ sed -i -E "s|(version: \")${SEMVER}(\")|\1${VER}\2|"              "$ROOT/site/sr
 sed -i -E "s|(\"version\": \")${SEMVER}(\")|\1${VER}\2|"          "$ROOT/site/src/pages/install.astro"
 sed -i -E "s|(defaults to <code>)${SEMVER}(</code>)|\1${VER}\2|"  "$ROOT/site/src/pages/install.astro"
 
+# README.md — only the three CURRENT-version markers. The shields release badge
+# (alt text + URL), the bold "**vX.Y.Z**" latest-release marker under Project
+# status, and the MARAUDER_VERSION default note. Deliberately anchored so the
+# HISTORICAL mentions in the same prose ("v1.0.0 was the initial production
+# cut", "v1.0.1 ... first to publish to GHCR") are left untouched.
+sed -i -E "s|(Release: v)${SEMVER}|\1${VER}|"                     "$ROOT/README.md"
+sed -i -E "s|(badge/release-v)${SEMVER}(-success)|\1${VER}\2|"    "$ROOT/README.md"
+sed -i -E "s|(\*\*v)${SEMVER}(\*\*)|\1${VER}\2|"                  "$ROOT/README.md"
+sed -i -E "s|(defaults to \`)${SEMVER}(\`)|\1${VER}\2|"           "$ROOT/README.md"
+
 echo "bump-version-refs: stamped ${VER} into deploy/ and site/ version references"

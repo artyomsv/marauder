@@ -7,7 +7,15 @@
 **A modern, self-hosted torrent topic monitor for the trackers the *arr stack can't reach.**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Release: v1.0.1](https://img.shields.io/badge/release-v1.0.1-success.svg)](CHANGELOG.md)
+[![Release: v1.0.6](https://img.shields.io/badge/release-v1.0.6-success.svg)](CHANGELOG.md)
+
+[![CI](https://github.com/artyomsv/marauder/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/artyomsv/marauder/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/artyomsv/marauder/actions/workflows/codeql.yml/badge.svg?branch=main)](https://github.com/artyomsv/marauder/actions/workflows/codeql.yml)
+[![Docker build + scan](https://github.com/artyomsv/marauder/actions/workflows/docker.yml/badge.svg?branch=main)](https://github.com/artyomsv/marauder/actions/workflows/docker.yml)
+[![E2E (nightly)](https://github.com/artyomsv/marauder/actions/workflows/e2e.yml/badge.svg)](https://github.com/artyomsv/marauder/actions/workflows/e2e.yml)
+[![Client acceptance (nightly)](https://github.com/artyomsv/marauder/actions/workflows/client-acceptance.yml/badge.svg)](https://github.com/artyomsv/marauder/actions/workflows/client-acceptance.yml)
+[![Deploy site](https://github.com/artyomsv/marauder/actions/workflows/site.yml/badge.svg)](https://github.com/artyomsv/marauder/actions/workflows/site.yml)
+
 [![Go](https://img.shields.io/badge/backend-Go%201.25-00ADD8.svg)](backend/)
 [![React 19](https://img.shields.io/badge/frontend-React%2019.2-61DAFB.svg)](frontend/)
 [![Postgres 18](https://img.shields.io/badge/database-Postgres%2018-336791.svg)](deploy/)
@@ -61,8 +69,8 @@ Read the full rationale: [VISION.md](docs/VISION.md) ·
 
 ## Project status
 
-**v1.0.1** — latest release (v1.0.0 was the initial production cut;
-v1.0.1 is the first release to publish container images to GHCR).
+**v1.0.6** — latest release (v1.0.0 was the initial production cut;
+v1.0.1 was the first release to publish container images to GHCR).
 
 What works **today**:
 
@@ -125,7 +133,7 @@ docker compose -f docker-compose.ghcr.yml --env-file .env up -d
 ```
 
 Requires Docker Compose **v2.23.1+**. Pin the release with `MARAUDER_VERSION`
-in `.env` (defaults to `1.0.1`); `latest` also exists.
+in `.env` (defaults to `1.0.6`); `latest` also exists.
 
 ### Build from source (contributors)
 
