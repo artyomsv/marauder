@@ -11,8 +11,15 @@ import (
 	"golang.org/x/text/encoding/charmap"
 
 	"github.com/artyomsv/marauder/backend/internal/domain"
+	"github.com/artyomsv/marauder/backend/internal/infohash"
 	"github.com/artyomsv/marauder/backend/internal/plugins/trackers/forumcommon"
 )
+
+// validBencodedTorrent is a minimal but structurally valid single-file
+// .torrent the infohash package can parse. The mock dl.php serves it so
+// tests can prove Download submits a real torrent (with announce URLs)
+// rather than RuTracker's hash-only page magnet (#52).
+const validBencodedTorrent = "d8:announce19:http://tracker/annc4:infod6:lengthi100e4:name4:test12:piece lengthi16384e6:pieces20:aaaaaaaaaaaaaaaaaaaaee"
 
 // TestCleanTitle_DecodesWindows1251 feeds real cp1251-encoded bytes (the
 // encoding RuTracker actually serves) through cleanTitle and asserts they come
@@ -51,7 +58,7 @@ func newTestPlugin(t *testing.T) (*plugin, *httptest.Server) {
 		case strings.HasPrefix(r.URL.Path, "/forum/dl.php"):
 			w.Header().Set("Content-Type", "application/x-bittorrent")
 			w.WriteHeader(200)
-			w.Write([]byte("d8:announce..."))
+			w.Write([]byte(validBencodedTorrent))
 		case r.URL.Path == "/forum/index.php":
 			w.WriteHeader(200)
 			w.Write([]byte(`<div id="logged-in-username">alice</div>`))
@@ -133,7 +140,11 @@ func TestCheckExtractsHashAndTitle(t *testing.T) {
 	}
 }
 
-func TestDownloadReturnsMagnet(t *testing.T) {
+// TestDownloadReturnsMagnetWithoutCredentials covers the documented
+// fallback: dl.php needs the session cookie, so with no creds Download
+// must hand back the page magnet rather than fetch an unauthenticated
+// (HTML login) dl.php response.
+func TestDownloadReturnsMagnetWithoutCredentials(t *testing.T) {
 	p, _ := newTestPlugin(t)
 	topic := &domain.Topic{URL: "https://" + p.domain + "/forum/viewtopic.php?t=987654"}
 
@@ -143,6 +154,70 @@ func TestDownloadReturnsMagnet(t *testing.T) {
 	}
 	if !strings.HasPrefix(payload.MagnetURI, "magnet:?xt=urn:btih:") {
 		t.Errorf("magnet URI: %q", payload.MagnetURI)
+	}
+}
+
+// TestDownloadPrefersTorrentFileWhenAuthenticated is the #52 regression: a
+// RuTracker page magnet is hash-only (no announce URLs), so an
+// authenticated Download must fetch the .torrent via dl.php instead of
+// handing qBittorrent a trackerless magnet it can never resolve.
+func TestDownloadPrefersTorrentFileWhenAuthenticated(t *testing.T) {
+	p, _ := newTestPlugin(t)
+	creds := &domain.TrackerCredential{
+		UserID:    uuid.New(),
+		Username:  "alice",
+		SecretEnc: []byte("password123"),
+	}
+	topic := &domain.Topic{URL: "https://" + p.domain + "/forum/viewtopic.php?t=987654"}
+
+	payload, err := p.Download(context.Background(), topic, nil, creds)
+	if err != nil {
+		t.Fatalf("Download: %v", err)
+	}
+	if payload.MagnetURI != "" {
+		t.Errorf("expected no magnet, got hash-only magnet %q", payload.MagnetURI)
+	}
+	if len(payload.TorrentFile) == 0 {
+		t.Fatal("expected a .torrent payload, got none")
+	}
+	if _, verr := infohash.FromTorrent(payload.TorrentFile); verr != nil {
+		t.Errorf("payload is not a valid bencoded torrent: %v", verr)
+	}
+}
+
+// TestDownloadFallsBackToMagnetWhenTorrentInvalid guards the fail-open
+// path: if dl.php returns something that is not a bencoded torrent (an
+// HTML error/login page), Download must not submit that garbage — it
+// falls back to the page magnet.
+func TestDownloadFallsBackToMagnetWhenTorrentInvalid(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/forum/viewtopic.php"):
+			w.WriteHeader(200)
+			w.Write([]byte(fixtureTopicHTML))
+		case strings.HasPrefix(r.URL.Path, "/forum/dl.php"):
+			w.WriteHeader(200)
+			w.Write([]byte("<html><body>Please log in</body></html>"))
+		default:
+			w.WriteHeader(404)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	hostNoScheme := strings.TrimPrefix(srv.URL, "http://")
+	p := &plugin{
+		sessions:  forumcommon.New(),
+		domain:    hostNoScheme,
+		transport: &schemeRewrite{target: hostNoScheme},
+	}
+	creds := &domain.TrackerCredential{UserID: uuid.New(), Username: "alice", SecretEnc: []byte("pw")}
+	topic := &domain.Topic{URL: "https://" + p.domain + "/forum/viewtopic.php?t=987654"}
+
+	payload, err := p.Download(context.Background(), topic, nil, creds)
+	if err != nil {
+		t.Fatalf("Download: %v", err)
+	}
+	if !strings.HasPrefix(payload.MagnetURI, "magnet:?xt=urn:btih:") {
+		t.Errorf("expected magnet fallback, got %q / %d torrent bytes", payload.MagnetURI, len(payload.TorrentFile))
 	}
 }
 

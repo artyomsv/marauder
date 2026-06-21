@@ -21,6 +21,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **RuTracker delivered a hash-only magnet that left qBittorrent stuck on
+  "Downloading metadata" forever** (#52). RuTracker page magnets carry no
+  announce URLs, so on a private tracker the client could never find peers.
+  `Download` now prefers the authenticated `.torrent` from `dl.php` (which
+  carries the announce list and full info dict), validates it is a real
+  bencoded torrent before submitting, and falls back to the page magnet only
+  when credentials are absent or the `.torrent` is unavailable.
 - **Kinozal checks reported `no infohash found in topic page`** (#48): the
   plugin scraped the details page, which doesn't carry the hash. It now reads
   the infohash from the authenticated `get_srv_details.php?id=<id>&action=2`

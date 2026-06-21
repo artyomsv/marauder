@@ -30,6 +30,7 @@ import (
 	"strings"
 
 	"github.com/artyomsv/marauder/backend/internal/domain"
+	"github.com/artyomsv/marauder/backend/internal/infohash"
 	"github.com/artyomsv/marauder/backend/internal/plugins/registry"
 	"github.com/artyomsv/marauder/backend/internal/plugins/trackers/forumcommon"
 )
@@ -247,27 +248,45 @@ func (p *plugin) ResolveMetadata(ctx context.Context, rawURL string, creds *doma
 	return meta, nil
 }
 
-// Download returns the magnet URI for the current topic. RuTracker also
-// exposes a downloadable .torrent file via dl.php, but the magnet alone
-// is enough for v0.3 — every torrent client we support accepts magnets.
+// Download submits a usable torrent payload for the current topic.
+//
+// RuTracker page magnets are hash-only (no `&tr=` announce URLs). For a
+// private tracker that is unusable: the client has no announce to reach
+// peers and no DHT fallback, so it sits on "Downloading metadata" forever
+// (#52). The authenticated `.torrent` from dl.php carries the announce
+// list and the full info dict, so we prefer it whenever we can fetch it.
+//
+// Priority:
+//  1. dl.php `.torrent` — when creds are configured (the link needs the
+//     session cookie) and the response validates as a bencoded torrent.
+//  2. page magnet — fallback when creds are absent, dl.php is missing, the
+//     fetch fails, or the response is not a real torrent (e.g. an HTML
+//     login page). A degraded magnet still beats a hard failure.
 func (p *plugin) Download(ctx context.Context, topic *domain.Topic, _ *domain.Check, creds *domain.TrackerCredential) (*domain.Payload, error) {
 	body, err := p.fetchTopicPage(ctx, topic, creds)
 	if err != nil {
 		return nil, err
 	}
+
+	if creds != nil {
+		if m := dlHrefRe.FindSubmatch(body); m != nil {
+			dlURL := "https://" + p.domain + "/forum/" + string(m[1])
+			// Validate the payload is a real bencoded torrent before
+			// submitting it — guards against handing the client an HTML
+			// login/error page that dl.php returns on a dead session.
+			if torrent, ferr := p.fetchBytes(ctx, topic, creds, dlURL); ferr == nil {
+				if _, verr := infohash.FromTorrent(torrent); verr == nil {
+					return &domain.Payload{TorrentFile: torrent, FileName: "rutracker.torrent"}, nil
+				}
+			}
+			// fall through to the magnet on any fetch/validation failure
+		}
+	}
+
 	if m := magnetRe.Find(body); m != nil {
 		return &domain.Payload{MagnetURI: string(m)}, nil
 	}
-	// Fall back to dl.php — needs the session cookie.
-	if m := dlHrefRe.FindSubmatch(body); m != nil {
-		dlURL := "https://" + p.domain + "/forum/" + string(m[1])
-		torrent, err := p.fetchBytes(ctx, topic, creds, dlURL)
-		if err != nil {
-			return nil, err
-		}
-		return &domain.Payload{TorrentFile: torrent, FileName: "rutracker.torrent"}, nil
-	}
-	return nil, errors.New("rutracker: no magnet link or dl.php link in topic page")
+	return nil, errors.New("rutracker: no usable .torrent (needs credentials) and no magnet link in topic page")
 }
 
 func (p *plugin) fetchTopicPage(ctx context.Context, topic *domain.Topic, creds *domain.TrackerCredential) ([]byte, error) {
