@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Per-topic notifier override** — a topic can route its new-release
+  notifications to one specific notifier instead of the global notifier set,
+  via an optional `Notifier` selector on the Add/Edit Topic form. No override
+  keeps the existing behaviour (all subscribed notifiers fire). (#51)
+
 ## [1.0.7] - 2026-06-21
 
 ### Changed
