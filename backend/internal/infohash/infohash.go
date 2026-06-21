@@ -99,6 +99,13 @@ func normalizeHash(h string) (string, error) {
 	}
 }
 
+// maxBencodeDepth bounds container nesting in the scanner. Real torrents
+// nest only a few levels deep (the info dict, a files list, per-file dicts);
+// anything past this is a malformed or hostile payload. The cap turns a
+// stack-exhaustion DoS (unbounded recursion on a crafted dl.php response,
+// see infohash.FromTorrent's callers) into a clean error.
+const maxBencodeDepth = 32
+
 // infoDictBytes locates the raw byte span of the top-level `info` value in
 // a bencoded torrent. The span is returned verbatim (not re-encoded) so
 // the SHA-1 matches what every BitTorrent client computes.
@@ -113,7 +120,7 @@ func infoDictBytes(data []byte) ([]byte, error) {
 			return nil, err
 		}
 		valStart := next
-		valEnd, err := scanValue(data, valStart)
+		valEnd, err := scanValue(data, valStart, 1)
 		if err != nil {
 			return nil, err
 		}
@@ -126,9 +133,14 @@ func infoDictBytes(data []byte) ([]byte, error) {
 }
 
 // scanValue returns the index immediately past the bencoded value at pos.
-func scanValue(data []byte, pos int) (int, error) {
+// depth is the current container nesting level; it guards against
+// unbounded recursion on a hostile payload (see maxBencodeDepth).
+func scanValue(data []byte, pos, depth int) (int, error) {
 	if pos >= len(data) {
 		return 0, errors.New("unexpected end of bencode")
+	}
+	if depth > maxBencodeDepth {
+		return 0, errors.New("bencode nesting exceeds maximum depth")
 	}
 	c := data[pos]
 	switch {
@@ -149,7 +161,7 @@ func scanValue(data []byte, pos int) (int, error) {
 				}
 				pos = next
 			}
-			next, err := scanValue(data, pos)
+			next, err := scanValue(data, pos, depth+1)
 			if err != nil {
 				return 0, err
 			}

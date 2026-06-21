@@ -29,7 +29,10 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/rs/zerolog/log"
+
 	"github.com/artyomsv/marauder/backend/internal/domain"
+	"github.com/artyomsv/marauder/backend/internal/infohash"
 	"github.com/artyomsv/marauder/backend/internal/plugins/registry"
 	"github.com/artyomsv/marauder/backend/internal/plugins/trackers/forumcommon"
 )
@@ -247,27 +250,76 @@ func (p *plugin) ResolveMetadata(ctx context.Context, rawURL string, creds *doma
 	return meta, nil
 }
 
-// Download returns the magnet URI for the current topic. RuTracker also
-// exposes a downloadable .torrent file via dl.php, but the magnet alone
-// is enough for v0.3 — every torrent client we support accepts magnets.
+// Download submits a usable torrent payload for the current topic.
+//
+// RuTracker page magnets are hash-only (no `&tr=` announce URLs). For a
+// private tracker that is unusable: the client has no announce to reach
+// peers and no DHT fallback, so it sits on "Downloading metadata" forever
+// (#52). The authenticated `.torrent` from dl.php carries the announce
+// list and the full info dict, so we prefer it whenever we can fetch it.
+//
+// Priority:
+//  1. dl.php `.torrent` — when creds are configured (the link needs the
+//     session cookie) and the response validates as a bencoded torrent.
+//  2. page magnet — fallback when creds are absent, dl.php is missing, the
+//     fetch fails, or the response is not a real torrent (e.g. an HTML
+//     login page). A degraded magnet still beats a hard failure.
+//
+// Both fetches (topic page + dl.php) share the caller's context, which the
+// scheduler bounds with TrackerHTTPTimeout per Download invocation — so the
+// two sequential round-trips draw from one timeout budget.
 func (p *plugin) Download(ctx context.Context, topic *domain.Topic, _ *domain.Check, creds *domain.TrackerCredential) (*domain.Payload, error) {
 	body, err := p.fetchTopicPage(ctx, topic, creds)
 	if err != nil {
 		return nil, err
 	}
+
+	if creds != nil {
+		if m := dlHrefRe.FindSubmatch(body); m != nil {
+			dlURL := "https://" + p.domain + "/forum/" + string(m[1])
+			// Validate the payload is a real bencoded torrent before
+			// submitting it — guards against handing the client an HTML
+			// login/error page that dl.php returns on a dead session.
+			torrent, ferr := p.fetchBytes(ctx, topic, creds, dlURL)
+			switch {
+			case ferr != nil:
+				// Fail-open: a degraded magnet still beats a hard failure,
+				// but log it — the operator-visible symptom of a dead
+				// session is the client stuck on metadata (#52), and a
+				// silent fallback would leave no breadcrumb.
+				log.Warn().Str("plugin", pluginName).Str("step", "download").
+					Str("url", dlURL).Err(ferr).
+					Msg("dl.php fetch failed; falling back to hash-only page magnet")
+			default:
+				if _, verr := infohash.FromTorrent(torrent); verr != nil {
+					log.Warn().Str("plugin", pluginName).Str("step", "download").
+						Str("url", dlURL).Err(verr).
+						Msg("dl.php returned a non-torrent payload; falling back to hash-only page magnet")
+					break
+				}
+				return &domain.Payload{TorrentFile: torrent, FileName: torrentFileName(string(m[1]))}, nil
+			}
+		}
+	}
+
 	if m := magnetRe.Find(body); m != nil {
 		return &domain.Payload{MagnetURI: string(m)}, nil
 	}
-	// Fall back to dl.php — needs the session cookie.
-	if m := dlHrefRe.FindSubmatch(body); m != nil {
-		dlURL := "https://" + p.domain + "/forum/" + string(m[1])
-		torrent, err := p.fetchBytes(ctx, topic, creds, dlURL)
-		if err != nil {
-			return nil, err
-		}
-		return &domain.Payload{TorrentFile: torrent, FileName: "rutracker.torrent"}, nil
+	return nil, errors.New("rutracker: topic page has no downloadable torrent or magnet link")
+}
+
+// dlTopicIDRe extracts the numeric topic id from a `dl.php?t=<id>` link.
+var dlTopicIDRe = regexp.MustCompile(`t=(\d+)`)
+
+// torrentFileName derives a per-topic .torrent filename from the dl.php
+// link (`dl.php?t=<id>`) so deliveries are diagnosable instead of all
+// sharing one static name. Host-agnostic, so it works under test rewrites.
+// Falls back to a generic name when no id is present.
+func torrentFileName(dlPath string) string {
+	if m := dlTopicIDRe.FindStringSubmatch(dlPath); m != nil {
+		return "rutracker-" + m[1] + ".torrent"
 	}
-	return nil, errors.New("rutracker: no magnet link or dl.php link in topic page")
+	return "rutracker.torrent"
 }
 
 func (p *plugin) fetchTopicPage(ctx context.Context, topic *domain.Topic, creds *domain.TrackerCredential) ([]byte, error) {

@@ -25,7 +25,7 @@ const e2eTopicHTML = `<html>
 
 func TestE2E(t *testing.T) {
 	e2etest.RunFullPipeline(t, e2etest.Case{
-		Name: "rutracker/login-then-magnet-then-qbit",
+		Name: "rutracker/login-then-torrent-then-qbit",
 		Setup: func(t *testing.T, _ *e2etest.QBitFake) (registry.Tracker, string) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				switch {
@@ -36,6 +36,14 @@ func TestE2E(t *testing.T) {
 				case strings.HasPrefix(r.URL.Path, "/forum/viewtopic.php"):
 					w.WriteHeader(200)
 					_, _ = w.Write([]byte(e2eTopicHTML))
+				case strings.HasPrefix(r.URL.Path, "/forum/dl.php"):
+					// Authenticated .torrent download. Serving a real
+					// bencoded torrent here drives the #52 path: the
+					// pipeline must submit THIS file to qBittorrent, not
+					// the hash-only page magnet.
+					w.Header().Set("Content-Type", "application/x-bittorrent")
+					w.WriteHeader(200)
+					_, _ = w.Write([]byte(validBencodedTorrent))
 				case r.URL.Path == "/forum/index.php":
 					w.WriteHeader(200)
 					_, _ = w.Write([]byte(`<div id="logged-in-username">alice</div>`))
@@ -63,5 +71,8 @@ func TestE2E(t *testing.T) {
 		},
 		ExpectedHash:         "0123456789abcdef0123456789abcdef01234567",
 		ExpectedNameContains: "Some Show",
+		// #52: an authenticated RuTracker download must submit the real
+		// .torrent (from dl.php), never the hash-only page magnet.
+		ExpectTorrentFile: true,
 	})
 }
