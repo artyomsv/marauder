@@ -28,7 +28,7 @@ type topicStore interface {
 	ListForUser(ctx context.Context, userID uuid.UUID) ([]*domain.Topic, error)
 	Delete(ctx context.Context, id, userID uuid.UUID) error
 	UpdateStatus(ctx context.Context, id, userID uuid.UUID, status domain.TopicStatus) error
-	Update(ctx context.Context, id, userID uuid.UUID, displayName string, clientID *uuid.UUID, downloadDir, category string, extra map[string]any) (*domain.Topic, error)
+	Update(ctx context.Context, id, userID uuid.UUID, displayName string, clientID, notifierID *uuid.UUID, downloadDir, category string, extra map[string]any) (*domain.Topic, error)
 }
 
 // deliveriesStore is the consumer seam over *repo.Deliveries for the
@@ -64,6 +64,7 @@ type createTopicReq struct {
 	URL              string     `json:"url"`
 	DisplayName      string     `json:"display_name"`
 	ClientID         *uuid.UUID `json:"client_id"`
+	NotifierID       *uuid.UUID `json:"notifier_id"`
 	DownloadDir      string     `json:"download_dir"`
 	Category         string     `json:"category"`
 	CheckIntervalSec int        `json:"check_interval_sec"`
@@ -192,6 +193,7 @@ func (h *Topics) Create(w http.ResponseWriter, r *http.Request) {
 		DisplayName:      displayName,
 		ImageURL:         imageURL,
 		ClientID:         req.ClientID,
+		NotifierID:       req.NotifierID,
 		DownloadDir:      req.DownloadDir,
 		Category:         req.Category,
 		Extra:            extra,
@@ -210,6 +212,7 @@ func (h *Topics) Create(w http.ResponseWriter, r *http.Request) {
 type updateTopicReq struct {
 	DisplayName  string     `json:"display_name"`
 	ClientID     *uuid.UUID `json:"client_id"`
+	NotifierID   *uuid.UUID `json:"notifier_id"`
 	DownloadDir  string     `json:"download_dir"`
 	Category     string     `json:"category"`
 	Quality      string     `json:"quality,omitempty"`
@@ -281,7 +284,7 @@ func (h *Topics) Update(w http.ResponseWriter, r *http.Request) {
 		extra["start_episode"] = *req.StartEpisode
 	}
 
-	updated, uerr := h.Topics.Update(r.Context(), id, uid, req.DisplayName, req.ClientID, req.DownloadDir, req.Category, extra)
+	updated, uerr := h.Topics.Update(r.Context(), id, uid, req.DisplayName, req.ClientID, req.NotifierID, req.DownloadDir, req.Category, extra)
 	if uerr != nil {
 		if errors.Is(uerr, repo.ErrNotFound) {
 			problem.Write(w, r, h.BaseURL, problem.ErrNotFound("topic not found"))

@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"net/http"
 	"net/http/httptest"
 	"testing"
 
@@ -50,6 +51,7 @@ type fakeTopicStore struct {
 	updateCalled      bool
 	updateDisplayName string
 	updateClientID    *uuid.UUID
+	updateNotifierID  *uuid.UUID
 	updateDownloadDir string
 	updateCategory    string
 	updateExtra       map[string]any
@@ -69,10 +71,11 @@ func (s *fakeTopicStore) Delete(context.Context, uuid.UUID, uuid.UUID) error { r
 func (s *fakeTopicStore) UpdateStatus(context.Context, uuid.UUID, uuid.UUID, domain.TopicStatus) error {
 	return nil
 }
-func (s *fakeTopicStore) Update(_ context.Context, _, _ uuid.UUID, displayName string, clientID *uuid.UUID, downloadDir, category string, extra map[string]any) (*domain.Topic, error) {
+func (s *fakeTopicStore) Update(_ context.Context, _, _ uuid.UUID, displayName string, clientID, notifierID *uuid.UUID, downloadDir, category string, extra map[string]any) (*domain.Topic, error) {
 	s.updateCalled = true
 	s.updateDisplayName = displayName
 	s.updateClientID = clientID
+	s.updateNotifierID = notifierID
 	s.updateDownloadDir = downloadDir
 	s.updateCategory = category
 	s.updateExtra = extra
@@ -84,6 +87,7 @@ func (s *fakeTopicStore) Update(_ context.Context, _, _ uuid.UUID, displayName s
 		ID:          uuid.New(),
 		DisplayName: displayName,
 		ClientID:    clientID,
+		NotifierID:  notifierID,
 		DownloadDir: downloadDir,
 		Category:    category,
 		Extra:       extra,
@@ -186,3 +190,25 @@ func TestTopicsUpdate_BadQuality(t *testing.T) {
 }
 
 func intPtr(n int) *int { return &n }
+
+// TestTopics_Update_PassesNotifierID verifies that notifier_id from the PUT
+// body reaches store.Update as the notifierID argument.
+func TestTopics_Update_PassesNotifierID(t *testing.T) {
+	notifierID := uuid.New()
+	store := &fakeTopicStore{
+		getByID: &domain.Topic{ID: uuid.New(), Extra: map[string]any{}},
+	}
+	h := &Topics{Topics: store, BaseURL: "http://x"}
+
+	body := updateTopicReq{DisplayName: "X", NotifierID: &notifierID}
+	w := httptest.NewRecorder()
+	req := withURLParam(authedReq(t, uuid.New(), body), "id", uuid.New().String())
+	h.Update(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	if store.updateNotifierID == nil || *store.updateNotifierID != notifierID {
+		t.Errorf("updateNotifierID = %v, want %s", store.updateNotifierID, notifierID)
+	}
+}
