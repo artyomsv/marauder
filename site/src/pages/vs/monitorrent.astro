@@ -1,6 +1,7 @@
 ---
 import Page from "@/layouts/Page.astro";
 import { breadcrumbSchema } from "@/data/schemas";
+import { SITE } from "@/data/seo";
 
 const seo = {
   title: "Marauder vs monitorrent — the modern monitorrent successor",
@@ -41,7 +42,7 @@ const matrix = [
   { feature: "Newznab / Usenet indexer support",      mt: "no",                        ma: "yes (newznab plugin)" },
   { feature: "Torrent clients",                       mt: "Transmission, Deluge, µTorrent, qBittorrent", ma: "Transmission, Deluge, µTorrent, qBittorrent + watch folder" },
   { feature: "Language / runtime",                    mt: "Python",                    ma: "Go (single static binary)" },
-  { feature: "Latest release",                        mt: "v1.4.0 — July 2023",        ma: "v1.0.0 — 2026, active" },
+  { feature: "Latest release",                        mt: "v1.4.0 — July 2023",        ma: `v${SITE.software.version} — 2026, active` },
   { feature: "AES-256-GCM encrypted credentials",     mt: "no",                        ma: "yes" },
   { feature: "OpenID Connect / SSO",                  mt: "no",                        ma: "yes (Keycloak bundled)" },
   { feature: "Multi-user with per-user isolation",    mt: "no (single user)",          ma: "yes" },

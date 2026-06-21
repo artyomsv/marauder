@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- The "Marauder vs monitorrent" comparison page (`/vs/monitorrent`) advertised
+  a stale "Latest release v1.0.0"; it now renders the current version from the
+  shared site config so it stays in sync with releases (#55).
+
+## [1.0.3] - 2026-06-21
+
 ### Added
 
 - **Kinozal metadata resolution** (`WithMetadata`): the AddTopic form now
