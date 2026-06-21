@@ -72,6 +72,7 @@ type Topic struct {
 	DisplayName       string
 	ImageURL          string
 	ClientID          *uuid.UUID
+	NotifierID        *uuid.UUID
 	DownloadDir       string
 	Category          string
 	Extra             map[string]any

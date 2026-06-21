@@ -204,7 +204,8 @@ func topicRow(id, userID uuid.UUID, now time.Time) []any {
 	return []any{
 		id, userID, "faketracker", "https://example.invalid/t/1",
 		"My Topic", "", // display_name, image_url
-		(*uuid.UUID)(nil),
+		(*uuid.UUID)(nil), // client_id
+		(*uuid.UUID)(nil), // notifier_id
 		"",                            // download_dir
 		"",                            // category
 		[]byte(`{"quality":"1080p"}`), // extra
@@ -215,9 +216,9 @@ func topicRow(id, userID uuid.UUID, now time.Time) []any {
 	}
 }
 
-// topicColumnsAll mirrors the header slice for pgxmock.NewRows (20 cols).
+// topicColumnsAll mirrors the header slice for pgxmock.NewRows (21 cols).
 var topicColumnsAll = []string{
-	"id", "user_id", "tracker_name", "url", "display_name", "image_url", "client_id",
+	"id", "user_id", "tracker_name", "url", "display_name", "image_url", "client_id", "notifier_id",
 	"download_dir", "category", "extra", "last_hash",
 	"last_checked_at", "last_updated_at", "next_check_at",
 	"check_interval_sec", "consecutive_errors", "status",
@@ -236,11 +237,12 @@ func TestTopics_ScanTopic_MalformedExtra(t *testing.T) {
 	userID := uuid.New()
 	now := time.Now().UTC()
 
-	// Build a row that matches topicColumns exactly (19 columns).
+	// Build a row that matches topicColumns exactly (21 columns).
 	rows := pgxmock.NewRows(topicColumnsAll).AddRow(
 		id, userID, "faketracker", "https://example.invalid/t/1",
 		"My Topic", "", // display_name, image_url
-		(*uuid.UUID)(nil),
+		(*uuid.UUID)(nil), // client_id
+		(*uuid.UUID)(nil), // notifier_id
 		"", "",
 		[]byte("{not valid json"), "",
 		(*time.Time)(nil), (*time.Time)(nil), now,
@@ -333,9 +335,9 @@ func TestTopics_Create_RoundTripsCategory(t *testing.T) {
 
 	// Build the RETURNING row with category="movies".
 	row := topicRow(id, userID, now)
-	// column index 8 is category (0-based: id,user_id,tracker_name,url,
-	// display_name,image_url,client_id,download_dir,category,...)
-	row[8] = "movies"
+	// column index 9 is category (0-based: id,user_id,tracker_name,url,
+	// display_name,image_url,client_id,notifier_id,download_dir,category,...)
+	row[9] = "movies"
 
 	rows := pgxmock.NewRows(topicColumnsAll).AddRow(row...)
 
@@ -344,7 +346,8 @@ func TestTopics_Create_RoundTripsCategory(t *testing.T) {
 		WithArgs(
 			userID, "faketracker", "https://example.invalid/t/1",
 			"My Topic", "", // display_name, image_url
-			(*uuid.UUID)(nil),
+			(*uuid.UUID)(nil), // client_id
+			(*uuid.UUID)(nil), // notifier_id
 			"",               // download_dir
 			"movies",         // category
 			pgxmock.AnyArg(), // extra (JSON)
@@ -389,9 +392,9 @@ func TestTopics_Update_HappyPath(t *testing.T) {
 
 	// Build the RETURNING row reflecting the updated values.
 	row := topicRow(id, userID, now)
-	row[4] = "Updated Name"                                // display_name
-	row[8] = "series"                                      // category
-	row[9] = []byte(`{"quality":"720p","start_season":2}`) // extra
+	row[4] = "Updated Name"                                 // display_name
+	row[9] = "series"                                       // category
+	row[10] = []byte(`{"quality":"720p","start_season":2}`) // extra
 
 	rows := pgxmock.NewRows(topicColumnsAll).AddRow(row...)
 
@@ -400,14 +403,15 @@ func TestTopics_Update_HappyPath(t *testing.T) {
 			id, userID,
 			"Updated Name",    // $3 display_name
 			(*uuid.UUID)(nil), // $4 client_id
-			"",                // $5 download_dir
-			"series",          // $6 category
-			pgxmock.AnyArg(),  // $7 extra (JSON)
+			(*uuid.UUID)(nil), // $5 notifier_id
+			"",                // $6 download_dir
+			"series",          // $7 category
+			pgxmock.AnyArg(),  // $8 extra (JSON)
 		).
 		WillReturnRows(rows)
 
 	extra := map[string]any{"quality": "720p", "start_season": 2}
-	got, err := r.Update(context.Background(), id, userID, "Updated Name", nil, "", "series", extra)
+	got, err := r.Update(context.Background(), id, userID, "Updated Name", nil, nil, "", "series", extra)
 	if err != nil {
 		t.Fatalf("Update: unexpected error: %v", err)
 	}
@@ -429,10 +433,10 @@ func TestTopics_Update_NotFound(t *testing.T) {
 	userID := uuid.New()
 
 	mock.ExpectQuery(`UPDATE topics SET`).
-		WithArgs(id, userID, pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
+		WithArgs(id, userID, pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
 		WillReturnError(pgx.ErrNoRows)
 
-	_, err := r.Update(context.Background(), id, userID, "X", nil, "", "", map[string]any{})
+	_, err := r.Update(context.Background(), id, userID, "X", nil, nil, "", "", map[string]any{})
 	if !errors.Is(err, ErrNotFound) {
 		t.Fatalf("Update: want ErrNotFound, got %v", err)
 	}
@@ -449,14 +453,63 @@ func TestTopics_Update_DBError(t *testing.T) {
 	dbErr := errors.New("connection reset")
 
 	mock.ExpectQuery(`UPDATE topics SET`).
-		WithArgs(id, userID, pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
+		WithArgs(id, userID, pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
 		WillReturnError(dbErr)
 
-	_, err := r.Update(context.Background(), id, userID, "X", nil, "", "", map[string]any{})
+	_, err := r.Update(context.Background(), id, userID, "X", nil, nil, "", "", map[string]any{})
 	if err == nil {
 		t.Fatal("Update: want error, got nil")
 	}
 	if !errors.Is(err, dbErr) {
 		t.Fatalf("Update: want wrapped %v, got %v", dbErr, err)
+	}
+}
+
+// TestTopics_Create_RoundTripsNotifierID verifies Create passes notifier_id
+// through to the INSERT and scans it back out of the RETURNING row.
+func TestTopics_Create_RoundTripsNotifierID(t *testing.T) {
+	repo, mock := newMockTopics(t)
+	t.Cleanup(func() { assertExpectationsMet(t, mock) })
+
+	id := uuid.New()
+	userID := uuid.New()
+	notifierID := uuid.New()
+	now := time.Now().UTC()
+
+	row := topicRow(id, userID, now)
+	row[7] = &notifierID // notifier_id column
+
+	rows := pgxmock.NewRows(topicColumnsAll).AddRow(row...)
+
+	mock.ExpectQuery(`INSERT INTO topics.*notifier_id.*RETURNING`).
+		WithArgs(
+			userID, "faketracker", "https://example.invalid/t/1",
+			"My Topic", "",
+			(*uuid.UUID)(nil), // client_id
+			&notifierID,       // notifier_id
+			"", "",
+			pgxmock.AnyArg(),
+			3600, pgxmock.AnyArg(), "active",
+		).
+		WillReturnRows(rows)
+
+	in := &domain.Topic{
+		UserID:           userID,
+		TrackerName:      "faketracker",
+		URL:              "https://example.invalid/t/1",
+		DisplayName:      "My Topic",
+		NotifierID:       &notifierID,
+		Extra:            map[string]any{"quality": "1080p"},
+		CheckIntervalSec: 3600,
+		NextCheckAt:      now,
+		Status:           domain.TopicStatusActive,
+	}
+
+	got, err := repo.Create(context.Background(), in)
+	if err != nil {
+		t.Fatalf("Create: unexpected error: %v", err)
+	}
+	if got.NotifierID == nil || *got.NotifierID != notifierID {
+		t.Errorf("Create: want NotifierID=%s, got %v", notifierID, got.NotifierID)
 	}
 }

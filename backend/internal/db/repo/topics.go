@@ -36,7 +36,7 @@ func NewTopics(pool *pgxpool.Pool) *Topics {
 }
 
 const topicColumns = `id, user_id, tracker_name, url, display_name,
-		COALESCE(image_url,''), client_id,
+		COALESCE(image_url,''), client_id, notifier_id,
 		COALESCE(download_dir,''), COALESCE(category,''), extra, COALESCE(last_hash,''),
 		last_checked_at, last_updated_at, next_check_at,
 		check_interval_sec, consecutive_errors, status,
@@ -47,10 +47,10 @@ func scanTopic(row pgx.Row) (*domain.Topic, error) {
 	var extraRaw []byte
 	var lastChecked, lastUpdated *time.Time
 	var status string
-	var clientID *uuid.UUID
+	var clientID, notifierID *uuid.UUID
 	err := row.Scan(
 		&t.ID, &t.UserID, &t.TrackerName, &t.URL, &t.DisplayName,
-		&t.ImageURL, &clientID, &t.DownloadDir, &t.Category, &extraRaw, &t.LastHash,
+		&t.ImageURL, &clientID, &notifierID, &t.DownloadDir, &t.Category, &extraRaw, &t.LastHash,
 		&lastChecked, &lastUpdated, &t.NextCheckAt,
 		&t.CheckIntervalSec, &t.ConsecutiveErrors, &status,
 		&t.LastError, &t.CreatedAt, &t.UpdatedAt,
@@ -59,6 +59,7 @@ func scanTopic(row pgx.Row) (*domain.Topic, error) {
 		return nil, err
 	}
 	t.ClientID = clientID
+	t.NotifierID = notifierID
 	t.LastCheckedAt = lastChecked
 	t.LastUpdatedAt = lastUpdated
 	t.Status = domain.TopicStatus(status)
@@ -81,12 +82,12 @@ func scanTopic(row pgx.Row) (*domain.Topic, error) {
 func (r *Topics) Create(ctx context.Context, t *domain.Topic) (*domain.Topic, error) {
 	extra, _ := json.Marshal(t.Extra)
 	q := `
-INSERT INTO topics (user_id, tracker_name, url, display_name, image_url, client_id,
+INSERT INTO topics (user_id, tracker_name, url, display_name, image_url, client_id, notifier_id,
                     download_dir, category, extra, check_interval_sec, next_check_at, status)
-VALUES ($1,$2,$3,$4,NULLIF($5,''),$6,NULLIF($7,''),NULLIF($8,''),$9,$10,$11,$12)
+VALUES ($1,$2,$3,$4,NULLIF($5,''),$6,$7,NULLIF($8,''),NULLIF($9,''),$10,$11,$12,$13)
 RETURNING ` + topicColumns
 	row := r.pool.QueryRow(ctx, q,
-		t.UserID, t.TrackerName, t.URL, t.DisplayName, t.ImageURL, t.ClientID,
+		t.UserID, t.TrackerName, t.URL, t.DisplayName, t.ImageURL, t.ClientID, t.NotifierID,
 		t.DownloadDir, t.Category, extra, t.CheckIntervalSec, t.NextCheckAt, string(t.Status),
 	)
 	return scanTopic(row)
@@ -238,11 +239,11 @@ WHERE  id = $1`
 	return nil
 }
 
-// Update edits a topic's user-editable fields (display name, client,
+// Update edits a topic's user-editable fields (display name, client, notifier,
 // download dir, category, and the capability Extra map). It does NOT
 // touch url/tracker/status/hash/scheduling. Returns ErrNotFound when the
 // topic doesn't belong to the user.
-func (r *Topics) Update(ctx context.Context, id, userID uuid.UUID, displayName string, clientID *uuid.UUID, downloadDir, category string, extra map[string]any) (*domain.Topic, error) {
+func (r *Topics) Update(ctx context.Context, id, userID uuid.UUID, displayName string, clientID, notifierID *uuid.UUID, downloadDir, category string, extra map[string]any) (*domain.Topic, error) {
 	raw, err := json.Marshal(extra)
 	if err != nil {
 		return nil, fmt.Errorf("topics: marshal extra: %w", err)
@@ -251,10 +252,10 @@ func (r *Topics) Update(ctx context.Context, id, userID uuid.UUID, displayName s
 		raw = []byte("{}")
 	}
 	row := r.pool.QueryRow(ctx, `UPDATE topics SET
-		display_name = $3, client_id = $4, download_dir = $5, category = $6,
-		extra = $7, updated_at = now()
+		display_name = $3, client_id = $4, notifier_id = $5, download_dir = $6, category = $7,
+		extra = $8, updated_at = now()
 	WHERE id = $1 AND user_id = $2
-	RETURNING `+topicColumns, id, userID, displayName, clientID, downloadDir, category, raw)
+	RETURNING `+topicColumns, id, userID, displayName, clientID, notifierID, downloadDir, category, raw)
 	t, err := scanTopic(row)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
