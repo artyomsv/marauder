@@ -30,7 +30,7 @@ jobs:
         client: [qbittorrent, transmission, deluge, utorrent]
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
       - name: Acceptance (pinned baseline)
         run: bash deploy/acceptance/acceptance.sh ${{ matrix.client }} pinned
 
@@ -49,7 +49,7 @@ jobs:
         client: [qbittorrent, transmission, deluge]
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
       - name: Acceptance (latest image)
         id: acc
         continue-on-error: true
