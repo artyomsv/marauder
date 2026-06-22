@@ -10,6 +10,7 @@ import { QK } from "@/lib/queryKeys";
 import { useDebouncedValue } from "@/lib/hooks/useDebouncedValue";
 import { SeasonEpisodePicker, SELECT_CLASS } from "./SeasonEpisodePicker";
 import { PosterImage } from "./PosterImage";
+import { NotifierSelect } from "./NotifierSelect";
 
 // Shape of GET /trackers/match. Drives which optional sections the form
 // renders (quality, season/episode filter, credentials hint).
@@ -27,12 +28,6 @@ export interface TrackerMatch {
 // Minimal shape of a torrent client for the picker. The full ClientView
 // lives in Clients.tsx; the form only needs id + display_name.
 interface ClientOption {
-  id: string;
-  display_name: string;
-}
-
-// Minimal shape of a configured notifier for the picker — id + label only.
-interface NotifierOption {
   id: string;
   display_name: string;
 }
@@ -99,13 +94,6 @@ export function TopicForm({
     staleTime: 60_000,
   });
   const clients = clientsQuery.data?.clients ?? [];
-
-  const notifiersQuery = useQuery({
-    queryKey: QK.notifiers,
-    queryFn: () => api.get<{ notifiers: NotifierOption[] | null }>("/notifiers"),
-    staleTime: 60_000,
-  });
-  const notifiers = notifiersQuery.data?.notifiers ?? [];
 
   // In edit mode the URL never changes, so the debounce is a no-op pass
   // through. In add mode it throttles the /trackers/match lookup.
@@ -343,25 +331,10 @@ export function TopicForm({
         </select>
       </div>
 
-      <div className="space-y-1.5">
-        <Label htmlFor="notifier">Notifier (optional)</Label>
-        <select
-          id="notifier"
-          value={delivery.notifierId}
-          onChange={(e) => setDelivery((d) => ({ ...d, notifierId: e.target.value }))}
-          className={SELECT_CLASS}
-        >
-          <option value="">Use default notifiers</option>
-          {notifiers.map((n) => (
-            <option key={n.id} value={n.id}>
-              {n.display_name}
-            </option>
-          ))}
-        </select>
-        <p className="text-xs text-muted-foreground">
-          Route this topic's release alerts to one notifier instead of all of them.
-        </p>
-      </div>
+      <NotifierSelect
+        value={delivery.notifierId}
+        onChange={(v) => setDelivery((d) => ({ ...d, notifierId: v }))}
+      />
 
       <div className="grid gap-4 sm:grid-cols-2">
         <div className="space-y-1.5">
