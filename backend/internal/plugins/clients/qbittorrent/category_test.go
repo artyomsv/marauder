@@ -71,24 +71,24 @@ func TestAdd_CategoryField(t *testing.T) {
 		wantSavePath string
 	}{
 		{
-			name: "magnet with category sends field and nests save path",
+			name:    "magnet with category sends field and nests save path",
 			payload: magnet, category: "sonarr-topic",
 			wantPresent: true, wantCategory: "sonarr-topic",
 			wantSavePath: base + "/sonarr-topic",
 		},
 		{
-			name: "torrent file with category sends field too",
+			name:    "torrent file with category sends field too",
 			payload: torrent, category: "sonarr-topic",
 			wantPresent: true, wantCategory: "sonarr-topic",
 			wantSavePath: base + "/sonarr-topic",
 		},
 		{
-			name: "no category omits field",
+			name:    "no category omits field",
 			payload: magnet, category: "",
 			wantPresent: false, wantSavePath: base,
 		},
 		{
-			name: "whitespace-only category omits field",
+			name:    "whitespace-only category omits field",
 			payload: magnet, category: "   ",
 			wantPresent: false, wantSavePath: base,
 		},
@@ -96,7 +96,7 @@ func TestAdd_CategoryField(t *testing.T) {
 			// A path-ish category must be sanitised identically for the label
 			// and the save-path segment, so they stay aligned (issue #75 / the
 			// SanitizeCategory consistency fix).
-			name: "path-like category is sanitised to match save path",
+			name:    "path-like category is sanitised to match save path",
 			payload: magnet, category: "../tv",
 			wantPresent: true, wantCategory: "tv",
 			wantSavePath: base + "/tv",
