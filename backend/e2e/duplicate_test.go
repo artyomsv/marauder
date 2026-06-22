@@ -76,7 +76,13 @@ func TestDuplicateDelivery(t *testing.T) {
 	}
 
 	// And it must not have been parked in the error state by the duplicate.
-	if status, lastErr := m.topicState(t, topicB); status == "error" {
+	status, lastErr := m.topicState(t, topicB)
+	if status == "" {
+		// domain.Topic has no JSON tags today (status marshals as "Status"); an
+		// empty decode means that shape changed and this assertion went blind.
+		t.Fatalf("topic B status decoded empty — domain.Topic JSON shape changed?")
+	}
+	if status == "error" {
 		t.Errorf("topic B is in error state after a duplicate delivery: status=%q last_error=%q", status, lastErr)
 	}
 }

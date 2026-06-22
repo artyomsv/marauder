@@ -172,7 +172,7 @@ func (p *plugin) Add(ctx context.Context, rawConfig []byte, payload *domain.Payl
 	accepted := false
 	switch {
 	case resp.StatusCode == http.StatusConflict:
-		accepted = false // duplicate signal — verify presence below
+		// Duplicate signal — leave accepted=false so the presence check below runs.
 	case strings.HasPrefix(respBody, "{"):
 		var summary struct {
 			SuccessCount int `json:"success_count"`
@@ -193,10 +193,12 @@ func (p *plugin) Add(ctx context.Context, rawConfig []byte, payload *domain.Payl
 		return nil
 	}
 
-	// qBittorrent rejected the add. If the payload's infohash is already present,
-	// the rejection is a duplicate and the delivery is effectively done — treat
-	// it as an idempotent success (issue #76). Otherwise it is a genuine failure
-	// (bad torrent, server problem) and must surface as an error.
+	// qBittorrent rejected the add. The probe below runs for ANY rejection
+	// signal (409, "Fails.", or a JSON failure), not only 409: if the payload's
+	// infohash is already present, the rejection is a duplicate and the delivery
+	// is effectively done — treat it as an idempotent success (issue #76).
+	// Otherwise it is a genuine failure (bad torrent, server problem) and must
+	// surface as an error.
 	if p.alreadyPresent(ctx, rawConfig, payload) {
 		return nil
 	}
@@ -217,6 +219,9 @@ func (p *plugin) alreadyPresent(ctx context.Context, rawConfig []byte, payload *
 	if err != nil || ih == "" {
 		return false
 	}
+	// Status filters server-side via /torrents/info?hashes=<ih>, so a non-empty
+	// result means this exact infohash is present; we deliberately rely on that
+	// filter rather than re-matching the returned hash here.
 	statuses, err := p.Status(ctx, rawConfig, []string{ih})
 	if err != nil {
 		return false
