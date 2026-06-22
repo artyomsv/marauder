@@ -80,96 +80,20 @@ jobs:
           docker logs deploy-qbittorrent-1
           exit 1
 
-      - name: Run the magnet -> qBittorrent walkthrough
+      - name: Run the Go e2e harness
         env:
           QBIT_PASSWORD: ${{ steps.qbit.outputs.password }}
+        # Runs inside the compose network so the test reaches gateway:6688 and
+        # qbittorrent:6611 by service DNS — avoids qBittorrent 5.x's host-port
+        # 401. Network name `deploy_default` follows the compose project name
+        # (this workflow runs compose from deploy/ with no -p); keep in sync.
         run: |
-          set -e
-
-          echo "[1] login to Marauder"
-          LOGIN=$(curl -sS -X POST http://localhost:34080/api/v1/auth/login \
-            -H "Content-Type: application/json" \
-            -d '{"username":"admin","password":"pleasechangeme"}')
-          TOK=$(echo "$LOGIN" | awk -F'"access_token":"' '{print $2}' | awk -F'"' '{print $1}')
-          test -n "$TOK"
-
-          echo "[2] create qBittorrent client"
-          CLIENT_JSON=$(curl -sS -X POST http://localhost:34080/api/v1/clients \
-            -H "Authorization: Bearer $TOK" \
-            -H "Content-Type: application/json" \
-            -d "{
-              \"client_name\": \"qbittorrent\",
-              \"display_name\": \"E2E qBit\",
-              \"is_default\": true,
-              \"config\": {
-                \"url\": \"http://qbittorrent:6611\",
-                \"username\": \"admin\",
-                \"password\": \"${QBIT_PASSWORD}\"
-              }
-            }")
-          echo "$CLIENT_JSON"
-          CLIENT_ID=$(echo "$CLIENT_JSON" | awk -F'"id":"' '{print $2}' | awk -F'"' '{print $1}')
-          test -n "$CLIENT_ID"
-
-          echo "[3] add magnet topic with a category (issue #75)"
-          INFOHASH=0123456789abcdef0123456789abcdef01234567
-          CATEGORY=sonarr-e2e
-          MAG="magnet:?xt=urn:btih:${INFOHASH}&dn=marauder-e2e"
-          TOPIC_JSON=$(curl -sS -X POST http://localhost:34080/api/v1/topics \
-            -H "Authorization: Bearer $TOK" \
-            -H "Content-Type: application/json" \
-            -d "{\"url\":\"$MAG\",\"client_id\":\"$CLIENT_ID\",\"category\":\"$CATEGORY\"}")
-          echo "$TOPIC_JSON"
-          TOPIC_ID=$(echo "$TOPIC_JSON" | awk -F'"ID":"' '{print $2}' | awk -F'"' '{print $1}')
-          test -n "$TOPIC_ID"
-
-          echo "[4] wait for the scheduler to push the torrent (up to ~135s)"
-          # Verify through Marauder's own API, which exercises the real
-          # backend -> qBittorrent delivery path and records topic_deliveries.
-          # We deliberately do NOT poke the qBittorrent WebUI directly:
-          # qBittorrent 5.x rejects requests whose Host-header port differs
-          # from its WebUI port, which the published host port (34611 -> 6611)
-          # does, so a host-side login returns 401.
-          sleep 75
-          echo "[5] verify delivery via Marauder topic status API"
-          DELIVERED=
-          for _ in $(seq 1 6); do
-            STATUS=$(curl -sS -H "Authorization: Bearer $TOK" \
-              "http://localhost:34080/api/v1/topics/$TOPIC_ID/status")
-            echo "$STATUS"
-            if echo "$STATUS" | grep -q "$INFOHASH"; then
-              echo "delivery recorded for $INFOHASH"
-              DELIVERED=1
-              break
-            fi
-            sleep 10
-          done
-          [ -n "$DELIVERED" ] || { echo "torrent $INFOHASH never appeared in topic status"; exit 1; }
-
-          echo "[6] verify qBittorrent recorded the category (issue #75)"
-          # Query qBittorrent from INSIDE the compose network so the Host
-          # header is qbittorrent:6611 (matching its WebUI port) — a host-side
-          # login would 401 on qBittorrent 5.x (see the step [4] note).
-          # The password and infohash are forwarded as container env vars (-e)
-          # and the body is single-quoted, so nothing is string-interpolated
-          # into the shell command.
-          QBIT_INFO=$(docker run --rm --network deploy_default \
-            -e QBIT_PASSWORD -e INFOHASH="$INFOHASH" \
-            curlimages/curl:8.11.1 sh -c '
-              SID=$(curl -sS -i -X POST "http://qbittorrent:6611/api/v2/auth/login" \
-                --data-urlencode "username=admin" \
-                --data-urlencode "password=$QBIT_PASSWORD" \
-                | grep -i "^set-cookie:" | sed "s/.*SID=//I" | cut -d";" -f1)
-              test -n "$SID" || { echo "qBit login failed (no SID cookie)" >&2; exit 1; }
-              curl -sS -H "Cookie: SID=$SID" \
-                "http://qbittorrent:6611/api/v2/torrents/info?hashes=$INFOHASH"')
-          echo "$QBIT_INFO"
-          if echo "$QBIT_INFO" | grep -q "\"category\":\"$CATEGORY\""; then
-            echo "qBittorrent category correctly set to $CATEGORY"
-            exit 0
-          fi
-          echo "qBittorrent did NOT record category=$CATEGORY (issue #75 regression)"
-          exit 1
+          docker run --rm --network deploy_default \
+            -v "$PWD/backend:/backend" -w /backend \
+            -e MARAUDER_BASE_URL=http://gateway:6688 \
+            -e MARAUDER_ADMIN_USER=admin -e MARAUDER_ADMIN_PASS=pleasechangeme \
+            -e QBIT_URL=http://qbittorrent:6611 -e QBIT_PASSWORD \
+            golang:1.25 go test -tags=e2e -count=1 -v ./e2e/...
 
       - name: Print stack logs on failure
         if: failure()

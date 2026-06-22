@@ -7,6 +7,11 @@ API appears in qBittorrent within one scheduler tick.
 The test relies only on Docker and assumes nothing is installed on the
 host besides Docker and git.
 
+> **Automated version:** this walkthrough is automated as a Go harness in
+> `backend/e2e/` (run with `go test -tags=e2e ./e2e/...`), exercised nightly by
+> `.github/workflows/e2e.yml`. The manual steps below remain for humans who want
+> to drive the flow by hand.
+
 ## 1. Bring up the dev stack
 
 The dev overlay (`deploy/docker-compose.dev.yml`) publishes the database
