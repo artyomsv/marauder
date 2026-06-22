@@ -31,7 +31,10 @@ deploy/         docker-compose stacks (source-build base + prebuilt-image
 docs/           ROADMAP, PRD, VISION, COMPETITORS, per-feature guides
 site/           Astro 5 marketing site published to marauder.cc
 techdebt/       Debt-tracking files (one per issue, see global rule)
-.github/        Workflows: ci, docker, e2e, release, auto-release, codeql
+.github/        Workflows: ci, docker, e2e, nightly-build, release,
+                auto-release, codeql (nightly-build builds all 3 images on
+                native amd64+arm64 runners nightly and runs them — guards
+                against arch regressions like #74)
                 + scripts/ (release-helpers.sh: tested bump/version/issue logic)
 ```
 
