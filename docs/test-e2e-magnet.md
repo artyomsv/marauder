@@ -88,10 +88,13 @@ MAG='magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567&dn=marauder-te
 curl -sS -X POST http://localhost:34080/api/v1/topics \
   -H "Authorization: Bearer $TOK" \
   -H "Content-Type: application/json" \
-  -d "{\"url\":\"$MAG\",\"client_id\":\"$CLIENT_ID\"}"
+  -d "{\"url\":\"$MAG\",\"client_id\":\"$CLIENT_ID\",\"category\":\"sonarr-test\"}"
 ```
 
-You should see a `Topic` JSON with `"TrackerName":"genericmagnet"`.
+You should see a `Topic` JSON with `"TrackerName":"genericmagnet"`. The
+optional `category` both nests the save path under `sonarr-test/` **and** sets
+qBittorrent's native category (issue #75), which is what download managers like
+Sonarr key off to import the completed files.
 
 ## 6. Wait for one scheduler tick
 
@@ -122,6 +125,13 @@ Expected: a JSON array containing at least one entry with:
 - `"name": "marauder-test-file"`
 - `"hash": "0123456789abcdef0123456789abcdef01234567"`
 - `"state": "metaDL"` (fetching metadata from DHT / trackers)
+- `"category": "sonarr-test"` (issue #75 — the native qBittorrent category)
+
+> Note: from the host, a qBittorrent 5.x login can return `401` because the
+> published host port (`34611`) differs from qBittorrent's WebUI port (`6611`),
+> which trips its Host-header check. If so, run the login/info `curl` from
+> inside the compose network instead (Host `qbittorrent:6611`), e.g. via
+> `docker run --rm --network deploy_default curlimages/curl ...`.
 
 This is the full chain working:
 

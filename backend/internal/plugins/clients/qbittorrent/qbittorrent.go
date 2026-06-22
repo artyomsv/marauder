@@ -125,6 +125,14 @@ func (p *plugin) Add(ctx context.Context, rawConfig []byte, payload *domain.Payl
 	if dir := registry.EffectiveDownloadDir(cfg.DownloadDir, opts.DownloadDir, opts.Category); dir != "" {
 		_ = mw.WriteField("savepath", dir)
 	}
+	// Also set the native qBittorrent category (issue #75). The category is
+	// already folded into the save path above, but tools like Sonarr discover
+	// completed torrents by qBittorrent category, not by folder — so the label
+	// must be set explicitly too. Derive it from the same SanitizeCategory used
+	// for the save path so the label and the folder segment can never diverge.
+	if category := registry.SanitizeCategory(opts.Category); category != "" {
+		_ = mw.WriteField("category", category)
+	}
 	if opts.Paused {
 		_ = mw.WriteField("paused", "true")
 	}

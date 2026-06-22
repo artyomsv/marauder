@@ -68,6 +68,9 @@ jobs:
             PW=$(docker logs deploy-qbittorrent-1 2>&1 | grep "temporary password" | awk '{print $NF}' | tail -1 || true)
             if [ -n "$PW" ]; then
               echo "qBit temporary password acquired"
+              # Mask it everywhere downstream — it's a step output, not a
+              # registered secret, so it is not auto-redacted from logs.
+              echo "::add-mask::$PW"
               echo "password=$PW" >> "$GITHUB_OUTPUT"
               exit 0
             fi
@@ -108,13 +111,14 @@ jobs:
           CLIENT_ID=$(echo "$CLIENT_JSON" | awk -F'"id":"' '{print $2}' | awk -F'"' '{print $1}')
           test -n "$CLIENT_ID"
 
-          echo "[3] add magnet topic"
+          echo "[3] add magnet topic with a category (issue #75)"
           INFOHASH=0123456789abcdef0123456789abcdef01234567
+          CATEGORY=sonarr-e2e
           MAG="magnet:?xt=urn:btih:${INFOHASH}&dn=marauder-e2e"
           TOPIC_JSON=$(curl -sS -X POST http://localhost:34080/api/v1/topics \
             -H "Authorization: Bearer $TOK" \
             -H "Content-Type: application/json" \
-            -d "{\"url\":\"$MAG\",\"client_id\":\"$CLIENT_ID\"}")
+            -d "{\"url\":\"$MAG\",\"client_id\":\"$CLIENT_ID\",\"category\":\"$CATEGORY\"}")
           echo "$TOPIC_JSON"
           TOPIC_ID=$(echo "$TOPIC_JSON" | awk -F'"ID":"' '{print $2}' | awk -F'"' '{print $1}')
           test -n "$TOPIC_ID"
@@ -128,17 +132,43 @@ jobs:
           # does, so a host-side login returns 401.
           sleep 75
           echo "[5] verify delivery via Marauder topic status API"
+          DELIVERED=
           for _ in $(seq 1 6); do
             STATUS=$(curl -sS -H "Authorization: Bearer $TOK" \
               "http://localhost:34080/api/v1/topics/$TOPIC_ID/status")
             echo "$STATUS"
             if echo "$STATUS" | grep -q "$INFOHASH"; then
               echo "delivery recorded for $INFOHASH"
-              exit 0
+              DELIVERED=1
+              break
             fi
             sleep 10
           done
-          echo "torrent $INFOHASH never appeared in topic status"
+          [ -n "$DELIVERED" ] || { echo "torrent $INFOHASH never appeared in topic status"; exit 1; }
+
+          echo "[6] verify qBittorrent recorded the category (issue #75)"
+          # Query qBittorrent from INSIDE the compose network so the Host
+          # header is qbittorrent:6611 (matching its WebUI port) — a host-side
+          # login would 401 on qBittorrent 5.x (see the step [4] note).
+          # The password and infohash are forwarded as container env vars (-e)
+          # and the body is single-quoted, so nothing is string-interpolated
+          # into the shell command.
+          QBIT_INFO=$(docker run --rm --network deploy_default \
+            -e QBIT_PASSWORD -e INFOHASH="$INFOHASH" \
+            curlimages/curl:8.11.1 sh -c '
+              SID=$(curl -sS -i -X POST "http://qbittorrent:6611/api/v2/auth/login" \
+                --data-urlencode "username=admin" \
+                --data-urlencode "password=$QBIT_PASSWORD" \
+                | grep -i "^set-cookie:" | sed "s/.*SID=//I" | cut -d";" -f1)
+              test -n "$SID" || { echo "qBit login failed (no SID cookie)" >&2; exit 1; }
+              curl -sS -H "Cookie: SID=$SID" \
+                "http://qbittorrent:6611/api/v2/torrents/info?hashes=$INFOHASH"')
+          echo "$QBIT_INFO"
+          if echo "$QBIT_INFO" | grep -q "\"category\":\"$CATEGORY\""; then
+            echo "qBittorrent category correctly set to $CATEGORY"
+            exit 0
+          fi
+          echo "qBittorrent did NOT record category=$CATEGORY (issue #75 regression)"
           exit 1
 
       - name: Print stack logs on failure
