@@ -204,8 +204,8 @@ func topicRow(id, userID uuid.UUID, now time.Time) []any {
 	return []any{
 		id, userID, "faketracker", "https://example.invalid/t/1",
 		"My Topic", "", // display_name, image_url
-		(*uuid.UUID)(nil), // client_id
-		(*uuid.UUID)(nil), // notifier_id
+		(*uuid.UUID)(nil),             // client_id
+		(*uuid.UUID)(nil),             // notifier_id
 		"",                            // download_dir
 		"",                            // category
 		[]byte(`{"quality":"1080p"}`), // extra
@@ -348,9 +348,9 @@ func TestTopics_Create_RoundTripsCategory(t *testing.T) {
 			"My Topic", "", // display_name, image_url
 			(*uuid.UUID)(nil), // client_id
 			(*uuid.UUID)(nil), // notifier_id
-			"",               // download_dir
-			"movies",         // category
-			pgxmock.AnyArg(), // extra (JSON)
+			"",                // download_dir
+			"movies",          // category
+			pgxmock.AnyArg(),  // extra (JSON)
 			3600, pgxmock.AnyArg(), "active",
 		).
 		WillReturnRows(rows)
