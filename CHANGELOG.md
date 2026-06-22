@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Duplicate qBittorrent deliveries are now idempotent** — when a torrent's
+  infohash is already present, qBittorrent rejects a re-submit (with `409
+  Conflict`, or `200 "Fails."` on older versions like 5.1.4), which previously
+  drove the topic into the `error` state even though the torrent was correctly
+  present and downloading. Marauder now verifies the payload's infohash is
+  actually present and treats such a rejection as a successful delivery;
+  genuine failures (infohash absent) still surface as errors. (#76)
+
 ## [1.1.1] - 2026-06-22
 
 ### Fixed
