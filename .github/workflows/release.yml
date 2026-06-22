@@ -39,7 +39,9 @@ jobs:
       frontend-digest: ${{ steps.export.outputs.frontend-digest }}
       cfsolver-digest: ${{ steps.export.outputs.cfsolver-digest }}
     strategy:
-      fail-fast: true
+      # Don't let one image's arch-verify failure cancel the others' builds —
+      # each image is independent and we want all results in one run.
+      fail-fast: false
       matrix:
         image:
           - name: backend
@@ -141,6 +143,12 @@ jobs:
               echo "::error::marauder-${{ matrix.image.name }} on linux/$arch failed to exec (exec format error)"
               fail=1
             fi
+            # Drop the digest-pinned image before the next platform. Docker keeps
+            # a single local record per digest, so a second `docker create
+            # --platform` of the SAME digest fails with "cannot overwrite digest"
+            # — which blocked the v1.1.3 release on the arm64 iteration. Removing
+            # it forces a clean per-platform pull each time.
+            docker rmi -f "$IMG" >/dev/null 2>&1 || true
           done
           [ "$fail" -eq 0 ]
 
