@@ -85,6 +85,7 @@ func NewRouter(d Deps) http.Handler {
 		Topics:     d.Topics,
 		Deliveries: d.Deliveries,
 		Clients:    d.Clients,
+		Notifiers:  d.Notifiers,
 		Master:     d.Master,
 		BaseURL:    d.Cfg.PublicBaseURL,
 	}

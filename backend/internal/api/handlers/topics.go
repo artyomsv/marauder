@@ -39,10 +39,17 @@ type deliveriesStore interface {
 }
 
 // clientsLookup is the consumer seam over *repo.Clients used to resolve a
-// topic's client so its live torrent status can be queried.
+// topic's client so its live torrent status can be queried, and to validate
+// ownership on topic write operations.
 type clientsLookup interface {
 	GetByID(ctx context.Context, id uuid.UUID, userID uuid.UUID) (*domain.Client, error)
 	GetDefault(ctx context.Context, userID uuid.UUID) (*domain.Client, error)
+}
+
+// notifiersLookup resolves a user's notifier so the handler can reject a
+// topic that references a notifier the user does not own.
+type notifiersLookup interface {
+	GetByID(ctx context.Context, id uuid.UUID, userID uuid.UUID) (*domain.Notifier, error)
 }
 
 // configDecryptor is the subset of *crypto.MasterKey used to decrypt a
@@ -56,6 +63,7 @@ type Topics struct {
 	Topics     topicStore
 	Deliveries deliveriesStore
 	Clients    clientsLookup
+	Notifiers  notifiersLookup
 	Master     configDecryptor
 	BaseURL    string
 }
@@ -186,6 +194,11 @@ func (h *Topics) Create(w http.ResponseWriter, r *http.Request) {
 		extra["start_episode"] = *req.StartEpisode
 	}
 
+	if perr := h.validateOwnership(r.Context(), uid, req.NotifierID, req.ClientID); perr != nil {
+		problem.Write(w, r, h.BaseURL, perr)
+		return
+	}
+
 	t := &domain.Topic{
 		UserID:           uid,
 		TrackerName:      tracker.Name(),
@@ -282,6 +295,11 @@ func (h *Topics) Update(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.StartEpisode != nil {
 		extra["start_episode"] = *req.StartEpisode
+	}
+
+	if perr := h.validateOwnership(r.Context(), uid, req.NotifierID, req.ClientID); perr != nil {
+		problem.Write(w, r, h.BaseURL, perr)
+		return
 	}
 
 	updated, uerr := h.Topics.Update(r.Context(), id, uid, req.DisplayName, req.ClientID, req.NotifierID, req.DownloadDir, req.Category, extra)
@@ -502,6 +520,30 @@ func (h *Topics) setStatus(w http.ResponseWriter, r *http.Request, status domain
 }
 
 // --- helpers ------------------------------------------------------------
+
+// validateOwnership checks that the referenced notifier and client (when
+// non-nil) belong to the requesting user. It is nil-safe on the lookup
+// fields so that unit tests which don't wire h.Notifiers / h.Clients skip
+// validation and remain green. Returns a non-nil *problem.Error on failure.
+func (h *Topics) validateOwnership(ctx context.Context, uid uuid.UUID, notifierID, clientID *uuid.UUID) *problem.Error {
+	if notifierID != nil && h.Notifiers != nil {
+		if _, err := h.Notifiers.GetByID(ctx, *notifierID, uid); err != nil {
+			if errors.Is(err, repo.ErrNotFound) {
+				return problem.ErrUnprocessable("notifier not found")
+			}
+			return problem.ErrInternal(err.Error())
+		}
+	}
+	if clientID != nil && h.Clients != nil {
+		if _, err := h.Clients.GetByID(ctx, *clientID, uid); err != nil {
+			if errors.Is(err, repo.ErrNotFound) {
+				return problem.ErrUnprocessable("client not found")
+			}
+			return problem.ErrInternal(err.Error())
+		}
+	}
+	return nil
+}
 
 func currentUserID(r *http.Request) (uuid.UUID, *problem.Error) {
 	claims := middleware.ClaimsFromContext(r.Context())
