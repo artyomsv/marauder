@@ -37,7 +37,7 @@ export { AddTopicCard } from "@/components/topics/AddTopicCard";
 
 type TopicsList = { topics: Topic[] | null };
 type ClientsList = { clients: ClientRef[] | null };
-type NotifiersList = { notifiers: NotifierRef[] | null };
+interface NotifiersList { notifiers: NotifierRef[] | null }
 
 export function TopicsPage() {
   const qc = useQueryClient();
@@ -55,6 +55,7 @@ export function TopicsPage() {
   const { data: notifiersData } = useQuery({
     queryKey: QK.notifiers,
     queryFn: () => api.get<NotifiersList>("/notifiers"),
+    staleTime: 60_000,
   });
   const notifierById = new Map((notifiersData?.notifiers ?? []).map((n) => [n.id, n]));
   const density = usePrefs((s) => s.density);
