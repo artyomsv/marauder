@@ -1,0 +1,168 @@
+---
+import Page from "@/layouts/Page.astro";
+import { breadcrumbSchema } from "@/data/schemas";
+
+const seo = {
+  title: "Marauder vs Prowlarr — monitor forum trackers",
+  description:
+    "Prowlarr aggregates indexers for the *arr stack but can't watch a RuTracker or LostFilm thread for new releases. Marauder does — and reads Prowlarr's feeds too.",
+  path: "/vs/prowlarr",
+  keywords: [
+    "prowlarr forum tracker",
+    "prowlarr rutracker",
+    "indexers for prowlarr",
+    "prowlarr best trackers",
+    "marauder vs prowlarr",
+    "prowlarr oidc",
+    "prowlarr alternative",
+  ],
+};
+
+const schemas = [
+  breadcrumbSchema([
+    { name: "Marauder",   path: "/" },
+    { name: "Compare",    path: "/" },
+    { name: "vs Prowlarr", path: "/vs/prowlarr" },
+  ]),
+];
+
+// Every row reflects Prowlarr's real role (an indexer manager that syncs
+// Torznab/Newznab definitions to the *arr apps and offers manual search) versus
+// Marauder's (a forum-tracker topic monitor + downloader that also consumes
+// Torznab/Newznab feeds). Nothing here is invented.
+const matrix = [
+  { feature: "Primary role",                          prowlarr: "indexer manager / aggregator",        marauder: "topic monitor + auto-downloader" },
+  { feature: "Torznab / Newznab aggregation",         prowlarr: "yes (its core job)",                  marauder: "consumes feeds (incl. from Prowlarr)" },
+  { feature: "Forum-tracker search shims (Cardigann)",prowlarr: "yes (many definitions)",              marauder: "no (monitors, not a search shim)" },
+  { feature: "Topic monitoring (in-place .torrent swap)", prowlarr: "no",                              marauder: "yes (RuTracker, LostFilm, Kinozal, NNM-Club)" },
+  { feature: "Watch one thread for new releases",     prowlarr: "no (search only)",                    marauder: "yes" },
+  { feature: "Hands torrents to a download client",   prowlarr: "no (syncs to *arr apps)",             marauder: "yes (qBittorrent, Transmission, Deluge, µTorrent, watch folder)" },
+  { feature: "Cloudflare-gated tracker access",       prowlarr: "via FlareSolverr (search)",           marauder: "cfsolver sidecar (full monitoring)" },
+  { feature: "Interactive captcha login (LostFilm)",  prowlarr: "no",                                  marauder: "yes" },
+  { feature: "Per-topic quality selection",           prowlarr: "no",                                  marauder: "yes (LostFilm)" },
+  { feature: "Native OIDC / SSO",                     prowlarr: "no (reverse proxy in front)",         marauder: "yes (Keycloak bundled)" },
+  { feature: "Multi-user with isolation",             prowlarr: "no",                                  marauder: "yes" },
+  { feature: "Prometheus /metrics",                   prowlarr: "no (third-party exporter)",           marauder: "yes (built-in)" },
+];
+---
+<Page {...seo} schemas={schemas}>
+  <article class="mx-auto max-w-4xl px-6 py-16">
+    <nav aria-label="Breadcrumb" class="mb-4 text-sm text-muted-foreground">
+      <ol class="flex items-center gap-2">
+        <li><a href="/" class="hover:text-foreground">Marauder</a></li>
+        <li aria-hidden="true">›</li>
+        <li class="text-foreground">vs Prowlarr</li>
+      </ol>
+    </nav>
+
+    <header class="mb-12">
+      <p class="mb-2 text-xs font-mono uppercase tracking-wider text-muted-foreground">comparison</p>
+      <h1 class="text-4xl font-bold tracking-tight sm:text-5xl">
+        Marauder vs Prowlarr
+      </h1>
+      <p class="mt-4 text-lg text-muted-foreground">
+        The short answer: <strong class="text-foreground">use both.</strong>
+        Prowlarr is the indexer manager for the *arr stack — it aggregates
+        Torznab/Newznab indexers and keeps Sonarr, Radarr, and Lidarr in sync.
+        Marauder monitors the forum-tracker <em>threads</em> Prowlarr can search
+        but can't watch, and it happily reads a Prowlarr Torznab feed too.
+      </p>
+    </header>
+
+    <section class="mb-12" aria-labelledby="tldr">
+      <div class="glass-card rounded-2xl p-8">
+        <h2 id="tldr" class="text-xl font-semibold tracking-tight">TL;DR</h2>
+        <p class="mt-3 text-muted-foreground">
+          Prowlarr's job is <strong class="text-foreground">indexer aggregation</strong>:
+          one place to manage every Torznab/Newznab indexer and push it to your
+          *arr apps. It even bolts Cardigann/Jackett-style search shims onto some
+          forum trackers — but those shims only <strong class="text-foreground">search</strong>.
+        </p>
+        <p class="mt-3 text-muted-foreground">
+          They can't <strong class="text-foreground">monitor a specific topic</strong> —
+          a RuTracker release thread or a LostFilm series page — and grab the new
+          <code>.torrent</code> the moment an uploader swaps it in place. That is
+          exactly Marauder's job. And because Marauder speaks Torznab and Newznab
+          natively, one Marauder install can consume your Prowlarr feeds <em>and</em>
+          watch the forum threads Prowlarr was never built to follow.
+        </p>
+      </div>
+    </section>
+
+    <section class="mb-12" aria-labelledby="why">
+      <h2 id="why" class="mb-4 text-2xl font-semibold tracking-tight">Search is not monitoring</h2>
+      <p class="text-muted-foreground">
+        Prowlarr (and Jackett before it) exposes trackers through the
+        <strong class="text-foreground">Torznab API contract</strong>: a structured
+        search endpoint the *arr apps query for matching releases. For forum
+        trackers, Prowlarr ships Cardigann definitions that scrape the site's
+        search page and present the results as Torznab.
+      </p>
+      <p class="mt-3 text-muted-foreground">
+        That covers <em>discovery by search</em>. It does not cover the case forum
+        trackers are built around:
+      </p>
+      <ul class="mt-4 space-y-2 text-muted-foreground">
+        <li>• A single topic thread that gets a <strong class="text-foreground">new <code>.torrent</code> attachment in place</strong> when the next episode or a better encode drops</li>
+        <li>• Season packs that are <strong class="text-foreground">re-uploaded to the same URL</strong> as they grow</li>
+        <li>• Releases that never surface in a search feed in a way the *arr matcher will reliably catch</li>
+      </ul>
+      <p class="mt-3 text-muted-foreground">
+        Marauder watches the thread itself, hashes the attachment to detect the
+        swap, and hands the new file straight to your download client.
+        <strong class="text-foreground">It complements Prowlarr; it does not replace it.</strong>
+      </p>
+    </section>
+
+    <section class="mb-12" aria-labelledby="matrix">
+      <h2 id="matrix" class="mb-4 text-2xl font-semibold tracking-tight">Feature matrix</h2>
+      <div class="overflow-x-auto rounded-xl border border-border/60">
+        <table class="w-full text-sm">
+          <thead class="bg-muted/40 text-xs uppercase tracking-wider text-muted-foreground">
+            <tr>
+              <th scope="col" class="px-4 py-3 text-left">Feature</th>
+              <th scope="col" class="px-4 py-3 text-left">Prowlarr</th>
+              <th scope="col" class="px-4 py-3 text-left">Marauder</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-border/60">
+            {matrix.map((row) => (
+              <tr class="hover:bg-muted/20">
+                <td class="px-4 py-3 font-medium text-foreground">{row.feature}</td>
+                <td class="px-4 py-3 text-muted-foreground">{row.prowlarr}</td>
+                <td class="px-4 py-3 text-muted-foreground">{row.marauder}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="mb-12" aria-labelledby="coexist">
+      <h2 id="coexist" class="mb-4 text-2xl font-semibold tracking-tight">How they coexist</h2>
+      <p class="text-muted-foreground">
+        A common setup runs both side by side:
+      </p>
+      <ul class="mt-4 space-y-2 text-muted-foreground">
+        <li>• <strong class="text-foreground">Prowlarr</strong> manages your Torznab/Newznab indexers and feeds Sonarr / Radarr.</li>
+        <li>• <strong class="text-foreground">Marauder</strong> monitors forum-tracker topics (RuTracker, LostFilm, Kinozal, NNM-Club) that have no usable feed — and can also consume a Prowlarr Torznab URL with the <code>torznab+</code> prefix.</li>
+        <li>• Both push to the <strong class="text-foreground">same qBittorrent / Transmission</strong>; tag categories so you can tell the sources apart.</li>
+      </ul>
+      <p class="mt-4 text-muted-foreground">
+        See the <a href="/integrations/" class="underline decoration-foreground/40 underline-offset-4 hover:text-foreground">integrations page</a>
+        for the exact Prowlarr-feed setup, and
+        <a href="/vs/sonarr/" class="underline decoration-foreground/40 underline-offset-4 hover:text-foreground">Marauder vs Sonarr / Radarr</a>
+        for how the PVRs fit in.
+      </p>
+    </section>
+
+    <section class="glass-card rounded-2xl p-8 text-center" aria-labelledby="cta">
+      <h2 id="cta" class="text-2xl font-semibold tracking-tight">Add forum trackers to your Prowlarr stack</h2>
+      <p class="mt-3 text-muted-foreground">Marauder runs in the same docker compose stack and pushes to the same client.</p>
+      <div class="mt-6 flex flex-wrap justify-center gap-3">
+        <a href="/install/" class="btn-primary">Install in 5 minutes</a>
+        <a href="/trackers/" class="btn-outline">See supported trackers</a>
+      </div>
+    </section>
+  </article>
+</Page>
