@@ -28,16 +28,19 @@ func EffectiveDownloadDir(base, override, category string) string {
 	if override != "" {
 		return override
 	}
-	category = sanitizeCategory(category)
+	category = SanitizeCategory(category)
 	if category == "" {
 		return base
 	}
 	return path.Join(base, category)
 }
 
-// sanitizeCategory normalises a user-supplied category into a safe relative
-// path segment that cannot traverse above its base folder.
-func sanitizeCategory(category string) string {
+// SanitizeCategory normalises a user-supplied category into a safe relative
+// path segment that cannot traverse above its base folder. It is exported so
+// client plugins that set a native category/label (e.g. qBittorrent) derive it
+// from the same value that nests the save path, keeping the folder and the
+// label aligned for any input.
+func SanitizeCategory(category string) string {
 	category = strings.TrimSpace(category)
 	if category == "" {
 		return ""

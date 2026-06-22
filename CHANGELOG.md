@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **qBittorrent category is now set on the torrent** — a topic's category was
+  folded into the save path but never sent as qBittorrent's native `category`
+  field, so completed torrents had an empty category and tools like Sonarr
+  (which discover downloads by category) could not import them. The category is
+  now sent on `/api/v2/torrents/add`. (#75)
+
 ## [1.1.0] - 2026-06-22
 
 ### Added
