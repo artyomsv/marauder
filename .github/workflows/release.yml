@@ -44,10 +44,13 @@ jobs:
         image:
           - name: backend
             context: ./backend
+            binpath: /usr/local/bin/marauder
           - name: frontend
             context: ./frontend
+            binpath: ''            # nginx static assets, no Go binary to arch-check
           - name: cfsolver
             context: ./cfsolver
+            binpath: /usr/local/bin/cfsolver
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -99,6 +102,54 @@ jobs:
           sbom: true
           cache-from: type=gha,scope=release-${{ matrix.image.name }}
           cache-to: type=gha,scope=release-${{ matrix.image.name }},mode=max
+
+      # Verify every published platform contains a binary of the matching
+      # architecture (issue #74: the arm64 manifest shipped an amd64 binary
+      # that died with "exec format error" on real aarch64 hosts). We extract
+      # the binary from each platform image WITHOUT running it and check its
+      # ELF machine type — because executing it here would NOT catch the bug:
+      # this runner is amd64, so an amd64 binary in an arm64 image runs
+      # natively (the host CPU can execute it) and never raises a format error.
+      # The arch mismatch only surfaces on a true aarch64 host, so the reliable
+      # CI signal is the binary's declared arch vs. the manifest's platform.
+      # QEMU (set up above) additionally lets us exec each binary as a bonus
+      # liveness check; the arch assertion is the actual gate.
+      - name: Verify each platform's binary architecture (QEMU)
+        if: matrix.image.binpath != ''
+        env:
+          IMG: ${{ env.REGISTRY }}/${{ env.OWNER }}/marauder-${{ matrix.image.name }}@${{ steps.push.outputs.digest }}
+          BIN: ${{ matrix.image.binpath }}
+        run: |
+          set -euo pipefail
+          declare -A want=( [amd64]="x86-64" [arm64]="aarch64" )
+          fail=0
+          for arch in amd64 arm64; do
+            echo "== linux/$arch =="
+            # `docker create` resolves the per-platform image but does NOT run
+            # the binary, so the check is independent of the runner's own arch.
+            cid="$(docker create --platform "linux/$arch" "$IMG")"
+            docker cp "$cid:$BIN" "./bin-$arch"
+            docker rm "$cid" >/dev/null
+            desc="$(file -b "./bin-$arch")"
+            echo "  binary: $desc"
+            case "$desc" in
+              *"${want[$arch]}"*)
+                echo "  OK: matches linux/$arch" ;;
+              *)
+                echo "::error::marauder-${{ matrix.image.name }} linux/$arch contains a wrong-arch binary (expected ${want[$arch]}): $desc"
+                fail=1 ;;
+            esac
+            # Bonus liveness check: run the binary under its platform. On this
+            # amd64 runner the arm64 binary executes via QEMU. We don't require
+            # a clean exit (no --help; exits on missing config) — only that the
+            # kernel doesn't reject it outright.
+            out="$(timeout 30 docker run --rm --platform "linux/$arch" "$IMG" 2>&1 || true)"
+            if printf '%s' "$out" | grep -q 'exec format error'; then
+              echo "::error::marauder-${{ matrix.image.name }} on linux/$arch failed to exec (exec format error)"
+              fail=1
+            fi
+          done
+          [ "$fail" -eq 0 ]
 
       - name: Install cosign
         uses: sigstore/cosign-installer@v3

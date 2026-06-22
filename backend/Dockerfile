@@ -18,7 +18,13 @@ ARG VERSION=0.0.0-dev
 ARG COMMIT=unknown
 ARG BUILD_DATE=unknown
 
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+# TARGETARCH is auto-populated by BuildKit/buildx for each --platform it builds
+# (e.g. "arm64"). Cross-compile the Go binary to match, so the arm64 image
+# actually contains an arm64 binary instead of an amd64 one (issue #74). The
+# :-amd64 default keeps a plain `docker build` (no buildx, TARGETARCH unset)
+# working.
+ARG TARGETARCH
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH:-amd64} \
     go build -trimpath -ldflags="-s -w \
       -X github.com/artyomsv/marauder/backend/internal/version.Version=${VERSION} \
       -X github.com/artyomsv/marauder/backend/internal/version.Commit=${COMMIT} \
