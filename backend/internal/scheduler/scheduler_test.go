@@ -175,12 +175,13 @@ func (f *fakeCredsSession) MarkSessionExpired(_ context.Context, _, _ uuid.UUID)
 	return f.markExpiredWon, f.markExpiredErr
 }
 
-// fakeNotifier records Send calls.
+// fakeNotifier records Send / SendVia calls.
 type fakeNotifier struct {
-	calls     int
-	lastID    uuid.UUID
-	lastEvent string
-	lastMsg   domain.Message
+	calls          int
+	lastID         uuid.UUID
+	lastEvent      string
+	lastMsg        domain.Message
+	lastNotifierID *uuid.UUID
 }
 
 func (f *fakeNotifier) Send(_ context.Context, userID uuid.UUID, event string, msg domain.Message) int {
@@ -188,6 +189,16 @@ func (f *fakeNotifier) Send(_ context.Context, userID uuid.UUID, event string, m
 	f.lastID = userID
 	f.lastEvent = event
 	f.lastMsg = msg
+	f.lastNotifierID = nil
+	return 1
+}
+
+func (f *fakeNotifier) SendVia(_ context.Context, userID uuid.UUID, notifierID *uuid.UUID, event string, msg domain.Message) int {
+	f.calls++
+	f.lastID = userID
+	f.lastEvent = event
+	f.lastMsg = msg
+	f.lastNotifierID = notifierID
 	return 1
 }
 
@@ -1127,6 +1138,46 @@ func TestLoadCredentials_SessionExpired_AlreadyFlagged(t *testing.T) {
 	}
 	if got := notifier.calls; got != 0 {
 		t.Errorf("notifier.Send: want 0 calls (already flagged), got %d", got)
+	}
+}
+
+// TestNotifyUpdated_RoutesToTopicNotifier verifies notifyUpdated forwards
+// the topic's NotifierID to the dispatcher so a per-topic override is honoured.
+func TestNotifyUpdated_RoutesToTopicNotifier(t *testing.T) {
+	notifier := &fakeNotifier{}
+	s := &Scheduler{cfg: &config.Config{PublicBaseURL: "http://x"}, notifier: notifier}
+
+	notifierID := uuid.New()
+	topic := &domain.Topic{UserID: uuid.New(), DisplayName: "My Show", NotifierID: &notifierID}
+
+	s.notifyUpdated(context.Background(), topic, []string{"s01e01"})
+
+	if notifier.calls != 1 {
+		t.Fatalf("want 1 notification, got %d", notifier.calls)
+	}
+	if notifier.lastEvent != "updated" {
+		t.Errorf("event = %q, want updated", notifier.lastEvent)
+	}
+	if notifier.lastNotifierID == nil || *notifier.lastNotifierID != notifierID {
+		t.Errorf("notifierID = %v, want %s", notifier.lastNotifierID, notifierID)
+	}
+}
+
+// TestNotifyUpdated_NilNotifierID_GlobalFanOut verifies a topic without an
+// override passes nil through (global fan-out, unchanged behaviour).
+func TestNotifyUpdated_NilNotifierID_GlobalFanOut(t *testing.T) {
+	notifier := &fakeNotifier{}
+	s := &Scheduler{cfg: &config.Config{PublicBaseURL: "http://x"}, notifier: notifier}
+
+	topic := &domain.Topic{UserID: uuid.New(), DisplayName: "My Show", NotifierID: nil}
+
+	s.notifyUpdated(context.Background(), topic, []string{"s01e01"})
+
+	if notifier.calls != 1 {
+		t.Fatalf("want 1 notification, got %d", notifier.calls)
+	}
+	if notifier.lastNotifierID != nil {
+		t.Errorf("notifierID = %v, want nil", notifier.lastNotifierID)
 	}
 }
 

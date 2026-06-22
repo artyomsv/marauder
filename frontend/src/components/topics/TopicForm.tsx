@@ -10,6 +10,7 @@ import { QK } from "@/lib/queryKeys";
 import { useDebouncedValue } from "@/lib/hooks/useDebouncedValue";
 import { SeasonEpisodePicker, SELECT_CLASS } from "./SeasonEpisodePicker";
 import { PosterImage } from "./PosterImage";
+import { NotifierSelect } from "./NotifierSelect";
 
 // Shape of GET /trackers/match. Drives which optional sections the form
 // renders (quality, season/episode filter, credentials hint).
@@ -40,6 +41,7 @@ export interface TopicFormValues {
   startSeason: string;
   startEpisode: string;
   clientId: string;
+  notifierId: string;
   downloadDir: string;
   category: string;
 }
@@ -185,6 +187,7 @@ export function TopicForm({
   // respect the useState ceiling.
   const [delivery, setDelivery] = useState({
     clientId: initial.clientId,
+    notifierId: initial.notifierId,
     downloadDir: initial.downloadDir,
     category: initial.category,
   });
@@ -198,6 +201,7 @@ export function TopicForm({
       startSeason,
       startEpisode,
       clientId: delivery.clientId,
+      notifierId: delivery.notifierId,
       downloadDir: delivery.downloadDir,
       category: delivery.category,
     });
@@ -326,6 +330,11 @@ export function TopicForm({
           ))}
         </select>
       </div>
+
+      <NotifierSelect
+        value={delivery.notifierId}
+        onChange={(v) => setDelivery((d) => ({ ...d, notifierId: v }))}
+      />
 
       <div className="grid gap-4 sm:grid-cols-2">
         <div className="space-y-1.5">

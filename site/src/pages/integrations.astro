@@ -77,7 +77,10 @@ const schemas = [
       <h2 id="notifiers-heading" class="mb-2 text-2xl font-semibold tracking-tight">Notifications</h2>
       <p class="mb-6 text-muted-foreground">
         Pick which events fire a notification (topic updated, topic errored,
-        all failures) and which channels they fire on. Mix and match.
+        all failures) and which channels they fire on. Mix and match — globally,
+        or per topic: route a single topic's alerts to one specific notifier
+        (a separate Telegram chat, a dedicated webhook) while everything else
+        stays on your default notifier set.
       </p>
       <div class="grid gap-4 md:grid-cols-2">
         {notifiers.map((n) => (

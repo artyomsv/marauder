@@ -72,6 +72,7 @@ const sections = [
       "Per-topic check pipeline: load → call tracker Check → compare hash → call Download if changed → decrypt client config → call client Add",
       "Exponential backoff on errors, capped at 6 hours; success resets to the topic's configured interval",
       "Falls back to the user's default client if a topic has no explicit client_id",
+      "Per-topic notifier override: a topic routes its update alerts to one chosen notifier (validated as owned by the user), or fans out to the global notifier set when unset",
       "In-memory ring buffer of the last 50 run summaries with checked / updated / errors counters, exposed at /api/v1/system/status and visualised on the System page",
       "Per-tracker check duration histograms in Prometheus",
     ],

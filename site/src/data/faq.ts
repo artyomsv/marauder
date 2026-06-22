@@ -30,6 +30,11 @@ export const homeFaq: FaqItem[] = [
       "qBittorrent (WebUI API v2), Transmission (RPC), Deluge (Web JSON-RPC), µTorrent (token-based WebUI), and a download-to-folder fallback that pairs with SABnzbd or NZBGet for Usenet.",
   },
   {
+    question: "Can Marauder notify me when a topic updates?",
+    answer:
+      "Yes. Marauder sends notifications through Telegram, email (SMTP), webhooks, or Pushover, and you choose which events fire them — a topic updated, a topic errored, or all failures. Notifiers are global by default, but any single topic can override that and route its alerts to one specific notifier. That lets you send one show to a separate Telegram chat or webhook while everything else stays on your default set; topics without an override keep firing every subscribed notifier as before.",
+  },
+  {
     question: "Is Marauder free?",
     answer:
       "Yes. Marauder is open source under the MIT License. There is no paid tier, no hosted version, no telemetry. You self-host it on your own machine.",

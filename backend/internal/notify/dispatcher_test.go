@@ -186,3 +186,92 @@ func TestSend_DecryptError_Skipped(t *testing.T) {
 		t.Errorf("want 1, got %d", got)
 	}
 }
+
+func TestSendVia_NilID_BehavesLikeSend(t *testing.T) {
+	uid := uuid.New()
+	repo := &fakeRepo{}
+	d, enc, nonce := newTestDispatcher(t, repo)
+
+	repo.items = []*domain.Notifier{
+		{ID: uuid.New(), UserID: uid, NotifierName: okPlugin.Name(), ConfigEnc: enc, ConfigNonce: nonce},
+		{ID: uuid.New(), UserID: uid, NotifierName: okPlugin.Name(), ConfigEnc: enc, ConfigNonce: nonce},
+	}
+
+	got := d.SendVia(context.Background(), uid, nil, "updated", domain.Message{Title: "t"})
+	if got != 2 {
+		t.Errorf("want 2 (global fan-out), got %d", got)
+	}
+}
+
+func TestSendVia_TargetsSingleNotifier(t *testing.T) {
+	uid := uuid.New()
+	repo := &fakeRepo{}
+	d, enc, nonce := newTestDispatcher(t, repo)
+
+	target := uuid.New()
+	repo.items = []*domain.Notifier{
+		{ID: uuid.New(), UserID: uid, NotifierName: okPlugin.Name(), ConfigEnc: enc, ConfigNonce: nonce},
+		{ID: target, UserID: uid, NotifierName: okPlugin.Name(), ConfigEnc: enc, ConfigNonce: nonce},
+	}
+
+	got := d.SendVia(context.Background(), uid, &target, "updated", domain.Message{Title: "t"})
+	if got != 1 {
+		t.Errorf("want 1 (only the targeted notifier), got %d", got)
+	}
+}
+
+func TestSendVia_TargetUnsubscribedToEvent_ReturnsZero(t *testing.T) {
+	uid := uuid.New()
+	repo := &fakeRepo{}
+	d, enc, nonce := newTestDispatcher(t, repo)
+
+	target := uuid.New()
+	repo.items = []*domain.Notifier{
+		// Targeted notifier is subscribed only to "error" — an "updated"
+		// event must NOT reach it even though it was explicitly selected.
+		{ID: target, UserID: uid, NotifierName: okPlugin.Name(), Events: []string{"error"}, ConfigEnc: enc, ConfigNonce: nonce},
+	}
+
+	got := d.SendVia(context.Background(), uid, &target, "updated", domain.Message{Title: "t"})
+	if got != 0 {
+		t.Errorf("want 0 (target not subscribed to updated), got %d", got)
+	}
+}
+
+func TestSendVia_UnknownTarget_ReturnsZero(t *testing.T) {
+	uid := uuid.New()
+	repo := &fakeRepo{}
+	d, enc, nonce := newTestDispatcher(t, repo)
+
+	repo.items = []*domain.Notifier{
+		{ID: uuid.New(), UserID: uid, NotifierName: okPlugin.Name(), ConfigEnc: enc, ConfigNonce: nonce},
+	}
+
+	missing := uuid.New()
+	got := d.SendVia(context.Background(), uid, &missing, "updated", domain.Message{Title: "t"})
+	if got != 0 {
+		t.Errorf("want 0 (target id not in user's list), got %d", got)
+	}
+}
+
+// TestSendVia_TargetFound_SendFails_ReturnsZero: the targeted notifier is
+// found and subscribed to the event, but the plugin's Send call errors.
+// The matched-but-failed-send branch in SendVia must return 0.
+func TestSendVia_TargetFound_SendFails_ReturnsZero(t *testing.T) {
+	uid := uuid.New()
+	repo := &fakeRepo{}
+	d, enc, nonce := newTestDispatcher(t, repo)
+
+	target := uuid.New()
+	repo.items = []*domain.Notifier{
+		// The target notifier is subscribed to all events (empty Events list)
+		// and uses failPlugin, so sendOne will find it, pass subscription
+		// filtering, decrypt OK, but return false when Send errors.
+		{ID: target, UserID: uid, NotifierName: failPlugin.Name(), ConfigEnc: enc, ConfigNonce: nonce},
+	}
+
+	got := d.SendVia(context.Background(), uid, &target, "updated", domain.Message{Title: "t"})
+	if got != 0 {
+		t.Errorf("want 0 (target found but send failed), got %d", got)
+	}
+}

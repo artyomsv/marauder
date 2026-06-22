@@ -54,13 +54,22 @@ const clientsList = {
   ],
 };
 
-// Routes /trackers/match, /trackers/seasons and /clients; everything else
-// (e.g. the /credentials list the card also reads) resolves empty.
+// Two notifiers the picker should list, plus the "Use default notifiers" option.
+const notifiersList = {
+  notifiers: [
+    { id: "n1", display_name: "Telegram" },
+    { id: "n2", display_name: "Email" },
+  ],
+};
+
+// Routes /trackers/match, /trackers/seasons, /clients and /notifiers;
+// everything else (e.g. the /credentials list the card also reads) resolves empty.
 function routeGet(seasonsImpl: () => unknown) {
   mockApi.get.mockImplementation((path: string) => {
     if (path.startsWith("/trackers/match")) return Promise.resolve(catalogMatch);
     if (path.startsWith("/trackers/seasons")) return seasonsImpl();
     if (path.startsWith("/clients")) return Promise.resolve(clientsList);
+    if (path.startsWith("/notifiers")) return Promise.resolve(notifiersList);
     return Promise.resolve({ credentials: [] });
   });
 }
@@ -90,6 +99,7 @@ const EXISTING_TOPIC: Topic = {
   DisplayName: "Some Show",
   ImageURL: "",
   ClientID: "c2",
+  NotifierID: null,
   DownloadDir: "/downloads/shows",
   Category: "series",
   Extra: { quality: "1080p", start_season: 2, start_episode: 3 },
@@ -301,6 +311,49 @@ describe("AddTopicCard — client picker + download folder + category", () => {
       }),
     );
   });
+
+  it("lists the user's notifiers plus a default option", async () => {
+    const user = userEvent.setup();
+    routeGet(() => Promise.resolve({ seasons: [] }));
+
+    renderCard();
+    await user.type(screen.getByLabelText(/url or magnet link/i), LOSTFILM_URL);
+
+    // Wait for the client picker to confirm the form has fully loaded.
+    await screen.findByLabelText(/^client \(optional\)$/i);
+
+    const notifierSelect = screen.getByLabelText(
+      /^notifier \(optional\)$/i,
+    ) as HTMLSelectElement;
+    const options = within(notifierSelect)
+      .getAllByRole("option")
+      .map((o) => o.textContent);
+    expect(options).toEqual(["Use default notifiers", "Telegram", "Email"]);
+  });
+
+  it("sends notifier_id in the create payload when a notifier is selected", async () => {
+    const user = userEvent.setup();
+    routeGet(() => Promise.resolve({ seasons: [] }));
+    mockApi.post.mockResolvedValue({});
+
+    renderCard();
+    await user.type(screen.getByLabelText(/url or magnet link/i), LOSTFILM_URL);
+
+    // Wait for the notifier select to be available.
+    await screen.findByLabelText(/^client \(optional\)$/i);
+    const notifierSelect = screen.getByLabelText(/^notifier \(optional\)$/i);
+    await user.selectOptions(notifierSelect, "n1");
+
+    await user.click(screen.getByRole("button", { name: /add topic/i }));
+
+    expect(mockApi.post).toHaveBeenCalledWith(
+      "/topics",
+      expect.objectContaining({
+        url: LOSTFILM_URL,
+        notifier_id: "n1",
+      }),
+    );
+  });
 });
 
 // Match advertising a quality list so the edit form renders the quality
@@ -315,6 +368,7 @@ function routeGetWithQuality(seasonsImpl: () => unknown) {
     if (path.startsWith("/trackers/match")) return Promise.resolve(qualityCatalogMatch);
     if (path.startsWith("/trackers/seasons")) return seasonsImpl();
     if (path.startsWith("/clients")) return Promise.resolve(clientsList);
+    if (path.startsWith("/notifiers")) return Promise.resolve(notifiersList);
     return Promise.resolve({ credentials: [] });
   });
 }
@@ -421,6 +475,50 @@ describe("EditTopicCard — prefill + update", () => {
     expect(mockApi.updateTopic).toHaveBeenCalledWith(
       "t-1",
       expect.objectContaining({ download_dir: "" }),
+    );
+  });
+
+  it("sends notifier_id when a notifier is selected on edit", async () => {
+    const user = userEvent.setup();
+    routeGetWithQuality(() => Promise.resolve({ seasons: [] }));
+    mockApi.updateTopic.mockResolvedValue({});
+
+    renderEdit();
+
+    // Wait for the form to fully load (quality select implies match resolved).
+    await screen.findByLabelText(/^quality$/i);
+
+    const notifierSelect = screen.getByLabelText(/^notifier \(optional\)$/i);
+    await user.selectOptions(notifierSelect, "n1");
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    expect(mockApi.updateTopic).toHaveBeenCalledWith(
+      "t-1",
+      expect.objectContaining({ notifier_id: "n1" }),
+    );
+  });
+
+  it("pre-fills notifier_id from topic.NotifierID and sends it on save", async () => {
+    const user = userEvent.setup();
+    routeGetWithQuality(() => Promise.resolve({ seasons: [] }));
+    mockApi.updateTopic.mockResolvedValue({});
+
+    // Render a topic that already has NotifierID set to "n2".
+    renderEdit({ ...EXISTING_TOPIC, NotifierID: "n2" });
+
+    // Wait for the notifier options to load before asserting the prefilled value.
+    await screen.findByRole("option", { name: "Email" });
+    const notifierSelect = screen.getByLabelText(
+      /^notifier \(optional\)$/i,
+    ) as HTMLSelectElement;
+    expect(notifierSelect.value).toBe("n2");
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    expect(mockApi.updateTopic).toHaveBeenCalledWith(
+      "t-1",
+      expect.objectContaining({ notifier_id: "n2" }),
     );
   });
 });
