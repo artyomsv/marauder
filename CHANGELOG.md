@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **arm64 images now contain arm64 binaries** — the `backend` and `cfsolver`
+  Dockerfiles hardcoded `GOARCH=amd64`, so the published `linux/arm64` images
+  shipped an amd64 binary that failed with `exec format error` on real
+  `aarch64` hosts. They now cross-compile to BuildKit's `TARGETARCH`. The
+  release workflow now verifies each published platform's binary architecture
+  (and execs it under QEMU as a liveness check), failing the build if a binary
+  is the wrong architecture. (#74)
+
 ## [1.1.2] - 2026-06-22
 
 ### Fixed

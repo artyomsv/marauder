@@ -10,7 +10,12 @@ COPY go.mod go.sum* ./
 RUN go mod download
 COPY . .
 
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+# TARGETARCH is auto-populated by BuildKit/buildx for each --platform it builds
+# (e.g. "arm64"). Cross-compile to match so the arm64 image contains an arm64
+# binary, not an amd64 one (issue #74). The :-amd64 default keeps a plain
+# `docker build` (no buildx, TARGETARCH unset) working.
+ARG TARGETARCH
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH:-amd64} \
     go build -trimpath -ldflags="-s -w" -o /out/cfsolver .
 
 # --- Runtime stage ------------------------------------------------------

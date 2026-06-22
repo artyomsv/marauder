@@ -1,0 +1,163 @@
+name: Nightly build + verify (native multi-arch)
+
+# Build all three images from main HEAD natively on each architecture
+# (amd64 + arm64) and confirm they actually run there. Catches arch/build
+# regressions on main between releases — issue #74: an arm64 image once
+# shipped an amd64 binary that died with "exec format error" on real aarch64.
+#
+# Why native runners and not QEMU: on an amd64 runner an amd64 binary inside an
+# arm64 image runs natively (the host CPU executes it), so the kernel never
+# raises "exec format error" — emulation only kicks in for foreign-arch ELFs.
+# A native ubuntu-24.04-arm runner fails for real, so the verify can stay
+# trivial while being faithful. Complements release.yml's release-time arch
+# check (which inspects the published manifest at tag time); this runs HEAD on
+# real hardware every night.
+
+on:
+  schedule:
+    - cron: '0 4 * * *'   # 04:00 UTC nightly, matching e2e.yml
+  workflow_dispatch:
+
+concurrency:
+  group: nightly-build-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build-verify:
+    name: ${{ matrix.image.name }} / ${{ matrix.runner }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      issues: write     # to file the deduped canary issue on failure
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+        image:
+          - name: backend
+            context: ./backend
+            kind: go
+          - name: frontend
+            context: ./frontend
+            kind: nginx
+          - name: cfsolver
+            context: ./cfsolver
+            kind: go-server
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build image natively
+        uses: docker/build-push-action@v7
+        with:
+          context: ${{ matrix.image.context }}
+          push: false
+          load: true
+          tags: marauder-${{ matrix.image.name }}:nightly
+          # No `platforms:` — build for the runner's own architecture so the
+          # verify step runs the binary on real hardware (no QEMU).
+          cache-from: type=gha,scope=nightly-${{ matrix.image.name }}-${{ matrix.runner }}
+          cache-to: type=gha,scope=nightly-${{ matrix.image.name }}-${{ matrix.runner }},mode=max
+
+      - name: Verify image runs on this architecture
+        id: verify
+        continue-on-error: true
+        env:
+          IMG: marauder-${{ matrix.image.name }}:nightly
+          KIND: ${{ matrix.image.kind }}
+        run: |
+          set -uo pipefail
+          arch="$(uname -m)"
+          echo "Verifying $IMG on $arch (kind=$KIND)"
+          fail() { echo "::error::$IMG failed to verify on $arch: $1"; exit 1; }
+
+          case "$KIND" in
+            go)
+              # Backend exits on missing config. Reaching that error proves the
+              # Go binary execs on this arch; a wrong-arch binary would instead
+              # die with "exec format error" (genuine on a native runner). It
+              # cannot reach /health without a DB, so config-load is the honest
+              # liveness signal and needs no services.
+              out="$(timeout 30 docker run --rm "$IMG" 2>&1 || true)"
+              printf '%s\n' "$out" | head -n 5
+              printf '%s' "$out" | grep -q 'exec format error' && fail "exec format error"
+              # Match loosely ('load config', case-insensitive) so a reworded
+              # config-load error doesn't turn this into a spurious canary.
+              printf '%s' "$out" | grep -qi 'load config' || fail "binary never reached config load"
+              ;;
+            go-server)
+              # cfsolver has no DB dependency, so it should actually serve
+              # /health. Poll until healthy, bailing early if it crashes.
+              # Host port is in the project's mandated 30000-49999 range
+              # (local-port-ranges.md); each matrix leg is its own GitHub-hosted
+              # VM, so a fixed port cannot collide with another leg.
+              cid="$(docker run -d -p 39244:9244 "$IMG")"
+              ok=0
+              for _ in $(seq 1 30); do
+                if curl -fsS http://localhost:39244/health >/dev/null 2>&1; then ok=1; break; fi
+                docker ps -q --no-trunc | grep -q "$cid" || break   # container exited
+                sleep 1
+              done
+              logs="$(docker logs "$cid" 2>&1 | tail -n 20 || true)"
+              docker rm -f "$cid" >/dev/null 2>&1 || true
+              printf '%s\n' "$logs"
+              printf '%s' "$logs" | grep -q 'exec format error' && fail "exec format error"
+              [ "$ok" -eq 1 ] || fail "/health never became reachable"
+              ;;
+            nginx)
+              # Frontend is static nginx; confirm it serves its root page.
+              # Host port in the mandated 30000-49999 range (see go-server note).
+              cid="$(docker run -d -p 38081:8081 "$IMG")"
+              ok=0
+              for _ in $(seq 1 20); do
+                if curl -fsS http://localhost:38081/ >/dev/null 2>&1; then ok=1; break; fi
+                docker ps -q --no-trunc | grep -q "$cid" || break
+                sleep 1
+              done
+              logs="$(docker logs "$cid" 2>&1 | tail -n 20 || true)"
+              docker rm -f "$cid" >/dev/null 2>&1 || true
+              printf '%s\n' "$logs"
+              [ "$ok" -eq 1 ] || fail "did not serve / "
+              ;;
+            *)
+              fail "unknown kind '$KIND'"
+              ;;
+          esac
+          echo "OK: $IMG runs on $arch"
+
+      - name: File deduped canary issue on failure
+        if: steps.verify.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IMAGE: ${{ matrix.image.name }}
+          RUNNER_LABEL: ${{ matrix.runner }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          gh label create build-canary --color B60205 \
+            --description "A nightly native multi-arch build/verify is failing" \
+            2>/dev/null || true
+          TITLE="[build-canary] nightly build failing: ${IMAGE} on ${RUNNER_LABEL}"
+          NUM=$(gh issue list --label build-canary --state open \
+            --json number,title \
+            --jq ".[] | select(.title == \"${TITLE}\") | .number" | head -1)
+          if [ -n "${NUM}" ]; then
+            gh issue comment "${NUM}" \
+              --body "Still failing on the nightly build. Run: ${RUN_URL}"
+          else
+            gh issue create --title "${TITLE}" --label build-canary --body \
+          "The nightly native build/verify for \`${IMAGE}\` on \`${RUNNER_LABEL}\` failed. The image either did not build or did not run on that architecture (see issue #74 for the class of bug this guards). Investigate the run and fix before the next release. Run: ${RUN_URL}"
+          fi
+
+      - name: Surface verify failure as a red (non-blocking) check
+        if: steps.verify.outcome == 'failure'
+        run: |
+          echo "::warning::${{ matrix.image.name }} on ${{ matrix.runner }} failed the nightly build/verify — issue filed"
+          exit 1
