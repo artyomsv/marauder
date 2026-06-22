@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/artyomsv/marauder/backend/internal/domain"
+	"github.com/artyomsv/marauder/backend/internal/infohash"
 	"github.com/artyomsv/marauder/backend/internal/plugins/registry"
 )
 
@@ -149,38 +150,78 @@ func (p *plugin) Add(ctx context.Context, rawConfig []byte, payload *domain.Payl
 		return fmt.Errorf("add torrent: %w", err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		b, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("unexpected status %d: %s", resp.StatusCode, string(b))
-	}
-	// qBittorrent's /torrents/add success contract varies by version:
-	//   - legacy: 200 with body "Ok." (and "Fails." on a rejected torrent).
-	//   - newer:  200 with a JSON summary, e.g.
-	//     {"added_torrent_ids":[..],"failure_count":0,"pending_count":0,"success_count":1}
-	// Detect failure precisely. A naive substring check for "fail" trips on
-	// the JSON field name "failure_count" and turns a success into a false
-	// rejection (observed against linuxserver/qbittorrent on the multipart
-	// add path).
 	b, _ := io.ReadAll(resp.Body)
 	respBody := strings.TrimSpace(string(b))
-	if strings.HasPrefix(respBody, "{") {
+
+	// A non-2xx that is NOT the duplicate-conflict signal is a hard transport
+	// error (auth, server fault, ...). 409 Conflict is handled below as a
+	// possible duplicate.
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusConflict {
+		return fmt.Errorf("unexpected status %d: %s", resp.StatusCode, respBody)
+	}
+
+	// Decide whether qBittorrent accepted the add. The contract is
+	// version-dependent:
+	//   - legacy: 200 "Ok." (success) / 200 "Fails." (rejection).
+	//   - newer:  200 with a JSON summary, e.g.
+	//     {"added_torrent_ids":[..],"failure_count":0,"pending_count":0,"success_count":1}.
+	//   - duplicate: 409 Conflict (newer) or 200 "Fails." (e.g. 5.1.4) when the
+	//     infohash is already present.
+	// The JSON path is parsed precisely so the field name "failure_count" is not
+	// mistaken for a "fail" rejection (regression guard, #60).
+	accepted := false
+	switch {
+	case resp.StatusCode == http.StatusConflict:
+		accepted = false // duplicate signal — verify presence below
+	case strings.HasPrefix(respBody, "{"):
 		var summary struct {
 			SuccessCount int `json:"success_count"`
 			FailureCount int `json:"failure_count"`
 			PendingCount int `json:"pending_count"`
 		}
 		if err := json.Unmarshal([]byte(respBody), &summary); err == nil {
-			if summary.FailureCount > 0 || (summary.SuccessCount == 0 && summary.PendingCount == 0) {
-				return fmt.Errorf("qbittorrent rejected torrent: %s", respBody)
-			}
-			return nil
+			accepted = summary.FailureCount == 0 && (summary.SuccessCount > 0 || summary.PendingCount > 0)
+		} else {
+			// Unparseable JSON: fall back to the legacy string contract.
+			accepted = !strings.Contains(strings.ToLower(respBody), "fails")
 		}
-		// Unparseable JSON falls through to the legacy string check below.
+	default:
+		// Legacy string contract: anything that isn't "fails" is success.
+		accepted = !strings.Contains(strings.ToLower(respBody), "fails")
 	}
-	if strings.Contains(strings.ToLower(respBody), "fails") {
-		return fmt.Errorf("qbittorrent rejected torrent: %s", respBody)
+	if accepted {
+		return nil
 	}
-	return nil
+
+	// qBittorrent rejected the add. If the payload's infohash is already present,
+	// the rejection is a duplicate and the delivery is effectively done — treat
+	// it as an idempotent success (issue #76). Otherwise it is a genuine failure
+	// (bad torrent, server problem) and must surface as an error.
+	if p.alreadyPresent(ctx, rawConfig, payload) {
+		return nil
+	}
+	if resp.StatusCode == http.StatusConflict {
+		return fmt.Errorf("unexpected status %d: %s", resp.StatusCode, respBody)
+	}
+	return fmt.Errorf("qbittorrent rejected torrent: %s", respBody)
+}
+
+// alreadyPresent reports whether the payload's infohash is already known to
+// qBittorrent. It makes a rejected /torrents/add idempotent: qBittorrent
+// rejects a duplicate add (via 409, "Fails.", or a JSON failure depending on
+// version), but the torrent is in fact present, so the delivery is done
+// (issue #76). Fail-closed: if the infohash cannot be derived or the status
+// query fails, it returns false so a genuine rejection is never swallowed.
+func (p *plugin) alreadyPresent(ctx context.Context, rawConfig []byte, payload *domain.Payload) bool {
+	ih, err := infohash.FromPayload(payload.MagnetURI, payload.TorrentFile)
+	if err != nil || ih == "" {
+		return false
+	}
+	statuses, err := p.Status(ctx, rawConfig, []string{ih})
+	if err != nil {
+		return false
+	}
+	return len(statuses) > 0
 }
 
 // Status implements registry.WithStatus. It queries
