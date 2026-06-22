@@ -147,6 +147,9 @@ jobs:
       - name: Run bump-version-refs tests
         run: bash .github/scripts/bump-version-refs_test.sh
 
+      - name: Run verify-arch tests
+        run: bash .github/scripts/verify-arch_test.sh
+
   # ---------------------------------------------------------------- frontend
   frontend:
     name: Frontend (Node ${{ matrix.node }})

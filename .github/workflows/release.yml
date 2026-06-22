@@ -121,7 +121,6 @@ jobs:
           BIN: ${{ matrix.image.binpath }}
         run: |
           set -euo pipefail
-          declare -A want=( [amd64]="x86-64" [arm64]="aarch64" )
           fail=0
           for arch in amd64 arm64; do
             echo "== linux/$arch =="
@@ -130,15 +129,9 @@ jobs:
             cid="$(docker create --platform "linux/$arch" "$IMG")"
             docker cp "$cid:$BIN" "./bin-$arch"
             docker rm "$cid" >/dev/null
-            desc="$(file -b "./bin-$arch")"
-            echo "  binary: $desc"
-            case "$desc" in
-              *"${want[$arch]}"*)
-                echo "  OK: matches linux/$arch" ;;
-              *)
-                echo "::error::marauder-${{ matrix.image.name }} linux/$arch contains a wrong-arch binary (expected ${want[$arch]}): $desc"
-                fail=1 ;;
-            esac
+            # The ELF-arch match decision lives in a unit-tested script
+            # (.github/scripts/verify-arch.sh, covered by verify-arch_test.sh).
+            bash .github/scripts/verify-arch.sh assert-file "./bin-$arch" "$arch" || fail=1
             # Bonus liveness check: run the binary under its platform. On this
             # amd64 runner the arm64 binary executes via QEMU. We don't require
             # a clean exit (no --help; exits on missing config) — only that the
@@ -198,8 +191,13 @@ jobs:
 
       - name: Extract changelog section for this tag
         id: changelog
+        env:
+          # Pass the workflow_dispatch input via env rather than interpolating
+          # ${{ }} straight into the shell, so the value can never be parsed as
+          # script (defense-in-depth; only write-access actors can dispatch).
+          TAG_INPUT: ${{ github.event.inputs.tag }}
         run: |
-          TAG="${GITHUB_REF_NAME:-${{ github.event.inputs.tag }}}"
+          TAG="${GITHUB_REF_NAME:-$TAG_INPUT}"
           VER="${TAG#v}"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
