@@ -3,16 +3,16 @@ import Page from "@/layouts/Page.astro";
 import { breadcrumbSchema } from "@/data/schemas";
 
 const seo = {
-  title: "Marauder vs Sonarr / Radarr / Prowlarr — when to use which",
+  title: "Marauder vs Sonarr & Radarr — when to use which",
   description:
-    "Sonarr, Radarr, and Prowlarr dominate the Torznab/Newznab world. Marauder fills the gap they never could: monitoring forum-style trackers like RuTracker, LostFilm, and NNM-Club. They are complementary, not competitive.",
+    "Sonarr and Radarr dominate the Torznab/Newznab PVR world. Marauder fills the gap they never could: monitoring forum-style trackers like RuTracker, LostFilm, and NNM-Club. They are complementary, not competitive.",
   path: "/vs/sonarr",
   keywords: [
     "sonarr alternative",
     "sonarr forum tracker",
     "sonarr rutracker",
     "radarr alternative",
-    "prowlarr forum tracker",
+    "radarr forum tracker",
     "marauder vs sonarr",
   ],
 };
@@ -55,13 +55,17 @@ const matrix = [
     <header class="mb-12">
       <p class="mb-2 text-xs font-mono uppercase tracking-wider text-muted-foreground">comparison</p>
       <h1 class="text-4xl font-bold tracking-tight sm:text-5xl">
-        Marauder vs Sonarr / Radarr / Prowlarr
+        Marauder vs Sonarr / Radarr
       </h1>
       <p class="mt-4 text-lg text-muted-foreground">
         The short answer: <strong class="text-foreground">use both.</strong> They live in
         different worlds and they complement each other cleanly. Sonarr and
-        Radarr dominate the Torznab/Newznab indexer ecosystem; Marauder fills
-        the forum-tracker gap they were never built to handle.
+        Radarr are the PVRs that dominate the Torznab/Newznab indexer ecosystem;
+        Marauder fills the forum-tracker gap they were never built to handle.
+      </p>
+      <p class="mt-3 text-sm text-muted-foreground">
+        Comparing the indexer manager specifically? See
+        <a href="/vs/prowlarr/" class="underline decoration-foreground/40 underline-offset-4 hover:text-foreground">Marauder vs Prowlarr</a>.
       </p>
     </header>
 
@@ -164,8 +168,8 @@ const matrix = [
       <h2 id="cta" class="text-2xl font-semibold tracking-tight">Try Marauder alongside your Sonarr</h2>
       <p class="mt-3 text-muted-foreground">It runs in the same docker compose stack and uses the same qBittorrent.</p>
       <div class="mt-6 flex flex-wrap justify-center gap-3">
-        <a href="/install" class="btn-primary">Install in 5 minutes</a>
-        <a href="/trackers" class="btn-outline">See supported trackers</a>
+        <a href="/install/" class="btn-primary">Install in 5 minutes</a>
+        <a href="/trackers/" class="btn-outline">See supported trackers</a>
       </div>
     </section>
   </article>

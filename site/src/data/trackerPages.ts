@@ -33,6 +33,8 @@ export const trackerPages: TrackerPageContent[] = [
       "rutracker автоскачивание",
       "rutracker sonarr",
       "rutracker topic watcher",
+      "rutracker не работает",
+      "rutracker недоступен",
     ],
     intro:
       "RuTracker.org is the largest Russian-language forum tracker, and its content lives in phpBB topic threads — not in a Torznab API. That's exactly the case the *arr stack can't handle. Marauder logs in with your RuTracker account, watches the specific topic you point it at, and downloads the new .torrent the moment the uploader swaps it in.",
@@ -57,6 +59,16 @@ export const trackerPages: TrackerPageContent[] = [
         question: "Does Marauder handle RuTracker season packs that grow over time?",
         answer:
           "Yes. RuTracker often updates a single season-pack .torrent as new episodes are added. Marauder detects the replaced file by hashing the attachment and re-downloads it, so your client always has the latest pack.",
+      },
+      {
+        question: "RuTracker.org недоступен — Marauder поможет?",
+        answer:
+          "RuTracker чаще всего недоступен из-за блокировок провайдера, а не из-за самого трекера. Marauder обращается к RuTracker с вашего сервера: если сервер может открыть rutracker.org — напрямую, через зеркало или через VPN/прокси на уровне хоста — Marauder входит под вашей учётной записью и следит за темой как обычно. Сам Marauder не обходит блокировки провайдера; он работает там, где у сервера есть доступ к трекеру.",
+      },
+      {
+        question: "What happens when my RuTracker login session expires?",
+        answer:
+          "Marauder stores the RuTracker session cookie encrypted and re-authenticates with your saved account when the session goes stale, so monitoring keeps running without a manual re-login. If a credential genuinely needs attention, it raises a notification rather than silently failing.",
       },
     ],
   },

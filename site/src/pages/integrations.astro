@@ -15,6 +15,10 @@ const seo = {
     "transmission topic monitor",
     "deluge auto download",
     "telegram torrent notifier",
+    "qbittorrent oidc",
+    "qbittorrent sso",
+    "prowlarr oidc",
+    "self-hosted torrent sso",
   ],
 };
 
@@ -104,6 +108,13 @@ const schemas = [
         Marauder ships with first-class OpenID Connect support. Bring your
         own provider — Keycloak, Authentik, Authelia, Auth0, Okta, Google,
         Microsoft Entra, anything that speaks OIDC discovery.
+      </p>
+      <p class="mb-6 text-muted-foreground">
+        This is rare in the torrent stack. qBittorrent, Prowlarr, Sonarr, and
+        Radarr have <strong class="text-foreground">no native OIDC</strong> — the
+        usual answer is to bolt Authelia, Authentik, or a reverse proxy in front
+        for SSO. Marauder authenticates against your identity provider directly,
+        so single sign-on works without an extra gateway hop in front of it.
       </p>
       <div class="glass-card rounded-xl p-6">
         <h3 class="text-lg font-semibold text-foreground">Keycloak (bundled in dev compose)</h3>
