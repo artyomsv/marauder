@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.1] - 2026-06-22
+
 ### Fixed
 
 - **qBittorrent category is now set on the torrent** — a topic's category was
