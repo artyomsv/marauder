@@ -98,6 +98,10 @@
       transparent 60%
     ),
     hsl(var(--background));
+    /* Pin the ambient glows to the viewport. Without this the gradient
+       scrolls with the (content-tall) body and renders as a hard-edged
+       band partway down once the list overflows one screen. */
+    background-attachment: fixed;
     color: hsl(var(--foreground));
     font-feature-settings: "rlig" 1, "calt" 1;
   }

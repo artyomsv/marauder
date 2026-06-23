@@ -101,7 +101,11 @@ export function AppShell() {
       </aside>
 
       {/* Main */}
-      <main className="flex-1 md:ml-64">
+      {/* min-w-0: a flex item defaults to min-width:auto and won't shrink
+          below its content's intrinsic width — a long topic title would then
+          push main past the viewport. min-w-0 lets inner truncate/break-words
+          constrain instead. */}
+      <main className="min-w-0 flex-1 md:ml-64">
         <header className="sticky top-0 z-20 flex h-16 items-center gap-4 border-b border-border/60 bg-background/40 px-6 backdrop-blur-xl">
           <div className="flex md:hidden items-center gap-2">
             <Logo />
