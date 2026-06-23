@@ -43,6 +43,7 @@ const catalogMatch = {
   supports_episode_filter: true,
   supports_season_catalog: true,
   requires_credentials: false,
+  credentials_optional: false,
   uses_cloudflare: false,
 };
 
@@ -186,6 +187,63 @@ describe("AddTopicCard — season/episode catalog dropdowns", () => {
   });
 });
 
+describe("AddTopicCard — credentials hint", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const NNM_URL = "https://nnmclub.to/forum/viewtopic.php?t=420880";
+
+  function mockMatch(opts: { requires: boolean; optional: boolean }) {
+    mockApi.get.mockImplementation((path: string) => {
+      if (path.startsWith("/trackers/match")) {
+        return Promise.resolve({
+          tracker_name: "nnmclub",
+          display_name: "NNM-Club.to",
+          supports_episode_filter: false,
+          supports_season_catalog: false,
+          requires_credentials: opts.requires,
+          credentials_optional: opts.optional,
+          uses_cloudflare: true,
+        });
+      }
+      if (path.startsWith("/clients")) return Promise.resolve(clientsList);
+      return Promise.resolve({ credentials: [] });
+    });
+    mockApi.previewTracker.mockResolvedValue({ title: "", image_url: "" });
+  }
+
+  it("shows an optional (not required) hint when credentials are optional", async () => {
+    const user = userEvent.setup();
+    mockMatch({ requires: false, optional: true });
+
+    renderCard();
+    await user.type(screen.getByLabelText(/url or magnet link/i), NNM_URL);
+
+    expect(
+      await screen.findByText(/works without an account/i),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText(/requires login credentials/i),
+    ).not.toBeInTheDocument();
+  });
+
+  it("shows the required hint when credentials are required", async () => {
+    const user = userEvent.setup();
+    mockMatch({ requires: true, optional: false });
+
+    renderCard();
+    await user.type(screen.getByLabelText(/url or magnet link/i), NNM_URL);
+
+    expect(
+      await screen.findByText(/requires login credentials/i),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText(/works without an account/i),
+    ).not.toBeInTheDocument();
+  });
+});
+
 describe("AddTopicCard — display name auto-fill on URL change", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -203,6 +261,7 @@ describe("AddTopicCard — display name auto-fill on URL change", () => {
           supports_episode_filter: false,
           supports_season_catalog: false,
           requires_credentials: false,
+          credentials_optional: false,
           uses_cloudflare: false,
         });
       }

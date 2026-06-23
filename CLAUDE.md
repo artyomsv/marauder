@@ -356,18 +356,25 @@ See `docs/plugin-development.md`. The pattern: implement the
 unit test plus an e2e test using `plugins/e2etest.HostRewriteTransport`.
 
 Optional capability interfaces: `WithQuality`, `WithEpisodeFilter`,
-`WithCredentials`, `WithCloudflare`, `WithInteractiveLogin`,
-`WithSeasonCatalog`, `WithMetadata`. The frontend AddTopic form discovers most via
-`GET /api/v1/trackers/match?url=`; `supports_interactive_login` is
-**also** surfaced per-tracker in `GET /api/v1/system/info` because the
-add-credential form selects a tracker by name and has no URL.
+`WithCredentials`, `WithAnonymousDownload`, `WithCloudflare`, `WithInteractiveLogin`,
+`WithSeasonCatalog`, `WithMetadata`. `WithAnonymousDownload` (RuTracker)
+marks a `WithCredentials` tracker whose download also works without an account, so
+`/trackers/match` reports `credentials_optional` (not `requires_credentials`) and the
+AddTopic form shows an optional hint instead of a "requires login" warning. The
+frontend AddTopic form discovers most via
+`GET /api/v1/trackers/match?url=`; `supports_interactive_login` **and**
+`supports_credentials` are surfaced per-tracker in `GET /api/v1/system/info`
+because the add-credential form selects a tracker by name and has no URL — a
+tracker with `supports_credentials:false` (e.g. **NNM-Club**, which is
+anonymous-only because its login is Cloudflare-Turnstile-gated and so does NOT
+implement `WithCredentials`) shows a disclaimer and blocks the add-account form.
 `WithSeasonCatalog` (LostFilm) enumerates a series' released
 seasons/episodes from `GET /api/v1/trackers/seasons?url=` (fetches the
 public `/series/<slug>/seasons` page, reuses the episode parser); the
 AddTopic form uses it to constrain the "start from" season/episode
 selectors to released values.
 
-`WithMetadata` (RuTracker, LostFilm, Kinozal) resolves a real title + poster image
+`WithMetadata` (RuTracker, LostFilm, Kinozal, NNM-Club) resolves a real title + poster image
 from a topic URL. It is called best-effort (fail-open, short timeout) at add
 time so a new topic shows a real name + image immediately instead of a
 "RuTracker topic 123" placeholder, and powers `GET /api/v1/trackers/preview?url=`

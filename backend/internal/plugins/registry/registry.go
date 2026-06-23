@@ -31,14 +31,27 @@ type Tracker interface {
 	Download(ctx context.Context, topic *domain.Topic, check *domain.Check, creds *domain.TrackerCredential) (*domain.Payload, error)
 }
 
-// WithCredentials is an optional capability; a tracker that requires user
-// credentials implements this interface in addition to Tracker.
+// WithCredentials is an optional capability; a tracker that can use user
+// credentials implements this interface in addition to Tracker. It does NOT
+// by itself mean credentials are mandatory — a tracker that also implements
+// WithAnonymousDownload works without them (see below).
 type WithCredentials interface {
 	Tracker
 	// Login is called before any Check/Download when a credential exists.
 	Login(ctx context.Context, creds *domain.TrackerCredential) error
 	// Verify checks whether existing cookies/session is still valid.
 	Verify(ctx context.Context, creds *domain.TrackerCredential) (bool, error)
+}
+
+// WithAnonymousDownload is an optional marker for a WithCredentials tracker
+// whose Check/Download also succeed without credentials (e.g. an anonymous
+// magnet on the topic page). The AddTopic form uses it to present credentials
+// as optional (an enhancement, e.g. enabling .torrent downloads) rather than
+// required. A WithCredentials tracker that does NOT implement this is treated
+// as credentials-required.
+type WithAnonymousDownload interface {
+	Tracker
+	SupportsAnonymousDownload() bool
 }
 
 // LoginChallenge is a captcha to present to the user during interactive

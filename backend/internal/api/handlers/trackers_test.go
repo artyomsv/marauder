@@ -70,10 +70,113 @@ func (f *fakeErrSeasonTracker) SeasonCatalog(_ context.Context, _ string) ([]reg
 	return nil, errors.New("boom")
 }
 
+// fakeRequiredCredsTracker implements registry.WithCredentials but NOT
+// WithAnonymousDownload — credentials are required.
+type fakeRequiredCredsTracker struct{ name string }
+
+func (f *fakeRequiredCredsTracker) Name() string        { return f.name }
+func (f *fakeRequiredCredsTracker) DisplayName() string { return "Fake Required-Creds Tracker" }
+func (f *fakeRequiredCredsTracker) CanParse(rawURL string) bool {
+	return rawURL == "https://fake-required-creds.test/topic/1"
+}
+func (f *fakeRequiredCredsTracker) Parse(context.Context, string) (*domain.Topic, error) {
+	return nil, nil
+}
+func (f *fakeRequiredCredsTracker) Check(context.Context, *domain.Topic, *domain.TrackerCredential) (*domain.Check, error) {
+	return nil, nil
+}
+func (f *fakeRequiredCredsTracker) Download(context.Context, *domain.Topic, *domain.Check, *domain.TrackerCredential) (*domain.Payload, error) {
+	return nil, nil
+}
+func (f *fakeRequiredCredsTracker) Login(context.Context, *domain.TrackerCredential) error {
+	return nil
+}
+func (f *fakeRequiredCredsTracker) Verify(context.Context, *domain.TrackerCredential) (bool, error) {
+	return true, nil
+}
+
+// fakeOptionalCredsTracker implements registry.WithCredentials AND
+// WithAnonymousDownload — credentials are optional.
+type fakeOptionalCredsTracker struct{ name string }
+
+func (f *fakeOptionalCredsTracker) Name() string        { return f.name }
+func (f *fakeOptionalCredsTracker) DisplayName() string { return "Fake Optional-Creds Tracker" }
+func (f *fakeOptionalCredsTracker) CanParse(rawURL string) bool {
+	return rawURL == "https://fake-optional-creds.test/topic/1"
+}
+func (f *fakeOptionalCredsTracker) Parse(context.Context, string) (*domain.Topic, error) {
+	return nil, nil
+}
+func (f *fakeOptionalCredsTracker) Check(context.Context, *domain.Topic, *domain.TrackerCredential) (*domain.Check, error) {
+	return nil, nil
+}
+func (f *fakeOptionalCredsTracker) Download(context.Context, *domain.Topic, *domain.Check, *domain.TrackerCredential) (*domain.Payload, error) {
+	return nil, nil
+}
+func (f *fakeOptionalCredsTracker) Login(context.Context, *domain.TrackerCredential) error {
+	return nil
+}
+func (f *fakeOptionalCredsTracker) Verify(context.Context, *domain.TrackerCredential) (bool, error) {
+	return true, nil
+}
+func (f *fakeOptionalCredsTracker) SupportsAnonymousDownload() bool { return true }
+
 func init() {
 	registry.RegisterTracker(&fakeSeasonTracker{name: "fake-season-tracker-test"})
 	registry.RegisterTracker(&fakeNoSeasonTracker{name: "fake-no-season-tracker-test"})
 	registry.RegisterTracker(&fakeErrSeasonTracker{name: "fake-err-season-tracker-test"})
+	registry.RegisterTracker(&fakeRequiredCredsTracker{name: "fake-required-creds-test"})
+	registry.RegisterTracker(&fakeOptionalCredsTracker{name: "fake-optional-creds-test"})
+}
+
+func TestTrackers_Match_RequiredCredentials(t *testing.T) {
+	h := &Trackers{BaseURL: "http://test"}
+	req := httptest.NewRequest(http.MethodGet, "/trackers/match?url=https://fake-required-creds.test/topic/1", nil)
+	w := httptest.NewRecorder()
+
+	h.Match(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var body struct {
+		RequiresCredentials bool `json:"requires_credentials"`
+		CredentialsOptional bool `json:"credentials_optional"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !body.RequiresCredentials {
+		t.Error("want requires_credentials=true for a WithCredentials-only tracker")
+	}
+	if body.CredentialsOptional {
+		t.Error("want credentials_optional=false for a WithCredentials-only tracker")
+	}
+}
+
+func TestTrackers_Match_OptionalCredentials(t *testing.T) {
+	h := &Trackers{BaseURL: "http://test"}
+	req := httptest.NewRequest(http.MethodGet, "/trackers/match?url=https://fake-optional-creds.test/topic/1", nil)
+	w := httptest.NewRecorder()
+
+	h.Match(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var body struct {
+		RequiresCredentials bool `json:"requires_credentials"`
+		CredentialsOptional bool `json:"credentials_optional"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.RequiresCredentials {
+		t.Error("want requires_credentials=false for an anonymous-capable tracker")
+	}
+	if !body.CredentialsOptional {
+		t.Error("want credentials_optional=true for an anonymous-capable tracker")
+	}
 }
 
 func TestTrackers_Seasons_OK(t *testing.T) {

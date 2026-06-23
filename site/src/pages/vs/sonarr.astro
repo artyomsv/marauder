@@ -80,11 +80,12 @@ const matrix = [
         </p>
         <p class="mt-3 text-muted-foreground">
           If your tracker is a <strong class="text-foreground">forum thread</strong>
-          you log in to, scroll, and click — RuTracker, LostFilm, Kinozal,
-          NNM-Club, Anidub, Anilibria, Toloka, and so on — Sonarr cannot help
-          you. Forum trackers don't expose Torznab. Marauder is built specifically
-          to scrape these sites, and it speaks Torznab and Newznab too so a
-          single Marauder install reaches both worlds at once.
+          you browse to — RuTracker, LostFilm, Kinozal, NNM-Club, Anidub,
+          Anilibria, Toloka, and so on — Sonarr cannot help you. Forum trackers
+          don't expose Torznab. Marauder is built specifically to scrape these
+          sites (with account login where required, or anonymously where not),
+          and it speaks Torznab and Newznab too so a single Marauder install
+          reaches both worlds at once.
         </p>
       </div>
     </section>
@@ -105,10 +106,10 @@ const matrix = [
         What they share is:
       </p>
       <ul class="mt-4 space-y-2 text-muted-foreground">
-        <li>• Authentication by <strong class="text-foreground">session cookie</strong> obtained via an HTML login form</li>
         <li>• Content discovery by <strong class="text-foreground">browsing topic threads</strong>, not by querying an API</li>
         <li>• Updates <strong class="text-foreground">in place</strong> — the same topic URL gets a new <code>.torrent</code> attachment when a new episode drops</li>
-        <li>• <strong class="text-foreground">Cloudflare interstitials</strong> that need to be solved before you can even reach the login page</li>
+        <li>• Most require <strong class="text-foreground">account login</strong> via an HTML form (RuTracker, LostFilm, Kinozal…); some like NNM-Club work <strong class="text-foreground">anonymously</strong> via magnet links</li>
+        <li>• <strong class="text-foreground">Cloudflare interstitials</strong> that need to be solved before the page can be reached</li>
       </ul>
       <p class="mt-3 text-muted-foreground">
         Jackett bolts a Torznab shim onto these sites for the *arr stack, but

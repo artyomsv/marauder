@@ -143,7 +143,7 @@ export const trackerPages: TrackerPageContent[] = [
   {
     slug: "nnmclub",
     description:
-      "Monitor NNM-Club.to topics behind Cloudflare. Marauder routes through a headless-Chromium solver to pass the interstitial, logs in, and auto-downloads new torrents to your client.",
+      "Monitor NNM-Club.to topics behind Cloudflare — no account needed. Marauder routes through a headless-Chromium solver to pass the interstitial and auto-downloads new torrents anonymously.",
     keywords: [
       "nnm-club monitor",
       "nnmclub auto download",
@@ -152,18 +152,23 @@ export const trackerPages: TrackerPageContent[] = [
       "nnm club tracker",
     ],
     intro:
-      "NNM-Club.to is a Russian-language phpBB tracker sitting behind a Cloudflare interstitial — which makes it doubly hard for conventional tools to reach. Marauder pairs a dedicated Cloudflare solver sidecar with its forum plugin to pass the challenge, log in, and watch the topic for new releases.",
+      "NNM-Club.to is a Russian-language phpBB tracker sitting behind a Cloudflare interstitial — which makes it hard for conventional tools to reach. Marauder pairs a dedicated Cloudflare solver sidecar with its NNM-Club plugin to pass the challenge and watch topics for new releases. No account is required: NNM-Club's magnet flow works anonymously, so you can add topic URLs and start monitoring straight away.",
     howItWorks: [
-      "Routes requests through the cfsolver sidecar (headless Chromium via chromedp) to clear the Cloudflare interstitial and collect cookies.",
-      "Logs in with your NNM-Club account and scrapes the topic page for .torrent changes.",
+      "Routes requests through the cfsolver sidecar (headless Chromium via chromedp) to clear the Cloudflare interstitial and collect the necessary cookies.",
+      "Scrapes the topic page anonymously for magnet link changes — no login or account needed.",
       "Hands new releases to your configured client like any other Marauder topic.",
     ],
     setup: [
       "Enable the cfsolver compose profile (Cloudflare solver sidecar).",
-      "Add your NNM-Club credentials under Credentials.",
-      "Paste the topic URL; Marauder handles the Cloudflare challenge transparently on each check.",
+      "Paste the topic URL directly as a new topic — no credentials to add.",
+      "Marauder handles the Cloudflare challenge transparently on each check.",
     ],
     faq: [
+      {
+        question: "Do I need an NNM-Club account to use this plugin?",
+        answer:
+          "No. NNM-Club's magnet flow is publicly accessible, so Marauder monitors topics without logging in. You do not need to add any credentials — just paste the topic URL.",
+      },
       {
         question: "How does Marauder get past Cloudflare on NNM-Club?",
         answer:

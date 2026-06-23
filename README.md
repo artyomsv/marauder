@@ -91,12 +91,13 @@ What works **today**:
 - English + Russian UI.
 
 **Validated end-to-end**: the generic magnet and `.torrent`-URL paths,
-the Torznab/Newznab indexer adapters, and the **RuTracker**, **LostFilm**
-(including interactive captcha login), and **Kinozal** plugins, each
-against a live target.
+the Torznab/Newznab indexer adapters, the **RuTracker**, **LostFilm**
+(including interactive captcha login), and **Kinozal** plugins, and
+**NNM-Club** (anonymous-only — its login is Cloudflare-Turnstile-gated,
+so accounts aren't supported), each against a live target.
 
-What's still **alpha**: the other 9 CIS forum-tracker plugins
-(NNM-Club, Anilibria, Anidub, Rutor, Toloka, Unionpeer,
+What's still **alpha**: the other 8 CIS forum-tracker plugins
+(Anilibria, Anidub, Rutor, Toloka, Unionpeer,
 Tapochek, Free-Torrents, HD-Club) are structurally complete with
 fixture-based tests but have not been validated against live sites —
 that requires real account credentials and is the first thing

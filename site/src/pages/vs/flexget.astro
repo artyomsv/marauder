@@ -84,14 +84,15 @@ const matrix = [
       <p class="text-muted-foreground">
         FlexGet is built around <strong class="text-foreground">feeds</strong> — give it
         an RSS or HTML source and it filters and acts on entries. That's a great
-        fit for sources that publish a feed. Forum trackers like RuTracker,
-        LostFilm, NNM-Club, and Kinozal don't work that way: you log in with a
-        session cookie, browse a topic thread, and the same topic URL quietly gets
-        a <strong class="text-foreground">new <code>.torrent</code> attachment</strong> when a
+        fit for sources that publish a feed. Forum trackers like RuTracker, LostFilm, NNM-Club, and Kinozal don't work
+        that way: you browse to a topic thread — logging in where the tracker
+        requires it, or accessing anonymously where it does not (NNM-Club) — and
+        the same topic URL quietly gets a
+        <strong class="text-foreground">new <code>.torrent</code> attachment</strong> when a
         new episode drops. There's no per-episode feed item to catch.
       </p>
       <p class="mt-3 text-muted-foreground">
-        Marauder is built specifically for that pattern — log in, scrape the topic
+        Marauder is built specifically for that pattern — scrape the topic
         page, detect the in-place file swap, and hand the result to your client.
         It also speaks Torznab and Newznab, so the feed-shaped sources FlexGet
         excels at are reachable too.

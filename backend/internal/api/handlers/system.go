@@ -102,10 +102,12 @@ func listTrackerInfos(items []registry.Tracker) []map[string]any {
 	out := make([]map[string]any, 0, len(items))
 	for _, t := range items {
 		_, interactive := t.(registry.WithInteractiveLogin)
+		_, hasCreds := t.(registry.WithCredentials)
 		out = append(out, map[string]any{
 			"name":                       t.Name(),
 			"display_name":               t.DisplayName(),
 			"supports_interactive_login": interactive,
+			"supports_credentials":       hasCreds,
 		})
 	}
 	return out

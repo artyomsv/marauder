@@ -76,70 +76,19 @@ func (p *plugin) Parse(_ context.Context, rawURL string) (*domain.Topic, error) 
 	}, nil
 }
 
-// --- WithCredentials ---------------------------------------------------
-
-func (p *plugin) Login(ctx context.Context, creds *domain.TrackerCredential) error {
-	if creds == nil || creds.Username == "" {
-		return errors.New("nnm-club credentials are required")
-	}
-	sess := p.sessions.GetOrCreate(forumcommon.SessionKey(pluginName, creds.UserID.String()), userAgent)
-	if p.transport != nil {
-		sess.Client.Transport = p.transport
-	}
-	form := url.Values{
-		"username": {creds.Username},
-		"password": {string(creds.SecretEnc)},
-		"redirect": {""},
-		"login":    {"%C2%F5%EE%E4"}, // "Вход" in cp1251
-	}
-	endpoint := "https://" + p.domain + "/forum/login.php"
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(form.Encode()))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("User-Agent", userAgent)
-	resp, err := sess.Client.Do(req)
-	if err != nil {
-		return fmt.Errorf("nnm-club login: %w", err)
-	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
-	if err != nil {
-		return fmt.Errorf("nnm-club login: read body: %w", err)
-	}
-	if strings.Contains(string(body), "incorrect") || strings.Contains(string(body), "Неверный") {
-		return errors.New("nnm-club login failed: invalid credentials")
-	}
-	sess.LoggedIn = true
-	return nil
-}
-
-func (p *plugin) Verify(ctx context.Context, creds *domain.TrackerCredential) (bool, error) {
-	sess := p.sessions.GetOrCreate(forumcommon.SessionKey(pluginName, creds.UserID.String()), userAgent)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://"+p.domain+"/forum/index.php", nil)
-	if err != nil {
-		return false, err
-	}
-	req.Header.Set("User-Agent", userAgent)
-	resp, err := sess.Client.Do(req)
-	if err != nil {
-		return false, err
-	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 16*1024))
-	if err != nil {
-		return false, fmt.Errorf("nnm-club verify: read body: %w", err)
-	}
-	return strings.Contains(string(body), "logout.php"), nil
-}
+// NNM-Club is anonymous-only in Marauder: its login is gated by Cloudflare
+// Turnstile, which blocks automated (headless/server-side) sign-in, so the
+// plugin deliberately does NOT implement registry.WithCredentials. Delivery
+// uses the public, account-free magnet on the topic page.
 
 // --- Check / Download --------------------------------------------------
 
 var (
 	titleRe  = regexp.MustCompile(`(?s)<title>([^<]+)</title>`)
-	hashRe   = regexp.MustCompile(`(?i)Info-?Hash[^A-Z0-9]+([A-Fa-f0-9]{40})`)
-	dlHrefRe = regexp.MustCompile(`href="(download\.php\?id=\d+)"`)
+	magnetRe = regexp.MustCompile(`magnet:\?xt=urn:btih:([A-Fa-f0-9]{40})`)
+	// ogImageRe expects property before content (the order NNM-Club emits).
+	// If that order ever reverses it fails open: ImageURL stays empty, no error.
+	ogImageRe = regexp.MustCompile(`(?i)<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']`)
 )
 
 func (p *plugin) Check(ctx context.Context, topic *domain.Topic, creds *domain.TrackerCredential) (*domain.Check, error) {
@@ -149,10 +98,9 @@ func (p *plugin) Check(ctx context.Context, topic *domain.Topic, creds *domain.T
 	}
 	check := &domain.Check{}
 	if m := titleRe.FindSubmatch(body); m != nil {
-		check.DisplayName = strings.TrimSpace(string(m[1]))
-		check.DisplayName = strings.TrimSuffix(check.DisplayName, " :: NNM-Club")
+		check.DisplayName = forumcommon.CleanTitle(string(m[1]), " :: NNM-Club")
 	}
-	if m := hashRe.FindSubmatch(body); m != nil {
+	if m := magnetRe.FindSubmatch(body); m != nil {
 		check.Hash = strings.ToLower(string(m[1]))
 	} else {
 		return nil, errors.New("nnm-club: no infohash found")
@@ -160,21 +108,50 @@ func (p *plugin) Check(ctx context.Context, topic *domain.Topic, creds *domain.T
 	return check, nil
 }
 
+// Download returns a magnet for the topic. Anonymous (no creds) is the only
+// supported mode in Phase 1: the .torrent at download.php is login-gated
+// (302 -> login), and a fresh anonymous fetch of the topic page yields a
+// hash-only magnet (NNM-Club only embeds its tracker announce in the magnet
+// for logged-in sessions). So we return the page's hash-only magnet enriched
+// with a real &dn= display name. Peer discovery relies on DHT and may stall on
+// poorly-seeded torrents — the reliable fix is the credentialed .torrent (with
+// the user's passkey'd announce, also crediting ratio), Phase 2.
 func (p *plugin) Download(ctx context.Context, topic *domain.Topic, _ *domain.Check, creds *domain.TrackerCredential) (*domain.Payload, error) {
 	body, err := p.fetch(ctx, topic.URL, creds)
 	if err != nil {
 		return nil, err
 	}
-	m := dlHrefRe.FindSubmatch(body)
+	m := magnetRe.FindSubmatch(body)
 	if m == nil {
-		return nil, errors.New("nnm-club: no download link in topic page")
+		return nil, errors.New("nnm-club: topic page has no magnet link")
 	}
-	dlURL := "https://" + p.domain + "/forum/" + string(m[1])
-	torrent, err := p.fetch(ctx, dlURL, creds)
+	magnet := "magnet:?xt=urn:btih:" + strings.ToLower(string(m[1]))
+	if mt := titleRe.FindSubmatch(body); mt != nil {
+		if name := forumcommon.CleanTitle(string(mt[1]), " :: NNM-Club"); name != "" {
+			magnet += "&dn=" + url.QueryEscape(name)
+		}
+	}
+	return &domain.Payload{MagnetURI: magnet}, nil
+}
+
+// ResolveMetadata implements registry.WithMetadata: it fetches the topic page
+// anonymously and extracts a human title + poster (og:image) for the AddTopic
+// preview card.
+var _ registry.WithMetadata = (*plugin)(nil)
+
+func (p *plugin) ResolveMetadata(ctx context.Context, rawURL string, creds *domain.TrackerCredential) (*registry.Metadata, error) {
+	body, err := p.fetch(ctx, rawURL, creds)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("nnm-club resolve metadata: %w", err)
 	}
-	return &domain.Payload{TorrentFile: torrent, FileName: "nnmclub.torrent"}, nil
+	meta := &registry.Metadata{}
+	if m := titleRe.FindSubmatch(body); m != nil {
+		meta.Title = forumcommon.CleanTitle(string(m[1]), " :: NNM-Club")
+	}
+	if m := ogImageRe.FindSubmatch(body); m != nil {
+		meta.ImageURL = strings.TrimSpace(string(m[1]))
+	}
+	return meta, nil
 }
 
 func (p *plugin) fetch(ctx context.Context, target string, creds *domain.TrackerCredential) ([]byte, error) {

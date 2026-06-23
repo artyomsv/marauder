@@ -57,10 +57,10 @@ export const trackers: Tracker[] = [
   {
     slug: "nnmclub",
     name: "NNM-Club.to",
-    description: "Russian-language phpBB tracker, Cloudflare-protected.",
+    description: "Russian-language phpBB tracker, Cloudflare-protected. Works anonymously — no account needed.",
     category: "forum-cis",
     region: "RU",
-    auth: "account",
+    auth: "public",
     status: "alpha",
     cloudflare: true,
   },

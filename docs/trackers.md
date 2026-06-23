@@ -85,6 +85,9 @@ expects you to add an account on `/accounts` before adding any
 topics. Marauder validates the credential by attempting Login when
 you save the account — bad credentials are rejected immediately.
 
+> **NNM-Club** is listed separately below — it is anonymous-only
+> and does not require an account.
+
 ### LostFilm.tv
 
 | | |
@@ -169,24 +172,30 @@ page `<title>` (cp1251-decoded) and `og:image`.
 (2026-06) — login, infohash resolution, metadata, and download → client
 delivery all confirmed.
 
-### NNM-Club
+---
+
+## NNM-Club (anonymous, no account)
 
 | | |
 |---|---|
 | **Plugin name** | `nnmclub` |
-| **Account required** | Yes (free) |
+| **Account required** | No (anonymous) |
 | **Quality selection** | No |
 | **Episode filter** | No |
 | **Cloudflare** | **Yes** — requires the cfsolver sidecar |
 | **URL format** | `https://nnmclub.to/forum/viewtopic.php?t=<id>` |
 
-phpBB tracker wrapped in Cloudflare. Marauder routes through the
-`cfsolver` sidecar profile (start it with
-`docker compose --profile cfsolver up -d`) which uses headless
-Chromium via chromedp to solve the Cloudflare interstitial and
-hand the cookies back.
+phpBB tracker wrapped in Cloudflare. Works anonymously — account
+login is not supported because Cloudflare Turnstile blocks automated
+login flows. Marauder routes through the `cfsolver` sidecar profile
+(start it with `docker compose --profile cfsolver up -d`) which uses
+headless Chromium via chromedp to solve the Cloudflare interstitial
+and hand the cookies back. No credentials needed; do **not** add an
+NNM-Club account entry on `/accounts`.
 
-### Other CIS trackers
+---
+
+## Other CIS trackers
 
 | Plugin name | Display name | Account | Quality | Episode filter | Cloudflare |
 |---|---|---|---|---|---|
