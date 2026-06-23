@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -15,9 +16,18 @@ import (
 	"github.com/artyomsv/marauder/backend/internal/problem"
 )
 
+// notifierStore is the consumer seam over *repo.Notifiers.
+type notifierStore interface {
+	ListForUser(ctx context.Context, userID uuid.UUID) ([]*domain.Notifier, error)
+	Create(ctx context.Context, n *domain.Notifier) (*domain.Notifier, error)
+	GetByID(ctx context.Context, id, userID uuid.UUID) (*domain.Notifier, error)
+	Delete(ctx context.Context, id, userID uuid.UUID) error
+	Update(ctx context.Context, id, userID uuid.UUID, notifierName, displayName string, events []string, isDefault bool, configEnc, configNonce []byte) error
+}
+
 // Notifiers handles /notifiers.
 type Notifiers struct {
-	Notifiers *repo.Notifiers
+	Notifiers notifierStore
 	Master    *crypto.MasterKey
 	BaseURL   string
 }
@@ -27,6 +37,7 @@ type notifierView struct {
 	NotifierName string   `json:"notifier_name"`
 	DisplayName  string   `json:"display_name"`
 	Events       []string `json:"events"`
+	IsDefault    bool     `json:"is_default"`
 	CreatedAt    string   `json:"created_at"`
 	UpdatedAt    string   `json:"updated_at"`
 }
@@ -37,6 +48,7 @@ func notifierToView(n *domain.Notifier) notifierView {
 		NotifierName: n.NotifierName,
 		DisplayName:  n.DisplayName,
 		Events:       n.Events,
+		IsDefault:    n.IsDefault,
 		CreatedAt:    n.CreatedAt.UTC().Format("2006-01-02T15:04:05Z"),
 		UpdatedAt:    n.UpdatedAt.UTC().Format("2006-01-02T15:04:05Z"),
 	}
@@ -65,6 +77,7 @@ type createNotifierReq struct {
 	NotifierName string          `json:"notifier_name"`
 	DisplayName  string          `json:"display_name"`
 	Events       []string        `json:"events"`
+	IsDefault    bool            `json:"is_default"`
 	Config       json.RawMessage `json:"config"`
 }
 
@@ -109,12 +122,109 @@ func (h *Notifiers) Create(w http.ResponseWriter, r *http.Request) {
 		ConfigEnc:    enc,
 		ConfigNonce:  nonce,
 		Events:       events,
+		IsDefault:    req.IsDefault,
 	})
 	if cerr != nil {
 		problem.Write(w, r, h.BaseURL, problem.ErrInternal("create notifier: "+cerr.Error()))
 		return
 	}
 	writeJSON(w, http.StatusCreated, notifierToView(created))
+}
+
+// Get handles GET /notifiers/{id}. Returns the notifier with its decrypted
+// config so the edit form can hydrate. Config secrets never leave the user's
+// own authenticated session.
+func (h *Notifiers) Get(w http.ResponseWriter, r *http.Request) {
+	uid, perr := currentUserID(r)
+	if perr != nil {
+		problem.Write(w, r, h.BaseURL, perr)
+		return
+	}
+	id, ierr := uuid.Parse(chi.URLParam(r, "id"))
+	if ierr != nil {
+		problem.Write(w, r, h.BaseURL, problem.ErrBadRequest("invalid id"))
+		return
+	}
+	n, err := h.Notifiers.GetByID(r.Context(), id, uid)
+	if err != nil {
+		problem.Write(w, r, h.BaseURL, problem.ErrNotFound("notifier not found"))
+		return
+	}
+	raw, derr := h.Master.Decrypt(n.ConfigEnc, n.ConfigNonce)
+	if derr != nil {
+		problem.Write(w, r, h.BaseURL, problem.ErrInternal("decrypt: "+derr.Error()))
+		return
+	}
+	v := notifierToView(n)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"id": v.ID, "notifier_name": v.NotifierName, "display_name": v.DisplayName,
+		"events": v.Events, "is_default": v.IsDefault, "config": json.RawMessage(raw),
+		"created_at": v.CreatedAt, "updated_at": v.UpdatedAt,
+	})
+}
+
+type updateNotifierReq struct {
+	DisplayName string          `json:"display_name"`
+	Events      []string        `json:"events"`
+	IsDefault   bool            `json:"is_default"`
+	Config      json.RawMessage `json:"config"`
+}
+
+// Update handles PUT /notifiers/{id}. Re-runs the plugin Test() like Create.
+// The notifier type is immutable — taken from the stored row, not the request.
+func (h *Notifiers) Update(w http.ResponseWriter, r *http.Request) {
+	uid, perr := currentUserID(r)
+	if perr != nil {
+		problem.Write(w, r, h.BaseURL, perr)
+		return
+	}
+	id, ierr := uuid.Parse(chi.URLParam(r, "id"))
+	if ierr != nil {
+		problem.Write(w, r, h.BaseURL, problem.ErrBadRequest("invalid id"))
+		return
+	}
+	var req updateNotifierReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		problem.Write(w, r, h.BaseURL, problem.ErrBadRequest("invalid JSON"))
+		return
+	}
+	if req.DisplayName == "" || len(req.Config) == 0 {
+		problem.Write(w, r, h.BaseURL, problem.ErrBadRequest("display_name and config are required"))
+		return
+	}
+	existing, gerr := h.Notifiers.GetByID(r.Context(), id, uid)
+	if gerr != nil {
+		problem.Write(w, r, h.BaseURL, problem.ErrNotFound("notifier not found"))
+		return
+	}
+	plug := registry.GetNotifier(existing.NotifierName)
+	if plug == nil {
+		problem.Write(w, r, h.BaseURL, problem.ErrInternal("notifier plugin not installed"))
+		return
+	}
+	if err := plug.Test(r.Context(), req.Config); err != nil {
+		problem.Write(w, r, h.BaseURL, problem.ErrUnprocessable("notifier test failed: "+err.Error()))
+		return
+	}
+	enc, nonce, eerr := h.Master.Encrypt(req.Config)
+	if eerr != nil {
+		problem.Write(w, r, h.BaseURL, problem.ErrInternal("encrypt: "+eerr.Error()))
+		return
+	}
+	events := req.Events
+	if len(events) == 0 {
+		events = []string{"updated", "error"}
+	}
+	if err := h.Notifiers.Update(r.Context(), id, uid, existing.NotifierName, req.DisplayName, events, req.IsDefault, enc, nonce); err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			problem.Write(w, r, h.BaseURL, problem.ErrNotFound("notifier not found"))
+			return
+		}
+		problem.Write(w, r, h.BaseURL, problem.ErrInternal("update notifier: "+err.Error()))
+		return
+	}
+	updated, _ := h.Notifiers.GetByID(r.Context(), id, uid)
+	writeJSON(w, http.StatusOK, notifierToView(updated))
 }
 
 // Delete handles DELETE /notifiers/{id}.
@@ -157,8 +267,8 @@ func (h *Notifiers) Test(w http.ResponseWriter, r *http.Request) {
 		problem.Write(w, r, h.BaseURL, problem.ErrNotFound("notifier not found"))
 		return
 	}
-	plugin := registry.GetNotifier(n.NotifierName)
-	if plugin == nil {
+	plug := registry.GetNotifier(n.NotifierName)
+	if plug == nil {
 		problem.Write(w, r, h.BaseURL, problem.ErrInternal("notifier plugin not installed"))
 		return
 	}
@@ -167,7 +277,7 @@ func (h *Notifiers) Test(w http.ResponseWriter, r *http.Request) {
 		problem.Write(w, r, h.BaseURL, problem.ErrInternal("decrypt: "+err.Error()))
 		return
 	}
-	if err := plugin.Test(r.Context(), raw); err != nil {
+	if err := plug.Test(r.Context(), raw); err != nil {
 		problem.Write(w, r, h.BaseURL, problem.ErrUnprocessable("test failed: "+err.Error()))
 		return
 	}
