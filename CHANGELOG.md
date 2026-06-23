@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Default notifiers** — mark one notifier per type (Telegram, email, …) as
+  default with a `default` badge, and edit existing notifiers (display name,
+  events, config, default flag) via the Notifiers page. (#85)
+
+### Changed
+
+- **Topic notifications without an explicit notifier now route to your default
+  notifiers only** (previously: all configured notifiers). If no default is
+  set, such topics send no notification — mark a default on the Notifiers page.
+  Per-topic notifier overrides are unaffected. (#85)
+
 ## [1.2.0] - 2026-06-23
 
 ### Added
