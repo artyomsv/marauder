@@ -11,31 +11,23 @@ import (
 	"github.com/artyomsv/marauder/backend/internal/plugins/trackers/forumcommon"
 )
 
-const fixtureViewtopicHTML = `<html><head><title>Big Anime Series :: NNM-Club</title></head>
+const fixtureViewtopicHTML = `<html><head>
+<title>Через тернии к звёздам (1980) DVDRip [H.264] Оригинальная версия :: NNM-Club</title>
+<meta property="og:image" content="https://a.radikal.ru/a11/2008/6f/f91ffdbf65b2.jpg"/>
+</head>
 <body>
 <a href="logout.php">logout</a>
-<div>Info-Hash: 0123456789ABCDEF0123456789ABCDEF01234567</div>
-<a href="download.php?id=12345">скачать</a>
+<a rel="nofollow" href="magnet:?xt=urn:btih:094EC3052ED759240E4DFD89F3F7CA5C5B428FF4" title="Примагнититься"><img src="https://nnmstatic.win/forum/images/magnet.png"></a>
+<a href="download.php?id=379398" rel="nofollow">Скачать</a>
 </body></html>`
 
 func newTestPlugin(t *testing.T) *plugin {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case strings.HasPrefix(r.URL.Path, "/forum/login.php"):
-			http.SetCookie(w, &http.Cookie{Name: "phpbb2mysql_4_data", Value: "abc"})
-			w.WriteHeader(200)
-			w.Write([]byte(`<a href="logout.php">logout</a>`))
 		case strings.HasPrefix(r.URL.Path, "/forum/viewtopic.php"):
 			w.WriteHeader(200)
 			w.Write([]byte(fixtureViewtopicHTML))
-		case strings.HasPrefix(r.URL.Path, "/forum/download.php"):
-			w.Header().Set("Content-Type", "application/x-bittorrent")
-			w.WriteHeader(200)
-			w.Write([]byte("d8:announce..."))
-		case r.URL.Path == "/forum/index.php":
-			w.WriteHeader(200)
-			w.Write([]byte(`<a href="logout.php">logout</a>`))
 		default:
 			w.WriteHeader(404)
 		}
@@ -100,11 +92,14 @@ func TestCheck(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Check: %v", err)
 	}
-	if check.Hash != "0123456789abcdef0123456789abcdef01234567" {
+	if check.Hash != "094ec3052ed759240e4dfd89f3f7ca5c5b428ff4" {
 		t.Errorf("hash: %q", check.Hash)
 	}
-	if !strings.Contains(check.DisplayName, "Big Anime Series") {
+	if !strings.Contains(check.DisplayName, "Через тернии к звёздам") {
 		t.Errorf("display name: %q", check.DisplayName)
+	}
+	if strings.HasSuffix(check.DisplayName, " :: NNM-Club") {
+		t.Errorf("site suffix not stripped: %q", check.DisplayName)
 	}
 }
 
@@ -115,7 +110,27 @@ func TestDownload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Download: %v", err)
 	}
-	if len(payload.TorrentFile) == 0 {
-		t.Error("expected torrent bytes")
+	if len(payload.TorrentFile) != 0 {
+		t.Errorf("expected no torrent file in anonymous mode, got %d bytes", len(payload.TorrentFile))
+	}
+	if !strings.Contains(payload.MagnetURI, "urn:btih:094ec3052ed759240e4dfd89f3f7ca5c5b428ff4") {
+		t.Errorf("magnet missing infohash: %q", payload.MagnetURI)
+	}
+	if !strings.Contains(payload.MagnetURI, "dn=") {
+		t.Errorf("magnet missing display name: %q", payload.MagnetURI)
+	}
+}
+
+func TestResolveMetadata(t *testing.T) {
+	p := newTestPlugin(t)
+	meta, err := p.ResolveMetadata(context.Background(), "https://"+p.domain+"/forum/viewtopic.php?t=42", nil)
+	if err != nil {
+		t.Fatalf("ResolveMetadata: %v", err)
+	}
+	if !strings.Contains(meta.Title, "Через тернии к звёздам") {
+		t.Errorf("title: %q", meta.Title)
+	}
+	if meta.ImageURL != "https://a.radikal.ru/a11/2008/6f/f91ffdbf65b2.jpg" {
+		t.Errorf("image url: %q", meta.ImageURL)
 	}
 }

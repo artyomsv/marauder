@@ -26,6 +26,7 @@ type trackerMatch struct {
 	DefaultQuality           string   `json:"default_quality,omitempty"`
 	SupportsEpisodeFilter    bool     `json:"supports_episode_filter"`
 	RequiresCredentials      bool     `json:"requires_credentials"`
+	CredentialsOptional      bool     `json:"credentials_optional"`
 	SupportsInteractiveLogin bool     `json:"supports_interactive_login"`
 	UsesCloudflare           bool     `json:"uses_cloudflare"`
 	SupportsSeasonCatalog    bool     `json:"supports_season_catalog"`
@@ -61,7 +62,13 @@ func (h *Trackers) Match(w http.ResponseWriter, r *http.Request) {
 		out.SupportsEpisodeFilter = ef.SupportsEpisodeFilter()
 	}
 	if _, ok := t.(registry.WithCredentials); ok {
+		// WithCredentials alone means credentials are required. A tracker that
+		// also supports anonymous download flips this to optional.
 		out.RequiresCredentials = true
+		if ad, ok := t.(registry.WithAnonymousDownload); ok && ad.SupportsAnonymousDownload() {
+			out.RequiresCredentials = false
+			out.CredentialsOptional = true
+		}
 	}
 	if _, ok := t.(registry.WithInteractiveLogin); ok {
 		out.SupportsInteractiveLogin = true

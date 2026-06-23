@@ -63,6 +63,14 @@ func init() {
 func (p *plugin) Name() string        { return pluginName }
 func (p *plugin) DisplayName() string { return displayName }
 
+// SupportsAnonymousDownload implements registry.WithAnonymousDownload: the
+// topic page exposes a magnet without login (Download falls back to it when
+// no credentials are present), so credentials are optional — they only
+// enable the preferred .torrent path.
+var _ registry.WithAnonymousDownload = (*plugin)(nil)
+
+func (p *plugin) SupportsAnonymousDownload() bool { return true }
+
 // CanParse — true for any rutracker viewtopic URL.
 func (p *plugin) CanParse(rawURL string) bool {
 	return urlPattern.MatchString(strings.TrimSpace(rawURL))

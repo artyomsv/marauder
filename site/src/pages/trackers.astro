@@ -81,8 +81,9 @@ const indexers = trackers.filter((t) => t.category === "indexer");
       <h2 id="cat-forum" class="mb-2 text-2xl font-semibold tracking-tight">CIS forum trackers</h2>
       <p class="mb-6 text-muted-foreground">
         The Russian-speaking forum trackers that the *arr stack cannot reach.
-        Marauder logs in with your account, scrapes the topic page, and detects
-        when the uploader replaces the .torrent attachment.
+        Marauder scrapes the topic page and detects when the uploader replaces
+        the .torrent attachment — logging in with your account where required,
+        or fetching anonymously for public trackers (see the Auth column).
       </p>
       <div class="overflow-hidden rounded-xl border border-border/60">
         <table class="w-full text-sm">

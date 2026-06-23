@@ -226,7 +226,12 @@ export function CredentialsPage() {
 
 // ---------------------------------------------------------------------
 
-type Tracker = { name: string; display_name: string; supports_interactive_login: boolean };
+type Tracker = {
+  name: string;
+  display_name: string;
+  supports_interactive_login: boolean;
+  supports_credentials: boolean;
+};
 
 // CaptchaState groups every captcha-step field into ONE useState object
 // so AddCredentialCard stays within the project's 8-useState limit.
@@ -266,6 +271,12 @@ function AddCredentialCard({
   // sniffing. True → interactive (captcha) flow; false → plain create.
   const supportsInteractiveLogin =
     available.find((tr) => tr.name === trackerName)?.supports_interactive_login ?? false;
+
+  // Some trackers work anonymously and don't implement credentialed login
+  // (e.g. NNM-Club, gated by Cloudflare Turnstile which blocks automated
+  // sign-in). For those we show a disclaimer and block the form.
+  const selectedTracker = available.find((tr) => tr.name === trackerName);
+  const supportsCredentials = selectedTracker?.supports_credentials ?? true;
 
   // Plain create — used for trackers that don't support interactive login.
   const create = useMutation({
@@ -398,7 +409,7 @@ function AddCredentialCard({
                 id="cred-username"
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
-                disabled={!!captcha}
+                disabled={!!captcha || !supportsCredentials}
                 autoComplete="username"
                 required
               />
@@ -410,7 +421,7 @@ function AddCredentialCard({
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                disabled={!!captcha}
+                disabled={!!captcha || !supportsCredentials}
                 autoComplete="new-password"
                 required
               />
@@ -420,6 +431,18 @@ function AddCredentialCard({
               </p>
             </div>
           </div>
+
+          {!supportsCredentials && (
+            <div className="flex items-start gap-2 rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-warning">
+              <AlertTriangle className="mt-0.5 size-4 shrink-0" />
+              <span>
+                {selectedTracker?.display_name} works in <strong>anonymous mode
+                only</strong> — authenticated login is not supported (its sign-in
+                is gated by a Cloudflare Turnstile that blocks automated login).
+                No account is needed; just add topic URLs directly.
+              </span>
+            </div>
+          )}
 
           {captcha && (
             <CaptchaChallenge
@@ -457,7 +480,10 @@ function AddCredentialCard({
                 {t("credentials.captchaSubmit")}
               </Button>
             ) : (
-              <Button type="submit" disabled={submitting || !trackerName}>
+              <Button
+                type="submit"
+                disabled={submitting || !trackerName || !supportsCredentials}
+              >
                 {submitting && <Loader2 className="size-4 animate-spin" />}
                 Login &amp; save
               </Button>

@@ -42,6 +42,13 @@ vi.mock("@/lib/hooks/useSystemInfo", () => ({
           name: "lostfilm",
           display_name: "LostFilm",
           supports_interactive_login: supportsInteractiveLogin,
+          supports_credentials: true,
+        },
+        {
+          name: "nnmclub",
+          display_name: "NNM-Club.to",
+          supports_interactive_login: false,
+          supports_credentials: false,
         },
       ],
     },
@@ -103,6 +110,26 @@ async function fillAndSubmit(user: ReturnType<typeof userEvent.setup>) {
   await user.type(screen.getByLabelText(/^password$/i), "hunter2");
   await user.click(screen.getByRole("button", { name: /login & save/i }));
 }
+
+describe("CredentialsPage — anonymous-only tracker", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    supportsInteractiveLogin = true;
+    mockApi.get.mockResolvedValue({ credentials: [] });
+  });
+
+  it("shows a disclaimer and disables submit when the tracker has no credential support", async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(screen.getByRole("button", { name: /add account/i }));
+    await user.selectOptions(screen.getByLabelText(/^tracker$/i), "nnmclub");
+
+    expect(await screen.findByText(/anonymous mode only/i)).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /login & save/i }),
+    ).toBeDisabled();
+  });
+});
 
 describe("CredentialsPage — interactive captcha flow", () => {
   beforeEach(() => {

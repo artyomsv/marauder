@@ -22,6 +22,7 @@ export interface TrackerMatch {
   supports_episode_filter: boolean;
   supports_season_catalog: boolean;
   requires_credentials: boolean;
+  credentials_optional: boolean;
   uses_cloudflare: boolean;
 }
 
@@ -308,11 +309,25 @@ export function TopicForm({
         </div>
       )}
 
-      {match?.requires_credentials && hasCredential && (
-        <div className="rounded-md border border-success/40 bg-success/10 px-3 py-2 text-xs text-success">
-          ✓ Using your {match.display_name} account.
+      {match?.credentials_optional && !hasCredential && (
+        <div className="rounded-md border border-border bg-muted/50 px-3 py-2 text-xs text-muted-foreground">
+          Works without an account. Optionally{" "}
+          <a
+            href="/accounts"
+            className="font-semibold underline-offset-4 hover:underline"
+          >
+            add a {match.display_name} account →
+          </a>{" "}
+          to enable .torrent downloads.
         </div>
       )}
+
+      {(match?.requires_credentials || match?.credentials_optional) &&
+        hasCredential && (
+          <div className="rounded-md border border-success/40 bg-success/10 px-3 py-2 text-xs text-success">
+            ✓ Using your {match.display_name} account.
+          </div>
+        )}
 
       <div className="space-y-1.5">
         <Label htmlFor="client">Client (optional)</Label>

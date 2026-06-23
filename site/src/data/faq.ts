@@ -12,7 +12,7 @@ export const homeFaq: FaqItem[] = [
   {
     question: "How is Marauder different from Sonarr or Radarr?",
     answer:
-      "Sonarr and Radarr are built around Torznab indexers. They cannot monitor a forum thread on RuTracker, LostFilm, or NNM-Club because those sites are forums, not API-driven indexers. Marauder is built specifically to watch forum threads, log in with your credentials, scrape topic pages, and detect when an uploader replaces the .torrent attachment. It also speaks Torznab and Newznab so you can use it on top of Jackett or Prowlarr if you want.",
+      "Sonarr and Radarr are built around Torznab indexers. They cannot monitor a forum thread on RuTracker, LostFilm, or NNM-Club because those sites are forums, not API-driven indexers. Marauder is built specifically to watch forum threads, scrape topic pages, and detect when an uploader replaces the .torrent attachment — logging in with your account where the tracker requires it, or fetching anonymously where it does not (NNM-Club). It also speaks Torznab and Newznab so you can use it on top of Jackett or Prowlarr if you want.",
   },
   {
     question: "Is Marauder a replacement for monitorrent?",
