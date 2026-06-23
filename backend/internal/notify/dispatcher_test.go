@@ -187,19 +187,20 @@ func TestSend_DecryptError_Skipped(t *testing.T) {
 	}
 }
 
-func TestSendVia_NilID_BehavesLikeSend(t *testing.T) {
+func TestSendVia_NilID_NoDefaults_ReturnsZero(t *testing.T) {
 	uid := uuid.New()
 	repo := &fakeRepo{}
 	d, enc, nonce := newTestDispatcher(t, repo)
 
+	// Neither notifier is marked IsDefault — strict silence expected.
 	repo.items = []*domain.Notifier{
 		{ID: uuid.New(), UserID: uid, NotifierName: okPlugin.Name(), ConfigEnc: enc, ConfigNonce: nonce},
 		{ID: uuid.New(), UserID: uid, NotifierName: okPlugin.Name(), ConfigEnc: enc, ConfigNonce: nonce},
 	}
 
 	got := d.SendVia(context.Background(), uid, nil, "updated", domain.Message{Title: "t"})
-	if got != 2 {
-		t.Errorf("want 2 (global fan-out), got %d", got)
+	if got != 0 {
+		t.Errorf("want 0 (no defaults, strict silence), got %d", got)
 	}
 }
 
@@ -273,5 +274,45 @@ func TestSendVia_TargetFound_SendFails_ReturnsZero(t *testing.T) {
 	got := d.SendVia(context.Background(), uid, &target, "updated", domain.Message{Title: "t"})
 	if got != 0 {
 		t.Errorf("want 0 (target found but send failed), got %d", got)
+	}
+}
+
+func TestSendVia_NilID_SendsToDefaultsOnly(t *testing.T) {
+	uid := uuid.New()
+	repo := &fakeRepo{}
+	d, enc, nonce := newTestDispatcher(t, repo)
+	repo.items = []*domain.Notifier{
+		{ID: uuid.New(), UserID: uid, NotifierName: okPlugin.Name(), IsDefault: true, ConfigEnc: enc, ConfigNonce: nonce},
+		{ID: uuid.New(), UserID: uid, NotifierName: okPlugin.Name(), IsDefault: false, ConfigEnc: enc, ConfigNonce: nonce},
+	}
+	got := d.SendVia(context.Background(), uid, nil, "updated", domain.Message{Title: "t"})
+	if got != 1 {
+		t.Errorf("want 1 (only the default notifier), got %d", got)
+	}
+}
+
+func TestSendVia_NilID_NoDefaults_SendsNothing(t *testing.T) {
+	uid := uuid.New()
+	repo := &fakeRepo{}
+	d, enc, nonce := newTestDispatcher(t, repo)
+	repo.items = []*domain.Notifier{
+		{ID: uuid.New(), UserID: uid, NotifierName: okPlugin.Name(), IsDefault: false, ConfigEnc: enc, ConfigNonce: nonce},
+	}
+	got := d.SendVia(context.Background(), uid, nil, "updated", domain.Message{Title: "t"})
+	if got != 0 {
+		t.Errorf("want 0 (no defaults set = strict silence), got %d", got)
+	}
+}
+
+func TestSendVia_NilID_DefaultRespectsSubscription(t *testing.T) {
+	uid := uuid.New()
+	repo := &fakeRepo{}
+	d, enc, nonce := newTestDispatcher(t, repo)
+	repo.items = []*domain.Notifier{
+		{ID: uuid.New(), UserID: uid, NotifierName: okPlugin.Name(), IsDefault: true, Events: []string{"error"}, ConfigEnc: enc, ConfigNonce: nonce},
+	}
+	got := d.SendVia(context.Background(), uid, nil, "updated", domain.Message{Title: "t"})
+	if got != 0 {
+		t.Errorf("want 0 (default not subscribed to updated), got %d", got)
 	}
 }
