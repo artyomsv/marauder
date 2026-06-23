@@ -208,15 +208,6 @@ export function TopicsPage() {
                       <span className="min-w-0 break-words font-medium">
                         {t.DisplayName}
                       </span>
-                      <Badge variant="outline" className="shrink-0 font-mono">
-                        {t.TrackerName}
-                      </Badge>
-                      <ClientBadge
-                        topic={t}
-                        clientById={clientById}
-                        defaultClient={defaultClient}
-                      />
-                      <NotifierBadge topic={t} notifierById={notifierById} />
                     </div>
                     {!compact && (
                       <div className="truncate font-mono text-xs text-muted-foreground">
@@ -230,6 +221,17 @@ export function TopicsPage() {
                       </div>
                     )}
                     {!compact && <DeliveryStatus topicId={t.ID} />}
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                      <Badge variant="outline" className="shrink-0 font-mono">
+                        {t.TrackerName}
+                      </Badge>
+                      <ClientBadge
+                        topic={t}
+                        clientById={clientById}
+                        defaultClient={defaultClient}
+                      />
+                      <NotifierBadge topic={t} notifierById={notifierById} />
+                    </div>
                   </div>
                   {!compact && (
                     <div className="hidden lg:block text-right">

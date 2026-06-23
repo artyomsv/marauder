@@ -23,8 +23,13 @@ describe("NotifierBadge", () => {
     expect(screen.getByText("Main Telegram")).toBeInTheDocument();
   });
 
-  it("renders nothing when no override is set", () => {
-    const { container } = render(<NotifierBadge topic={topic({ NotifierID: null })} notifierById={byId} />);
-    expect(container).toBeEmptyDOMElement();
+  it("renders the default-notifiers fallback when no override is set", () => {
+    render(<NotifierBadge topic={topic({ NotifierID: null })} notifierById={byId} />);
+    expect(screen.getByText("default notifiers")).toBeInTheDocument();
+  });
+
+  it("renders 'unknown notifier' when the assigned notifier is missing", () => {
+    render(<NotifierBadge topic={topic({ NotifierID: "gone" })} notifierById={byId} />);
+    expect(screen.getByText("unknown notifier")).toBeInTheDocument();
   });
 });
