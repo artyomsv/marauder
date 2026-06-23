@@ -351,12 +351,16 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          # Deploy/repo artifacts: nothing to redeploy -> [skip ci].
-          if ! git diff --quiet -- deploy/docker-compose.yml deploy/docker-compose.ghcr.yml deploy/.env.example; then
-            git add deploy/docker-compose.yml deploy/docker-compose.ghcr.yml deploy/.env.example
-            git commit -m "chore: pin deploy stack to ${VER} [skip ci]"
+          # Deploy/repo artifacts (incl. README version markers): nothing to
+          # redeploy -> [skip ci]. README.md MUST be in this add list — the
+          # bump script edits its release badge / latest-release marker /
+          # MARAUDER_VERSION default, but those edits are dropped if the file is
+          # never staged (which froze README at an old version for many releases).
+          if ! git diff --quiet -- deploy/docker-compose.yml deploy/docker-compose.ghcr.yml deploy/.env.example README.md; then
+            git add deploy/docker-compose.yml deploy/docker-compose.ghcr.yml deploy/.env.example README.md
+            git commit -m "chore: pin deploy stack and README to ${VER} [skip ci]"
           else
-            echo "deploy version references already at ${VER}"
+            echo "deploy/README version references already at ${VER}"
           fi
 
           # Site content: must trigger site.yml to redeploy marauder.cc, so this
