@@ -15,15 +15,13 @@ describe("TopicUrl", () => {
 
   it("collapses a magnet to its infohash form and shows a copy button", () => {
     render(<TopicUrl url={MAGNET} />);
+    // Exact-match: the visible label is ONLY the canonical infohash magnet —
+    // this fails if any of the noisy &tr=…&dn=… tail leaks into the text, so it
+    // is a stronger check than a substring assertion (and avoids a host
+    // substring match that CodeQL flags as incomplete URL sanitization).
     expect(
       screen.getByText("magnet:?xt=urn:btih:2EEE793C09553B47290888FD97A327E9CF5E24D7"),
     ).toBeInTheDocument();
-    // The noisy tr=/dn= params are dropped from the visible label. Use a
-    // substring predicate (not a bare host regex) so the assertion can't be
-    // read as an unanchored URL match.
-    expect(
-      screen.queryByText((text) => text.includes("bt.t-ru.org")),
-    ).not.toBeInTheDocument();
     expect(screen.getByLabelText(/copy magnet/i)).toBeInTheDocument();
   });
 });
