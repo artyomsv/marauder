@@ -23,6 +23,7 @@ export const QK = {
 
   // Notifier configurations.
   notifiers: ["notifiers"] as const,
+  notifier: (id: string) => ["notifier", id] as const,
 
   // Public /system/info — version, plugin manifests. Shared by AppShell
   // version chip and Settings About card.

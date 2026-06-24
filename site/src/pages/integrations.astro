@@ -80,11 +80,12 @@ const schemas = [
     <section class="mb-16" aria-labelledby="notifiers-heading">
       <h2 id="notifiers-heading" class="mb-2 text-2xl font-semibold tracking-tight">Notifications</h2>
       <p class="mb-6 text-muted-foreground">
-        Pick which events fire a notification (topic updated, topic errored,
-        all failures) and which channels they fire on. Mix and match — globally,
-        or per topic: route a single topic's alerts to one specific notifier
-        (a separate Telegram chat, a dedicated webhook) while everything else
-        stays on your default notifier set.
+        Pick which events each notifier listens for — a new release or a topic
+        error — and which channels they fire on. Mark a default notifier per
+        type (one Telegram, one email, …); topics notify those defaults unless
+        you override a single topic to route its alerts to one specific notifier
+        (a separate chat, a dedicated webhook). Edit a notifier's channels,
+        events, and default flag any time.
       </p>
       <div class="grid gap-4 md:grid-cols-2">
         {notifiers.map((n) => (

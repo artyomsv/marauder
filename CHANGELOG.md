@@ -21,6 +21,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   idempotent (deduped by topic URL), and fail-open if Sonarr is unreachable.
   (#86)
 
+## [1.3.0] - 2026-06-24
+
+### Added
+
+- **Default notifiers** — mark one notifier per type (Telegram, email, …) as
+  default with a `default` badge, and edit existing notifiers (display name,
+  events, config, default flag) via the Notifiers page. (#85)
+
+### Changed
+
+- **Topic notifications without an explicit notifier now route to your default
+  notifiers only** (previously: all configured notifiers). If no default is
+  set, such topics send no notification — mark a default on the Notifiers page.
+  Per-topic notifier overrides are unaffected. (#85)
+
+### Fixed
+
+- **Topic errors now fire an `error` notification.** Previously only a
+  credential session-expiry triggered the notifier `error` event; a failed
+  tracker check, a failed download/client submit, or a missing plugin were
+  recorded on the topic but never notified. They now notify the topic's
+  notifier (override or defaults), once per error episode (deduped so a topic
+  retrying on backoff doesn't spam). (#85)
+
+## [1.2.0] - 2026-06-23
+
 ### Added
 
 - feat(nnmclub): anonymous-only support + credentials disclaimer

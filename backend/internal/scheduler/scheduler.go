@@ -336,6 +336,7 @@ func (s *Scheduler) runCheck(ctx context.Context, log zerolog.Logger, t *domain.
 		log.Error().Msg("no registered tracker")
 		metrics.SchedulerTopicChecksTotal.WithLabelValues(t.TrackerName, "no_plugin").Inc()
 		s.recordResult(ctx, log, t.ID, "", false, s.backoff(t, true, nil), "tracker plugin not installed")
+		s.notifyError(ctx, t, "tracker plugin not installed")
 		s.recordChecked(false, true)
 		return
 	}
@@ -358,6 +359,7 @@ func (s *Scheduler) runCheck(ctx context.Context, log zerolog.Logger, t *domain.
 		log.Warn().Err(err).Msg("check failed")
 		metrics.SchedulerTopicChecksTotal.WithLabelValues(t.TrackerName, "error").Inc()
 		s.recordResult(ctx, log, t.ID, "", false, s.backoff(t, true, err), err.Error())
+		s.notifyError(ctx, t, err.Error())
 		s.recordChecked(false, true)
 		return
 	}
@@ -390,6 +392,7 @@ func (s *Scheduler) runCheck(ctx context.Context, log zerolog.Logger, t *domain.
 				metrics.SchedulerTopicChecksTotal.WithLabelValues(t.TrackerName, "download_error").Inc()
 			}
 			s.recordResult(ctx, log, t.ID, t.LastHash, anySubmitted, s.backoff(t, true, dlErr), dlErr.Error())
+			s.notifyError(ctx, t, dlErr.Error())
 			s.recordChecked(true, true)
 			return
 		}
@@ -438,6 +441,24 @@ func (s *Scheduler) notifyUpdated(ctx context.Context, t *domain.Topic, labels [
 	s.notifier.SendVia(ctx, t.UserID, t.NotifierID, "updated", domain.Message{
 		Title: t.DisplayName,
 		Body:  body,
+		Link:  s.cfg.PublicBaseURL + "/topics",
+	})
+}
+
+// notifyError fires a one-shot "error" notification when a topic first enters
+// the error state (tracker check, download/client, or missing-plugin failure).
+// Deduped by the pre-check ConsecutiveErrors snapshot: only the first failure
+// (count 0) notifies, so a topic retrying on its backoff schedule doesn't spam
+// every tick. Routed via the topic's notifier override or the user's default
+// notifiers — same path as new-release alerts — and best-effort (nil notifier
+// is a no-op; the dispatcher honours each notifier's "error" subscription).
+func (s *Scheduler) notifyError(ctx context.Context, t *domain.Topic, errMsg string) {
+	if s.notifier == nil || t.ConsecutiveErrors > 0 {
+		return
+	}
+	s.notifier.SendVia(ctx, t.UserID, t.NotifierID, "error", domain.Message{
+		Title: "Topic check failed: " + t.DisplayName,
+		Body:  errMsg,
 		Link:  s.cfg.PublicBaseURL + "/topics",
 	})
 }

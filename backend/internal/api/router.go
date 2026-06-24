@@ -153,6 +153,8 @@ func NewRouter(d Deps) http.Handler {
 
 			r.Get("/notifiers", notifiersH.List)
 			r.Post("/notifiers", notifiersH.Create)
+			r.Get("/notifiers/{id}", notifiersH.Get)
+			r.Put("/notifiers/{id}", notifiersH.Update)
 			r.Delete("/notifiers/{id}", notifiersH.Delete)
 			r.Post("/notifiers/{id}/test", notifiersH.Test)
 

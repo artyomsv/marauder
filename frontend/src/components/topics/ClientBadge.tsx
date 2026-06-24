@@ -1,7 +1,6 @@
 import { Server } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
-import { cn } from "@/lib/utils";
 import type { Topic } from "@/lib/api";
 
 // Minimal client shape needed to render the badge. The full client view
@@ -29,7 +28,7 @@ export function ClientBadge({ topic, clientById, defaultClient }: ClientBadgePro
   // Explicit client picked on the topic.
   if (explicit) {
     return (
-      <Badge variant="outline" className="shrink-0 gap-1 font-normal">
+      <Badge variant="success" className="shrink-0 gap-1 font-normal">
         <Server className="size-3" />
         {explicit.display_name}
       </Badge>
@@ -39,21 +38,19 @@ export function ClientBadge({ topic, clientById, defaultClient }: ClientBadgePro
   // ClientID set but the client no longer exists (deleted after assignment).
   if (topic.ClientID) {
     return (
-      <Badge variant="outline" className="shrink-0 gap-1 font-normal text-destructive">
+      <Badge variant="destructive" className="shrink-0 gap-1 font-normal">
         <Server className="size-3" />
         unknown client
       </Badge>
     );
   }
 
-  // No per-topic client → falls back to the default.
+  // No per-topic client → falls back to the default (green like an explicit
+  // client; a missing default is an error state shown in red).
   return (
     <Badge
-      variant="outline"
-      className={cn(
-        "shrink-0 gap-1 font-normal text-muted-foreground",
-        !defaultClient && "text-destructive",
-      )}
+      variant={defaultClient ? "success" : "destructive"}
+      className="shrink-0 gap-1 font-normal"
     >
       <Server className="size-3" />
       {defaultClient ? `${defaultClient.display_name} · default` : "no default client"}

@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { motion, AnimatePresence } from "framer-motion";
-import { Plus, Loader2, CheckCircle2, Bell, AlertCircle } from "lucide-react";
+import { Plus, Loader2, CheckCircle2, Bell, AlertCircle, Pencil } from "lucide-react";
 
 import { api } from "@/lib/api";
 import { useT } from "@/i18n";
@@ -14,12 +14,14 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { DeleteConfirm } from "@/components/shared/DeleteConfirm";
 import { ResourceCard } from "@/components/shared/ResourceCard";
+import { EditNotifierCard } from "@/components/notifiers/EditNotifierCard";
 
 type NotifierView = {
   id: string;
   notifier_name: string;
   display_name: string;
   events: string[];
+  is_default: boolean;
   created_at: string;
   updated_at: string;
 };
@@ -46,6 +48,7 @@ export function NotifiersPage() {
   });
   const { data: systemInfo } = useSystemInfo();
   const [showAdd, setShowAdd] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
   const items = data?.notifiers ?? [];
   const plugins = systemInfo?.notifiers ?? [];
 
@@ -88,6 +91,20 @@ export function NotifiersPage() {
         )}
       </AnimatePresence>
 
+      <AnimatePresence>
+        {editingId && (
+          <EditNotifierCard
+            key={editingId}
+            id={editingId}
+            onClose={() => setEditingId(null)}
+            onSaved={() => {
+              setEditingId(null);
+              qc.invalidateQueries({ queryKey: QK.notifiers });
+            }}
+          />
+        )}
+      </AnimatePresence>
+
       {isLoading ? (
         <Card>
           <div className="flex items-center justify-center gap-2 p-12 text-sm text-muted-foreground">
@@ -113,67 +130,86 @@ export function NotifiersPage() {
           </div>
         </Card>
       ) : (
-        <div className="grid gap-4 md:grid-cols-2">
-          {items.map((n) => (
-            <ResourceCard
-              key={n.id}
-              glow="accent"
-              title={n.display_name}
-              badges={
-                <>
-                  <Badge variant="outline" className="font-mono">
-                    {n.notifier_name}
-                  </Badge>
-                  <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
-                    <Bell className="size-3" />
-                    {t("notifiers.events.prefix")}:
-                  </span>
-                  {n.events.map((e) => (
-                    <Badge
-                      key={e}
-                      variant="secondary"
-                      title={`${t("notifiers.events.prefix")}: ${eventLabel(e, t)}`}
-                    >
-                      {eventLabel(e, t)}
+        <>
+          {items.length > 0 && !items.some((n) => n.is_default) && (
+            <div className="rounded-md border border-warning/40 bg-warning/10 px-4 py-3 text-sm text-warning">
+              No default notifier set. Topics created without an explicit notifier
+              won't notify anyone until you mark at least one notifier as default.
+            </div>
+          )}
+          <div className="grid gap-4 md:grid-cols-2">
+            {items.map((n) => (
+              <ResourceCard
+                key={n.id}
+                glow="accent"
+                title={n.display_name}
+                badges={
+                  <>
+                    <Badge variant="outline" className="font-mono">
+                      {n.notifier_name}
                     </Badge>
-                  ))}
-                </>
-              }
-              actions={
-                <DeleteConfirm
-                  onConfirm={() => del.mutate(n.id)}
-                  isPending={del.isPending && del.variables === n.id}
-                  label="Delete notifier"
-                />
-              }
-            >
-              <div className="mt-4">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => test.mutate(n.id)}
-                  disabled={test.isPending}
-                >
-                  {test.isPending ? (
-                    <Loader2 className="size-4 animate-spin" />
-                  ) : test.isSuccess && test.variables === n.id ? (
-                    <CheckCircle2 className="size-4 text-success" />
-                  ) : test.isError && test.variables === n.id ? (
-                    <AlertCircle className="size-4 text-destructive" />
-                  ) : (
-                    <CheckCircle2 className="size-4" />
-                  )}
-                  Send test
-                </Button>
-              </div>
-              {test.isError && test.variables === n.id && (
-                <div className="mt-2 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
-                  {(test.error as Error)?.message}
+                    {n.is_default && <Badge variant="success">default</Badge>}
+                    <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+                      <Bell className="size-3" />
+                      {t("notifiers.events.prefix")}:
+                    </span>
+                    {n.events.map((e) => (
+                      <Badge
+                        key={e}
+                        variant="secondary"
+                        title={`${t("notifiers.events.prefix")}: ${eventLabel(e, t)}`}
+                      >
+                        {eventLabel(e, t)}
+                      </Badge>
+                    ))}
+                  </>
+                }
+                actions={
+                  <>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      onClick={() => setEditingId(n.id)}
+                      aria-label="Edit notifier"
+                    >
+                      <Pencil className="size-4" />
+                    </Button>
+                    <DeleteConfirm
+                      onConfirm={() => del.mutate(n.id)}
+                      isPending={del.isPending && del.variables === n.id}
+                      label="Delete notifier"
+                    />
+                  </>
+                }
+              >
+                <div className="mt-4">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => test.mutate(n.id)}
+                    disabled={test.isPending}
+                  >
+                    {test.isPending ? (
+                      <Loader2 className="size-4 animate-spin" />
+                    ) : test.isSuccess && test.variables === n.id ? (
+                      <CheckCircle2 className="size-4 text-success" />
+                    ) : test.isError && test.variables === n.id ? (
+                      <AlertCircle className="size-4 text-destructive" />
+                    ) : (
+                      <CheckCircle2 className="size-4" />
+                    )}
+                    Send test
+                  </Button>
                 </div>
-              )}
-            </ResourceCard>
-          ))}
-        </div>
+                {test.isError && test.variables === n.id && (
+                  <div className="mt-2 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+                    {(test.error as Error)?.message}
+                  </div>
+                )}
+              </ResourceCard>
+            ))}
+          </div>
+        </>
       )}
     </div>
   );
@@ -192,6 +228,8 @@ function AddNotifierCard({
 }) {
   const [pluginName, setPluginName] = useState(plugins[0]?.name ?? "");
   const [displayName, setDisplayName] = useState("");
+  const [events, setEvents] = useState<string[]>(["updated", "error"]);
+  const [isDefault, setIsDefault] = useState(false);
   const [config, setConfig] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
 
@@ -202,6 +240,8 @@ function AddNotifierCard({
       api.post("/notifiers", {
         notifier_name: pluginName,
         display_name: displayName,
+        events,
+        is_default: isDefault,
         config,
       }),
     onSuccess: () => onCreated(),
@@ -275,6 +315,32 @@ function AddNotifierCard({
             ))}
           </div>
 
+          <div className="flex flex-wrap items-center gap-4 text-sm">
+            <span className="text-muted-foreground">Notify on:</span>
+            {(["updated", "error"] as const).map((ev) => (
+              <label key={ev} className="inline-flex items-center gap-1.5">
+                <input
+                  type="checkbox"
+                  checked={events.includes(ev)}
+                  onChange={(e) =>
+                    setEvents((prev) =>
+                      e.target.checked ? [...prev, ev] : prev.filter((x) => x !== ev),
+                    )
+                  }
+                />
+                {ev === "updated" ? "new releases" : "errors"}
+              </label>
+            ))}
+          </div>
+          <label className="inline-flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={isDefault}
+              onChange={(e) => setIsDefault(e.target.checked)}
+            />
+            Use as a default notifier (one per type) for topics without an explicit notifier
+          </label>
+
           {error && (
             <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
               {error}
@@ -296,9 +362,9 @@ function AddNotifierCard({
   );
 }
 
-type Field = { key: string; label: string; placeholder?: string; password?: boolean };
+export type Field = { key: string; label: string; placeholder?: string; password?: boolean };
 
-function fieldsForPlugin(name: string): Field[] {
+export function fieldsForPlugin(name: string): Field[] {
   switch (name) {
     case "telegram":
       return [

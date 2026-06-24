@@ -32,7 +32,7 @@ export const homeFaq: FaqItem[] = [
   {
     question: "Can Marauder notify me when a topic updates?",
     answer:
-      "Yes. Marauder sends notifications through Telegram, email (SMTP), webhooks, or Pushover, and you choose which events fire them — a topic updated, a topic errored, or all failures. Notifiers are global by default, but any single topic can override that and route its alerts to one specific notifier. That lets you send one show to a separate Telegram chat or webhook while everything else stays on your default set; topics without an override keep firing every subscribed notifier as before.",
+      "Yes. Marauder sends notifications through Telegram, email (SMTP), webhooks, or Pushover — on a new release or a topic error — and you choose which events each notifier listens for. Mark a default notifier per type (one Telegram, one email, and so on) and topics notify those defaults; override a single topic to route its alerts to one specific notifier instead, so you can send one show to a separate chat while the rest stay on your defaults. Notifiers are fully editable — change channels, events, or the default flag any time.",
   },
   {
     question: "Is Marauder free?",

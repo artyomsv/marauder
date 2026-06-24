@@ -30,6 +30,7 @@ import { ClientBadge, type ClientRef } from "@/components/topics/ClientBadge";
 import { NotifierBadge, type NotifierRef } from "@/components/topics/NotifierBadge";
 import { DeliveryStatus } from "@/components/topics/DeliveryStatus";
 import { PosterImage } from "@/components/topics/PosterImage";
+import { TopicUrl } from "@/components/topics/TopicUrl";
 
 // Re-exported so existing imports (and tests) that reference AddTopicCard
 // from this page module keep resolving after the extraction.
@@ -200,6 +201,7 @@ export function TopicsPage() {
                     <PosterImage
                       src={t.ImageURL}
                       alt={t.DisplayName}
+                      ghost
                       className="h-12 w-9 shrink-0 rounded object-cover"
                     />
                   )}
@@ -208,7 +210,17 @@ export function TopicsPage() {
                       <span className="min-w-0 break-words font-medium">
                         {t.DisplayName}
                       </span>
-                      <Badge variant="outline" className="shrink-0 font-mono">
+                    </div>
+                    {!compact && <TopicUrl url={t.URL} />}
+                    {t.LastError && (
+                      <div className="mt-1 flex items-center gap-1.5 text-xs text-destructive">
+                        <AlertTriangle className="size-3" />
+                        {t.LastError}
+                      </div>
+                    )}
+                    {!compact && <DeliveryStatus topicId={t.ID} />}
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                      <Badge variant="default" className="shrink-0 font-mono">
                         {t.TrackerName}
                       </Badge>
                       <ClientBadge
@@ -218,18 +230,6 @@ export function TopicsPage() {
                       />
                       <NotifierBadge topic={t} notifierById={notifierById} />
                     </div>
-                    {!compact && (
-                      <div className="truncate font-mono text-xs text-muted-foreground">
-                        {t.URL}
-                      </div>
-                    )}
-                    {t.LastError && (
-                      <div className="mt-1 flex items-center gap-1.5 text-xs text-destructive">
-                        <AlertTriangle className="size-3" />
-                        {t.LastError}
-                      </div>
-                    )}
-                    {!compact && <DeliveryStatus topicId={t.ID} />}
                   </div>
                   {!compact && (
                     <div className="hidden lg:block text-right">
