@@ -54,13 +54,16 @@ const goodURL = "https://faketopics.test/topic/1"
 func TestBuildAndCreate_Created(t *testing.T) {
 	store := &fakeStore{}
 	res, err := BuildAndCreate(context.Background(), store, CreateInput{
-		UserID: uuid.New(), URL: goodURL, Category: "tv-sonarr", DownloadDir: "/data",
+		UserID: uuid.New(), URL: goodURL, Category: "tv-sonarr", DownloadDir: "/data", Source: "sonarr",
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !res.Created || res.Topic == nil {
 		t.Fatalf("want Created with topic, got %+v", res)
+	}
+	if store.created.Extra["source"] != "sonarr" {
+		t.Errorf("source tag = %v, want sonarr", store.created.Extra["source"])
 	}
 	if store.created.TrackerName != "faketopics-test" {
 		t.Errorf("tracker = %q", store.created.TrackerName)

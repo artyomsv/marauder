@@ -339,6 +339,9 @@ export interface TopicExtra {
   quality?: string;
   start_season?: number;
   start_episode?: number;
+  // How the topic was created. "sonarr" marks topics auto-imported by the
+  // Sonarr integration; absent for manually-added topics.
+  source?: string;
   [key: string]: unknown;
 }
 

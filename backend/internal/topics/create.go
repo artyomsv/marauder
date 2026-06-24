@@ -57,6 +57,10 @@ type CreateInput struct {
 	Quality          string
 	StartSeason      *int
 	StartEpisode     *int
+	// Source tags how the topic was created (e.g. "sonarr"). Stored in
+	// extra["source"] so the UI can badge auto-imported topics. Empty for
+	// manually-added topics.
+	Source string
 }
 
 // Result reports what happened. Created is false (with a nil Topic) when an
@@ -112,6 +116,9 @@ func BuildAndCreate(ctx context.Context, store Store, in CreateInput) (*Result, 
 	}
 	if in.StartEpisode != nil {
 		extra["start_episode"] = *in.StartEpisode
+	}
+	if in.Source != "" {
+		extra["source"] = in.Source
 	}
 
 	t := &domain.Topic{

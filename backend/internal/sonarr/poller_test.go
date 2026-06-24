@@ -132,6 +132,9 @@ func TestPoller_CreatesTopic(t *testing.T) {
 	if ts.created[0].Category != "tv-sonarr" {
 		t.Errorf("default category not applied: %q", ts.created[0].Category)
 	}
+	if ts.created[0].Extra["source"] != "sonarr" {
+		t.Errorf("topic should be tagged source=sonarr, got %v", ts.created[0].Extra["source"])
+	}
 	if s.cursor == nil || !s.cursor.After(past) {
 		t.Errorf("cursor not advanced")
 	}

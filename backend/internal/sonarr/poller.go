@@ -23,6 +23,10 @@ const minPollInterval = 60 * time.Second
 // defaultPollInterval is used when none is configured.
 const defaultPollInterval = 15 * time.Minute
 
+// topicSourceSonarr tags topics auto-created by this poller (stored in
+// extra["source"]) so the UI can badge them. Mirrored by the frontend.
+const topicSourceSonarr = "sonarr"
+
 // settingsStore reads the integration config and advances the poll cursor.
 type settingsStore interface {
 	GetSonarr(ctx context.Context, master *crypto.MasterKey) (*domain.SonarrConfig, error)
@@ -198,6 +202,7 @@ func (p *Poller) processURL(ctx context.Context, cfg *domain.SonarrConfig, owner
 		ClientID:    cfg.DefaultClientID,
 		Category:    cfg.DefaultCategory,
 		DownloadDir: cfg.DefaultDownloadDir,
+		Source:      topicSourceSonarr,
 	})
 	if err != nil {
 		p.log.Warn().Err(err).Str("url", url).Msg("auto-create topic failed")

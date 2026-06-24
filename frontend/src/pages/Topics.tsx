@@ -13,6 +13,7 @@ import {
   Rows4,
   Check,
   X,
+  Tv,
 } from "lucide-react";
 
 import { api, type Topic } from "@/lib/api";
@@ -223,6 +224,16 @@ export function TopicsPage() {
                       <Badge variant="default" className="shrink-0 font-mono">
                         {t.TrackerName}
                       </Badge>
+                      {t.Extra?.source === "sonarr" && (
+                        <Badge
+                          variant="secondary"
+                          className="shrink-0 gap-1 font-normal"
+                          title="Auto-imported by the Sonarr integration"
+                        >
+                          <Tv className="size-3" />
+                          Sonarr
+                        </Badge>
+                      )}
                       <ClientBadge
                         topic={t}
                         clientById={clientById}
