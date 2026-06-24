@@ -18,7 +18,7 @@
 #   docker network ls | grep default
 #   # e.g. MARAUDER_NETWORK=marauder_default docker compose -f docker-compose.arr.yml up -d
 #
-# Then in Marauder → Settings → Sonarr integration:
+# Then in Marauder → Integrations → Sonarr:
 #   - Sonarr URL: http://sonarr:8989
 #   - API key:    Sonarr → Settings → General → API Key
 #

@@ -11,7 +11,7 @@
 #   - starts Prowlarr + Sonarr + FlareSolverr so the Sonarr integration
 #     (issue #86) can be exercised end-to-end. The backend reaches Sonarr at
 #     http://sonarr:8989 on the shared network — set that URL in
-#     Settings → Sonarr integration (Prowlarr UI: http://localhost:34696,
+#     Integrations → Sonarr (Prowlarr UI: http://localhost:34696,
 #     Sonarr UI: http://localhost:34989).
 #
 # None of these services are exposed in production.

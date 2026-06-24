@@ -24,6 +24,7 @@ const ru: Record<string, string> = {
   "nav.notifiers": "Уведомления",
   "nav.system": "Система",
   "nav.audit": "Журнал аудита",
+  "nav.integrations": "Интеграции",
   "nav.settings": "Настройки",
 
   // Dashboard
@@ -93,6 +94,9 @@ const ru: Record<string, string> = {
   "credentials.reauthenticate": "Повторная авторизация",
 
   // Settings
+  "integrations.kicker": "подключения",
+  "integrations.title": "Интеграции",
+  "integrations.blurb": "Подключение Marauder к внешним сервисам, таким как Sonarr.",
   "settings.kicker": "настройки",
   "settings.title": "Настройки",
   "settings.blurb": "Персонализируйте внешний вид Marauder, управляйте аккаунтом и просматривайте сведения о сборке.",
