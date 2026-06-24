@@ -24,7 +24,7 @@ export function NotifierBadge({ topic, notifierById }: NotifierBadgeProps) {
   // Explicit notifier picked on the topic.
   if (explicit) {
     return (
-      <Badge variant="outline" className="shrink-0 gap-1 font-normal">
+      <Badge variant="warning" className="shrink-0 gap-1 font-normal text-warning">
         <Bell className="size-3" />
         {explicit.display_name}
       </Badge>
@@ -35,7 +35,7 @@ export function NotifierBadge({ topic, notifierById }: NotifierBadgeProps) {
   // The topics.notifier_id FK is ON DELETE SET NULL so this is defensive.
   if (topic.NotifierID) {
     return (
-      <Badge variant="outline" className="shrink-0 gap-1 font-normal text-destructive">
+      <Badge variant="destructive" className="shrink-0 gap-1 font-normal">
         <Bell className="size-3" />
         unknown notifier
       </Badge>
@@ -44,7 +44,7 @@ export function NotifierBadge({ topic, notifierById }: NotifierBadgeProps) {
 
   // No per-topic notifier → falls back to the user's default notifiers.
   return (
-    <Badge variant="outline" className="shrink-0 gap-1 font-normal text-muted-foreground">
+    <Badge variant="warning" className="shrink-0 gap-1 font-normal text-warning">
       <Bell className="size-3" />
       default notifiers
     </Badge>

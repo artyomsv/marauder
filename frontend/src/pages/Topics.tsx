@@ -222,7 +222,7 @@ export function TopicsPage() {
                     )}
                     {!compact && <DeliveryStatus topicId={t.ID} />}
                     <div className="mt-2 flex flex-wrap items-center gap-2">
-                      <Badge variant="outline" className="shrink-0 font-mono">
+                      <Badge variant="default" className="shrink-0 font-mono">
                         {t.TrackerName}
                       </Badge>
                       <ClientBadge
