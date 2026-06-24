@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/rs/zerolog"
 
 	"github.com/artyomsv/marauder/backend/internal/api/middleware"
 	"github.com/artyomsv/marauder/backend/internal/auth"
@@ -123,5 +124,29 @@ func TestSonarr_Test_UsesStoredConfig(t *testing.T) {
 	_ = json.Unmarshal(w.Body.Bytes(), &v)
 	if v["ok"] != true || v["version"] != "4.0.0" {
 		t.Errorf("unexpected test result: %v", v)
+	}
+}
+
+func TestSonarr_Test_ConnectionFailure_SanitizedError(t *testing.T) {
+	// Port 1 is closed → the dial fails. The handler must return a generic
+	// 422 and must NOT echo the raw connection error (which can leak the
+	// resolved host/IP / "connection refused" details).
+	h := &Sonarr{
+		Settings: &fakeSonarrSettings{cfg: domain.SonarrConfig{URL: "http://127.0.0.1:1", APIKey: "k"}},
+		Log:      zerolog.Nop(),
+		BaseURL:  "http://t", Timeout: time.Second,
+	}
+	req := adminCtx(httptest.NewRequest(http.MethodPost, "/system/sonarr/test", strings.NewReader(`{}`)), uuid.New())
+	w := httptest.NewRecorder()
+	h.Test(w, req)
+
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want 422", w.Code)
+	}
+	body := strings.ToLower(w.Body.String())
+	for _, leak := range []string{"127.0.0.1:1", "connection refused", "dial tcp"} {
+		if strings.Contains(body, leak) {
+			t.Errorf("response leaked raw connection detail %q: %s", leak, w.Body.String())
+		}
 	}
 }

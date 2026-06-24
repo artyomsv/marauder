@@ -13,7 +13,6 @@ import {
   Rows4,
   Check,
   X,
-  Tv,
 } from "lucide-react";
 
 import { api, type Topic } from "@/lib/api";
@@ -29,6 +28,7 @@ import { AddTopicCard } from "@/components/topics/AddTopicCard";
 import { EditTopicCard } from "@/components/topics/EditTopicCard";
 import { ClientBadge, type ClientRef } from "@/components/topics/ClientBadge";
 import { NotifierBadge, type NotifierRef } from "@/components/topics/NotifierBadge";
+import { SonarrBadge } from "@/components/topics/SonarrBadge";
 import { DeliveryStatus } from "@/components/topics/DeliveryStatus";
 import { PosterImage } from "@/components/topics/PosterImage";
 import { TopicUrl } from "@/components/topics/TopicUrl";
@@ -224,16 +224,7 @@ export function TopicsPage() {
                       <Badge variant="default" className="shrink-0 font-mono">
                         {t.TrackerName}
                       </Badge>
-                      {t.Extra?.source === "sonarr" && (
-                        <Badge
-                          variant="secondary"
-                          className="shrink-0 gap-1 font-normal"
-                          title="Auto-imported by the Sonarr integration"
-                        >
-                          <Tv className="size-3" />
-                          Sonarr
-                        </Badge>
-                      )}
+                      <SonarrBadge topic={t} />
                       <ClientBadge
                         topic={t}
                         clientById={clientById}

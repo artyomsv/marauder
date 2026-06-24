@@ -10,17 +10,10 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"strconv"
+	"sort"
 	"strings"
 	"time"
 )
-
-// historyPageSize is the page size for history fetches.
-const historyPageSize = 100
-
-// maxHistoryPages bounds a single poll so an enormous Sonarr history (or a
-// far-back cursor) can't fetch unbounded pages in one tick.
-const maxHistoryPages = 50
 
 // Client is a typed, read-only Sonarr v3 API client.
 type Client struct {
@@ -35,7 +28,20 @@ func NewClient(baseURL, apiKey string, timeout time.Duration) *Client {
 	return &Client{
 		baseURL: strings.TrimRight(strings.TrimSpace(baseURL), "/"),
 		apiKey:  strings.TrimSpace(apiKey),
-		http:    &http.Client{Timeout: timeout},
+		http: &http.Client{
+			Timeout: timeout,
+			// Refuse to follow redirects. The Sonarr URL is admin-supplied and
+			// we make server-side requests to it, so following a redirect could
+			// pivot the request to another internal host (SSRF). Sonarr's API
+			// never redirects, so blocking is safe and a redirecting endpoint
+			// fails cleanly as an unexpected status. A private-IP denylist is
+			// intentionally NOT applied: Sonarr is normally reached on the
+			// internal network (e.g. http://sonarr:8989, a private address by
+			// design) and the config endpoint is admin-only.
+			CheckRedirect: func(*http.Request, []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		},
 	}
 }
 
@@ -66,13 +72,6 @@ type HistoryData struct {
 	TorrentInfoHash string `json:"torrentInfoHash"`
 }
 
-type historyPage struct {
-	Page         int             `json:"page"`
-	PageSize     int             `json:"pageSize"`
-	TotalRecords int             `json:"totalRecords"`
-	Records      []HistoryRecord `json:"records"`
-}
-
 // SystemStatus fetches Sonarr's status, validating connectivity + API key.
 func (c *Client) SystemStatus(ctx context.Context) (*SystemStatus, error) {
 	var out SystemStatus
@@ -82,43 +81,36 @@ func (c *Client) SystemStatus(ctx context.Context) (*SystemStatus, error) {
 	return &out, nil
 }
 
-// GrabHistorySince returns grabbed-event history records newer than `since`,
-// in chronological (oldest-first) order so the caller's cursor advances
-// monotonically. Records are fetched newest-first and paging stops as soon
-// as a record at or before `since` is seen.
+// GrabHistorySince returns grabbed-event history records strictly newer than
+// `since`, in chronological (oldest-first) order so the caller's cursor
+// advances monotonically.
+//
+// It uses Sonarr's /history/since endpoint — the purpose-built incremental
+// sync API that returns every record on or after `since` in a single
+// unpaginated response. This avoids the page-cap pitfall of a descending
+// scan: a capped page walk would keep only the newest N records and let the
+// cursor advance past the older, never-fetched grabs (silent topic loss),
+// whereas /history/since hands back the whole window since the cursor.
 func (c *Client) GrabHistorySince(ctx context.Context, since time.Time) ([]HistoryRecord, error) {
-	var collected []HistoryRecord
-	for page := 1; page <= maxHistoryPages; page++ {
-		q := url.Values{}
-		q.Set("page", strconv.Itoa(page))
-		q.Set("pageSize", strconv.Itoa(historyPageSize))
-		q.Set("eventType", "1") // grabbed
-		q.Set("sortKey", "date")
-		q.Set("sortDirection", "descending")
+	q := url.Values{}
+	q.Set("date", since.UTC().Format(time.RFC3339))
+	q.Set("eventType", "1") // grabbed
 
-		var pg historyPage
-		if err := c.getJSON(ctx, "/api/v3/history", q, &pg); err != nil {
-			return nil, err
-		}
-
-		reachedCursor := false
-		for _, rec := range pg.Records {
-			if !rec.Date.After(since) {
-				reachedCursor = true
-				break
-			}
-			collected = append(collected, rec)
-		}
-		if reachedCursor || page*historyPageSize >= pg.TotalRecords || len(pg.Records) == 0 {
-			break
-		}
+	var records []HistoryRecord
+	if err := c.getJSON(ctx, "/api/v3/history/since", q, &records); err != nil {
+		return nil, err
 	}
 
-	// Reverse to chronological order.
-	for i, j := 0, len(collected)-1; i < j; i, j = i+1, j-1 {
-		collected[i], collected[j] = collected[j], collected[i]
+	// The endpoint is inclusive of `since`; keep only strictly-newer records so
+	// the boundary grab isn't reprocessed on every tick.
+	var out []HistoryRecord
+	for _, rec := range records {
+		if rec.Date.After(since) {
+			out = append(out, rec)
+		}
 	}
-	return collected, nil
+	sort.Slice(out, func(i, j int) bool { return out[i].Date.Before(out[j].Date) })
+	return out, nil
 }
 
 func (c *Client) getJSON(ctx context.Context, path string, q url.Values, out any) error {
@@ -146,7 +138,7 @@ func (c *Client) getJSON(ctx context.Context, path string, q url.Values, out any
 		return fmt.Errorf("sonarr: GET %s: unexpected status %d", path, resp.StatusCode)
 	}
 
-	const maxBody = 16 << 20 // 16 MiB cap on a history page
+	const maxBody = 16 << 20 // 16 MiB cap on the response body
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBody))
 	if err != nil {
 		return fmt.Errorf("sonarr: read %s: %w", path, err)

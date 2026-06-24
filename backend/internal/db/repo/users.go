@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/artyomsv/marauder/backend/internal/domain"
@@ -19,9 +20,18 @@ import (
 // ErrNotFound is returned when a row lookup misses.
 var ErrNotFound = errors.New("not found")
 
+// usersPool is the minimal subset of *pgxpool.Pool used by Users, defined as
+// an unexported interface so tests can substitute a fake (mirrors topicsPool
+// / settingsPool). The concrete *pgxpool.Pool satisfies it.
+type usersPool interface {
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
 // Users is the repository for the users table.
 type Users struct {
-	pool *pgxpool.Pool
+	pool usersPool
 }
 
 // NewUsers constructs a Users repository.

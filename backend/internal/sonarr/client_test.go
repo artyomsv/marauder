@@ -42,17 +42,18 @@ func TestClient_GrabHistorySince(t *testing.T) {
 	t2 := t1.Add(time.Hour)
 	t3 := t2.Add(time.Hour)
 
-	var gotAPIKey, gotEventType string
+	var gotAPIKey, gotEventType, gotPath string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotAPIKey = r.Header.Get("X-Api-Key")
 		gotEventType = r.URL.Query().Get("eventType")
-		// Sonarr returns newest-first.
-		page := historyPage{Page: 1, PageSize: 100, TotalRecords: 3, Records: []HistoryRecord{
+		gotPath = r.URL.Path
+		// /history/since returns a bare, unpaginated array, in arbitrary order.
+		recs := []HistoryRecord{
+			{ID: 1, Date: t1, EventType: "grabbed", Data: HistoryData{NzbInfoURL: "u1"}},
 			{ID: 3, Date: t3, EventType: "grabbed", Data: HistoryData{NzbInfoURL: "u3"}},
 			{ID: 2, Date: t2, EventType: "grabbed", Data: HistoryData{NzbInfoURL: "u2"}},
-			{ID: 1, Date: t1, EventType: "grabbed", Data: HistoryData{NzbInfoURL: "u1"}},
-		}}
-		_ = json.NewEncoder(w).Encode(page)
+		}
+		_ = json.NewEncoder(w).Encode(recs)
 	}))
 	defer srv.Close()
 
@@ -67,10 +68,26 @@ func TestClient_GrabHistorySince(t *testing.T) {
 	if recs[0].ID != 2 || recs[1].ID != 3 {
 		t.Errorf("want chronological [2,3], got [%d,%d]", recs[0].ID, recs[1].ID)
 	}
+	if gotPath != "/api/v3/history/since" {
+		t.Errorf("path = %q, want /api/v3/history/since", gotPath)
+	}
 	if gotAPIKey != "k" {
 		t.Errorf("api key header = %q", gotAPIKey)
 	}
 	if gotEventType != "1" {
 		t.Errorf("eventType filter = %q, want 1 (grabbed)", gotEventType)
+	}
+}
+
+// TestClient_RefusesRedirect verifies the SSRF guard: a Sonarr endpoint that
+// 302-redirects must NOT be followed (could pivot to another internal host).
+func TestClient_RefusesRedirect(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "http://169.254.169.254/latest/meta-data/", http.StatusFound)
+	}))
+	defer srv.Close()
+
+	if _, err := NewClient(srv.URL, "k", 5*time.Second).SystemStatus(context.Background()); err == nil {
+		t.Fatal("expected an error when the endpoint redirects (SSRF guard), got nil")
 	}
 }

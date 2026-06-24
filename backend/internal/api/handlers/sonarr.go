@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/rs/zerolog"
 
 	"github.com/artyomsv/marauder/backend/internal/audit"
 	"github.com/artyomsv/marauder/backend/internal/crypto"
@@ -30,6 +31,7 @@ type Sonarr struct {
 	Settings sonarrSettingsStore
 	Master   *crypto.MasterKey
 	Audit    *audit.Logger
+	Log      zerolog.Logger
 	Timeout  time.Duration
 	BaseURL  string
 }
@@ -166,11 +168,16 @@ func (h *Sonarr) Test(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), h.Timeout)
-	defer cancel()
-	status, err := sonarr.NewClient(targetURL, apiKey, h.Timeout).SystemStatus(ctx)
+	// The client already enforces h.Timeout via http.Client.Timeout, so no
+	// extra context deadline is needed. The raw error is logged server-side
+	// but NOT echoed to the client — a connection error can leak internal
+	// network details (resolved host/IP), and a generic, actionable message
+	// is enough for the admin who supplied the URL.
+	status, err := sonarr.NewClient(targetURL, apiKey, h.Timeout).SystemStatus(r.Context())
 	if err != nil {
-		problem.Write(w, r, h.BaseURL, problem.ErrUnprocessable("connection failed: "+err.Error()))
+		h.Log.Warn().Err(err).Str("url", targetURL).Msg("sonarr connection test failed")
+		problem.Write(w, r, h.BaseURL, problem.ErrUnprocessable(
+			"could not connect to Sonarr — verify the URL is reachable and the API key is correct"))
 		return
 	}
 	if h.Audit != nil {

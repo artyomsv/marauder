@@ -4,12 +4,19 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { api, ApiError, type SonarrConfig, type SonarrConfigUpdate } from "@/lib/api";
+import { api } from "@/lib/api";
 import { QK } from "@/lib/queryKeys";
 import { useSystemInfo } from "@/lib/hooks/useSystemInfo";
 import { useT } from "@/i18n";
 import { cn } from "@/lib/utils";
+import { Field, CheckRow } from "@/components/integrations/SonarrFields";
+import {
+  EMPTY_FORM,
+  errText,
+  fromConfig,
+  toUpdate,
+  type SonarrForm,
+} from "@/components/integrations/sonarrForm";
 
 interface ClientOption {
   id: string;
@@ -17,65 +24,9 @@ interface ClientOption {
 }
 type ClientsList = { clients: ClientOption[] | null };
 
-interface SonarrForm {
-  enabled: boolean;
-  sonarr_url: string;
-  api_key: string;
-  poll_interval_sec: number;
-  allowed_trackers: string[];
-  default_client_id: string;
-  default_category: string;
-  default_download_dir: string;
-  update_existing: boolean;
-}
-
-const EMPTY_FORM: SonarrForm = {
-  enabled: false,
-  sonarr_url: "",
-  api_key: "",
-  poll_interval_sec: 900,
-  allowed_trackers: [],
-  default_client_id: "",
-  default_category: "",
-  default_download_dir: "",
-  update_existing: false,
-};
-
-function fromConfig(c: SonarrConfig): SonarrForm {
-  return {
-    enabled: c.enabled,
-    sonarr_url: c.sonarr_url,
-    api_key: "", // never round-trips; blank means "keep stored"
-    poll_interval_sec: c.poll_interval_sec || 900,
-    allowed_trackers: c.allowed_trackers ?? [],
-    default_client_id: c.default_client_id ?? "",
-    default_category: c.default_category,
-    default_download_dir: c.default_download_dir,
-    update_existing: c.update_existing,
-  };
-}
-
-function toUpdate(f: SonarrForm): SonarrConfigUpdate {
-  return {
-    enabled: f.enabled,
-    sonarr_url: f.sonarr_url.trim(),
-    api_key: f.api_key,
-    poll_interval_sec: f.poll_interval_sec,
-    allowed_trackers: f.allowed_trackers,
-    default_client_id: f.default_client_id || null,
-    default_category: f.default_category.trim(),
-    default_download_dir: f.default_download_dir.trim(),
-    update_existing: f.update_existing,
-  };
-}
-
-function errText(e: unknown): string {
-  return e instanceof ApiError ? e.problem.detail || e.problem.title : String(e);
-}
-
 /**
- * Admin-only Sonarr integration config. Renders nothing for non-admins
- * (gated by the caller in Settings.tsx).
+ * Admin-only Sonarr integration config. Rendered by the Integrations page,
+ * which gates it to admins.
  */
 export function SonarrCard() {
   const t = useT();
@@ -252,31 +203,5 @@ export function SonarrCard() {
         </div>
       </CardContent>
     </Card>
-  );
-}
-
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div className="space-y-1.5">
-      <Label>{label}</Label>
-      {children}
-    </div>
-  );
-}
-
-function CheckRow({
-  label,
-  checked,
-  onChange,
-}: {
-  label: string;
-  checked: boolean;
-  onChange: (v: boolean) => void;
-}) {
-  return (
-    <label className="flex items-center gap-2 text-sm font-medium text-foreground">
-      <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} />
-      <span>{label}</span>
-    </label>
   );
 }

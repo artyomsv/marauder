@@ -3,6 +3,7 @@ package sonarr
 import (
 	"context"
 	"errors"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -75,9 +76,14 @@ func New(log zerolog.Logger, master *crypto.MasterKey, settings settingsStore, a
 	}
 }
 
-// Start runs the poll loop until ctx is cancelled. It runs once immediately,
-// then on the configured interval, re-reading settings each tick so admin-UI
-// changes (enable/disable, interval) take effect without a restart.
+// Start runs the poll loop until ctx is cancelled. It polls once immediately,
+// then on the configured interval, re-reading settings each tick. Config
+// changes (enable/disable, interval) are picked up on the NEXT tick, not
+// instantly: a just-enabled integration with a long interval waits up to one
+// interval before its first poll, and an interval change applies from the
+// following tick (the ticker is reset only after a tick observes the new
+// value). This is acceptable for a background poller; it is not a restart-free
+// instant-apply.
 func (p *Poller) Start(ctx context.Context) error {
 	p.log.Info().Msg("sonarr poller starting")
 	interval := p.pollOnce(ctx)
@@ -153,6 +159,10 @@ func (p *Poller) pollOnce(ctx context.Context) time.Duration {
 // processRecords dedupes the batch by topic URL and processes each unique URL
 // in chronological order. Returns the newest record Date seen (the cursor).
 func (p *Poller) processRecords(ctx context.Context, cfg *domain.SonarrConfig, ownerID uuid.UUID, records []HistoryRecord) time.Time {
+	// maxDate advances over EVERY record — including ones skipped below (empty
+	// URL, duplicate, or unmatched/disallowed tracker) — so the cursor moves
+	// past records we deliberately don't act on instead of re-fetching them on
+	// every tick.
 	var maxDate time.Time
 	seen := make(map[string]struct{}, len(records))
 	for _, rec := range records {
@@ -180,7 +190,7 @@ func (p *Poller) processURL(ctx context.Context, cfg *domain.SonarrConfig, owner
 		metrics.SonarrRecordsProcessedTotal.WithLabelValues("no_tracker").Inc()
 		return
 	}
-	if len(cfg.AllowedTrackers) > 0 && !contains(cfg.AllowedTrackers, tracker.Name()) {
+	if len(cfg.AllowedTrackers) > 0 && !slices.Contains(cfg.AllowedTrackers, tracker.Name()) {
 		metrics.SonarrRecordsProcessedTotal.WithLabelValues("disallowed").Inc()
 		return
 	}
@@ -265,15 +275,6 @@ func pollInterval(sec int) time.Duration {
 		return minPollInterval
 	}
 	return d
-}
-
-func contains(list []string, want string) bool {
-	for _, v := range list {
-		if v == want {
-			return true
-		}
-	}
-	return false
 }
 
 func ptrUUIDEqual(a, b *uuid.UUID) bool {

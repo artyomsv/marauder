@@ -78,7 +78,7 @@ services:
   # FlareSolverr lets Prowlarr through Cloudflare (RuTracker/Kinozal); it has
   # no host port — only Prowlarr talks to it (http://flaresolverr:8191).
   flaresolverr:
-    image: ghcr.io/flaresolverr/flaresolverr:latest
+    image: ghcr.io/flaresolverr/flaresolverr@sha256:139dfee1c6f89249c8d665d1333a42e8ec74ec0a86bc6bb1c8461e10d3a66a47
     restart: unless-stopped
     environment:
       LOG_LEVEL: "info"
@@ -90,7 +90,7 @@ services:
 
   # Prowlarr — indexer proxy. Web UI: http://localhost:34696.
   prowlarr:
-    image: lscr.io/linuxserver/prowlarr:latest
+    image: lscr.io/linuxserver/prowlarr@sha256:7ab5769616c1929247c8e7944453253f0b777fac2724c3bc9976ae2ff4023257
     restart: unless-stopped
     depends_on:
       - flaresolverr
@@ -111,7 +111,7 @@ services:
   # Sonarr — series manager. Web UI: http://localhost:34989. The Marauder
   # backend reaches it at http://sonarr:8989 on the shared network.
   sonarr:
-    image: lscr.io/linuxserver/sonarr:latest
+    image: lscr.io/linuxserver/sonarr@sha256:02bc962946fef994e67a38152446df25c10a52f8583aefeeb6467f9dd44cab99
     restart: unless-stopped
     depends_on:
       - prowlarr

@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -106,7 +107,7 @@ func BuildAndCreate(ctx context.Context, store Store, in CreateInput) (*Result, 
 		extra = map[string]any{}
 	}
 	if in.Quality != "" {
-		if wq, ok := tracker.(registry.WithQuality); ok && !contains(wq.Qualities(), in.Quality) {
+		if wq, ok := tracker.(registry.WithQuality); ok && !slices.Contains(wq.Qualities(), in.Quality) {
 			return nil, fmt.Errorf("%w: %q", ErrQualityUnsupported, in.Quality)
 		}
 		extra["quality"] = in.Quality
@@ -164,15 +165,6 @@ func resolveMetadata(ctx context.Context, tracker registry.Tracker, in CreateInp
 		*displayName = meta.Title
 	}
 	return meta.ImageURL
-}
-
-func contains(list []string, want string) bool {
-	for _, v := range list {
-		if v == want {
-			return true
-		}
-	}
-	return false
 }
 
 func isUniqueViolation(err error) bool {

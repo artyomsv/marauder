@@ -107,6 +107,7 @@ func NewRouter(d Deps) http.Handler {
 		Settings: d.Settings,
 		Master:   d.Master,
 		Audit:    d.AuditLog,
+		Log:      d.Log,
 		Timeout:  10 * time.Second,
 		BaseURL:  d.Cfg.PublicBaseURL,
 	}

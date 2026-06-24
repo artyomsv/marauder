@@ -93,10 +93,9 @@ func (f *fakeTopics) Update(_ context.Context, id, _ uuid.UUID, _ string, _, _ *
 const fakeURL = "https://faketracker.test/forum/viewtopic.php?t=9"
 
 func historyServer(records []HistoryRecord) *httptest.Server {
+	// /history/since returns a bare, unpaginated array.
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.NewEncoder(w).Encode(historyPage{
-			Page: 1, PageSize: 100, TotalRecords: len(records), Records: records,
-		})
+		_ = json.NewEncoder(w).Encode(records)
 	}))
 }
 
