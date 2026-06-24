@@ -3,6 +3,7 @@ package api
 
 import (
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	chimw "github.com/go-chi/chi/v5/middleware"
@@ -34,6 +35,7 @@ type Deps struct {
 	Notifiers  *repo.Notifiers
 	Creds      *repo.TrackerCredentials
 	Deliveries *repo.Deliveries
+	Settings   *repo.Settings
 	Audit      *repo.Audit
 	AuditLog   *audit.Logger
 	OIDC       *auth.OIDCProvider
@@ -101,6 +103,13 @@ func NewRouter(d Deps) http.Handler {
 		BaseURL:   d.Cfg.PublicBaseURL,
 	}
 	sysH := &handlers.System{BaseURL: d.Cfg.PublicBaseURL, Scheduler: d.Scheduler, Audit: d.Audit}
+	sonarrH := &handlers.Sonarr{
+		Settings: d.Settings,
+		Master:   d.Master,
+		Audit:    d.AuditLog,
+		Timeout:  10 * time.Second,
+		BaseURL:  d.Cfg.PublicBaseURL,
+	}
 	trackersH := &handlers.Trackers{BaseURL: d.Cfg.PublicBaseURL}
 	credsH := handlers.NewCredentials(d.Creds, d.Master, d.AuditLog, d.Cfg.PublicBaseURL)
 
@@ -162,6 +171,9 @@ func NewRouter(d Deps) http.Handler {
 			r.Group(func(r chi.Router) {
 				r.Use(middleware.RequireAdmin(d.Cfg.PublicBaseURL))
 				r.Get("/system/audit", sysH.AuditList)
+				r.Get("/system/sonarr", sonarrH.Get)
+				r.Put("/system/sonarr", sonarrH.Update)
+				r.Post("/system/sonarr/test", sonarrH.Test)
 			})
 		})
 	})

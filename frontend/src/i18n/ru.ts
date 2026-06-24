@@ -124,6 +124,28 @@ const ru: Record<string, string> = {
   "settings.about.version": "Версия",
   "settings.about.license": "Лицензия",
   "settings.about.links": "Ссылки",
+  "settings.sonarr.title": "Интеграция с Sonarr",
+  "settings.sonarr.blurb":
+    "Marauder автоматически берёт на контроль обновляемые темы форум-трекеров, которые скачал Sonarr (RuTracker, Kinozal, …). Только для администратора.",
+  "settings.sonarr.enabled": "Включить интеграцию",
+  "settings.sonarr.url": "URL Sonarr",
+  "settings.sonarr.apiKey": "API-ключ",
+  "settings.sonarr.apiKeySet": "Ключ сохранён — оставьте пустым, чтобы не менять.",
+  "settings.sonarr.pollInterval": "Интервал опроса (секунды)",
+  "settings.sonarr.allowedTrackers": "Разрешённые трекеры",
+  "settings.sonarr.allowedTrackersHint":
+    "Не отмечайте ничего, чтобы разрешить все поддерживаемые трекеры.",
+  "settings.sonarr.defaultClient": "Клиент загрузки по умолчанию",
+  "settings.sonarr.defaultClientNone": "Нет (использовать клиент по умолчанию)",
+  "settings.sonarr.defaultCategory": "Категория по умолчанию",
+  "settings.sonarr.defaultDownloadDir": "Папка загрузки по умолчанию",
+  "settings.sonarr.updateExisting": "Приводить существующие темы к этим значениям",
+  "settings.sonarr.test": "Проверить подключение",
+  "settings.sonarr.testing": "Проверка…",
+  "settings.sonarr.testOk": "Подключено к Sonarr",
+  "settings.sonarr.save": "Сохранить",
+  "settings.sonarr.saving": "Сохранение…",
+  "settings.sonarr.saved": "Настройки сохранены.",
 
   // Topic delivery status
   "topics.delivery.delivered": "Доставлено",

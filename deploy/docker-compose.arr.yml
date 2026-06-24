@@ -1,0 +1,93 @@
+# Standalone *arr stack for an ALREADY-RUNNING Marauder.
+#
+# Adds Prowlarr + Sonarr + FlareSolverr and attaches them to Marauder's
+# EXISTING Docker network, so the backend can reach Sonarr by DNS
+# (http://sonarr:8989) and you can wire up the Sonarr integration (issue #86)
+# without touching or rebuilding the main stack.
+#
+# Prerequisite: the Marauder stack is already running (its network must
+# exist). Bring this up from the deploy/ directory:
+#
+#   docker compose -f docker-compose.arr.yml up -d
+#
+# Network: defaults to `deploy_default` — the implicit network Compose
+# creates for the base stack when it's run from this directory. If your
+# Marauder stack uses a different Compose project name, point MARAUDER_NETWORK
+# at its "<project>_default" network. Find it with:
+#
+#   docker network ls | grep default
+#   # e.g. MARAUDER_NETWORK=marauder_default docker compose -f docker-compose.arr.yml up -d
+#
+# Then in Marauder → Settings → Sonarr integration:
+#   - Sonarr URL: http://sonarr:8989
+#   - API key:    Sonarr → Settings → General → API Key
+#
+# Host-side web UIs are bound to 127.0.0.1 only (local-port-ranges rule,
+# 34xxx range) so they aren't exposed beyond this machine:
+#   Prowlarr  http://127.0.0.1:34696   (add a FlareSolverr proxy at
+#                                        http://flaresolverr:8191, then your
+#                                        RuTracker/Kinozal indexers + Sonarr app)
+#   Sonarr    http://127.0.0.1:34989
+
+services:
+  # Cloudflare solver — only Prowlarr talks to it (no host port).
+  flaresolverr:
+    image: ghcr.io/flaresolverr/flaresolverr:latest
+    restart: unless-stopped
+    environment:
+      LOG_LEVEL: "info"
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
+
+  prowlarr:
+    image: lscr.io/linuxserver/prowlarr:latest
+    restart: unless-stopped
+    depends_on:
+      - flaresolverr
+    environment:
+      PUID: "${PUID:-1000}"
+      PGID: "${PGID:-1000}"
+      TZ: "${TZ:-Etc/UTC}"
+    volumes:
+      - prowlarr_config:/config
+    ports:
+      - "127.0.0.1:${MARAUDER_ARR_PROWLARR_PORT:-34696}:9696"
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
+
+  sonarr:
+    image: lscr.io/linuxserver/sonarr:latest
+    restart: unless-stopped
+    depends_on:
+      - prowlarr
+    environment:
+      PUID: "${PUID:-1000}"
+      PGID: "${PGID:-1000}"
+      TZ: "${TZ:-Etc/UTC}"
+    volumes:
+      - sonarr_config:/config
+      - sonarr_data:/data
+    ports:
+      - "127.0.0.1:${MARAUDER_ARR_SONARR_PORT:-34989}:8989"
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
+
+volumes:
+  prowlarr_config:
+  sonarr_config:
+  sonarr_data:
+
+# Attach to Marauder's existing network instead of creating an isolated one.
+networks:
+  default:
+    name: ${MARAUDER_NETWORK:-deploy_default}
+    external: true

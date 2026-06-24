@@ -62,6 +62,14 @@ func (r *Users) GetByUsername(ctx context.Context, username string) (*domain.Use
 	return r.scanOne(ctx, `WHERE username = $1`, username)
 }
 
+// GetInitialAdmin returns the earliest-created admin user. Used by headless
+// background services (e.g. the Sonarr poller) that must attribute
+// auto-created resources to an owner when none is explicitly configured.
+// Returns ErrNotFound when no admin exists yet (e.g. before bootstrap).
+func (r *Users) GetInitialAdmin(ctx context.Context) (*domain.User, error) {
+	return r.scanOne(ctx, `WHERE role = 'admin' ORDER BY created_at ASC LIMIT 1`)
+}
+
 // GetByOIDCSubject fetches a user by OIDC issuer + subject.
 func (r *Users) GetByOIDCSubject(ctx context.Context, issuer, subject string) (*domain.User, error) {
 	return r.scanOne(ctx, `WHERE oidc_issuer = $1 AND oidc_subject = $2`, issuer, subject)

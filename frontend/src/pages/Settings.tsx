@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useAuthStore } from "@/lib/auth-store";
 import { api, ApiError } from "@/lib/api";
+import { SonarrCard } from "@/components/settings/SonarrCard";
 import { useSystemInfo } from "@/lib/hooks/useSystemInfo";
 import { useLogout } from "@/lib/hooks/useLogout";
 import { useT, useI18n, LOCALES, type Locale } from "@/i18n";
@@ -48,6 +49,7 @@ export function SettingsPage() {
 
       <AppearanceCard />
       <AccountCard username={user?.username ?? ""} email={user?.email ?? ""} />
+      {user?.role === "admin" && <SonarrCard />}
       <AboutCard />
     </div>
   );

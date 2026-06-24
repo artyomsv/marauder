@@ -7,7 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [1.2.0] - 2026-06-23
+### Added
+
+- **Sonarr integration** — Marauder can now automatically take over monitoring
+  of updateable forum-tracker topics that Sonarr grabs. A background poller
+  reads Sonarr's grab history and, for each grab from a supported tracker
+  (RuTracker, Kinozal, …), auto-creates a Marauder topic owned by the admin
+  using a configured default client/category/download dir, so future torrent
+  updates flow back to the same download client Sonarr imports from. Configured
+  at **Settings → Sonarr integration** (admin only): Sonarr URL + API key (with
+  a connection test), poll interval, allowed trackers, and defaults. The poll
+  is conservative — go-forward only on first enable (no historical flood),
+  idempotent (deduped by topic URL), and fail-open if Sonarr is unreachable.
+  (#86)
 
 ### Added
 

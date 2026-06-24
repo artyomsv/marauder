@@ -7,7 +7,12 @@
 #   - publishes the postgres, backend, and frontend ports directly to
 #     the host so developers can hit them without going through nginx;
 #   - starts qBittorrent and Transmission containers so tracker-to-client
-#     integration tests can run end-to-end against real clients.
+#     integration tests can run end-to-end against real clients;
+#   - starts Prowlarr + Sonarr + FlareSolverr so the Sonarr integration
+#     (issue #86) can be exercised end-to-end. The backend reaches Sonarr at
+#     http://sonarr:8989 on the shared network — set that URL in
+#     Settings → Sonarr integration (Prowlarr UI: http://localhost:34696,
+#     Sonarr UI: http://localhost:34989).
 #
 # None of these services are exposed in production.
 #
@@ -69,6 +74,64 @@ services:
         max-size: "5m"
         max-file: "2"
 
+  # --- *arr stack for the Sonarr integration (issue #86) ------------------
+  # FlareSolverr lets Prowlarr through Cloudflare (RuTracker/Kinozal); it has
+  # no host port — only Prowlarr talks to it (http://flaresolverr:8191).
+  flaresolverr:
+    image: ghcr.io/flaresolverr/flaresolverr:latest
+    restart: unless-stopped
+    environment:
+      LOG_LEVEL: "info"
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
+
+  # Prowlarr — indexer proxy. Web UI: http://localhost:34696.
+  prowlarr:
+    image: lscr.io/linuxserver/prowlarr:latest
+    restart: unless-stopped
+    depends_on:
+      - flaresolverr
+    environment:
+      PUID: "1000"
+      PGID: "1000"
+      TZ: "Etc/UTC"
+    volumes:
+      - prowlarr_config:/config
+    ports:
+      - "${MARAUDER_DEV_PROWLARR_PORT:-34696}:9696"
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
+
+  # Sonarr — series manager. Web UI: http://localhost:34989. The Marauder
+  # backend reaches it at http://sonarr:8989 on the shared network.
+  sonarr:
+    image: lscr.io/linuxserver/sonarr:latest
+    restart: unless-stopped
+    depends_on:
+      - prowlarr
+    environment:
+      PUID: "1000"
+      PGID: "1000"
+      TZ: "Etc/UTC"
+    volumes:
+      - sonarr_config:/config
+      - ../.downloads:/data
+    ports:
+      - "${MARAUDER_DEV_SONARR_PORT:-34989}:8989"
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
+
 volumes:
   qbit_config:
   transmission_config:
+  prowlarr_config:
+  sonarr_config:
