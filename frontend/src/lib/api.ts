@@ -171,6 +171,14 @@ export const api = {
   // poll: it degrades to "delivered" labels for clients without status.
   topicStatus: (id: string) =>
     request<TopicStatus>("GET", `/topics/${id}/status`),
+
+  // GET /notifiers/{id} — includes decrypted config for the edit form.
+  getNotifier: (id: string) =>
+    request<NotifierDetail>("GET", `/notifiers/${id}`),
+
+  // PUT /notifiers/{id} — update display name, events, default flag, and config.
+  updateNotifier: (id: string, body: UpdateNotifierBody) =>
+    request<{ id: string }>("PUT", `/notifiers/${id}`, body),
 };
 
 // One delivered torrent in GET /topics/{id}/status. state is the normalised
@@ -207,6 +215,26 @@ export interface UpdateTopicBody {
   quality?: string;
   start_season?: number;
   start_episode?: number;
+}
+
+// GET /notifiers/{id} — includes decrypted config for the edit form.
+export interface NotifierDetail {
+  id: string;
+  notifier_name: string;
+  display_name: string;
+  events: string[];
+  is_default: boolean;
+  config: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+// PUT /notifiers/{id} body.
+export interface UpdateNotifierBody {
+  display_name: string;
+  events: string[];
+  is_default: boolean;
+  config: Record<string, string>;
 }
 
 // --- Typed models mirroring backend/internal/domain ---------------------

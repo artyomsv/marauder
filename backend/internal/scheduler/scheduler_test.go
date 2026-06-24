@@ -486,6 +486,47 @@ func TestRunCheck_NoDownload_DoesNotNotify(t *testing.T) {
 	}
 }
 
+func TestRunCheck_CheckError_NotifiesError(t *testing.T) {
+	tr := &fakeTracker{
+		name:   "faketracker",
+		checks: []checkResult{{err: errors.New("tracker boom")}},
+	}
+	f := newFixture(t, tr, false)
+
+	f.s.runCheck(context.Background(), f.s.log, f.topic)
+
+	if f.notifier.calls != 1 {
+		t.Fatalf("expected 1 error notification on first failure, got %d", f.notifier.calls)
+	}
+	if f.notifier.lastEvent != "error" {
+		t.Errorf("event = %q, want error", f.notifier.lastEvent)
+	}
+	if f.notifier.lastID != f.topic.UserID {
+		t.Errorf("error notification sent to wrong user")
+	}
+	if f.notifier.lastNotifierID != f.topic.NotifierID {
+		t.Errorf("error notification did not route via the topic's notifier")
+	}
+	if !strings.Contains(f.notifier.lastMsg.Body, "tracker boom") {
+		t.Errorf("body = %q, want it to include the underlying error", f.notifier.lastMsg.Body)
+	}
+}
+
+func TestRunCheck_CheckError_AlreadyErrored_NoNotify(t *testing.T) {
+	tr := &fakeTracker{
+		name:   "faketracker",
+		checks: []checkResult{{err: errors.New("tracker boom")}},
+	}
+	f := newFixture(t, tr, false)
+	f.topic.ConsecutiveErrors = 1 // already in the error state — must not re-notify
+
+	f.s.runCheck(context.Background(), f.s.log, f.topic)
+
+	if f.notifier.calls != 0 {
+		t.Errorf("expected no error notification on a repeat failure, got %d", f.notifier.calls)
+	}
+}
+
 func TestRunCheck_Episodes_NotifiesWithEpisodeLabels(t *testing.T) {
 	const h1 = "1111111111111111111111111111111111111111"
 	const h2 = "2222222222222222222222222222222222222222"

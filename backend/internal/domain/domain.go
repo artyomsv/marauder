@@ -157,6 +157,7 @@ type Notifier struct {
 	ConfigEnc    []byte
 	ConfigNonce  []byte
 	Events       []string
+	IsDefault    bool
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
 }

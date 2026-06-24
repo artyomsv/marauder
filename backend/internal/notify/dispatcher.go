@@ -52,20 +52,24 @@ func (d *Dispatcher) Send(ctx context.Context, userID uuid.UUID, event string, m
 }
 
 // SendVia delivers msg through a single notifier (the one whose ID matches
-// notifierID) when notifierID is non-nil, still honouring that notifier's
-// event subscription. When notifierID is nil it falls back to the global
-// fan-out (Send). A notifierID that doesn't match any of the user's
-// notifiers (e.g. a stale reference) delivers to nobody and returns 0 —
-// the topics.notifier_id FK uses ON DELETE SET NULL so this is defensive.
-// Returns the count of successes.
+// notifierID) when notifierID is non-nil. When notifierID is nil it fans out
+// to the user's DEFAULT notifiers only (subscription-filtered) — a topic with
+// no per-topic override routes to the defaults; if the user has marked no
+// defaults, nothing is sent (strict). Returns the count of successes.
 func (d *Dispatcher) SendVia(ctx context.Context, userID uuid.UUID, notifierID *uuid.UUID, event string, msg domain.Message) int {
-	if notifierID == nil {
-		return d.Send(ctx, userID, event, msg)
-	}
 	list, err := d.notifiers.ListForUser(ctx, userID)
 	if err != nil {
 		d.log.Warn().Err(err).Str("user_id", userID.String()).Msg("notify: list notifiers failed")
 		return 0
+	}
+	if notifierID == nil {
+		sent := 0
+		for _, n := range list {
+			if n.IsDefault && d.sendOne(ctx, n, event, msg) {
+				sent++
+			}
+		}
+		return sent
 	}
 	for _, n := range list {
 		if n.ID != *notifierID {

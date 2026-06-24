@@ -14,19 +14,39 @@ interface NotifierBadgeProps {
   notifierById: Map<string, NotifierRef>;
 }
 
-// NotifierBadge shows which single notifier a topic's release alerts are
-// routed to, when the topic overrides the default. Topics without an
-// override use the global notifier fan-out (the default for every install),
-// so nothing is rendered for them to keep the card uncluttered.
+// NotifierBadge shows where a topic's release alerts go — mirroring ClientBadge,
+// it always renders. A topic with an explicit NotifierID shows that notifier; a
+// topic with none falls back to the user's default notifiers (the same
+// resolution the scheduler performs at send time), shown muted.
 export function NotifierBadge({ topic, notifierById }: NotifierBadgeProps) {
-  if (!topic.NotifierID) return null;
-  const notifier = notifierById.get(topic.NotifierID);
-  if (!notifier) return null;
+  const explicit = topic.NotifierID ? notifierById.get(topic.NotifierID) : undefined;
 
+  // Explicit notifier picked on the topic.
+  if (explicit) {
+    return (
+      <Badge variant="warning" className="shrink-0 gap-1 font-normal text-warning">
+        <Bell className="size-3" />
+        {explicit.display_name}
+      </Badge>
+    );
+  }
+
+  // NotifierID set but the notifier no longer exists (deleted after assignment).
+  // The topics.notifier_id FK is ON DELETE SET NULL so this is defensive.
+  if (topic.NotifierID) {
+    return (
+      <Badge variant="destructive" className="shrink-0 gap-1 font-normal">
+        <Bell className="size-3" />
+        unknown notifier
+      </Badge>
+    );
+  }
+
+  // No per-topic notifier → falls back to the user's default notifiers.
   return (
-    <Badge variant="outline" className="shrink-0 gap-1 font-normal text-muted-foreground">
+    <Badge variant="warning" className="shrink-0 gap-1 font-normal text-warning">
       <Bell className="size-3" />
-      {notifier.display_name}
+      default notifiers
     </Badge>
   );
 }
