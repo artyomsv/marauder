@@ -164,7 +164,9 @@ func topicCreateProblem(err error, url string) error {
 			"No tracker plugin matches this URL",
 			"The URL '"+url+"' is not parseable by any installed tracker plugin.")
 	case errors.Is(err, topics.ErrParse):
-		return problem.ErrUnprocessable("parse: " + errors.Unwrap(err).Error())
+		// err is "parse failed: <tracker error>" (multi-%w wrapped), so use
+		// its full message — errors.Unwrap returns nil on a multi-wrap.
+		return problem.ErrUnprocessable(err.Error())
 	case errors.Is(err, topics.ErrQualityUnsupported):
 		return problem.ErrUnprocessable(err.Error())
 	default:

@@ -84,7 +84,7 @@ func BuildAndCreate(ctx context.Context, store Store, in CreateInput) (*Result, 
 
 	parsed, err := tracker.Parse(ctx, in.URL)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrParse, err)
+		return nil, fmt.Errorf("%w: %w", ErrParse, err)
 	}
 
 	interval := in.CheckIntervalSec
