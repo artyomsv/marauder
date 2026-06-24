@@ -7,10 +7,12 @@ import { breadcrumbSchema } from "@/data/schemas";
 const seo = {
   title: "Integrations — qBittorrent, Transmission, Deluge, Telegram, more",
   description:
-    "Marauder integrates with qBittorrent, Transmission, Deluge, µTorrent, SABnzbd / NZBGet via watch folder, Telegram, email, webhooks, Pushover, Keycloak / OIDC, Prowlarr, Jackett, NZBHydra2, and Prometheus.",
+    "Marauder integrates with Sonarr (auto-monitor its forum-tracker grabs), qBittorrent, Transmission, Deluge, µTorrent, SABnzbd / NZBGet via watch folder, Telegram, email, webhooks, Pushover, Keycloak / OIDC, Prowlarr, Jackett, NZBHydra2, and Prometheus.",
   path: "/integrations",
   keywords: [
     "marauder integrations",
+    "sonarr integration",
+    "sonarr forum tracker handoff",
     "qbittorrent watch tracker",
     "transmission topic monitor",
     "deluge auto download",
@@ -50,6 +52,43 @@ const schemas = [
         Here's the integration matrix.
       </p>
     </header>
+
+    <!-- Sonarr handoff -->
+    <section class="mb-16" aria-labelledby="sonarr-heading">
+      <h2 id="sonarr-heading" class="mb-2 text-2xl font-semibold tracking-tight">Sonarr handoff</h2>
+      <p class="mb-6 text-muted-foreground">
+        Sonarr grabs the initial release; Marauder takes over what Sonarr
+        structurally can't — monitoring an <strong class="text-foreground">updateable
+        forum topic</strong> (RuTracker, Kinozal, …) for future torrent changes.
+        Enable it under <strong class="text-foreground">Integrations → Sonarr</strong> in the
+        Marauder UI (admin only): point it at your Sonarr URL + API key, pick a
+        default client and category, and Marauder reads Sonarr's grab history and
+        auto-creates a monitored topic for every grab from a supported tracker.
+      </p>
+      <div class="grid gap-4 md:grid-cols-2">
+        <article class="glass-card rounded-xl p-6">
+          <h3 class="text-lg font-semibold text-foreground">Automatic takeover</h3>
+          <p class="mt-2 text-sm text-muted-foreground">
+            A background poller matches each grab's topic URL to a Marauder
+            tracker plugin and creates a monitored topic — go-forward on first
+            enable (no historical flood) and idempotent (deduped by URL).
+            Auto-created topics carry a <strong class="text-foreground">Sonarr</strong> badge.
+          </p>
+        </article>
+        <article class="glass-card rounded-xl p-6">
+          <h3 class="text-lg font-semibold text-foreground">No category drift</h3>
+          <p class="mt-2 text-sm text-muted-foreground">
+            Auto-created topics use the same download client and category Sonarr
+            imports from, so future updates land where Sonarr already watches —
+            Sonarr keeps importing completed files. The API key is encrypted at
+            rest and never returned.
+          </p>
+        </article>
+      </div>
+      <p class="mt-6 text-sm text-muted-foreground">
+        Full guide: <a href="https://github.com/artyomsv/marauder/blob/main/docs/sonarr-integration.md" rel="noopener external" class="text-foreground underline decoration-foreground/40 underline-offset-4 hover:decoration-foreground">docs/sonarr-integration.md</a>
+      </p>
+    </section>
 
     <!-- Torrent clients -->
     <section class="mb-16" aria-labelledby="clients-heading">

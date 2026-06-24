@@ -78,6 +78,18 @@ const sections = [
     ],
   },
   {
+    title: "Sonarr integration — take over what Sonarr can't track",
+    intro:
+      "Sonarr grabs the initial release from a forum tracker but can't keep monitoring that updateable topic for future changes. Marauder reads Sonarr's grab history and automatically takes over.",
+    bullets: [
+      "Admin-configured under Integrations → Sonarr: Sonarr URL + API key (encrypted at rest, never returned), poll interval, allowed trackers, and default client / category / download dir",
+      "Background poller reads GET /api/v3/history/since (grabbed events) and matches each grab's topic URL (data.nzbInfoUrl) to an installed tracker plugin",
+      "Auto-creates a monitored topic per supported grab, owned by the admin and badged “Sonarr” in the Topics list",
+      "Go-forward on first enable (no historical flood), idempotent (deduped by topic URL — a season-pack grab makes exactly one topic), and fail-open if Sonarr is unreachable",
+      "Future torrent updates deliver to the same client + category Sonarr imports from, so Sonarr keeps importing completed files with no category drift",
+    ],
+  },
+  {
     title: "Observability from day one",
     intro:
       "Structured logs, metrics, health checks, audit log — all of it standard, all of it opt-out, all of it documented.",
