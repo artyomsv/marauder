@@ -32,6 +32,7 @@ const matrix = [
   { feature: "Forum-tracker scraping (LostFilm)",  sonarr: "no",                  marauder: "yes (lostfilm plugin, with quality)" },
   { feature: "Forum-tracker scraping (Kinozal)",   sonarr: "no",                  marauder: "yes (kinozal plugin)" },
   { feature: "Forum-tracker scraping (NNM-Club)",  sonarr: "no",                  marauder: "yes (nnmclub plugin, w/ Cloudflare bypass)" },
+  { feature: "Auto-monitor Sonarr's forum grabs",  sonarr: "no (can't track in-place updates)", marauder: "yes (Sonarr integration)" },
   { feature: "Quality profiles + library tracking",sonarr: "yes (best in class)", marauder: "no (out of scope)" },
   { feature: "Metadata scraping (TVDB / TMDB)",    sonarr: "yes",                 marauder: "no (out of scope)" },
   { feature: "File renaming + Plex/Jellyfin paths",sonarr: "yes",                 marauder: "no (hand off to client)" },
@@ -161,7 +162,15 @@ const matrix = [
         <li>• Marauder drops things into <code>tv-marauder</code> or <code>movies-marauder</code> — set per-client in the Marauder UI</li>
       </ul>
       <p class="mt-4 text-muted-foreground">
-        That's the entire integration. There is nothing else to wire up.
+        That's the zero-config baseline — both push to the same client. For
+        forum trackers there's an optional deeper handoff:
+        <strong class="text-foreground">Marauder can auto-monitor what Sonarr grabs.</strong>
+        Enable the Sonarr integration (<strong class="text-foreground">Integrations → Sonarr</strong>
+        in the Marauder UI), and when Sonarr grabs a release from a forum tracker
+        like RuTracker or Kinozal, Marauder automatically takes over watching
+        that updateable topic for future torrent changes — delivering updates to
+        the same category Sonarr imports from. See the
+        <a href="https://github.com/artyomsv/marauder/blob/main/docs/sonarr-integration.md" rel="noopener external" class="underline decoration-foreground/40 underline-offset-4 hover:text-foreground">Sonarr integration guide</a>.
       </p>
     </section>
 

@@ -106,6 +106,36 @@ var (
 	)
 )
 
+// Sonarr integration metrics ---------------------------------------------
+
+var (
+	// SonarrPollsTotal counts Sonarr history-poll ticks by result.
+	SonarrPollsTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "marauder_sonarr_polls_total",
+			Help: "Sonarr history-poll ticks, partitioned by result.",
+		},
+		[]string{"result"}, // "ok" | "error"
+	)
+
+	// SonarrTopicsCreatedTotal counts topics auto-created from Sonarr grabs.
+	SonarrTopicsCreatedTotal = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Name: "marauder_sonarr_topics_created_total",
+			Help: "Topics auto-created from Sonarr grab history.",
+		},
+	)
+
+	// SonarrRecordsProcessedTotal counts grab-history records by outcome.
+	SonarrRecordsProcessedTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "marauder_sonarr_records_processed_total",
+			Help: "Sonarr grab-history records processed, partitioned by outcome.",
+		},
+		[]string{"outcome"}, // created|updated|duplicate|no_tracker|disallowed|error
+	)
+)
+
 // ObserveHTTP is a convenience helper for the logging middleware.
 func ObserveHTTP(method, route string, status int, dur time.Duration) {
 	s := strconv.Itoa(status)

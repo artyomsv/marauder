@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/artyomsv/marauder/backend/internal/domain"
@@ -19,9 +20,18 @@ import (
 // ErrNotFound is returned when a row lookup misses.
 var ErrNotFound = errors.New("not found")
 
+// usersPool is the minimal subset of *pgxpool.Pool used by Users, defined as
+// an unexported interface so tests can substitute a fake (mirrors topicsPool
+// / settingsPool). The concrete *pgxpool.Pool satisfies it.
+type usersPool interface {
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
 // Users is the repository for the users table.
 type Users struct {
-	pool *pgxpool.Pool
+	pool usersPool
 }
 
 // NewUsers constructs a Users repository.
@@ -60,6 +70,14 @@ func (r *Users) GetByID(ctx context.Context, id uuid.UUID) (*domain.User, error)
 // GetByUsername fetches a user by username.
 func (r *Users) GetByUsername(ctx context.Context, username string) (*domain.User, error) {
 	return r.scanOne(ctx, `WHERE username = $1`, username)
+}
+
+// GetInitialAdmin returns the earliest-created admin user. Used by headless
+// background services (e.g. the Sonarr poller) that must attribute
+// auto-created resources to an owner when none is explicitly configured.
+// Returns ErrNotFound when no admin exists yet (e.g. before bootstrap).
+func (r *Users) GetInitialAdmin(ctx context.Context) (*domain.User, error) {
+	return r.scanOne(ctx, `WHERE role = 'admin' ORDER BY created_at ASC LIMIT 1`)
 }
 
 // GetByOIDCSubject fetches a user by OIDC issuer + subject.

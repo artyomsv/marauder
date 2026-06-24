@@ -16,6 +16,7 @@ import (
 	"github.com/artyomsv/marauder/backend/internal/domain"
 	"github.com/artyomsv/marauder/backend/internal/plugins/registry"
 	"github.com/artyomsv/marauder/backend/internal/problem"
+	"github.com/artyomsv/marauder/backend/internal/topics"
 )
 
 // topicStore is the consumer-side seam over *repo.Topics so the handler
@@ -91,12 +92,12 @@ func (h *Topics) List(w http.ResponseWriter, r *http.Request) {
 		problem.Write(w, r, h.BaseURL, perr)
 		return
 	}
-	topics, err := h.Topics.ListForUser(r.Context(), uid)
+	list, err := h.Topics.ListForUser(r.Context(), uid)
 	if err != nil {
 		problem.Write(w, r, h.BaseURL, problem.ErrInternal(err.Error()))
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"topics": topics})
+	writeJSON(w, http.StatusOK, map[string]any{"topics": list})
 }
 
 // Create handles POST /topics.
@@ -117,109 +118,60 @@ func (h *Topics) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tracker := registry.FindTrackerForURL(req.URL)
-	if tracker == nil {
-		problem.Write(w, r, h.BaseURL,
-			problem.New(http.StatusUnprocessableEntity,
-				"topic-url-not-recognized",
-				"No tracker plugin matches this URL",
-				"The URL '"+req.URL+"' is not parseable by any installed tracker plugin.",
-			))
-		return
-	}
-
-	parsed, parseErr := tracker.Parse(r.Context(), req.URL)
-	if parseErr != nil {
-		problem.Write(w, r, h.BaseURL, problem.ErrUnprocessable("parse: "+parseErr.Error()))
-		return
-	}
-
-	interval := req.CheckIntervalSec
-	if interval <= 0 {
-		interval = 900 // 15 min default
-	}
-	displayName := req.DisplayName
-	if displayName == "" {
-		displayName = parsed.DisplayName
-	}
-
-	// Best-effort metadata resolution: ask the tracker for a real title and a
-	// poster image straight from the page so a freshly-added topic shows them
-	// immediately instead of a "RuTracker topic 123" placeholder. This is
-	// fail-open — metadata is enhancement, not core: any error (timeout, login
-	// wall, parse miss) leaves the placeholder in place and never blocks the
-	// add. The scheduler later self-heals the title on the first check.
-	var imageURL string
-	if wm, ok := tracker.(registry.WithMetadata); ok {
-		mctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
-		meta, merr := wm.ResolveMetadata(mctx, req.URL, nil)
-		cancel()
-		if merr == nil && meta != nil {
-			if req.DisplayName == "" && meta.Title != "" {
-				displayName = meta.Title
-			}
-			imageURL = meta.ImageURL
-		}
-	}
-
-	// Overlay any user-supplied capability fields onto the Extra map
-	// the plugin's Parse() returned. The plugin's defaults stay in
-	// place for any field the user didn't specify.
-	extra := parsed.Extra
-	if extra == nil {
-		extra = map[string]any{}
-	}
-	if req.Quality != "" {
-		// Validate against the plugin's declared quality list, if any.
-		if wq, ok := tracker.(registry.WithQuality); ok {
-			allowed := false
-			for _, q := range wq.Qualities() {
-				if q == req.Quality {
-					allowed = true
-					break
-				}
-			}
-			if !allowed {
-				problem.Write(w, r, h.BaseURL,
-					problem.ErrUnprocessable("quality '"+req.Quality+"' not supported by this tracker"))
-				return
-			}
-		}
-		extra["quality"] = req.Quality
-	}
-	if req.StartSeason != nil {
-		extra["start_season"] = *req.StartSeason
-	}
-	if req.StartEpisode != nil {
-		extra["start_episode"] = *req.StartEpisode
-	}
-
+	// Ownership of the referenced client/notifier is validated here (the
+	// handler holds those lookups); the tracker-match → parse → metadata →
+	// persist sequence lives in the shared topics package so the Sonarr
+	// poller reuses the exact same logic.
 	if perr := h.validateOwnership(r.Context(), uid, req.NotifierID, req.ClientID); perr != nil {
 		problem.Write(w, r, h.BaseURL, perr)
 		return
 	}
 
-	t := &domain.Topic{
+	res, err := topics.BuildAndCreate(r.Context(), h.Topics, topics.CreateInput{
 		UserID:           uid,
-		TrackerName:      tracker.Name(),
 		URL:              req.URL,
-		DisplayName:      displayName,
-		ImageURL:         imageURL,
+		DisplayName:      req.DisplayName,
 		ClientID:         req.ClientID,
 		NotifierID:       req.NotifierID,
 		DownloadDir:      req.DownloadDir,
 		Category:         req.Category,
-		Extra:            extra,
-		CheckIntervalSec: interval,
-		NextCheckAt:      time.Now().UTC(),
-		Status:           domain.TopicStatusActive,
-	}
-	created, cerr := h.Topics.Create(r.Context(), t)
-	if cerr != nil {
-		problem.Write(w, r, h.BaseURL, problem.ErrInternal("create topic: "+cerr.Error()))
+		CheckIntervalSec: req.CheckIntervalSec,
+		Quality:          req.Quality,
+		StartSeason:      req.StartSeason,
+		StartEpisode:     req.StartEpisode,
+	})
+	if err != nil {
+		problem.Write(w, r, h.BaseURL, topicCreateProblem(err, req.URL))
 		return
 	}
-	writeJSON(w, http.StatusCreated, created)
+	if !res.Created {
+		problem.Write(w, r, h.BaseURL,
+			problem.New(http.StatusConflict, "topic-already-exists",
+				"Topic already exists",
+				"A topic for this URL already exists."))
+		return
+	}
+	writeJSON(w, http.StatusCreated, res.Topic)
+}
+
+// topicCreateProblem maps a topics.BuildAndCreate error to an RFC-7807
+// response, preserving the prior per-case status codes and messages.
+func topicCreateProblem(err error, url string) error {
+	switch {
+	case errors.Is(err, topics.ErrNoTracker):
+		return problem.New(http.StatusUnprocessableEntity,
+			"topic-url-not-recognized",
+			"No tracker plugin matches this URL",
+			"The URL '"+url+"' is not parseable by any installed tracker plugin.")
+	case errors.Is(err, topics.ErrParse):
+		// err is "parse failed: <tracker error>" (multi-%w wrapped), so use
+		// its full message — errors.Unwrap returns nil on a multi-wrap.
+		return problem.ErrUnprocessable(err.Error())
+	case errors.Is(err, topics.ErrQualityUnsupported):
+		return problem.ErrUnprocessable(err.Error())
+	default:
+		return problem.ErrInternal("create topic: " + err.Error())
+	}
 }
 
 type updateTopicReq struct {

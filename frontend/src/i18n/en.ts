@@ -23,6 +23,7 @@ const en: Record<string, string> = {
   "nav.notifiers": "Notifiers",
   "nav.system": "System",
   "nav.audit": "Audit log",
+  "nav.integrations": "Integrations",
   "nav.settings": "Settings",
 
   // Dashboard
@@ -91,6 +92,9 @@ const en: Record<string, string> = {
   "credentials.reauthenticate": "Re-authenticate",
 
   // Settings
+  "integrations.kicker": "connections",
+  "integrations.title": "Integrations",
+  "integrations.blurb": "Connect Marauder to external services like Sonarr.",
   "settings.kicker": "preferences",
   "settings.title": "Settings",
   "settings.blurb": "Personalise Marauder's appearance, manage your account, and read about this build.",
@@ -122,6 +126,28 @@ const en: Record<string, string> = {
   "settings.about.version": "Version",
   "settings.about.license": "License",
   "settings.about.links": "Links",
+  "settings.sonarr.title": "Sonarr integration",
+  "settings.sonarr.blurb":
+    "Let Marauder automatically take over monitoring of updateable forum-tracker topics that Sonarr grabs (RuTracker, Kinozal, …). Admin only.",
+  "settings.sonarr.enabled": "Enable integration",
+  "settings.sonarr.url": "Sonarr URL",
+  "settings.sonarr.apiKey": "API key",
+  "settings.sonarr.apiKeySet": "A key is stored — leave blank to keep it.",
+  "settings.sonarr.pollInterval": "Poll interval (seconds)",
+  "settings.sonarr.allowedTrackers": "Allowed trackers",
+  "settings.sonarr.allowedTrackersHint":
+    "Leave all unchecked to allow every supported tracker.",
+  "settings.sonarr.defaultClient": "Default download client",
+  "settings.sonarr.defaultClientNone": "None (use account default)",
+  "settings.sonarr.defaultCategory": "Default category",
+  "settings.sonarr.defaultDownloadDir": "Default download directory",
+  "settings.sonarr.updateExisting": "Realign existing topics to these defaults",
+  "settings.sonarr.test": "Test connection",
+  "settings.sonarr.testing": "Testing…",
+  "settings.sonarr.testOk": "Connected to Sonarr",
+  "settings.sonarr.save": "Save",
+  "settings.sonarr.saving": "Saving…",
+  "settings.sonarr.saved": "Settings saved.",
 
   // Topic delivery status
   "topics.delivery.delivered": "Delivered",

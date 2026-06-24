@@ -179,7 +179,49 @@ export const api = {
   // PUT /notifiers/{id} — update display name, events, default flag, and config.
   updateNotifier: (id: string, body: UpdateNotifierBody) =>
     request<{ id: string }>("PUT", `/notifiers/${id}`, body),
+
+  // --- Sonarr integration (admin only). The API key is never returned;
+  // the view exposes only `api_key_set`. An empty api_key on save keeps the
+  // stored key.
+  getSonarrConfig: () => request<SonarrConfig>("GET", "/system/sonarr"),
+  updateSonarrConfig: (body: SonarrConfigUpdate) =>
+    request<SonarrConfig>("PUT", "/system/sonarr", body),
+  testSonarr: (body: { sonarr_url?: string; api_key?: string }) =>
+    request<SonarrTestResult>("POST", "/system/sonarr/test", body),
 };
+
+// GET /system/sonarr — the API key is intentionally absent (api_key_set only).
+export interface SonarrConfig {
+  enabled: boolean;
+  sonarr_url: string;
+  api_key_set: boolean;
+  poll_interval_sec: number;
+  allowed_trackers: string[];
+  default_client_id: string | null;
+  default_category: string;
+  default_download_dir: string;
+  update_existing: boolean;
+  last_seen_at: string | null;
+}
+
+// Body of PUT /system/sonarr. An empty/omitted api_key keeps the stored one.
+export interface SonarrConfigUpdate {
+  enabled: boolean;
+  sonarr_url: string;
+  api_key: string;
+  poll_interval_sec: number;
+  allowed_trackers: string[];
+  default_client_id: string | null;
+  default_category: string;
+  default_download_dir: string;
+  update_existing: boolean;
+}
+
+export interface SonarrTestResult {
+  ok: boolean;
+  version: string;
+  app_name: string;
+}
 
 // One delivered torrent in GET /topics/{id}/status. state is the normalised
 // client lifecycle word ("downloading", "seeding", …) or "delivered" when
@@ -297,6 +339,9 @@ export interface TopicExtra {
   quality?: string;
   start_season?: number;
   start_episode?: number;
+  // How the topic was created. "sonarr" marks topics auto-imported by the
+  // Sonarr integration; absent for manually-added topics.
+  source?: string;
   [key: string]: unknown;
 }
 

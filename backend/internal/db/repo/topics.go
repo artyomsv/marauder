@@ -109,6 +109,19 @@ func (r *Topics) GetByID(ctx context.Context, id uuid.UUID, userID *uuid.UUID) (
 	return t, err
 }
 
+// GetByURL fetches a user's topic by its URL. Used by the Sonarr poller as
+// a cheap pre-check before attempting to create an auto-imported topic.
+// Returns ErrNotFound when the user has no topic with that URL.
+func (r *Topics) GetByURL(ctx context.Context, userID uuid.UUID, url string) (*domain.Topic, error) {
+	q := `SELECT ` + topicColumns + ` FROM topics WHERE user_id = $1 AND url = $2`
+	row := r.pool.QueryRow(ctx, q, userID, url)
+	t, err := scanTopic(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	return t, err
+}
+
 // ListForUser returns all topics for a user, newest first.
 func (r *Topics) ListForUser(ctx context.Context, userID uuid.UUID) ([]*domain.Topic, error) {
 	q := `SELECT ` + topicColumns + ` FROM topics WHERE user_id = $1 ORDER BY created_at DESC`

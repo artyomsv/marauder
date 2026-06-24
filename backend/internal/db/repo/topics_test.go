@@ -513,3 +513,41 @@ func TestTopics_Create_RoundTripsNotifierID(t *testing.T) {
 		t.Errorf("Create: want NotifierID=%s, got %v", notifierID, got.NotifierID)
 	}
 }
+
+// ---------- GetByURL (used by the Sonarr poller's dedup pre-check) ----------
+
+func TestTopics_GetByURL_Found(t *testing.T) {
+	repo, mock := newMockTopics(t)
+	t.Cleanup(func() { assertExpectationsMet(t, mock) })
+
+	id := uuid.New()
+	userID := uuid.New()
+	now := time.Now().UTC()
+	const url = "https://example.invalid/t/1"
+
+	rows := pgxmock.NewRows(topicColumnsAll).AddRow(topicRow(id, userID, now)...)
+	mock.ExpectQuery(`SELECT .* FROM topics WHERE user_id = \$1 AND url = \$2`).
+		WithArgs(userID, url).
+		WillReturnRows(rows)
+
+	got, err := repo.GetByURL(context.Background(), userID, url)
+	if err != nil {
+		t.Fatalf("GetByURL: unexpected error: %v", err)
+	}
+	if got.ID != id || got.URL != url {
+		t.Errorf("GetByURL: got id=%s url=%s, want id=%s url=%s", got.ID, got.URL, id, url)
+	}
+}
+
+func TestTopics_GetByURL_NotFound(t *testing.T) {
+	repo, mock := newMockTopics(t)
+	t.Cleanup(func() { assertExpectationsMet(t, mock) })
+
+	mock.ExpectQuery(`SELECT .* FROM topics WHERE user_id = \$1 AND url = \$2`).
+		WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg()).
+		WillReturnError(pgx.ErrNoRows)
+
+	if _, err := repo.GetByURL(context.Background(), uuid.New(), "x"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("GetByURL: want ErrNotFound, got %v", err)
+	}
+}

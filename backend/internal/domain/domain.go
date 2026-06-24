@@ -198,3 +198,21 @@ type Message struct {
 	Body  string
 	Link  string
 }
+
+// SonarrConfig is the runtime configuration for the Sonarr integration,
+// persisted in the singleton settings row. It is the plaintext-facing view:
+// APIKey is decrypted on read and (when non-empty) encrypted on write. The
+// repository never exposes the encrypted bytes past its boundary.
+type SonarrConfig struct {
+	Enabled            bool
+	URL                string
+	APIKey             string // decrypted; empty on read means "no key stored"
+	PollIntervalSec    int
+	AllowedTrackers    []string // tracker Name()s; empty = all supported
+	DefaultClientID    *uuid.UUID
+	DefaultCategory    string
+	DefaultDownloadDir string
+	UpdateExisting     bool
+	OwnerUserID        *uuid.UUID
+	LastSeenAt         *time.Time // history-poll cursor
+}

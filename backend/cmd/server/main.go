@@ -24,6 +24,7 @@ import (
 	"github.com/artyomsv/marauder/backend/internal/logging"
 	"github.com/artyomsv/marauder/backend/internal/notify"
 	"github.com/artyomsv/marauder/backend/internal/scheduler"
+	"github.com/artyomsv/marauder/backend/internal/sonarr"
 	"github.com/artyomsv/marauder/backend/internal/version"
 
 	// Register bundled plugins via blank imports. This activates their
@@ -104,6 +105,7 @@ func run() error {
 	notifiersRepo := repo.NewNotifiers(pool)
 	credsRepo := repo.NewTrackerCredentials(pool)
 	deliveriesRepo := repo.NewDeliveries(pool)
+	settingsRepo := repo.NewSettings(pool)
 	auditRepo := repo.NewAudit(pool)
 	auditLogger := audit.NewLogger(rootCtx, auditRepo, logger)
 
@@ -146,6 +148,16 @@ func run() error {
 		}
 	}()
 
+	// Sonarr integration poller. Self-gates on the DB-stored config
+	// (settings.sonarr_enabled), so it's always started; it no-ops while
+	// disabled. See issue #86.
+	sonarrPoller := sonarr.New(logger, master, settingsRepo, users, topicsRepo, cfg.TrackerHTTPTimeout)
+	go func() {
+		if err := sonarrPoller.Start(rootCtx); err != nil {
+			logger.Error().Err(err).Msg("sonarr poller exited with error")
+		}
+	}()
+
 	// HTTP server
 	router := api.NewRouter(api.Deps{
 		Cfg:        cfg,
@@ -159,6 +171,7 @@ func run() error {
 		Notifiers:  notifiersRepo,
 		Creds:      credsRepo,
 		Deliveries: deliveriesRepo,
+		Settings:   settingsRepo,
 		Audit:      auditRepo,
 		AuditLog:   auditLogger,
 		OIDC:       oidcProvider,

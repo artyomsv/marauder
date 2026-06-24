@@ -46,6 +46,9 @@ It is built in 2026 with a tightly focused set of modern tools:
 - **PostgreSQL 18.4** for state.
 - **Internal JWT + OIDC (Keycloak / Authentik / any OIDC provider)** for auth.
 - **Plugin architecture** for trackers, clients, and notifiers.
+- **Sonarr integration** — auto-monitor the updateable forum-tracker topics
+  Sonarr grabs but can't keep watching. See
+  [docs/sonarr-integration.md](docs/sonarr-integration.md).
 - **Observable** from day one — Prometheus metrics, structured logs,
   `/health`, `/ready`.
 
@@ -60,7 +63,9 @@ The short version:
 > Torznab indexer — it's a forum. The Python-era tools that historically
 > filled this niche have stalled. Marauder picks up where they left off,
 > built on a modern stack with first-class security, observability, and a
-> plugin model designed to be easy to extend.
+> plugin model designed to be easy to extend. And it doesn't compete with
+> Sonarr — it integrates: Marauder auto-takes-over monitoring of the forum
+> topics Sonarr grabs but can't keep watching.
 
 Read the full rationale: [VISION.md](docs/VISION.md) ·
 [COMPETITORS.md](docs/COMPETITORS.md).

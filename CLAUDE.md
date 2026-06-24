@@ -27,7 +27,8 @@ backend/        Go services (main backend + cfsolver sidecar)
 frontend/       React 19.2 + Vite + Tailwind 4 + shadcn admin UI
 cfsolver/       Standalone Go service: chromedp-based Cloudflare solver
 deploy/         docker-compose stacks (source-build base + prebuilt-image
-                ghcr stack + dev + sso overlays + test-clients matrix)
+                ghcr stack + dev + sso overlays + test-clients matrix +
+                arr stack for the Sonarr integration)
 docs/           ROADMAP, PRD, VISION, COMPETITORS, per-feature guides
 site/           Astro 5 marketing site published to marauder.cc
 techdebt/       Debt-tracking files (one per issue, see global rule)
@@ -48,9 +49,11 @@ techdebt/       Debt-tracking files (one per issue, see global rule)
 | `cfsolver` | in-process client to the standalone `cfsolver/` service |
 | `config` | env-driven config struct (caarlos0/env) — **add new env vars here** |
 | `crypto` | AES-256-GCM for tracker credentials and client config blobs |
-| `db` / `db/repo` | pgxpool wrapper + repository structs (`Topics`, `Clients`, `Notifiers`, `Users`, `TrackerCredentials`, `Deliveries`, `Audit`, `Settings`). `TrackerCredentials` carries encrypted `secret_enc` (password) **and** `session_enc`/`session_nonce` (cookie-session blob; migration `0002`), plus a nullable `session_expired_at` marker (migration `0003`) the scheduler uses to dedupe expiry notifications (atomic `MarkSessionExpired`, cleared by `SetSession` on re-auth). `Deliveries` (migration `0006`, `topic_deliveries`) records every torrent pushed to a client — `{topic_id, infohash, label, client_id, delivered_at}`, unique on `(topic_id, infohash)` so `Record` is idempotent (`ON CONFLICT DO NOTHING`). `Notifiers` gains `is_default bool` (migration `0008`, per-type unique partial index) + `Update(ctx, id, userID, name, displayName string, events []string, isDefault bool, configEnc, configNonce []byte) error` |
+| `db` / `db/repo` | pgxpool wrapper + repository structs (`Topics`, `Clients`, `Notifiers`, `Users`, `TrackerCredentials`, `Deliveries`, `Audit`, `Settings`). `Settings` (repo added for the Sonarr integration) reads/writes the singleton `settings` row — `GetSonarr`/`UpsertSonarr` (API key encrypted at rest like `oidc_client_secret_enc`, migration `0009`) + `UpdateSonarrCursor` (history-poll cursor). `Topics` adds `GetByURL(user,url)` for the poller's dedup pre-check; `Users` adds `GetInitialAdmin`. `TrackerCredentials` carries encrypted `secret_enc` (password) **and** `session_enc`/`session_nonce` (cookie-session blob; migration `0002`), plus a nullable `session_expired_at` marker (migration `0003`) the scheduler uses to dedupe expiry notifications (atomic `MarkSessionExpired`, cleared by `SetSession` on re-auth). `Deliveries` (migration `0006`, `topic_deliveries`) records every torrent pushed to a client — `{topic_id, infohash, label, client_id, delivered_at}`, unique on `(topic_id, infohash)` so `Record` is idempotent (`ON CONFLICT DO NOTHING`). `Notifiers` gains `is_default bool` (migration `0008`, per-type unique partial index) + `Update(ctx, id, userID, name, displayName string, events []string, isDefault bool, configEnc, configNonce []byte) error` |
 | **`notify`** | reusable notification dispatcher — `Send(userID, domain.Message)` fans out to all of a user's configured notifiers (best-effort, metered); `SendVia(userID, notifierID, …)` scopes the same fan-out to one notifier when a topic overrides it (nil ⇒ the user's **default** notifiers only (strict; none set ⇒ no send)). Consumers: scheduler new-release alerts + topic-error alerts (both per-topic via `SendVia`; error events deduped to fire once per error episode, on the first failure) + credential session-expiry alerts (global). The single event→notifier fan-out point |
 | `domain` | core types: `Topic` (incl. per-topic `ClientID`, **`NotifierID`** (per-topic notifier override, migration `0007`), `DownloadDir`, `Category`, `ImageURL`), `Check`, `Payload`, `TrackerCredential`, `TopicDelivery`, `AddOptions` (`DownloadDir` + `Category`) |
+| **`topics`** | shared `BuildAndCreate(store, CreateInput)` — the one tracker-match → `Parse` → fail-open `ResolveMetadata` → build → persist sequence, used by BOTH the `POST /topics` handler and the Sonarr poller (no duplication). Idempotent: a `(user_id,url)` unique-violation returns `Result{Created:false}` instead of erroring. Sentinels `ErrNoTracker`/`ErrParse`/`ErrQualityUnsupported` |
+| **`sonarr`** | Sonarr integration (issue #86): a typed read-only API `Client` (`SystemStatus` for the Test button; `GrabHistorySince` reads `eventType=grabbed` history, extracting `data.nzbInfoUrl` — the tracker topic URL, **not** `guid`) + a `Poller` that mirrors the scheduler (ticker loop, ctx-cancel, fail-open). Self-gates on the DB `settings.sonarr_enabled`, resolves the owner (configured admin ⇒ first admin), dedups history by URL, filters by allowed trackers, and auto-creates topics via `topics.BuildAndCreate` with configured default client/category/dir. First enable is go-forward only (cursor stamped, no historical import). Admin config UI: **Integrations** page (`pages/Integrations.tsx` → `components/integrations/SonarrCard`); API `GET/PUT/POST /api/v1/system/sonarr{,/test}` |
 | **`infohash`** | derives the BitTorrent v1 infohash (lowercase hex) from a `Payload` — `FromMagnet` (parses `xt=urn:btih:`, hex or base32) / `FromTorrent` (SHA-1 of the bencoded `info` dict via a length-based scanner) / `FromPayload`. The universal key linking a delivery to a client's live torrent status |
 | **`extra`** | shared `extra.Int / StringSlice / String` helpers for the untyped `map[string]any` blobs in `Topic.Extra` and `Check.Extra` (added 2026-04-07; **use this instead of writing local helpers**) |
 | `logging` | zerolog setup (JSON in prod, pretty in dev) |
@@ -153,6 +156,8 @@ src/
 │   ├── Credentials.tsx         Tracker account CRUD
 │   ├── Notifiers.tsx           Notifier CRUD
 │   ├── Settings.tsx            Theme/locale/density + change password + about
+│   ├── Integrations.tsx        Admin-only external integrations (Sonarr) —
+│   │                           hosts components/integrations/SonarrCard
 │   ├── Audit.tsx               Audit log viewer (admin-only)
 │   ├── System.tsx              System status page
 │   └── OIDCCallback.tsx        Keycloak authorization-code redirect target
@@ -221,6 +226,18 @@ were verified end-to-end against these real containers via the Marauder API
 (create-client → plugin `Test()`). The non-networked `downloadfolder` client
 is not part of this matrix.
 
+`deploy/docker-compose.arr.yml` is a **standalone *arr stack** (Prowlarr +
+Sonarr + FlareSolverr) for users who already run Marauder and want to add the
+Sonarr integration (issue #86) without rebuilding. It attaches to Marauder's
+existing Docker network via an **external network** (`name:
+${MARAUDER_NETWORK:-deploy_default}`, `external: true`) so the backend reaches
+Sonarr at `http://sonarr:8989` by DNS; web UIs bind to `127.0.0.1` in the 34xxx
+range (Prowlarr 34696, Sonarr 34989). The same three services are also baked
+into the **dev overlay** (`docker-compose.dev.yml`) for source-build end-to-end
+testing — service names `prowlarr`/`sonarr`/`flaresolverr` are identical across
+both files so DNS is consistent, and FlareSolverr is internal-only (no host
+port) in both.
+
 `.github/workflows/client-acceptance.yml` drives `deploy/acceptance/acceptance.sh
 <client> <pinned|latest>` as a nightly matrix (also on tag push for the pinned
 baseline). The runner brings up the base stack plus one client under the
@@ -286,6 +303,8 @@ Host-facing ports — all in the 34xxx range, overrideable via env vars:
 | Postgres (dev overlay only) | `34432` | `MARAUDER_DEV_DB_PORT` | 5432 |
 | qBittorrent (dev overlay only) | `34611` | `MARAUDER_DEV_QBIT_PORT` | 6611 |
 | Transmission (dev overlay only) | `34091` | `MARAUDER_DEV_TRANSMISSION_PORT` | 9091 |
+| Prowlarr (dev overlay / arr stack) | `34696` | `MARAUDER_DEV_PROWLARR_PORT` / `MARAUDER_ARR_PROWLARR_PORT` | 9696 |
+| Sonarr (dev overlay / arr stack) | `34989` | `MARAUDER_DEV_SONARR_PORT` / `MARAUDER_ARR_SONARR_PORT` | 8989 |
 | Keycloak (sso overlay only) | `34643` | `MARAUDER_KEYCLOAK_HOST_PORT` | 8643 |
 
 In the production stack (`docker-compose.yml` only) **only the gateway**
