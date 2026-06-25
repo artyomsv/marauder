@@ -27,6 +27,7 @@ import (
 	"github.com/artyomsv/marauder/backend/internal/progress"
 	"github.com/artyomsv/marauder/backend/internal/scheduler"
 	"github.com/artyomsv/marauder/backend/internal/sonarr"
+	"github.com/artyomsv/marauder/backend/internal/sse"
 	"github.com/artyomsv/marauder/backend/internal/version"
 
 	// Register bundled plugins via blank imports. This activates their
@@ -144,7 +145,9 @@ func run() error {
 	// Scheduler
 	topicEventsRepo := repo.NewTopicEvents(pool)
 	disp := notify.New(notifiersRepo, master, logger)
-	bus := events.New(topicEventsRepo, disp, nil, logger) // SSE publisher nil until Phase 3
+	hub := sse.NewHub(logger)
+	tickets := sse.NewTicketStore()
+	bus := events.New(topicEventsRepo, disp, hub, logger) // hub is the live SSE publisher
 	sch := scheduler.New(cfg, logger, topicsRepo, clientsRepo, credsRepo, deliveriesRepo, master, bus)
 	go func() {
 		if err := sch.Start(rootCtx); err != nil {
@@ -195,6 +198,8 @@ func run() error {
 		OIDC:       oidcProvider,
 		Scheduler:  sch,
 		Emit:       bus.Emit,
+		Hub:        hub,
+		Tickets:    tickets,
 	})
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
