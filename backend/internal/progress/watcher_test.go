@@ -108,6 +108,11 @@ func TestPoll_LostTransition_NoEmit(t *testing.T) {
 	st := fakeStatus{statuses: []registry.TorrentStatus{{Hash: "abc123", PercentDone: 1.0, State: registry.StateSeeding}}}
 	w := newTestWatcher(t, del, emit, st)
 	w.poll(context.Background())
+	// MarkCompleted must still be attempted (we mark, then gate the emit on the
+	// won bool) — assert it so a regression that skips the mark is caught.
+	if len(del.completed) != 1 {
+		t.Fatalf("expected MarkCompleted to be attempted once, got %v", del.completed)
+	}
 	if len(emit.events) != 0 {
 		t.Fatalf("a lost NULL→now transition must not emit: %+v", emit.events)
 	}

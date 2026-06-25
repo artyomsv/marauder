@@ -151,6 +151,9 @@ func (w *Watcher) poll(ctx context.Context) {
 func (w *Watcher) resolveClient(ctx context.Context, d *domain.InFlightDelivery) *resolvedClient {
 	client, err := w.clients.GetByID(ctx, *d.ClientID, d.UserID)
 	if err != nil || client == nil {
+		// Client deleted after the delivery was recorded — fail-open. A debug
+		// breadcrumb helps answer "why didn't my completion notify?".
+		w.log.Debug().Str("client_id", d.ClientID.String()).Msg("in-flight delivery's client unresolved; skipping")
 		return nil
 	}
 	plugin, ok := w.statusLookup(client.ClientName)
@@ -180,6 +183,9 @@ func (w *Watcher) checkClient(ctx context.Context, rc *resolvedClient) {
 	}
 	done := map[string]bool{}
 	for _, st := range statuses {
+		// "Finished downloading" = the bytes are on disk: actively seeding, or
+		// 100% in any state. A torrent that downloaded fully then stopped or
+		// errored still counts as complete (the download itself succeeded).
 		if st.State == registry.StateSeeding || st.PercentDone >= 1.0 {
 			done[strings.ToLower(st.Hash)] = true
 		}
