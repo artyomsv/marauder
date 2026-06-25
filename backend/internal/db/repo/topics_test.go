@@ -197,9 +197,9 @@ func TestTopics_MarkEpisodeDownloaded_DBError(t *testing.T) {
 // ---------- scanTopic malformed extra ----------
 
 // topicRow returns a pgxmock row slice that matches topicColumns exactly
-// (21 columns as of migration 0007, which added notifier_id after
-// client_id). Callers override individual fields as needed. The helper
-// centralises column-order so tests don't drift.
+// (22 columns as of migration 0010, which added display_name_is_placeholder).
+// Callers override individual fields as needed. The helper centralises
+// column-order so tests don't drift.
 func topicRow(id, userID uuid.UUID, now time.Time) []any {
 	return []any{
 		id, userID, "faketracker", "https://example.invalid/t/1",
@@ -213,16 +213,17 @@ func topicRow(id, userID uuid.UUID, now time.Time) []any {
 		(*time.Time)(nil), (*time.Time)(nil), now,
 		3600, 0, "active",
 		"", now, now,
+		false, // display_name_is_placeholder
 	}
 }
 
-// topicColumnsAll mirrors the header slice for pgxmock.NewRows (21 cols).
+// topicColumnsAll mirrors the header slice for pgxmock.NewRows (22 cols).
 var topicColumnsAll = []string{
 	"id", "user_id", "tracker_name", "url", "display_name", "image_url", "client_id", "notifier_id",
 	"download_dir", "category", "extra", "last_hash",
 	"last_checked_at", "last_updated_at", "next_check_at",
 	"check_interval_sec", "consecutive_errors", "status",
-	"last_error", "created_at", "updated_at",
+	"last_error", "created_at", "updated_at", "display_name_is_placeholder",
 }
 
 // TestTopics_ScanTopic_MalformedExtra drives GetByID through a mocked
@@ -237,7 +238,7 @@ func TestTopics_ScanTopic_MalformedExtra(t *testing.T) {
 	userID := uuid.New()
 	now := time.Now().UTC()
 
-	// Build a row that matches topicColumns exactly (21 columns).
+	// Build a row that matches topicColumns exactly (22 columns).
 	rows := pgxmock.NewRows(topicColumnsAll).AddRow(
 		id, userID, "faketracker", "https://example.invalid/t/1",
 		"My Topic", "", // display_name, image_url
@@ -248,6 +249,7 @@ func TestTopics_ScanTopic_MalformedExtra(t *testing.T) {
 		(*time.Time)(nil), (*time.Time)(nil), now,
 		3600, 0, "active",
 		"", now, now,
+		false, // display_name_is_placeholder
 	)
 
 	mock.ExpectQuery(`SELECT .* FROM topics WHERE id = \$1`).
@@ -352,6 +354,7 @@ func TestTopics_Create_RoundTripsCategory(t *testing.T) {
 			"movies",          // category
 			pgxmock.AnyArg(),  // extra (JSON)
 			3600, pgxmock.AnyArg(), "active",
+			false, // display_name_is_placeholder
 		).
 		WillReturnRows(rows)
 
@@ -490,6 +493,7 @@ func TestTopics_Create_RoundTripsNotifierID(t *testing.T) {
 			"", "",
 			pgxmock.AnyArg(),
 			3600, pgxmock.AnyArg(), "active",
+			false, // display_name_is_placeholder
 		).
 		WillReturnRows(rows)
 

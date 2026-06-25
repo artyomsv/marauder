@@ -40,7 +40,7 @@ const topicColumns = `id, user_id, tracker_name, url, display_name,
 		COALESCE(download_dir,''), COALESCE(category,''), extra, COALESCE(last_hash,''),
 		last_checked_at, last_updated_at, next_check_at,
 		check_interval_sec, consecutive_errors, status,
-		COALESCE(last_error,''), created_at, updated_at`
+		COALESCE(last_error,''), created_at, updated_at, display_name_is_placeholder`
 
 func scanTopic(row pgx.Row) (*domain.Topic, error) {
 	var t domain.Topic
@@ -53,7 +53,7 @@ func scanTopic(row pgx.Row) (*domain.Topic, error) {
 		&t.ImageURL, &clientID, &notifierID, &t.DownloadDir, &t.Category, &extraRaw, &t.LastHash,
 		&lastChecked, &lastUpdated, &t.NextCheckAt,
 		&t.CheckIntervalSec, &t.ConsecutiveErrors, &status,
-		&t.LastError, &t.CreatedAt, &t.UpdatedAt,
+		&t.LastError, &t.CreatedAt, &t.UpdatedAt, &t.DisplayNameIsPlaceholder,
 	)
 	if err != nil {
 		return nil, err
@@ -83,12 +83,14 @@ func (r *Topics) Create(ctx context.Context, t *domain.Topic) (*domain.Topic, er
 	extra, _ := json.Marshal(t.Extra)
 	q := `
 INSERT INTO topics (user_id, tracker_name, url, display_name, image_url, client_id, notifier_id,
-                    download_dir, category, extra, check_interval_sec, next_check_at, status)
-VALUES ($1,$2,$3,$4,NULLIF($5,''),$6,$7,NULLIF($8,''),NULLIF($9,''),$10,$11,$12,$13)
+                    download_dir, category, extra, check_interval_sec, next_check_at, status,
+                    display_name_is_placeholder)
+VALUES ($1,$2,$3,$4,NULLIF($5,''),$6,$7,NULLIF($8,''),NULLIF($9,''),$10,$11,$12,$13,$14)
 RETURNING ` + topicColumns
 	row := r.pool.QueryRow(ctx, q,
 		t.UserID, t.TrackerName, t.URL, t.DisplayName, t.ImageURL, t.ClientID, t.NotifierID,
 		t.DownloadDir, t.Category, extra, t.CheckIntervalSec, t.NextCheckAt, string(t.Status),
+		t.DisplayNameIsPlaceholder,
 	)
 	return scanTopic(row)
 }

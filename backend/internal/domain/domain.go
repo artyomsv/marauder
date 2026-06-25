@@ -71,6 +71,11 @@ type Topic struct {
 	URL               string
 	DisplayName       string
 	ImageURL          string
+	// DisplayNameIsPlaceholder is true while DisplayName is a tracker-generated
+	// placeholder (e.g. "Kinozal topic 123") eligible for scheduler self-heal.
+	// Set false once a real title is resolved (metadata, first self-heal, or a
+	// user rename) so self-heal can never downgrade a good title. See issue #90.
+	DisplayNameIsPlaceholder bool
 	ClientID          *uuid.UUID
 	NotifierID        *uuid.UUID
 	DownloadDir       string
