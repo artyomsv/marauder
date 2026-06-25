@@ -158,8 +158,6 @@ const en: Record<string, string> = {
 
   // Notifier event subscriptions (which events a notifier fires on)
   "notifiers.events.prefix": "Notifies on",
-  "notifiers.event.updated": "new releases",
-  "notifiers.event.error": "errors",
   "notifiers.notify_on": "Notify on",
 
   // Canonical event labels (notifier picker + topic timeline)

@@ -531,7 +531,7 @@ func (s *Scheduler) loadCredentials(ctx context.Context, checkCtx context.Contex
 					UserID: stored.UserID, TopicID: &t.ID, NotifierID: t.NotifierID,
 					Type: events.SessionExpired, Severity: "error",
 					Title: "Tracker session expired",
-					Body:  t.TrackerName + " needs re-authentication",
+					Body:  t.TrackerName + " needs re-authentication — solve the captcha in Marauder.",
 					Link:  s.cfg.PublicBaseURL + "/credentials",
 				})
 			}

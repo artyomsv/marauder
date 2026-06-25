@@ -160,8 +160,6 @@ const ru: Record<string, string> = {
 
   // Notifier event subscriptions (which events a notifier fires on)
   "notifiers.events.prefix": "Уведомлять о",
-  "notifiers.event.updated": "новых релизах",
-  "notifiers.event.error": "ошибках",
   "notifiers.notify_on": "Уведомлять о",
 
   // Canonical event labels (notifier picker + topic timeline)
