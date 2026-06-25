@@ -3,7 +3,6 @@ package sse
 import (
 	"bufio"
 	"bytes"
-	"context"
 	"testing"
 	"time"
 
@@ -110,5 +109,26 @@ func TestUnsubscribe_StopsDelivery(t *testing.T) {
 	case <-time.After(200 * time.Millisecond):
 		// also acceptable: nothing delivered
 	}
-	_ = context.Background()
+}
+
+// TestPublish_ConcurrentUnsubscribe_NoPanic is a regression test for the close
+// race: a send to a closed channel via select/case still panics even though
+// the select has a default branch. The per-subscriber mutex introduced in the
+// fix makes Publish's send and unsubscribe's close mutually exclusive, which
+// eliminates the panic. This test would reliably crash before the fix.
+func TestPublish_ConcurrentUnsubscribe_NoPanic(t *testing.T) {
+	h := NewHub(zerolog.Nop())
+	uid := uuid.New()
+	done := make(chan struct{})
+	go func() {
+		for i := 0; i < 5000; i++ {
+			h.Publish(uid, events.Event{UserID: uid, Type: events.CheckStarted}, 0)
+		}
+		close(done)
+	}()
+	for i := 0; i < 5000; i++ {
+		_, unsub := h.Subscribe(uid)
+		unsub()
+	}
+	<-done
 }

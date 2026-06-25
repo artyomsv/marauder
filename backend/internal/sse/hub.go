@@ -21,9 +21,14 @@ import (
 // blocking the hub.
 const subscriberBuffer = 64
 
-// subscriber is one live connection's frame queue.
+// subscriber is one live connection's frame queue. mu guards closed and ch so
+// that Publish's send and unsubscribe's close are mutually exclusive — a send
+// to a closed channel panics even inside a select/case, so the closed flag is
+// the only safe guard.
 type subscriber struct {
-	ch chan []byte
+	mu     sync.Mutex
+	ch     chan []byte
+	closed bool
 }
 
 // Hub fans serialized SSE frames out to a user's live connections. It is the
@@ -63,7 +68,14 @@ func (h *Hub) Subscribe(userID uuid.UUID) (<-chan []byte, func()) {
 				}
 			}
 			h.mu.Unlock()
+			// Close under the subscriber mutex so Publish's send loop cannot
+			// race between observing the old snapshot and sending to a closed
+			// channel. The hub mutex is NOT held here (Publish holds it only
+			// during the snapshot copy, never during the send).
+			s.mu.Lock()
+			s.closed = true
 			close(s.ch)
+			s.mu.Unlock()
 		})
 	}
 	return s.ch, unsub
@@ -86,11 +98,15 @@ func (h *Hub) Publish(userID uuid.UUID, ev events.Event, id int64) {
 	}
 	h.mu.Unlock()
 	for _, s := range targets {
-		select {
-		case s.ch <- frame:
-		default:
-			metrics.SSEDroppedFramesTotal.Inc()
+		s.mu.Lock()
+		if !s.closed {
+			select {
+			case s.ch <- frame:
+			default:
+				metrics.SSEDroppedFramesTotal.Inc()
+			}
 		}
+		s.mu.Unlock()
 	}
 }
 
