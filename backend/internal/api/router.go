@@ -2,6 +2,7 @@
 package api
 
 import (
+	"context"
 	"net/http"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 	"github.com/artyomsv/marauder/backend/internal/config"
 	"github.com/artyomsv/marauder/backend/internal/crypto"
 	"github.com/artyomsv/marauder/backend/internal/db/repo"
+	"github.com/artyomsv/marauder/backend/internal/events"
 	"github.com/artyomsv/marauder/backend/internal/scheduler"
 )
 
@@ -40,6 +42,9 @@ type Deps struct {
 	AuditLog   *audit.Logger
 	OIDC       *auth.OIDCProvider
 	Scheduler  *scheduler.Scheduler
+	// Emit is the events.Bus.Emit hook wired to the topics handler so it can
+	// publish topic.added on create. Nil-safe: omitting it disables emission.
+	Emit func(ctx context.Context, ev events.Event)
 }
 
 // NewRouter builds the HTTP handler tree.
@@ -90,6 +95,7 @@ func NewRouter(d Deps) http.Handler {
 		Notifiers:  d.Notifiers,
 		Master:     d.Master,
 		BaseURL:    d.Cfg.PublicBaseURL,
+		Emit:       d.Emit,
 	}
 	clientsH := &handlers.Clients{
 		Clients: d.Clients,

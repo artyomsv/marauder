@@ -21,6 +21,7 @@ import (
 	"github.com/artyomsv/marauder/backend/internal/db"
 	"github.com/artyomsv/marauder/backend/internal/db/repo"
 	"github.com/artyomsv/marauder/backend/internal/domain"
+	"github.com/artyomsv/marauder/backend/internal/events"
 	"github.com/artyomsv/marauder/backend/internal/logging"
 	"github.com/artyomsv/marauder/backend/internal/notify"
 	"github.com/artyomsv/marauder/backend/internal/scheduler"
@@ -140,8 +141,10 @@ func run() error {
 	}
 
 	// Scheduler
+	topicEventsRepo := repo.NewTopicEvents(pool)
 	disp := notify.New(notifiersRepo, master, logger)
-	sch := scheduler.New(cfg, logger, topicsRepo, clientsRepo, credsRepo, deliveriesRepo, master, disp)
+	bus := events.New(topicEventsRepo, disp, nil, logger) // SSE publisher nil until Phase 3
+	sch := scheduler.New(cfg, logger, topicsRepo, clientsRepo, credsRepo, deliveriesRepo, master, bus)
 	go func() {
 		if err := sch.Start(rootCtx); err != nil {
 			logger.Error().Err(err).Msg("scheduler exited with error")
@@ -176,6 +179,7 @@ func run() error {
 		AuditLog:   auditLogger,
 		OIDC:       oidcProvider,
 		Scheduler:  sch,
+		Emit:       bus.Emit,
 	})
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
