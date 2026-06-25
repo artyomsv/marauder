@@ -30,6 +30,7 @@ import { ClientBadge, type ClientRef } from "@/components/topics/ClientBadge";
 import { NotifierBadge, type NotifierRef } from "@/components/topics/NotifierBadge";
 import { SonarrBadge } from "@/components/topics/SonarrBadge";
 import { DeliveryStatus } from "@/components/topics/DeliveryStatus";
+import { TopicEventsTimeline } from "@/components/topics/TopicEventsTimeline";
 import { PosterImage } from "@/components/topics/PosterImage";
 import { TopicUrl } from "@/components/topics/TopicUrl";
 
@@ -220,6 +221,7 @@ export function TopicsPage() {
                       </div>
                     )}
                     {!compact && <DeliveryStatus topicId={t.ID} />}
+                    {!compact && <TopicHistoryDisclosure topicId={t.ID} />}
                     <div className="mt-2 flex flex-wrap items-center gap-2">
                       <Badge variant="default" className="shrink-0 font-mono">
                         {t.TrackerName}
@@ -400,6 +402,22 @@ function EmptyState({ onAdd }: { onAdd: () => void }) {
         <Plus className="size-4" />
         Add your first topic
       </Button>
+    </div>
+  );
+}
+
+function TopicHistoryDisclosure({ topicId }: { topicId: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="mt-1">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="text-xs text-muted-foreground hover:text-foreground"
+      >
+        {open ? "Hide history" : "History"}
+      </button>
+      {open && <TopicEventsTimeline topicId={topicId} />}
     </div>
   );
 }

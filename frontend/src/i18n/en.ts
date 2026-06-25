@@ -173,6 +173,9 @@ const en: Record<string, string> = {
   "events.check_failed": "error",
   "events.session_expired": "session expired",
 
+  // Topic history timeline
+  "topics.history.empty": "No history yet",
+
   // Generic
   "common.loading": "Loading...",
   "common.justNow": "just now",

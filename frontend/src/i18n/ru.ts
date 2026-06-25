@@ -175,6 +175,9 @@ const ru: Record<string, string> = {
   "events.check_failed": "ошибка",
   "events.session_expired": "сессия истекла",
 
+  // Topic history timeline
+  "topics.history.empty": "История пока пуста",
+
   // Generic
   "common.loading": "Загрузка...",
   "common.justNow": "только что",
