@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 
 	"github.com/artyomsv/marauder/backend/internal/config"
 	"github.com/artyomsv/marauder/backend/internal/domain"
+	"github.com/artyomsv/marauder/backend/internal/events"
 	"github.com/artyomsv/marauder/backend/internal/plugins/registry"
 )
 
@@ -175,31 +177,44 @@ func (f *fakeCredsSession) MarkSessionExpired(_ context.Context, _, _ uuid.UUID)
 	return f.markExpiredWon, f.markExpiredErr
 }
 
-// fakeNotifier records Send / SendVia calls.
-type fakeNotifier struct {
-	calls          int
-	lastID         uuid.UUID
-	lastEvent      string
-	lastMsg        domain.Message
-	lastNotifierID *uuid.UUID
+// fakeEmitter records every Emit call for assertions.
+type fakeEmitter struct {
+	mu     sync.Mutex
+	events []events.Event
 }
 
-func (f *fakeNotifier) Send(_ context.Context, userID uuid.UUID, event string, msg domain.Message) int {
-	f.calls++
-	f.lastID = userID
-	f.lastEvent = event
-	f.lastMsg = msg
-	f.lastNotifierID = nil
-	return 1
+func (f *fakeEmitter) Emit(_ context.Context, ev events.Event) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.events = append(f.events, ev)
 }
 
-func (f *fakeNotifier) SendVia(_ context.Context, userID uuid.UUID, notifierID *uuid.UUID, event string, msg domain.Message) int {
-	f.calls++
-	f.lastID = userID
-	f.lastEvent = event
-	f.lastMsg = msg
-	f.lastNotifierID = notifierID
-	return 1
+func (f *fakeEmitter) types() []events.Type {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []events.Type
+	for _, e := range f.events {
+		out = append(out, e.Type)
+	}
+	return out
+}
+
+func (f *fakeEmitter) ofType(tp events.Type) []events.Event {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []events.Event
+	for _, e := range f.events {
+		if e.Type == tp {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+func (f *fakeEmitter) count() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.events)
 }
 
 // fakeDecryptor returns its input unchanged.
@@ -246,7 +261,7 @@ type fixture struct {
 	atomicTopics *fakeTopicsAtomic
 	clientPlugin *fakeClientPlugin
 	deliveries   *fakeDeliveries
-	notifier     *fakeNotifier
+	emitter      *fakeEmitter
 	tracker      *fakeTracker
 	topic        *domain.Topic
 }
@@ -285,7 +300,7 @@ func newFixture(t *testing.T, tracker *fakeTracker, atomic bool) *fixture {
 	}
 
 	deliveries := &fakeDeliveries{}
-	notifier := &fakeNotifier{}
+	emit := &fakeEmitter{}
 	s := &Scheduler{
 		cfg:           cfg,
 		log:           zerolog.New(io.Discard),
@@ -293,7 +308,7 @@ func newFixture(t *testing.T, tracker *fakeTracker, atomic bool) *fixture {
 		clients:       &fakeClients{client: client},
 		creds:         &fakeCreds{},
 		deliveries:    deliveries,
-		notifier:      notifier,
+		emit:          emit,
 		master:        &fakeDecryptor{},
 		lookupTracker: func(name string) registry.Tracker { return tracker },
 		lookupClient:  func(name string) registry.Client { return clientPlugin },
@@ -322,7 +337,7 @@ func newFixture(t *testing.T, tracker *fakeTracker, atomic bool) *fixture {
 		atomicTopics: atomicImpl,
 		clientPlugin: clientPlugin,
 		deliveries:   deliveries,
-		notifier:     notifier,
+		emitter:      emit,
 		tracker:      tracker,
 		topic:        topic,
 	}
@@ -449,26 +464,25 @@ func TestRunCheck_SinglePayload_NotifiesUpdated(t *testing.T) {
 
 	f.s.runCheck(context.Background(), f.s.log, f.topic)
 
-	if f.notifier.calls != 1 {
-		t.Fatalf("expected 1 notification, got %d", f.notifier.calls)
+	evs := f.emitter.ofType(events.DownloadSubmitted)
+	if len(evs) != 1 {
+		t.Fatalf("expected 1 download.submitted event, got %d", len(evs))
 	}
-	if f.notifier.lastEvent != "updated" {
-		t.Errorf("event = %q, want updated", f.notifier.lastEvent)
-	}
-	if f.notifier.lastID != f.topic.UserID {
-		t.Errorf("notification sent to wrong user")
+	ev := evs[0]
+	if ev.UserID != f.topic.UserID {
+		t.Errorf("event UserID mismatch")
 	}
 	// Single-payload topics summarise with the topic display name.
-	if !strings.Contains(f.notifier.lastMsg.Body, "Fake Topic") {
-		t.Errorf("body = %q, want it to mention the topic name", f.notifier.lastMsg.Body)
+	if !strings.Contains(ev.Body, "Fake Topic") {
+		t.Errorf("body = %q, want it to mention the topic name", ev.Body)
 	}
 	// The notification fires when the torrent is handed to the client (download
 	// START), not when it finishes. The body must not claim completion.
-	if strings.Contains(f.notifier.lastMsg.Body, "Downloaded") {
-		t.Errorf("body = %q, must not claim the torrent finished downloading", f.notifier.lastMsg.Body)
+	if strings.Contains(ev.Body, "Downloaded") {
+		t.Errorf("body = %q, must not claim the torrent finished downloading", ev.Body)
 	}
-	if !strings.Contains(f.notifier.lastMsg.Body, "Sent to client") {
-		t.Errorf("body = %q, want it to say the release was sent to the client", f.notifier.lastMsg.Body)
+	if !strings.Contains(ev.Body, "Sent to client") {
+		t.Errorf("body = %q, want it to say the release was sent to the client", ev.Body)
 	}
 }
 
@@ -481,8 +495,8 @@ func TestRunCheck_NoDownload_DoesNotNotify(t *testing.T) {
 
 	f.s.runCheck(context.Background(), f.s.log, f.topic)
 
-	if f.notifier.calls != 0 {
-		t.Errorf("expected no notification when nothing downloaded, got %d", f.notifier.calls)
+	if evs := f.emitter.ofType(events.DownloadSubmitted); len(evs) != 0 {
+		t.Errorf("expected no download.submitted event when nothing downloaded, got %d", len(evs))
 	}
 }
 
@@ -495,20 +509,19 @@ func TestRunCheck_CheckError_NotifiesError(t *testing.T) {
 
 	f.s.runCheck(context.Background(), f.s.log, f.topic)
 
-	if f.notifier.calls != 1 {
-		t.Fatalf("expected 1 error notification on first failure, got %d", f.notifier.calls)
+	evs := f.emitter.ofType(events.CheckFailed)
+	if len(evs) != 1 {
+		t.Fatalf("expected 1 check.failed event on first failure, got %d", len(evs))
 	}
-	if f.notifier.lastEvent != "error" {
-		t.Errorf("event = %q, want error", f.notifier.lastEvent)
+	ev := evs[0]
+	if ev.UserID != f.topic.UserID {
+		t.Errorf("check.failed event UserID mismatch")
 	}
-	if f.notifier.lastID != f.topic.UserID {
-		t.Errorf("error notification sent to wrong user")
+	if ev.NotifierID != f.topic.NotifierID {
+		t.Errorf("check.failed event did not carry the topic's notifier override")
 	}
-	if f.notifier.lastNotifierID != f.topic.NotifierID {
-		t.Errorf("error notification did not route via the topic's notifier")
-	}
-	if !strings.Contains(f.notifier.lastMsg.Body, "tracker boom") {
-		t.Errorf("body = %q, want it to include the underlying error", f.notifier.lastMsg.Body)
+	if !strings.Contains(ev.Body, "tracker boom") {
+		t.Errorf("body = %q, want it to include the underlying error", ev.Body)
 	}
 }
 
@@ -522,8 +535,8 @@ func TestRunCheck_CheckError_AlreadyErrored_NoNotify(t *testing.T) {
 
 	f.s.runCheck(context.Background(), f.s.log, f.topic)
 
-	if f.notifier.calls != 0 {
-		t.Errorf("expected no error notification on a repeat failure, got %d", f.notifier.calls)
+	if evs := f.emitter.ofType(events.CheckFailed); len(evs) != 0 {
+		t.Errorf("expected no check.failed event on a repeat failure, got %d", len(evs))
 	}
 }
 
@@ -553,10 +566,11 @@ func TestRunCheck_Episodes_NotifiesWithEpisodeLabels(t *testing.T) {
 
 	f.s.runCheck(context.Background(), f.s.log, f.topic)
 
-	if f.notifier.calls != 1 {
-		t.Fatalf("expected 1 summary notification, got %d", f.notifier.calls)
+	evs := f.emitter.ofType(events.DownloadSubmitted)
+	if len(evs) != 1 {
+		t.Fatalf("expected 1 download.submitted event, got %d", len(evs))
 	}
-	body := f.notifier.lastMsg.Body
+	body := evs[0].Body
 	if !strings.Contains(body, "s01e01") || !strings.Contains(body, "s01e02") {
 		t.Errorf("body = %q, want both episode labels", body)
 	}
@@ -1006,8 +1020,8 @@ func (f *fakeTrackerWithCreds) Verify(_ context.Context, _ *domain.TrackerCreden
 }
 
 // newSessionFixture builds a scheduler wired for session-expiry tests.
-// creds is injected as the credentials repo; notifier is the fake notifier.
-func newSessionFixture(t *testing.T, creds credentialsRepo, notifier eventNotifier) (*Scheduler, *domain.Topic) {
+// creds is injected as the credentials repo; emit is the fake emitter.
+func newSessionFixture(t *testing.T, creds credentialsRepo, emit emitter) (*Scheduler, *domain.Topic) {
 	t.Helper()
 	cfg := &config.Config{
 		SchedulerEnabled:            true,
@@ -1028,7 +1042,7 @@ func newSessionFixture(t *testing.T, creds credentialsRepo, notifier eventNotifi
 		}},
 		creds:         creds,
 		master:        &fakeDecryptor{},
-		notifier:      notifier,
+		emit:          emit,
 		lookupTracker: func(_ string) registry.Tracker { return nil },
 		lookupClient:  func(_ string) registry.Client { return nil },
 		jobs:          make(chan *domain.Topic, 1),
@@ -1067,9 +1081,9 @@ func TestLoadCredentials_SessionExpired_WonTransition(t *testing.T) {
 		SecretEnc:        []byte("secret"),
 	}
 	creds := &fakeCredsSession{stored: storedCred, markExpiredWon: true}
-	notifier := &fakeNotifier{}
+	emit := &fakeEmitter{}
 
-	s, topic := newSessionFixture(t, creds, notifier)
+	s, topic := newSessionFixture(t, creds, emit)
 	topic.UserID = storedCred.UserID
 	s.lookupTracker = func(_ string) registry.Tracker { return tr }
 
@@ -1086,11 +1100,11 @@ func TestLoadCredentials_SessionExpired_WonTransition(t *testing.T) {
 	if got := creds.markExpiredCalls; got != 1 {
 		t.Errorf("MarkSessionExpired: want 1 call, got %d", got)
 	}
-	if got := notifier.calls; got != 1 {
-		t.Errorf("notifier.Send: want 1 call, got %d", got)
-	}
-	if notifier.lastID != storedCred.UserID {
-		t.Errorf("notifier.Send userID: want %s, got %s", storedCred.UserID, notifier.lastID)
+	evs := emit.ofType(events.SessionExpired)
+	if len(evs) != 1 {
+		t.Errorf("session.expired emit: want 1, got %d", len(evs))
+	} else if evs[0].UserID != storedCred.UserID {
+		t.Errorf("session.expired UserID: want %s, got %s", storedCred.UserID, evs[0].UserID)
 	}
 }
 
@@ -1115,9 +1129,9 @@ func TestLoadCredentials_SessionExpired_LostRace(t *testing.T) {
 		SecretEnc:        []byte("secret"),
 	}
 	creds := &fakeCredsSession{stored: storedCred, markExpiredWon: false}
-	notifier := &fakeNotifier{}
+	emit := &fakeEmitter{}
 
-	s, topic := newSessionFixture(t, creds, notifier)
+	s, topic := newSessionFixture(t, creds, emit)
 	topic.UserID = storedCred.UserID
 	s.lookupTracker = func(_ string) registry.Tracker { return tr }
 
@@ -1134,8 +1148,8 @@ func TestLoadCredentials_SessionExpired_LostRace(t *testing.T) {
 	if got := creds.markExpiredCalls; got != 1 {
 		t.Errorf("MarkSessionExpired: want 1 attempt (the UPDATE is the gate), got %d", got)
 	}
-	if got := notifier.calls; got != 0 {
-		t.Errorf("notifier.Send: want 0 calls (lost the transition race), got %d", got)
+	if evs := emit.ofType(events.SessionExpired); len(evs) != 0 {
+		t.Errorf("session.expired emit: want 0 (lost the transition race), got %d", len(evs))
 	}
 }
 
@@ -1158,9 +1172,9 @@ func TestLoadCredentials_SessionExpired_AlreadyFlagged(t *testing.T) {
 		SecretEnc:        []byte("secret"),
 	}
 	creds := &fakeCredsSession{stored: storedCred}
-	notifier := &fakeNotifier{}
+	emit := &fakeEmitter{}
 
-	s, topic := newSessionFixture(t, creds, notifier)
+	s, topic := newSessionFixture(t, creds, emit)
 	topic.UserID = storedCred.UserID
 	s.lookupTracker = func(_ string) registry.Tracker { return tr }
 
@@ -1177,48 +1191,92 @@ func TestLoadCredentials_SessionExpired_AlreadyFlagged(t *testing.T) {
 	if got := creds.markExpiredCalls; got != 0 {
 		t.Errorf("MarkSessionExpired: want 0 calls (already flagged), got %d", got)
 	}
-	if got := notifier.calls; got != 0 {
-		t.Errorf("notifier.Send: want 0 calls (already flagged), got %d", got)
+	if evs := emit.ofType(events.SessionExpired); len(evs) != 0 {
+		t.Errorf("session.expired emit: want 0 (already flagged), got %d", len(evs))
 	}
 }
 
-// TestNotifyUpdated_RoutesToTopicNotifier verifies notifyUpdated forwards
-// the topic's NotifierID to the dispatcher so a per-topic override is honoured.
+// TestNotifyUpdated_RoutesToTopicNotifier verifies notifyUpdated carries
+// the topic's NotifierID in the emitted event so the bus can route via it.
 func TestNotifyUpdated_RoutesToTopicNotifier(t *testing.T) {
-	notifier := &fakeNotifier{}
-	s := &Scheduler{cfg: &config.Config{PublicBaseURL: "http://x"}, notifier: notifier}
+	emit := &fakeEmitter{}
+	topicID := uuid.New()
+	s := &Scheduler{cfg: &config.Config{PublicBaseURL: "http://x"}, emit: emit}
 
 	notifierID := uuid.New()
-	topic := &domain.Topic{UserID: uuid.New(), DisplayName: "My Show", NotifierID: &notifierID}
+	topic := &domain.Topic{ID: topicID, UserID: uuid.New(), DisplayName: "My Show", NotifierID: &notifierID}
 
 	s.notifyUpdated(context.Background(), topic, []string{"s01e01"})
 
-	if notifier.calls != 1 {
-		t.Fatalf("want 1 notification, got %d", notifier.calls)
+	evs := emit.ofType(events.DownloadSubmitted)
+	if len(evs) != 1 {
+		t.Fatalf("want 1 download.submitted event, got %d", len(evs))
 	}
-	if notifier.lastEvent != "updated" {
-		t.Errorf("event = %q, want updated", notifier.lastEvent)
-	}
-	if notifier.lastNotifierID == nil || *notifier.lastNotifierID != notifierID {
-		t.Errorf("notifierID = %v, want %s", notifier.lastNotifierID, notifierID)
+	ev := evs[0]
+	if ev.NotifierID == nil || *ev.NotifierID != notifierID {
+		t.Errorf("NotifierID = %v, want %s", ev.NotifierID, notifierID)
 	}
 }
 
 // TestNotifyUpdated_NilNotifierID_GlobalFanOut verifies a topic without an
-// override passes nil through (global fan-out, unchanged behaviour).
+// override emits nil NotifierID (global fan-out, unchanged behaviour).
 func TestNotifyUpdated_NilNotifierID_GlobalFanOut(t *testing.T) {
-	notifier := &fakeNotifier{}
-	s := &Scheduler{cfg: &config.Config{PublicBaseURL: "http://x"}, notifier: notifier}
+	emit := &fakeEmitter{}
+	topicID := uuid.New()
+	s := &Scheduler{cfg: &config.Config{PublicBaseURL: "http://x"}, emit: emit}
 
-	topic := &domain.Topic{UserID: uuid.New(), DisplayName: "My Show", NotifierID: nil}
+	topic := &domain.Topic{ID: topicID, UserID: uuid.New(), DisplayName: "My Show", NotifierID: nil}
 
 	s.notifyUpdated(context.Background(), topic, []string{"s01e01"})
 
-	if notifier.calls != 1 {
-		t.Fatalf("want 1 notification, got %d", notifier.calls)
+	evs := emit.ofType(events.DownloadSubmitted)
+	if len(evs) != 1 {
+		t.Fatalf("want 1 download.submitted event, got %d", len(evs))
 	}
-	if notifier.lastNotifierID != nil {
-		t.Errorf("notifierID = %v, want nil", notifier.lastNotifierID)
+	if evs[0].NotifierID != nil {
+		t.Errorf("NotifierID = %v, want nil", evs[0].NotifierID)
+	}
+}
+
+// TestRunCheck_NewRelease_EmitsReleaseFoundAndSubmitted drives one check
+// that detects a new hash and submits one payload, asserting the typed
+// events fire in the expected order with no check.failed emitted.
+func TestRunCheck_NewRelease_EmitsReleaseFoundAndSubmitted(t *testing.T) {
+	const hash = "c12fe1c06bba254a9dc9f519b335aa7c1367a88a"
+	tr := &fakeTracker{
+		name: "faketracker",
+		checks: []checkResult{
+			{check: &domain.Check{Hash: "new-hash"}, err: nil},
+		},
+		downloads: []downloadResult{
+			{payload: &domain.Payload{MagnetURI: "magnet:?xt=urn:btih:" + hash}, err: nil},
+			{err: registry.ErrNoPendingEpisodes},
+		},
+	}
+	f := newFixture(t, tr, false)
+
+	f.s.runCheck(context.Background(), f.s.log, f.topic)
+
+	typs := f.emitter.types()
+
+	// Must contain release.found and download.submitted.
+	found := func(tp events.Type) bool {
+		for _, ty := range typs {
+			if ty == tp {
+				return true
+			}
+		}
+		return false
+	}
+	if !found(events.ReleaseFound) {
+		t.Errorf("expected release.found in emitted events, got %v", typs)
+	}
+	if !found(events.DownloadSubmitted) {
+		t.Errorf("expected download.submitted in emitted events, got %v", typs)
+	}
+	// Must NOT emit check.failed on success.
+	if found(events.CheckFailed) {
+		t.Errorf("unexpected check.failed in emitted events, got %v", typs)
 	}
 }
 

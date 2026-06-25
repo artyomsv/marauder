@@ -34,6 +34,7 @@ import (
 	"github.com/artyomsv/marauder/backend/internal/crypto"
 	"github.com/artyomsv/marauder/backend/internal/db/repo"
 	"github.com/artyomsv/marauder/backend/internal/domain"
+	"github.com/artyomsv/marauder/backend/internal/events"
 	"github.com/artyomsv/marauder/backend/internal/extra"
 	"github.com/artyomsv/marauder/backend/internal/infohash"
 	"github.com/artyomsv/marauder/backend/internal/metrics"
@@ -83,14 +84,11 @@ type credentialsRepo interface {
 	MarkSessionExpired(ctx context.Context, id, userID uuid.UUID) (bool, error)
 }
 
-// eventNotifier is the subset of *notify.Dispatcher that the scheduler
-// uses to fire notifications (a new-release "updated" alert, a one-time
-// session-expiry "error" alert). Defined as an interface so the scheduler
-// package does not need to import notify (avoiding any potential import
-// cycle). The dispatcher filters by each notifier's event subscription.
-type eventNotifier interface {
-	Send(ctx context.Context, userID uuid.UUID, event string, msg domain.Message) int
-	SendVia(ctx context.Context, userID uuid.UUID, notifierID *uuid.UUID, event string, msg domain.Message) int
+// emitter is the subset of *events.Bus the scheduler uses to publish typed
+// lifecycle events. Defined as an interface so the scheduler stays
+// unit-testable without the bus, and nil-safe in tests that ignore events.
+type emitter interface {
+	Emit(ctx context.Context, ev events.Event)
 }
 
 // decryptor is the subset of *crypto.MasterKey that the scheduler uses.
@@ -132,7 +130,7 @@ type Scheduler struct {
 	creds      credentialsRepo
 	deliveries deliveriesRecorder // nil-safe; records what was pushed to a client
 	master     decryptor
-	notifier   eventNotifier // nil-safe; fires new-release + session-expiry alerts
+	emit       emitter // nil-safe; publishes typed lifecycle events
 
 	// Test seams (default to registry.GetTracker / registry.GetClient).
 	lookupTracker trackerLookupFn
@@ -153,7 +151,7 @@ type Scheduler struct {
 }
 
 // New constructs a scheduler.
-func New(cfg *config.Config, log zerolog.Logger, topics *repo.Topics, clients *repo.Clients, creds *repo.TrackerCredentials, deliveries *repo.Deliveries, master *crypto.MasterKey, notifier eventNotifier) *Scheduler {
+func New(cfg *config.Config, log zerolog.Logger, topics *repo.Topics, clients *repo.Clients, creds *repo.TrackerCredentials, deliveries *repo.Deliveries, master *crypto.MasterKey, emit emitter) *Scheduler {
 	return &Scheduler{
 		cfg:           cfg,
 		log:           log.With().Str("component", "scheduler").Logger(),
@@ -162,7 +160,7 @@ func New(cfg *config.Config, log zerolog.Logger, topics *repo.Topics, clients *r
 		creds:         creds,
 		deliveries:    deliveries,
 		master:        master,
-		notifier:      notifier,
+		emit:          emit,
 		lookupTracker: registry.GetTracker,
 		lookupClient:  registry.GetClient,
 		jobs:          make(chan *domain.Topic, cfg.SchedulerWorkers*4),
@@ -341,6 +339,11 @@ func (s *Scheduler) runCheck(ctx context.Context, log zerolog.Logger, t *domain.
 		return
 	}
 
+	// Emit check.started once the tracker plugin is confirmed present.
+	if s.emit != nil {
+		s.emit.Emit(ctx, events.Event{UserID: t.UserID, TopicID: &t.ID, Type: events.CheckStarted})
+	}
+
 	// checkCtx covers credential decryption, login, and the initial
 	// Check call. The per-episode Download loop allocates its own
 	// per-iteration context with the same TrackerHTTPTimeout so each
@@ -370,6 +373,16 @@ func (s *Scheduler) runCheck(ctx context.Context, log zerolog.Logger, t *domain.
 	if updated {
 		log.Info().Str("old_hash", t.LastHash).Str("new_hash", check.Hash).Msg("topic updated")
 		metrics.TrackerUpdatesTotal.WithLabelValues(t.TrackerName).Inc()
+
+		// Emit release.found once per new hash, before draining episodes.
+		if s.emit != nil {
+			s.emit.Emit(ctx, events.Event{
+				UserID: t.UserID, TopicID: &t.ID, NotifierID: t.NotifierID,
+				Type: events.ReleaseFound, Severity: "info",
+				Title: t.DisplayName, Body: "New release detected",
+				Link: s.cfg.PublicBaseURL + "/topics",
+			})
+		}
 
 		var dlErr error
 		delivered, dlErr = s.downloadAllPending(ctx, log, t, tr, check, creds)
@@ -416,15 +429,22 @@ func (s *Scheduler) runCheck(ctx context.Context, log zerolog.Logger, t *domain.
 	}
 
 	metrics.SchedulerTopicChecksTotal.WithLabelValues(t.TrackerName, "ok").Inc()
-	s.recordResult(ctx, log, t.ID, check.Hash, updated || anySubmitted, s.backoff(t, false, nil), "")
+	nextCheckAt := s.backoff(t, false, nil)
+	if s.emit != nil {
+		s.emit.Emit(ctx, events.Event{
+			UserID: t.UserID, TopicID: &t.ID, Type: events.CheckCompleted,
+			Data: map[string]any{"next_check_at": nextCheckAt.UTC().Format(time.RFC3339)},
+		})
+	}
+	s.recordResult(ctx, log, t.ID, check.Hash, updated || anySubmitted, nextCheckAt, "")
 	s.recordChecked(updated || anySubmitted, false)
 }
 
-// notifyUpdated fires a single "new release" notification summarising what
-// was delivered this tick. Best-effort: a nil notifier or zero deliveries
-// is a no-op, and the dispatcher itself swallows per-notifier failures.
+// notifyUpdated emits a download.submitted event summarising what was
+// delivered this tick. Best-effort: a nil emitter or zero deliveries is a
+// no-op.
 func (s *Scheduler) notifyUpdated(ctx context.Context, t *domain.Topic, labels []string) {
-	if s.notifier == nil || len(labels) == 0 {
+	if s.emit == nil || len(labels) == 0 {
 		return
 	}
 	const maxList = 10
@@ -438,28 +458,27 @@ func (s *Scheduler) notifyUpdated(ctx context.Context, t *domain.Topic, labels [
 	if overflow > 0 {
 		body += fmt.Sprintf(" (+%d more)", overflow)
 	}
-	s.notifier.SendVia(ctx, t.UserID, t.NotifierID, "updated", domain.Message{
-		Title: t.DisplayName,
-		Body:  body,
-		Link:  s.cfg.PublicBaseURL + "/topics",
+	s.emit.Emit(ctx, events.Event{
+		UserID: t.UserID, TopicID: &t.ID, NotifierID: t.NotifierID,
+		Type: events.DownloadSubmitted, Severity: "info",
+		Title: t.DisplayName, Body: body, Link: s.cfg.PublicBaseURL + "/topics",
 	})
 }
 
-// notifyError fires a one-shot "error" notification when a topic first enters
-// the error state (tracker check, download/client, or missing-plugin failure).
-// Deduped by the pre-check ConsecutiveErrors snapshot: only the first failure
-// (count 0) notifies, so a topic retrying on its backoff schedule doesn't spam
-// every tick. Routed via the topic's notifier override or the user's default
-// notifiers — same path as new-release alerts — and best-effort (nil notifier
-// is a no-op; the dispatcher honours each notifier's "error" subscription).
+// notifyError emits a check.failed event when a topic first enters the error
+// state (tracker check, download/client, or missing-plugin failure). Deduped
+// by the pre-check ConsecutiveErrors snapshot: only the first failure (count
+// 0) emits, so a topic retrying on its backoff schedule doesn't spam every
+// tick.
 func (s *Scheduler) notifyError(ctx context.Context, t *domain.Topic, errMsg string) {
-	if s.notifier == nil || t.ConsecutiveErrors > 0 {
+	if s.emit == nil || t.ConsecutiveErrors > 0 {
 		return
 	}
-	s.notifier.SendVia(ctx, t.UserID, t.NotifierID, "error", domain.Message{
-		Title: "Topic check failed: " + t.DisplayName,
-		Body:  errMsg,
-		Link:  s.cfg.PublicBaseURL + "/topics",
+	s.emit.Emit(ctx, events.Event{
+		UserID: t.UserID, TopicID: &t.ID, NotifierID: t.NotifierID,
+		Type: events.CheckFailed, Severity: "error",
+		Title: "Topic check failed: " + t.DisplayName, Body: errMsg,
+		Link: s.cfg.PublicBaseURL + "/topics",
 	})
 }
 
@@ -507,10 +526,12 @@ func (s *Scheduler) loadCredentials(ctx context.Context, checkCtx context.Contex
 			if merr != nil {
 				log.Warn().Err(merr).Msg("mark session expired failed")
 			}
-			if transitioned && s.notifier != nil {
-				s.notifier.Send(ctx, stored.UserID, "error", domain.Message{
+			if transitioned && s.emit != nil {
+				s.emit.Emit(ctx, events.Event{
+					UserID: stored.UserID, TopicID: &t.ID, NotifierID: t.NotifierID,
+					Type: events.SessionExpired, Severity: "error",
 					Title: "Tracker session expired",
-					Body:  t.TrackerName + " needs re-authentication — solve the captcha in Marauder.",
+					Body:  t.TrackerName + " needs re-authentication",
 					Link:  s.cfg.PublicBaseURL + "/credentials",
 				})
 			}
