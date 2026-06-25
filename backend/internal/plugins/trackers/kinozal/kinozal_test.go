@@ -347,9 +347,9 @@ func (h *hostRecordingRewrite) RoundTrip(req *http.Request) (*http.Response, err
 }
 
 func TestCheck_CanonicalizesMirrorHost(t *testing.T) {
-	p := newTestPlugin(t)           // p.domain == test server host
+	p := newTestPlugin(t) // p.domain == test server host
 	rec := &hostRecordingRewrite{target: p.domain}
-	p.transport = rec              // applied per-session inside fetch()
+	p.transport = rec // applied per-session inside fetch()
 
 	// Topic URL points at a different mirror than p.domain.
 	topic := &domain.Topic{URL: "https://kinozal.guru/details.php?id=99999"}

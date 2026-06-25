@@ -65,32 +65,32 @@ const (
 
 // Topic represents a URL that Marauder is monitoring.
 type Topic struct {
-	ID                uuid.UUID
-	UserID            uuid.UUID
-	TrackerName       string
-	URL               string
-	DisplayName       string
-	ImageURL          string
+	ID          uuid.UUID
+	UserID      uuid.UUID
+	TrackerName string
+	URL         string
+	DisplayName string
+	ImageURL    string
 	// DisplayNameIsPlaceholder is true while DisplayName is a tracker-generated
 	// placeholder (e.g. "Kinozal topic 123") eligible for scheduler self-heal.
 	// Set false once a real title is resolved (metadata, first self-heal, or a
 	// user rename) so self-heal can never downgrade a good title. See issue #90.
 	DisplayNameIsPlaceholder bool
-	ClientID          *uuid.UUID
-	NotifierID        *uuid.UUID
-	DownloadDir       string
-	Category          string
-	Extra             map[string]any
-	LastHash          string
-	LastCheckedAt     *time.Time
-	LastUpdatedAt     *time.Time
-	NextCheckAt       time.Time
-	CheckIntervalSec  int
-	ConsecutiveErrors int
-	Status            TopicStatus
-	LastError         string
-	CreatedAt         time.Time
-	UpdatedAt         time.Time
+	ClientID                 *uuid.UUID
+	NotifierID               *uuid.UUID
+	DownloadDir              string
+	Category                 string
+	Extra                    map[string]any
+	LastHash                 string
+	LastCheckedAt            *time.Time
+	LastUpdatedAt            *time.Time
+	NextCheckAt              time.Time
+	CheckIntervalSec         int
+	ConsecutiveErrors        int
+	Status                   TopicStatus
+	LastError                string
+	CreatedAt                time.Time
+	UpdatedAt                time.Time
 }
 
 // TrackerCredential holds a user's login details for a tracker plugin.
