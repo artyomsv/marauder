@@ -172,6 +172,10 @@ export const api = {
   topicStatus: (id: string) =>
     request<TopicStatus>("GET", `/topics/${id}/status`),
 
+  // /topics/{id}/events — read-only per-topic history timeline.
+  topicEvents: (id: string) =>
+    request<{ events: TopicEvent[] }>("GET", `/topics/${id}/events`),
+
   // GET /notifiers/{id} — includes decrypted config for the edit form.
   getNotifier: (id: string) =>
     request<NotifierDetail>("GET", `/notifiers/${id}`),
@@ -239,6 +243,16 @@ export interface DeliveryStatus {
 export interface TopicStatus {
   client_supports_status: boolean;
   deliveries: DeliveryStatus[];
+}
+
+// One event in the per-topic history timeline (GET /topics/{id}/events).
+export interface TopicEvent {
+  id: number;
+  event_type: string;
+  severity: "info" | "warn" | "error";
+  message: string;
+  data?: Record<string, unknown>;
+  created_at: string;
 }
 
 // Response of GET /trackers/preview. Either field may be empty.
