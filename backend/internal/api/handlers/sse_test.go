@@ -1,7 +1,9 @@
 package handlers
 
 import (
+	"bufio"
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -70,5 +72,86 @@ func TestSSE_Stream_ValidTicket_StreamsFrames(t *testing.T) {
 	}
 	if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/event-stream") {
 		t.Errorf("Content-Type = %q, want text/event-stream", ct)
+	}
+}
+
+// TestSSE_Stream_SurvivesServerWriteTimeout proves that the SSE stream is not
+// hard-closed by the shared http.Server WriteTimeout. It runs against a REAL
+// httptest server (not httptest.ResponseRecorder) so that WriteTimeout is
+// actually enforced. Without the rc.SetWriteDeadline(time.Time{}) fix the
+// second read reliably fails because the connection is closed at the deadline.
+func TestSSE_Stream_SurvivesServerWriteTimeout(t *testing.T) {
+	const writeTimeout = 250 * time.Millisecond
+
+	hub := &fakeHub{ch: make(chan []byte, 4)}
+	tickets := &fakeTickets{issued: "tok", uid: uuid.New(), valid: true}
+	h := &SSE{Hub: hub, Tickets: tickets, Events: fakeEventLister{}, HeartbeatInterval: time.Hour}
+
+	ts := httptest.NewUnstartedServer(http.HandlerFunc(h.Stream))
+	ts.Config.WriteTimeout = writeTimeout
+	ts.Start()
+	defer ts.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, ts.URL+"?ticket=tok", nil)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	resp, err := ts.Client().Do(req)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+
+	reader := bufio.NewReader(resp.Body)
+
+	// Push and read the first frame (before the WriteTimeout window expires).
+	hub.ch <- []byte(fmt.Sprintf("data: {\"n\":1}\n\n"))
+	frame1, err := readSSEFrame(reader)
+	if err != nil {
+		t.Fatalf("read first frame: %v", err)
+	}
+	if !strings.Contains(frame1, `"n":1`) {
+		t.Fatalf("first frame unexpected: %q", frame1)
+	}
+
+	// Wait longer than the server's WriteTimeout so it would fire if still active.
+	time.Sleep(writeTimeout + 150*time.Millisecond)
+
+	// Push and read a second frame. With the bug this read returns an error
+	// because the server has already closed the connection. With the fix it
+	// succeeds because the write deadline was cleared.
+	hub.ch <- []byte(fmt.Sprintf("data: {\"n\":2}\n\n"))
+	frame2, err := readSSEFrame(reader)
+	if err != nil {
+		t.Fatalf("read second frame after WriteTimeout window: %v (stream was killed by WriteTimeout — fix is missing)", err)
+	}
+	if !strings.Contains(frame2, `"n":2`) {
+		t.Fatalf("second frame unexpected: %q", frame2)
+	}
+
+	// Clean up: cancel the request context so the handler goroutine exits.
+	cancel()
+}
+
+// readSSEFrame reads lines from r until it hits the blank line that terminates
+// an SSE frame, and returns all lines joined.
+func readSSEFrame(r *bufio.Reader) (string, error) {
+	var sb strings.Builder
+	for {
+		line, err := r.ReadString('\n')
+		sb.WriteString(line)
+		if err != nil {
+			return sb.String(), err
+		}
+		if line == "\n" {
+			return sb.String(), nil
+		}
 	}
 }

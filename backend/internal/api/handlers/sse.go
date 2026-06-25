@@ -70,6 +70,13 @@ func (h *SSE) Stream(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	flusher.Flush()
 
+	// A long-lived SSE stream must not be killed by the shared server's
+	// WriteTimeout (an absolute deadline, not reset by Flush). Clear it for
+	// this connection. (No-op for writers that don't support deadlines, e.g.
+	// httptest.ResponseRecorder.)
+	rc := http.NewResponseController(w)
+	_ = rc.SetWriteDeadline(time.Time{})
+
 	// Replay missed persisted events on reconnect.
 	if lastID, err := strconv.ParseInt(r.Header.Get("Last-Event-ID"), 10, 64); err == nil && lastID > 0 {
 		if rows, lerr := h.Events.ListForUserSince(r.Context(), uid, lastID); lerr == nil {
