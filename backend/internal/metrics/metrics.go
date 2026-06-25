@@ -146,6 +146,17 @@ var (
 	)
 )
 
+// SSE metrics ------------------------------------------------------------
+
+var (
+	// SSEDroppedFramesTotal counts SSE frames dropped because a subscriber's
+	// buffer was full (slow client) — drop-on-full keeps the hub non-blocking.
+	SSEDroppedFramesTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "marauder_sse_dropped_frames_total",
+		Help: "SSE frames dropped due to a full subscriber buffer.",
+	})
+)
+
 // ObserveHTTP is a convenience helper for the logging middleware.
 func ObserveHTTP(method, route string, status int, dur time.Duration) {
 	s := strconv.Itoa(status)
