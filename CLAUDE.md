@@ -50,9 +50,10 @@ techdebt/       Debt-tracking files (one per issue, see global rule)
 | `config` | env-driven config struct (caarlos0/env) — **add new env vars here** |
 | `crypto` | AES-256-GCM for tracker credentials and client config blobs |
 | `db` / `db/repo` | pgxpool wrapper + repository structs (`Topics`, `Clients`, `Notifiers`, `Users`, `TrackerCredentials`, `Deliveries`, `Audit`, `Settings`). `Settings` (repo added for the Sonarr integration) reads/writes the singleton `settings` row — `GetSonarr`/`UpsertSonarr` (API key encrypted at rest like `oidc_client_secret_enc`, migration `0009`) + `UpdateSonarrCursor` (history-poll cursor). `Topics` adds `GetByURL(user,url)` for the poller's dedup pre-check; `Users` adds `GetInitialAdmin`. `TrackerCredentials` carries encrypted `secret_enc` (password) **and** `session_enc`/`session_nonce` (cookie-session blob; migration `0002`), plus a nullable `session_expired_at` marker (migration `0003`) the scheduler uses to dedupe expiry notifications (atomic `MarkSessionExpired`, cleared by `SetSession` on re-auth). `Deliveries` (migration `0006`, `topic_deliveries`) records every torrent pushed to a client — `{topic_id, infohash, label, client_id, delivered_at}`, unique on `(topic_id, infohash)` so `Record` is idempotent (`ON CONFLICT DO NOTHING`). `Notifiers` gains `is_default bool` (migration `0008`, per-type unique partial index) + `Update(ctx, id, userID, name, displayName string, events []string, isDefault bool, configEnc, configNonce []byte) error` |
-| **`notify`** | reusable notification dispatcher — `Send(userID, domain.Message)` fans out to all of a user's configured notifiers (best-effort, metered); `SendVia(userID, notifierID, …)` scopes the same fan-out to one notifier when a topic overrides it (nil ⇒ the user's **default** notifiers only (strict; none set ⇒ no send)). Consumers: scheduler new-release alerts + topic-error alerts (both per-topic via `SendVia`; error events deduped to fire once per error episode, on the first failure) + credential session-expiry alerts (global). The single event→notifier fan-out point |
+| **`notify`** | reusable notification dispatcher — `Send(userID, domain.Message)` fans out to all of a user's configured notifiers (best-effort, metered); `SendVia(userID, notifierID, …)` scopes the same fan-out to one notifier when a topic overrides it (nil ⇒ the user's **default** notifiers only (strict; none set ⇒ no send)). Consumers: the `events.Bus` fan-out (per-event subscription, wired via `subscribed()` which maps typed `events.Type` to notifier event list; legacy `['updated','error']` rows kept working via dispatcher aliases). The single event→notifier fan-out point. Error events are deduped to fire once per error episode (on the first failure); session-expiry alerts are global one-shot |
 | `domain` | core types: `Topic` (incl. per-topic `ClientID`, **`NotifierID`** (per-topic notifier override, migration `0007`), `DownloadDir`, `Category`, `ImageURL`), `Check`, `Payload`, `TrackerCredential`, `TopicDelivery`, `AddOptions` (`DownloadDir` + `Category`) |
-| **`topics`** | shared `BuildAndCreate(store, CreateInput)` — the one tracker-match → `Parse` → fail-open `ResolveMetadata` → build → persist sequence, used by BOTH the `POST /topics` handler and the Sonarr poller (no duplication). Idempotent: a `(user_id,url)` unique-violation returns `Result{Created:false}` instead of erroring. Sentinels `ErrNoTracker`/`ErrParse`/`ErrQualityUnsupported` |
+| **`events`** | canonical event taxonomy (`Type` consts: topic.added, check.{started,completed,failed}, release.found, download.submitted, session.expired, download.{progress,completed}) + per-type `Policy` (persist/notifiable/sse) + `Bus.Emit` — the single event→sinks fan-out (history `topic_events`, notifier dispatcher, SSE seam). Phase-1 SSE publisher is nil (Phase 3). Phase-2 `download.{progress,completed}` policy rows exist but nothing emits them yet. `GET /api/v1/topics/{id}/events` endpoint reads the history. Frontend: `components/topics/TopicEventsTimeline`, `components/notifiers/EventPicker`, `lib/events.ts` |
+| **`topics`** | shared `BuildAndCreate(store, CreateInput)` — the one tracker-match → `Parse` → fail-open `ResolveMetadata` → build → persist sequence, used by BOTH the `POST /topics` handler and the Sonarr poller (no duplication). Idempotent: a `(user_id,url)` unique-violation returns `Result{Created:false}` instead of erroring. Sentinels `ErrNoTracker`/`ErrParse`/`ErrQualityUnsupported`. **`TopicEvents`** sibling repo (history feed: `Record`/`ListForTopic`/`ListForUserSince`) |
 | **`sonarr`** | Sonarr integration (issue #86): a typed read-only API `Client` (`SystemStatus` for the Test button; `GrabHistorySince` reads `eventType=grabbed` history, extracting `data.nzbInfoUrl` — the tracker topic URL, **not** `guid`) + a `Poller` that mirrors the scheduler (ticker loop, ctx-cancel, fail-open). Self-gates on the DB `settings.sonarr_enabled`, resolves the owner (configured admin ⇒ first admin), dedups history by URL, filters by allowed trackers, and auto-creates topics via `topics.BuildAndCreate` with configured default client/category/dir. First enable is go-forward only (cursor stamped, no historical import). Admin config UI: **Integrations** page (`pages/Integrations.tsx` → `components/integrations/SonarrCard`); API `GET/PUT/POST /api/v1/system/sonarr{,/test}` |
 | **`infohash`** | derives the BitTorrent v1 infohash (lowercase hex) from a `Payload` — `FromMagnet` (parses `xt=urn:btih:`, hex or base32) / `FromTorrent` (SHA-1 of the bencoded `info` dict via a length-based scanner) / `FromPayload`. The universal key linking a delivery to a client's live torrent status |
 | **`extra`** | shared `extra.Int / StringSlice / String` helpers for the untyped `map[string]any` blobs in `Topic.Extra` and `Check.Extra` (added 2026-04-07; **use this instead of writing local helpers**) |
@@ -90,6 +91,8 @@ techdebt/       Debt-tracking files (one per issue, see global rule)
      `updated || anySubmitted`.
 4. `recordResult` — persists `next_check_at` (with exponential backoff
    on errors, capped at 6h) and writes the run summary metrics.
+
+**Event emission:** the scheduler emits typed `events.Event`s via `events.Bus.Emit` at key points: `topic.added` (on initial topic creation), `check.started`/`check.completed`/`check.failed` (per check cycle), `release.found` (per new torrent detected), `download.submitted` (after client send), and `session.expired` (on credential session loss). The bus fans out to `topic_events` history table (all events persisted if policy allows), the notifier dispatcher (for event-type subscriptions), and an SSE seam (Phase 3 — publisher nil in Phase 1).
 
 **Per-topic delivery:** `sendViaClient` passes `domain.AddOptions{DownloadDir:
 t.DownloadDir, Category: t.Category}` to the client plugin. Category is a
@@ -134,6 +137,10 @@ src/
 │   ├── shared/                Reusable across pages
 │   │   ├── DeleteConfirm.tsx  Two-click destructive confirm (uses useArmedConfirm)
 │   │   └── ResourceCard.tsx   Slot-based card chrome for list pages
+│   ├── topics/                Page-specific topic components
+│   │   └── TopicEventsTimeline.tsx  Per-topic event history feed (read-only)
+│   ├── notifiers/             Page-specific notifier components
+│   │   └── EventPicker.tsx    Event type checkbox list (for notifier subscription)
 │   └── ui/                    shadcn primitives — DO NOT hand-edit
 ├── hooks/                     (legacy folder, mostly empty — prefer lib/hooks)
 ├── i18n/                      en/ru dictionaries + useT hook
@@ -143,6 +150,7 @@ src/
 │   ├── prefs.ts               zustand store: theme, locale, density
 │   ├── queryKeys.ts           Centralised React Query key factory (QK)
 │   ├── utils.ts               cn() helper
+│   ├── events.ts              Event type defs + `eventLabel()` i18n helper
 │   └── hooks/
 │       ├── useArmedConfirm.ts  Two-state idle⇄armed machine with timeout
 │       ├── useDebouncedValue.ts Generic debounce for query inputs

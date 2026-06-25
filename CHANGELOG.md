@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Typed event taxonomy with per-event notifier subscriptions (new releases, sent-to-client, download finished, errors) and a read-only per-topic event timeline (#93).
+
 ## [1.4.0] - 2026-06-24
 
 ### Added
