@@ -108,3 +108,71 @@ func TestBuildAndCreate_OtherCreateErrorPropagates(t *testing.T) {
 		t.Fatalf("want raw db error, got %v", err)
 	}
 }
+
+// metaTracker is a tracker that also resolves real metadata. Matches
+// https://metatopics.test/* and returns a fixed title + image.
+type metaTracker struct{}
+
+func (metaTracker) Name() string        { return "metatopics-test" }
+func (metaTracker) DisplayName() string { return "Meta Topics Tracker" }
+func (metaTracker) CanParse(u string) bool {
+	return strings.HasPrefix(u, "https://metatopics.test/")
+}
+func (metaTracker) Parse(context.Context, string) (*domain.Topic, error) {
+	return &domain.Topic{DisplayName: "Meta topic 1", Extra: map[string]any{}}, nil
+}
+func (metaTracker) Check(context.Context, *domain.Topic, *domain.TrackerCredential) (*domain.Check, error) {
+	return nil, nil
+}
+func (metaTracker) Download(context.Context, *domain.Topic, *domain.Check, *domain.TrackerCredential) (*domain.Payload, error) {
+	return nil, nil
+}
+func (metaTracker) ResolveMetadata(_ context.Context, _ string, _ *domain.TrackerCredential) (*registry.Metadata, error) {
+	return &registry.Metadata{Title: "Real Release Name", ImageURL: "https://img.test/p.jpg"}, nil
+}
+
+func init() { registry.RegisterTracker(metaTracker{}) }
+
+func TestBuildAndCreate_PlaceholderName_FlagsPlaceholder(t *testing.T) {
+	// fakeTracker has no metadata; name falls back to Parse's "Placeholder".
+	store := &fakeStore{}
+	_, err := BuildAndCreate(context.Background(), store, CreateInput{UserID: uuid.New(), URL: goodURL})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !store.created.DisplayNameIsPlaceholder {
+		t.Errorf("want DisplayNameIsPlaceholder=true for Parse fallback name")
+	}
+	if store.created.DisplayName != "Placeholder" {
+		t.Errorf("display name = %q, want Placeholder", store.created.DisplayName)
+	}
+}
+
+func TestBuildAndCreate_ResolvedMetadata_FlagsResolved(t *testing.T) {
+	store := &fakeStore{}
+	_, err := BuildAndCreate(context.Background(), store, CreateInput{
+		UserID: uuid.New(), URL: "https://metatopics.test/topic/1",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if store.created.DisplayNameIsPlaceholder {
+		t.Errorf("want DisplayNameIsPlaceholder=false when metadata resolved a title")
+	}
+	if store.created.DisplayName != "Real Release Name" {
+		t.Errorf("display name = %q, want Real Release Name", store.created.DisplayName)
+	}
+}
+
+func TestBuildAndCreate_CallerSuppliedName_FlagsResolved(t *testing.T) {
+	store := &fakeStore{}
+	_, err := BuildAndCreate(context.Background(), store, CreateInput{
+		UserID: uuid.New(), URL: goodURL, DisplayName: "User Chosen",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if store.created.DisplayNameIsPlaceholder {
+		t.Errorf("want DisplayNameIsPlaceholder=false for caller-supplied name")
+	}
+}

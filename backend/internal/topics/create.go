@@ -92,6 +92,7 @@ func BuildAndCreate(ctx context.Context, store Store, in CreateInput) (*Result, 
 		interval = defaultCheckIntervalSec
 	}
 	displayName := in.DisplayName
+	resolved := in.DisplayName != "" // caller-supplied name is authoritative
 	if displayName == "" {
 		displayName = parsed.DisplayName
 	}
@@ -100,7 +101,7 @@ func BuildAndCreate(ctx context.Context, store Store, in CreateInput) (*Result, 
 	// a fresh topic isn't a "RuTracker topic 123" placeholder. Fail-open —
 	// any error leaves the placeholder and never blocks creation; the
 	// scheduler self-heals the title on the first check.
-	imageURL := resolveMetadata(ctx, tracker, in, &displayName)
+	imageURL := resolveMetadata(ctx, tracker, in, &displayName, &resolved)
 
 	extra := parsed.Extra
 	if extra == nil {
@@ -123,19 +124,20 @@ func BuildAndCreate(ctx context.Context, store Store, in CreateInput) (*Result, 
 	}
 
 	t := &domain.Topic{
-		UserID:           in.UserID,
-		TrackerName:      tracker.Name(),
-		URL:              in.URL,
-		DisplayName:      displayName,
-		ImageURL:         imageURL,
-		ClientID:         in.ClientID,
-		NotifierID:       in.NotifierID,
-		DownloadDir:      in.DownloadDir,
-		Category:         in.Category,
-		Extra:            extra,
-		CheckIntervalSec: interval,
-		NextCheckAt:      time.Now().UTC(),
-		Status:           domain.TopicStatusActive,
+		UserID:                   in.UserID,
+		TrackerName:              tracker.Name(),
+		URL:                      in.URL,
+		DisplayName:              displayName,
+		DisplayNameIsPlaceholder: !resolved,
+		ImageURL:                 imageURL,
+		ClientID:                 in.ClientID,
+		NotifierID:               in.NotifierID,
+		DownloadDir:              in.DownloadDir,
+		Category:                 in.Category,
+		Extra:                    extra,
+		CheckIntervalSec:         interval,
+		NextCheckAt:              time.Now().UTC(),
+		Status:                   domain.TopicStatusActive,
 	}
 
 	created, err := store.Create(ctx, t)
@@ -148,9 +150,10 @@ func BuildAndCreate(ctx context.Context, store Store, in CreateInput) (*Result, 
 	return &Result{Topic: created, Created: true}, nil
 }
 
-// resolveMetadata returns the poster URL and upgrades displayName in place
-// when the user didn't supply one. Fail-open: errors are swallowed.
-func resolveMetadata(ctx context.Context, tracker registry.Tracker, in CreateInput, displayName *string) string {
+// resolveMetadata returns the poster URL and, when the user didn't supply a
+// name, upgrades displayName in place and flips *resolved to true. Fail-open:
+// errors are swallowed, leaving the placeholder name and *resolved unchanged.
+func resolveMetadata(ctx context.Context, tracker registry.Tracker, in CreateInput, displayName *string, resolved *bool) string {
 	wm, ok := tracker.(registry.WithMetadata)
 	if !ok {
 		return ""
@@ -163,6 +166,7 @@ func resolveMetadata(ctx context.Context, tracker registry.Tracker, in CreateInp
 	}
 	if in.DisplayName == "" && meta.Title != "" {
 		*displayName = meta.Title
+		*resolved = true
 	}
 	return meta.ImageURL
 }
