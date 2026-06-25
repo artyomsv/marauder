@@ -193,7 +193,7 @@ The frontend consumes the backend `GET /api/v1/events` Server-Sent Events stream
 - **`useCheckStatus` store** — per-topic `{phase, nextCheckAt?, error?}` tracking, fed by `check.*` events. Drives the `TopicCheckStatus` chip (shows "Checking…" pulse or a live next-check countdown).
 - **`TopicCheckStatus` component** — renders live check phase and next-check time via `useCheckStatus`; subscribes to topic-level updates.
 
-The **status poll fallback** (in `DeliveryStatus`) is now gated by `useSseStatus.connected` — it only polls when SSE is down or not yet connected. On reconnect, the backend's `?last_event_id=` query fallback replays any persisted events, so no updates are lost even if the client restarts mid-check.
+The **status poll fallback** (in `DeliveryStatus`) is now gated by `useSseStatus.connected` — it only polls when SSE is down or not yet connected. On reconnect, the backend's `?last_event_id=` query fallback replays missed **persisted** events (releases, submissions, completions, errors), so those aren't lost across a restart; ephemeral `download.progress`/`check.*` frames carry no `id:` and re-sync from the next live frame instead.
 
 ### Conventions
 
