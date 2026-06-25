@@ -320,3 +320,52 @@ func TestDownload_ValidTopic_ReturnsTorrentBytes(t *testing.T) {
 		t.Error("expected torrent bytes")
 	}
 }
+
+func TestCanonicalDetailsURL_RebuildsFromDomain(t *testing.T) {
+	p := &plugin{domain: "kinozal.tv"}
+	got, err := p.canonicalDetailsURL("https://kinozal.guru/details.php?id=2072973")
+	if err != nil {
+		t.Fatalf("canonicalDetailsURL: %v", err)
+	}
+	if want := "https://kinozal.tv/details.php?id=2072973"; got != want {
+		t.Errorf("canonicalDetailsURL = %q, want %q", got, want)
+	}
+}
+
+// hostRecordingRewrite records the Host of every outgoing request, then
+// redirects it to the test server (target) over http so no real network is hit.
+type hostRecordingRewrite struct {
+	target string // test server host:port (p.domain)
+	hosts  []string
+}
+
+func (h *hostRecordingRewrite) RoundTrip(req *http.Request) (*http.Response, error) {
+	h.hosts = append(h.hosts, req.URL.Host)
+	req.URL.Scheme = "http"
+	req.URL.Host = h.target
+	return http.DefaultTransport.RoundTrip(req)
+}
+
+func TestCheck_CanonicalizesMirrorHost(t *testing.T) {
+	p := newTestPlugin(t)           // p.domain == test server host
+	rec := &hostRecordingRewrite{target: p.domain}
+	p.transport = rec              // applied per-session inside fetch()
+
+	// Topic URL points at a different mirror than p.domain.
+	topic := &domain.Topic{URL: "https://kinozal.guru/details.php?id=99999"}
+	check, err := p.Check(context.Background(), topic, nil)
+	if err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	if !strings.Contains(check.DisplayName, "The Movie") {
+		t.Errorf("display name = %q, want it to contain The Movie", check.DisplayName)
+	}
+	if len(rec.hosts) == 0 {
+		t.Fatal("no requests recorded")
+	}
+	// The FIRST request is the title/details fetch — it must target p.domain,
+	// not the raw kinozal.guru mirror.
+	if rec.hosts[0] != p.domain {
+		t.Errorf("title fetch host = %q, want canonical %q", rec.hosts[0], p.domain)
+	}
+}
