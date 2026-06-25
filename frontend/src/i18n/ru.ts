@@ -162,6 +162,18 @@ const ru: Record<string, string> = {
   "notifiers.events.prefix": "Уведомлять о",
   "notifiers.event.updated": "новых релизах",
   "notifiers.event.error": "ошибках",
+  "notifiers.notify_on": "Уведомлять о",
+
+  // Canonical event labels (notifier picker + topic timeline)
+  "events.topic_added": "тема добавлена",
+  "events.check_started": "проверка начата",
+  "events.check_completed": "проверка завершена",
+  "events.release_found": "новый релиз",
+  "events.download_submitted": "отправлено клиенту",
+  "events.download_progress": "прогресс загрузки",
+  "events.download_completed": "загрузка завершена",
+  "events.check_failed": "ошибка",
+  "events.session_expired": "сессия истекла",
 
   // Generic
   "common.loading": "Загрузка...",

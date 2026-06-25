@@ -160,6 +160,18 @@ const en: Record<string, string> = {
   "notifiers.events.prefix": "Notifies on",
   "notifiers.event.updated": "new releases",
   "notifiers.event.error": "errors",
+  "notifiers.notify_on": "Notify on",
+
+  // Canonical event labels (notifier picker + topic timeline)
+  "events.topic_added": "topic added",
+  "events.check_started": "check started",
+  "events.check_completed": "check completed",
+  "events.release_found": "new release",
+  "events.download_submitted": "sent to client",
+  "events.download_progress": "download progress",
+  "events.download_completed": "download finished",
+  "events.check_failed": "error",
+  "events.session_expired": "session expired",
 
   // Generic
   "common.loading": "Loading...",

@@ -10,6 +10,7 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { fieldsForPlugin } from "@/pages/Notifiers";
+import { EventPicker } from "@/components/notifiers/EventPicker";
 
 interface EditNotifierCardProps {
   id: string;
@@ -120,23 +121,7 @@ export function EditNotifierCard({ id, onClose, onSaved }: EditNotifierCardProps
                 ))}
               </div>
 
-              <div className="flex flex-wrap items-center gap-4 text-sm">
-                <span className="text-muted-foreground">Notify on:</span>
-                {(["updated", "error"] as const).map((ev) => (
-                  <label key={ev} className="inline-flex items-center gap-1.5">
-                    <input
-                      type="checkbox"
-                      checked={events.includes(ev)}
-                      onChange={(e) =>
-                        setEvents((prev) =>
-                          e.target.checked ? [...prev, ev] : prev.filter((x) => x !== ev),
-                        )
-                      }
-                    />
-                    {ev === "updated" ? "new releases" : "errors"}
-                  </label>
-                ))}
-              </div>
+              <EventPicker value={events} onChange={setEvents} />
 
               <label className="inline-flex items-center gap-2 text-sm">
                 <input
