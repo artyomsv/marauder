@@ -136,7 +136,7 @@ src/
 ├── App.tsx                    Route table + Suspense boundary
 ├── main.tsx                   ReactDOM entrypoint
 ├── components/
-│   ├── EventStreamProvider.tsx Single app-wide SSE connection (mounted in App)
+│   ├── EventStreamProvider.tsx Single app-wide SSE connection (mounted in ProtectedLayout, authed-only)
 │   ├── layout/AppShell.tsx    Header + sidebar + outlet
 │   ├── shared/                Reusable across pages
 │   │   ├── DeleteConfirm.tsx  Two-click destructive confirm (uses useArmedConfirm)
@@ -187,7 +187,7 @@ src/
 The frontend consumes the backend `GET /api/v1/events` Server-Sent Events stream via a centralized, single-connection pattern:
 
 - **`useEventStream` hook** — maintains one live `EventSource` per app session. Since the SSE ticket is single-use, reconnection is manual: fetch a fresh ticket on each connect attempt and carry the last-seen `event.lastEventId` forward as a `last_event_id=` query param to survive reconnects with replay. Backoff is exponential (1s → 30s max).
-- **`EventStreamProvider` component** — lifecycle host mounted in `App.tsx` that wraps authenticated content. Runs `useEventStream` only when logged in; cleanly closes on logout.
+- **`EventStreamProvider` component** — lifecycle host mounted in `ProtectedLayout` (in `App.tsx`), wrapping the authenticated `Outlet`. Runs `useEventStream` only when logged in; cleanly closes on logout.
 - **`applyEvent` function** (`lib/events-stream.ts`) — routes typed SSE events into two sinks: React Query cache (invalidations on `release.found` / `download.submitted` / `topic.added` / `download.completed`; in-place patch on `download.progress`) and the `useCheckStatus` store (check.started/completed/failed phases). Pure function, safe to unit-test.
 - **`useSseStatus` store** — boolean `connected` flag so views can disable polling fallbacks while SSE is live.
 - **`useCheckStatus` store** — per-topic `{phase, nextCheckAt?, error?}` tracking, fed by `check.*` events. Drives the `TopicCheckStatus` chip (shows "Checking…" pulse or a live next-check countdown).
