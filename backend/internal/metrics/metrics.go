@@ -106,6 +106,16 @@ var (
 	)
 )
 
+// Progress watcher metrics -----------------------------------------------
+
+var (
+	// ProgressCompletionsTotal counts download.completed events the watcher fired.
+	ProgressCompletionsTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "marauder_progress_completions_total",
+		Help: "Total downloads the progress watcher detected as finished.",
+	})
+)
+
 // Sonarr integration metrics ---------------------------------------------
 
 var (
