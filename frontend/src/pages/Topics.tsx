@@ -21,6 +21,7 @@ import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { cn, formatRelative } from "@/lib/utils";
 import { usePrefs } from "@/lib/prefs";
+import { useT } from "@/i18n";
 import { DeleteConfirm } from "@/components/shared/DeleteConfirm";
 import { QK } from "@/lib/queryKeys";
 import { useArmedConfirm } from "@/lib/hooks/useArmedConfirm";
@@ -407,6 +408,7 @@ function EmptyState({ onAdd }: { onAdd: () => void }) {
 }
 
 function TopicHistoryDisclosure({ topicId }: { topicId: string }) {
+  const t = useT();
   const [open, setOpen] = useState(false);
   return (
     <div className="mt-1">
@@ -415,7 +417,7 @@ function TopicHistoryDisclosure({ topicId }: { topicId: string }) {
         onClick={() => setOpen((v) => !v)}
         className="text-xs text-muted-foreground hover:text-foreground"
       >
-        {open ? "Hide history" : "History"}
+        {open ? t("topics.history.hide") : t("topics.history.show")}
       </button>
       {open && <TopicEventsTimeline topicId={topicId} />}
     </div>

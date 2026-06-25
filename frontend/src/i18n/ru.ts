@@ -177,6 +177,8 @@ const ru: Record<string, string> = {
 
   // Topic history timeline
   "topics.history.empty": "История пока пуста",
+  "topics.history.show": "История",
+  "topics.history.hide": "Скрыть историю",
 
   // Generic
   "common.loading": "Загрузка...",

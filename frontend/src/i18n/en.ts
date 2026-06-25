@@ -175,6 +175,8 @@ const en: Record<string, string> = {
 
   // Topic history timeline
   "topics.history.empty": "No history yet",
+  "topics.history.show": "History",
+  "topics.history.hide": "Hide history",
 
   // Generic
   "common.loading": "Loading...",
