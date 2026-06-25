@@ -268,7 +268,9 @@ func (r *Topics) Update(ctx context.Context, id, userID uuid.UUID, displayName s
 	}
 	row := r.pool.QueryRow(ctx, `UPDATE topics SET
 		display_name = $3, client_id = $4, notifier_id = $5, download_dir = $6, category = $7,
-		extra = $8, updated_at = now()
+		extra = $8,
+		display_name_is_placeholder = CASE WHEN display_name <> $3 THEN false ELSE display_name_is_placeholder END,
+		updated_at = now()
 	WHERE id = $1 AND user_id = $2
 	RETURNING `+topicColumns, id, userID, displayName, clientID, notifierID, downloadDir, category, raw)
 	t, err := scanTopic(row)
@@ -289,7 +291,7 @@ func (r *Topics) UpdateDisplayName(ctx context.Context, id uuid.UUID, displayNam
 		return nil
 	}
 	_, err := r.pool.Exec(ctx,
-		`UPDATE topics SET display_name = $2, updated_at = now() WHERE id = $1`,
+		`UPDATE topics SET display_name = $2, display_name_is_placeholder = false, updated_at = now() WHERE id = $1`,
 		id, displayName,
 	)
 	return err
