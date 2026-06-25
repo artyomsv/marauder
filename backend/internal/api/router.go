@@ -36,8 +36,9 @@ type Deps struct {
 	Clients    *repo.Clients
 	Notifiers  *repo.Notifiers
 	Creds      *repo.TrackerCredentials
-	Deliveries *repo.Deliveries
-	Settings   *repo.Settings
+	Deliveries  *repo.Deliveries
+	TopicEvents *repo.TopicEvents
+	Settings    *repo.Settings
 	Audit      *repo.Audit
 	AuditLog   *audit.Logger
 	OIDC       *auth.OIDCProvider
@@ -97,6 +98,11 @@ func NewRouter(d Deps) http.Handler {
 		BaseURL:    d.Cfg.PublicBaseURL,
 		Emit:       d.Emit,
 	}
+	topicEventsH := &handlers.TopicEvents{
+		Events:  d.TopicEvents,
+		Topics:  d.Topics,
+		BaseURL: d.Cfg.PublicBaseURL,
+	}
 	clientsH := &handlers.Clients{
 		Clients: d.Clients,
 		Master:  d.Master,
@@ -148,6 +154,7 @@ func NewRouter(d Deps) http.Handler {
 			r.Put("/topics/{id}", topicsH.Update)
 			r.Delete("/topics/{id}", topicsH.Delete)
 			r.Get("/topics/{id}/status", topicsH.Status)
+			r.Get("/topics/{id}/events", topicEventsH.List)
 			r.Post("/topics/{id}/pause", topicsH.Pause)
 			r.Post("/topics/{id}/resume", topicsH.Resume)
 
