@@ -22,6 +22,7 @@ import { IntegrationsPage } from "@/pages/Integrations";
 import { CredentialsPage } from "@/pages/Credentials";
 import { useAuthStore } from "@/lib/auth-store";
 import { api, type Me } from "@/lib/api";
+import { EventStreamProvider } from "@/components/EventStreamProvider";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -49,7 +50,11 @@ function ProtectedLayout() {
   }, [accessToken, user, setUser, logout]);
 
   if (!accessToken) return <Navigate to="/login" replace />;
-  return <Outlet />;
+  return (
+    <EventStreamProvider>
+      <Outlet />
+    </EventStreamProvider>
+  );
 }
 
 export default function App() {
