@@ -178,18 +178,29 @@ func extractImageURL(body []byte, host string) string {
 	}
 }
 
+// parseTopicID extracts the numeric Kinozal topic id from the "id" query
+// parameter of rawURL. Shared by canonicalDetailsURL and fetchInfohash so the
+// url.Parse → id logic lives in exactly one place.
+func parseTopicID(rawURL string) (int, error) {
+	u, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil {
+		return 0, fmt.Errorf("kinozal: parse url: %w", err)
+	}
+	id, err := strconv.Atoi(u.Query().Get("id"))
+	if err != nil {
+		return 0, fmt.Errorf("kinozal: topic id: %w", err)
+	}
+	return id, nil
+}
+
 // canonicalDetailsURL rebuilds the details URL from the trusted host (p.domain)
 // + the numeric id parsed from rawURL — never the raw user URL. Avoids request
 // forgery (CodeQL go/request-forgery) and pins the request to p.domain so
 // Check's title matches ResolveMetadata's (issue #90).
 func (p *plugin) canonicalDetailsURL(rawURL string) (string, error) {
-	u, err := url.Parse(strings.TrimSpace(rawURL))
+	id, err := parseTopicID(rawURL)
 	if err != nil {
-		return "", fmt.Errorf("kinozal: parse url: %w", err)
-	}
-	id, err := strconv.Atoi(u.Query().Get("id"))
-	if err != nil {
-		return "", fmt.Errorf("kinozal: topic id: %w", err)
+		return "", err
 	}
 	return fmt.Sprintf("https://%s/details.php?id=%d", p.domain, id), nil
 }
@@ -228,13 +239,9 @@ func (p *plugin) Check(ctx context.Context, topic *domain.Topic, creds *domain.T
 // rebuilt from the trusted domain + numeric id (never the raw user URL) to
 // avoid request forgery (CodeQL go/request-forgery), mirroring Download.
 func (p *plugin) fetchInfohash(ctx context.Context, rawURL string, creds *domain.TrackerCredential) (string, error) {
-	u, err := url.Parse(strings.TrimSpace(rawURL))
+	id, err := parseTopicID(rawURL)
 	if err != nil {
-		return "", fmt.Errorf("kinozal: parse url: %w", err)
-	}
-	id, err := strconv.Atoi(u.Query().Get("id"))
-	if err != nil {
-		return "", fmt.Errorf("kinozal: topic id: %w", err)
+		return "", err
 	}
 	srvURL := fmt.Sprintf("https://%s/get_srv_details.php?id=%d&action=2", p.domain, id)
 	body, err := p.fetch(ctx, srvURL, creds)

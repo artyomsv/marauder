@@ -401,7 +401,9 @@ func TestTopics_Update_HappyPath(t *testing.T) {
 
 	rows := pgxmock.NewRows(topicColumnsAll).AddRow(row...)
 
-	mock.ExpectQuery(`UPDATE topics SET`).
+	// Pattern asserts the lock-on-rename clause is present (not just any UPDATE),
+	// so an accidental removal of the CASE expression is caught at unit level.
+	mock.ExpectQuery(`UPDATE topics SET[\s\S]*display_name_is_placeholder = CASE WHEN display_name <> \$3`).
 		WithArgs(
 			id, userID,
 			"Updated Name",    // $3 display_name
