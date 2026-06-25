@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Typed event taxonomy with per-event notifier subscriptions (new releases, sent-to-client, download finished, errors) and a read-only per-topic event timeline (#93).
+- Typed event taxonomy with per-event notifier subscriptions (new releases, sent-to-client, errors) and a read-only per-topic event timeline. Download-finished event emission is deferred to a later phase (#93).
 
 ## [1.4.0] - 2026-06-24
 

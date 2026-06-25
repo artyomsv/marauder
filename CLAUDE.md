@@ -92,7 +92,7 @@ techdebt/       Debt-tracking files (one per issue, see global rule)
 4. `recordResult` — persists `next_check_at` (with exponential backoff
    on errors, capped at 6h) and writes the run summary metrics.
 
-**Event emission:** the scheduler emits typed `events.Event`s via `events.Bus.Emit` at key points: `topic.added` (on initial topic creation), `check.started`/`check.completed`/`check.failed` (per check cycle), `release.found` (per new torrent detected), `download.submitted` (after client send), and `session.expired` (on credential session loss). The bus fans out to `topic_events` history table (all events persisted if policy allows), the notifier dispatcher (for event-type subscriptions), and an SSE seam (Phase 3 — publisher nil in Phase 1).
+**Event emission:** the scheduler emits typed `events.Event`s via `events.Bus.Emit` at key points: `check.started`/`check.completed`/`check.failed` (per check cycle), `release.found` (per new torrent detected), `download.submitted` (after client send), and `session.expired` (on credential session loss). (`topic.added` is emitted separately by the topics HTTP handler on `POST /topics`, not by the scheduler.) The bus fans out to `topic_events` history table (all events persisted if policy allows), the notifier dispatcher (for event-type subscriptions), and an SSE seam (Phase 3 — publisher nil in Phase 1).
 
 **Per-topic delivery:** `sendViaClient` passes `domain.AddOptions{DownloadDir:
 t.DownloadDir, Category: t.Category}` to the client plugin. Category is a
