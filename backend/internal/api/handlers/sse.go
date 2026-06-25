@@ -77,8 +77,14 @@ func (h *SSE) Stream(w http.ResponseWriter, r *http.Request) {
 	rc := http.NewResponseController(w)
 	_ = rc.SetWriteDeadline(time.Time{})
 
-	// Replay missed persisted events on reconnect.
-	if lastID, err := strconv.ParseInt(r.Header.Get("Last-Event-ID"), 10, 64); err == nil && lastID > 0 {
+	// EventSource sets Last-Event-ID on its own auto-reconnect, but the
+	// frontend does a manual reconnect (fresh ticket each time) on which the
+	// browser can't set the header — so accept ?last_event_id= as a fallback.
+	lastIDStr := r.Header.Get("Last-Event-ID")
+	if lastIDStr == "" {
+		lastIDStr = r.URL.Query().Get("last_event_id")
+	}
+	if lastID, err := strconv.ParseInt(lastIDStr, 10, 64); err == nil && lastID > 0 {
 		if rows, lerr := h.Events.ListForUserSince(r.Context(), uid, lastID); lerr == nil {
 			for _, e := range rows {
 				if frame := sse.FrameFromTopicEvent(e); frame != nil {

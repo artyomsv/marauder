@@ -39,6 +39,13 @@ func (fakeEventLister) ListForUserSince(_ context.Context, _ uuid.UUID, _ int64)
 	return nil, nil
 }
 
+type recordingLister struct{ since int64 }
+
+func (r *recordingLister) ListForUserSince(_ context.Context, _ uuid.UUID, sinceID int64) ([]*domain.TopicEvent, error) {
+	r.since = sinceID
+	return nil, nil
+}
+
 func TestSSE_Stream_RejectsMissingTicket(t *testing.T) {
 	h := &SSE{Hub: &fakeHub{ch: make(chan []byte, 1)}, Tickets: &fakeTickets{}, Events: fakeEventLister{}, HeartbeatInterval: time.Hour}
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/events", nil)
@@ -153,5 +160,70 @@ func readSSEFrame(r *bufio.Reader) (string, error) {
 		if line == "\n" {
 			return sb.String(), nil
 		}
+	}
+}
+
+func TestSSE_Stream_ReplaysFromQueryParam(t *testing.T) {
+	lister := &recordingLister{}
+	h := &SSE{Hub: &fakeHub{ch: make(chan []byte, 1)}, Tickets: &fakeTickets{issued: "tok", uid: uuid.New(), valid: true}, Events: lister, HeartbeatInterval: time.Hour}
+	ctx, cancel := context.WithCancel(context.Background())
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/events?ticket=tok&last_event_id=5", nil).WithContext(ctx)
+	rec := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() { h.Stream(rec, req); close(done) }()
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	<-done
+	if lister.since != 5 {
+		t.Fatalf("ListForUserSince sinceID = %d, want 5 (from query param)", lister.since)
+	}
+}
+
+func TestSSE_Stream_PrefersHeaderOverQueryParam(t *testing.T) {
+	lister := &recordingLister{}
+	h := &SSE{Hub: &fakeHub{ch: make(chan []byte, 1)}, Tickets: &fakeTickets{issued: "tok", uid: uuid.New(), valid: true}, Events: lister, HeartbeatInterval: time.Hour}
+	ctx, cancel := context.WithCancel(context.Background())
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/events?ticket=tok&last_event_id=5", nil).WithContext(ctx)
+	req.Header.Set("Last-Event-ID", "10")
+	rec := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() { h.Stream(rec, req); close(done) }()
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	<-done
+	if lister.since != 10 {
+		t.Fatalf("ListForUserSince sinceID = %d, want 10 (from header, not query param)", lister.since)
+	}
+}
+
+func TestSSE_Stream_IgnoresInvalidLastEventID(t *testing.T) {
+	lister := &recordingLister{}
+	h := &SSE{Hub: &fakeHub{ch: make(chan []byte, 1)}, Tickets: &fakeTickets{issued: "tok", uid: uuid.New(), valid: true}, Events: lister, HeartbeatInterval: time.Hour}
+	ctx, cancel := context.WithCancel(context.Background())
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/events?ticket=tok&last_event_id=invalid", nil).WithContext(ctx)
+	rec := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() { h.Stream(rec, req); close(done) }()
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	<-done
+	if lister.since != 0 {
+		t.Fatalf("ListForUserSince sinceID = %d, want 0 (unparseable value ignored)", lister.since)
+	}
+}
+
+func TestSSE_Stream_IgnoresZeroOrNegativeLastEventID(t *testing.T) {
+	lister := &recordingLister{}
+	h := &SSE{Hub: &fakeHub{ch: make(chan []byte, 1)}, Tickets: &fakeTickets{issued: "tok", uid: uuid.New(), valid: true}, Events: lister, HeartbeatInterval: time.Hour}
+	ctx, cancel := context.WithCancel(context.Background())
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/events?ticket=tok&last_event_id=0", nil).WithContext(ctx)
+	rec := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() { h.Stream(rec, req); close(done) }()
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	<-done
+	if lister.since != 0 {
+		t.Fatalf("ListForUserSince sinceID = %d, want 0 (zero/negative values ignored)", lister.since)
 	}
 }
