@@ -72,12 +72,13 @@ func (f *fakeTracker) Download(_ context.Context, _ *domain.Topic, _ *domain.Che
 // fakeTopics records every persistence call without touching a DB.
 // It satisfies topicsRepo (and optionally markEpisodeDownloader).
 type fakeTopics struct {
-	recordCalls         []recordCall
-	updateExtraCalls    []updateExtraCall
-	markCalls           []markCall
-	markErr             error
-	updateExtraErr      error
-	implementMarkAtomic bool // when true, the test exercises the atomic path
+	recordCalls            []recordCall
+	updateExtraCalls       []updateExtraCall
+	updateDisplayNameCalls []updateDisplayNameCall
+	markCalls              []markCall
+	markErr                error
+	updateExtraErr         error
+	implementMarkAtomic    bool // when true, the test exercises the atomic path
 }
 
 type recordCall struct {
@@ -98,6 +99,11 @@ type markCall struct {
 	packed string
 }
 
+type updateDisplayNameCall struct {
+	id   uuid.UUID
+	name string
+}
+
 func (f *fakeTopics) DueForCheck(_ context.Context, _ int) ([]*domain.Topic, error) {
 	return nil, nil
 }
@@ -116,6 +122,11 @@ func (f *fakeTopics) UpdateExtra(_ context.Context, id uuid.UUID, extra map[stri
 	}
 	f.updateExtraCalls = append(f.updateExtraCalls, updateExtraCall{id, snap})
 	return f.updateExtraErr
+}
+
+func (f *fakeTopics) UpdateDisplayName(_ context.Context, id uuid.UUID, name string) error {
+	f.updateDisplayNameCalls = append(f.updateDisplayNameCalls, updateDisplayNameCall{id, name})
+	return nil
 }
 
 // fakeTopicsAtomic is fakeTopics + the optional atomic method, used by
@@ -1241,5 +1252,47 @@ func TestIsNoPendingError(t *testing.T) {
 				t.Errorf("isNoPendingError(%v) = %v, want %v", tt.err, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestRunCheck_SelfHeal_PlaceholderName_Persists(t *testing.T) {
+	tr := &fakeTracker{
+		name: "faketracker",
+		checks: []checkResult{
+			{check: &domain.Check{Hash: "old-hash", DisplayName: "Real Title"}, err: nil},
+		},
+	}
+	f := newFixture(t, tr, false)
+	f.topic.DisplayName = "Fake topic 1"
+	f.topic.DisplayNameIsPlaceholder = true
+
+	f.s.runCheck(context.Background(), f.s.log, f.topic)
+
+	if len(f.topics.updateDisplayNameCalls) != 1 {
+		t.Fatalf("want 1 UpdateDisplayName call, got %d", len(f.topics.updateDisplayNameCalls))
+	}
+	if got := f.topics.updateDisplayNameCalls[0].name; got != "Real Title" {
+		t.Errorf("healed name = %q, want Real Title", got)
+	}
+}
+
+func TestRunCheck_SelfHeal_ResolvedName_DoesNotDowngrade(t *testing.T) {
+	// Regression for #90: a resolved title must NOT be overwritten even when
+	// Check reports a different (e.g. main-page) DisplayName.
+	tr := &fakeTracker{
+		name: "faketracker",
+		checks: []checkResult{
+			{check: &domain.Check{Hash: "old-hash", DisplayName: "Kinozal.TV Main Page"}, err: nil},
+		},
+	}
+	f := newFixture(t, tr, false)
+	f.topic.DisplayName = "Real Release Name"
+	f.topic.DisplayNameIsPlaceholder = false
+
+	f.s.runCheck(context.Background(), f.s.log, f.topic)
+
+	if len(f.topics.updateDisplayNameCalls) != 0 {
+		t.Errorf("want 0 UpdateDisplayName calls for a resolved title, got %d",
+			len(f.topics.updateDisplayNameCalls))
 	}
 }
