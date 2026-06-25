@@ -149,6 +149,11 @@ const en: Record<string, string> = {
   "settings.sonarr.saving": "Saving…",
   "settings.sonarr.saved": "Settings saved.",
 
+  // Topic live check status (fed by SSE check.* events)
+  "topics.check.checking": "Checking…",
+  "topics.check.error": "Check error",
+  "topics.check.next": "Next check {time}",
+
   // Topic delivery status
   "topics.delivery.delivered": "Delivered",
   "topics.delivery.downloading": "Downloading",

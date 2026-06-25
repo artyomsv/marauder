@@ -34,6 +34,7 @@ import { DeliveryStatus } from "@/components/topics/DeliveryStatus";
 import { TopicEventsTimeline } from "@/components/topics/TopicEventsTimeline";
 import { PosterImage } from "@/components/topics/PosterImage";
 import { TopicUrl } from "@/components/topics/TopicUrl";
+import { TopicCheckStatus } from "@/components/topics/TopicCheckStatus";
 
 // Re-exported so existing imports (and tests) that reference AddTopicCard
 // from this page module keep resolving after the extraction.
@@ -222,6 +223,7 @@ export function TopicsPage() {
                       </div>
                     )}
                     {!compact && <DeliveryStatus topicId={t.ID} />}
+                    {!compact && <TopicCheckStatus topicId={t.ID} />}
                     {!compact && <TopicHistoryDisclosure topicId={t.ID} />}
                     <div className="mt-2 flex flex-wrap items-center gap-2">
                       <Badge variant="default" className="shrink-0 font-mono">

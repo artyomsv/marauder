@@ -151,6 +151,11 @@ const ru: Record<string, string> = {
   "settings.sonarr.saving": "Сохранение…",
   "settings.sonarr.saved": "Настройки сохранены.",
 
+  // Topic live check status (fed by SSE check.* events)
+  "topics.check.checking": "Проверка…",
+  "topics.check.error": "Ошибка проверки",
+  "topics.check.next": "Следующая проверка {time}",
+
   // Topic delivery status
   "topics.delivery.delivered": "Доставлено",
   "topics.delivery.downloading": "Загружается",
