@@ -192,6 +192,10 @@ export const api = {
     request<SonarrConfig>("PUT", "/system/sonarr", body),
   testSonarr: (body: { sonarr_url?: string; api_key?: string }) =>
     request<SonarrTestResult>("POST", "/system/sonarr/test", body),
+
+  // --- Server-Sent Events. POST /events/ticket exchanges the access token
+  // for a single-use ticket; GET /events?ticket=… streams event-stream.
+  eventsTicket: () => request<{ ticket: string }>("POST", "/events/ticket"),
 };
 
 // GET /system/sonarr — the API key is intentionally absent (api_key_set only).
