@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Typed event taxonomy with per-event notifier subscriptions (new releases, sent-to-client, errors) and a read-only per-topic event timeline. Download-finished event emission is deferred to a later phase (#93).
 - "Download finished" notifications: a background watcher detects when a delivered torrent finishes downloading and emits a `download.completed` event to subscribed notifiers (#93).
+- Live updates over Server-Sent Events: the backend now streams events (checks, releases, download progress/finished) to the UI via `GET /api/v1/events` with one-time ticket auth and reconnect replay (#93).
 
 ## [1.4.0] - 2026-06-24
 
