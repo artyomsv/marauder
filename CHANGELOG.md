@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.1] - 2026-06-25
+
+### Fixed
+
+- fix(topics): stop resolved titles being overwritten on scheduler check
+
 ## [1.4.0] - 2026-06-24
 
 ### Added
