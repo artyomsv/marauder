@@ -108,3 +108,21 @@ func TestNotifiers_Update_PassesIsDefault(t *testing.T) {
 		t.Errorf("Update not called with is_default=true (called=%v def=%v)", store.updateCalled, store.updateIsDef)
 	}
 }
+
+func TestValidNotifierEvents_FiltersAndDefaults(t *testing.T) {
+	// empty -> full canonical notifiable set (5 entries)
+	if got := validNotifierEvents(nil); len(got) != 5 {
+		t.Errorf("default set size = %d, want 5", len(got))
+	}
+	// drops legacy 'updated' is allowed-through (kept for back-compat) but
+	// unknown junk is dropped
+	got := validNotifierEvents([]string{"release.found", "bogus.event", "download.completed"})
+	for _, e := range got {
+		if e == "bogus.event" {
+			t.Errorf("bogus event should be dropped: %v", got)
+		}
+	}
+	if len(got) != 2 {
+		t.Errorf("got %v, want [release.found download.completed]", got)
+	}
+}

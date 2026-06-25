@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"sort"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -12,6 +13,7 @@ import (
 	"github.com/artyomsv/marauder/backend/internal/crypto"
 	"github.com/artyomsv/marauder/backend/internal/db/repo"
 	"github.com/artyomsv/marauder/backend/internal/domain"
+	"github.com/artyomsv/marauder/backend/internal/events"
 	"github.com/artyomsv/marauder/backend/internal/plugins/registry"
 	"github.com/artyomsv/marauder/backend/internal/problem"
 )
@@ -52,6 +54,35 @@ func notifierToView(n *domain.Notifier) notifierView {
 		CreatedAt:    n.CreatedAt.UTC().Format("2006-01-02T15:04:05Z"),
 		UpdatedAt:    n.UpdatedAt.UTC().Format("2006-01-02T15:04:05Z"),
 	}
+}
+
+// validNotifierEvents keeps only events a notifier may subscribe to:
+// the canonical notifiable set, plus the legacy "updated"/"error" keywords
+// (still honored via dispatcher aliases). Empty input defaults to the full
+// canonical notifiable set. Unknown/non-notifiable events are dropped.
+func validNotifierEvents(in []string) []string {
+	allowed := map[string]bool{"updated": true, "error": true}
+	var canonical []string
+	for _, ty := range events.NotifiableTypes() {
+		allowed[string(ty)] = true
+		canonical = append(canonical, string(ty))
+	}
+	sort.Strings(canonical)
+	if len(in) == 0 {
+		return canonical
+	}
+	out := make([]string, 0, len(in))
+	seen := map[string]bool{}
+	for _, e := range in {
+		if allowed[e] && !seen[e] {
+			out = append(out, e)
+			seen[e] = true
+		}
+	}
+	if len(out) == 0 {
+		return canonical
+	}
+	return out
 }
 
 // List handles GET /notifiers.
@@ -111,17 +142,14 @@ func (h *Notifiers) Create(w http.ResponseWriter, r *http.Request) {
 		problem.Write(w, r, h.BaseURL, problem.ErrInternal("encrypt: "+err.Error()))
 		return
 	}
-	events := req.Events
-	if len(events) == 0 {
-		events = []string{"updated", "error"}
-	}
+	evts := validNotifierEvents(req.Events)
 	created, cerr := h.Notifiers.Create(r.Context(), &domain.Notifier{
 		UserID:       uid,
 		NotifierName: req.NotifierName,
 		DisplayName:  req.DisplayName,
 		ConfigEnc:    enc,
 		ConfigNonce:  nonce,
-		Events:       events,
+		Events:       evts,
 		IsDefault:    req.IsDefault,
 	})
 	if cerr != nil {
@@ -211,11 +239,8 @@ func (h *Notifiers) Update(w http.ResponseWriter, r *http.Request) {
 		problem.Write(w, r, h.BaseURL, problem.ErrInternal("encrypt: "+eerr.Error()))
 		return
 	}
-	events := req.Events
-	if len(events) == 0 {
-		events = []string{"updated", "error"}
-	}
-	if err := h.Notifiers.Update(r.Context(), id, uid, existing.NotifierName, req.DisplayName, events, req.IsDefault, enc, nonce); err != nil {
+	evts := validNotifierEvents(req.Events)
+	if err := h.Notifiers.Update(r.Context(), id, uid, existing.NotifierName, req.DisplayName, evts, req.IsDefault, enc, nonce); err != nil {
 		if errors.Is(err, repo.ErrNotFound) {
 			problem.Write(w, r, h.BaseURL, problem.ErrNotFound("notifier not found"))
 			return
