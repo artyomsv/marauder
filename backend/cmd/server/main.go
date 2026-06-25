@@ -24,6 +24,7 @@ import (
 	"github.com/artyomsv/marauder/backend/internal/events"
 	"github.com/artyomsv/marauder/backend/internal/logging"
 	"github.com/artyomsv/marauder/backend/internal/notify"
+	"github.com/artyomsv/marauder/backend/internal/progress"
 	"github.com/artyomsv/marauder/backend/internal/scheduler"
 	"github.com/artyomsv/marauder/backend/internal/sonarr"
 	"github.com/artyomsv/marauder/backend/internal/version"
@@ -150,6 +151,19 @@ func run() error {
 			logger.Error().Err(err).Msg("scheduler exited with error")
 		}
 	}()
+
+	// Progress watcher: detects when in-flight deliveries finish downloading
+	// and emits download.completed events. Gated by MARAUDER_PROGRESS_WATCHER_ENABLED.
+	if cfg.ProgressWatcherEnabled {
+		watcher := progress.New(
+			deliveriesRepo, clientsRepo, master, bus,
+			progress.Config{PollInterval: cfg.ProgressPollInterval, PublicBaseURL: cfg.PublicBaseURL},
+			logger,
+		)
+		if err := watcher.Start(rootCtx); err != nil {
+			logger.Error().Err(err).Msg("progress watcher failed to start")
+		}
+	}
 
 	// Sonarr integration poller. Self-gates on the DB-stored config
 	// (settings.sonarr_enabled), so it's always started; it no-ops while

@@ -70,6 +70,10 @@ type Config struct {
 	TrackerHTTPProxyURL         string        `env:"MARAUDER_HTTPS_PROXY" envDefault:""`
 	UserAgent                   string        `env:"MARAUDER_USER_AGENT" envDefault:"Marauder/0.0.0-dev (+https://marauder.cc)"`
 
+	// Progress watcher (download-completion detection)
+	ProgressWatcherEnabled bool          `env:"MARAUDER_PROGRESS_WATCHER_ENABLED" envDefault:"true"`
+	ProgressPollInterval   time.Duration `env:"MARAUDER_PROGRESS_POLL_INTERVAL" envDefault:"1m"`
+
 	// Optional Cloudflare solver sidecar
 	CFSolverEnabled bool   `env:"MARAUDER_CFSOLVER_ENABLED" envDefault:"false"`
 	CFSolverURL     string `env:"MARAUDER_CFSOLVER_URL" envDefault:""`
@@ -98,6 +102,9 @@ func (c *Config) validate() error {
 	}
 	if c.SchedulerWorkers < 1 {
 		return errors.New("MARAUDER_SCHEDULER_WORKERS must be >= 1")
+	}
+	if c.ProgressPollInterval <= 0 {
+		return errors.New("MARAUDER_PROGRESS_POLL_INTERVAL must be > 0")
 	}
 	return nil
 }
