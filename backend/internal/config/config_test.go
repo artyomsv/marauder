@@ -17,8 +17,8 @@ func TestConfig_ProgressDefaults(t *testing.T) {
 	if !c.ProgressWatcherEnabled {
 		t.Error("progress watcher should default enabled")
 	}
-	if c.ProgressPollInterval != time.Minute {
-		t.Errorf("poll interval = %v, want 1m", c.ProgressPollInterval)
+	if c.ProgressPollInterval != 5*time.Second {
+		t.Errorf("poll interval = %v, want 5s", c.ProgressPollInterval)
 	}
 }
 

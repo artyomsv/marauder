@@ -89,16 +89,62 @@ func TestPoll_Seeding_MarksCompletedAndEmits(t *testing.T) {
 	}
 }
 
-func TestPoll_StillDownloading_NoMarkNoEmit(t *testing.T) {
+func TestPoll_StillDownloading_EmitsProgressNotCompletion(t *testing.T) {
 	cid := uuid.New()
 	del := &fakeDeliveries{inflight: []*domain.InFlightDelivery{inflight(cid)}, markWon: true}
 	emit := &fakeEmitter{}
 	st := fakeStatus{statuses: []registry.TorrentStatus{{Hash: "abc123", PercentDone: 0.5, State: registry.StateDownloading}}}
 	w := newTestWatcher(t, del, emit, st)
 	w.poll(context.Background())
-	if len(del.completed) != 0 || len(emit.events) != 0 {
-		t.Fatalf("downloading torrent must not complete/emit: completed=%v events=%v", del.completed, emit.events)
+	if len(del.completed) != 0 {
+		t.Fatalf("downloading torrent must not complete: %v", del.completed)
 	}
+	if countType(emit, events.DownloadProgress) != 1 || countType(emit, events.DownloadCompleted) != 0 {
+		t.Fatalf("expected one progress, no completion: %+v", emit.events)
+	}
+}
+
+func TestPoll_DownloadingEmitsProgressOnChange(t *testing.T) {
+	cid := uuid.New()
+	d := inflight(cid)
+	del := &fakeDeliveries{inflight: []*domain.InFlightDelivery{d}, markWon: true}
+	emit := &fakeEmitter{}
+	st := fakeStatus{statuses: []registry.TorrentStatus{{Hash: "abc123", PercentDone: 0.5, State: registry.StateDownloading}}}
+	w := newTestWatcher(t, del, emit, st)
+
+	w.poll(context.Background()) // first sight → emit progress
+	if got := countType(emit, events.DownloadProgress); got != 1 {
+		t.Fatalf("first poll progress emits = %d, want 1", got)
+	}
+	d0 := lastProgress(emit)
+	if d0["percent_done"] != 0.5 || d0["state"] != registry.StateDownloading || d0["infohash"] != "abc123" {
+		t.Fatalf("progress data wrong: %+v", d0)
+	}
+
+	emit.events = nil
+	w.poll(context.Background()) // unchanged → no re-emit
+	if got := countType(emit, events.DownloadProgress); got != 0 {
+		t.Fatalf("unchanged poll progress emits = %d, want 0", got)
+	}
+}
+
+func countType(e *fakeEmitter, ty events.Type) int {
+	n := 0
+	for _, ev := range e.events {
+		if ev.Type == ty {
+			n++
+		}
+	}
+	return n
+}
+
+func lastProgress(e *fakeEmitter) map[string]any {
+	for i := len(e.events) - 1; i >= 0; i-- {
+		if e.events[i].Type == events.DownloadProgress {
+			return e.events[i].Data
+		}
+	}
+	return nil
 }
 
 func TestPoll_LostTransition_NoEmit(t *testing.T) {

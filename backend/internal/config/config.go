@@ -72,7 +72,7 @@ type Config struct {
 
 	// Progress watcher (download-completion detection)
 	ProgressWatcherEnabled bool          `env:"MARAUDER_PROGRESS_WATCHER_ENABLED" envDefault:"true"`
-	ProgressPollInterval   time.Duration `env:"MARAUDER_PROGRESS_POLL_INTERVAL" envDefault:"1m"`
+	ProgressPollInterval   time.Duration `env:"MARAUDER_PROGRESS_POLL_INTERVAL" envDefault:"5s"`
 
 	// Optional Cloudflare solver sidecar
 	CFSolverEnabled bool   `env:"MARAUDER_CFSOLVER_ENABLED" envDefault:"false"`

@@ -52,7 +52,14 @@ type Config struct {
 // statusLookupFn resolves a client plugin name to its WithStatus capability.
 type statusLookupFn func(clientName string) (registry.WithStatus, bool)
 
-// Watcher polls clients for in-flight deliveries and fires download.completed.
+// progressKey captures the (percent, state) pair for change detection.
+type progressKey struct {
+	percent float64
+	state   string
+}
+
+// Watcher polls clients for in-flight deliveries and fires download.completed
+// and download.progress events.
 type Watcher struct {
 	deliveries   Deliveries
 	clients      ClientResolver
@@ -61,6 +68,7 @@ type Watcher struct {
 	cfg          Config
 	log          zerolog.Logger
 	statusLookup statusLookupFn
+	lastSeen     map[string]progressKey
 }
 
 // New constructs a Watcher.
@@ -76,6 +84,7 @@ func New(deliveries Deliveries, clients ClientResolver, dec Decryptor, emit Emit
 			ws, ok := registry.GetClient(name).(registry.WithStatus)
 			return ws, ok
 		},
+		lastSeen: map[string]progressKey{},
 	}
 }
 
@@ -168,7 +177,10 @@ func (w *Watcher) resolveClient(ctx context.Context, d *domain.InFlightDelivery)
 	return &resolvedClient{plugin: plugin, rawConfig: raw}
 }
 
-// checkClient queries one client and completes any seeded/100% deliveries.
+// checkClient queries one client, completes any seeded/100% deliveries, and
+// emits download.progress for still-downloading torrents whose (percent,state)
+// changed since the last poll. Completion takes precedence: a finished torrent
+// emits only download.completed, never a progress event.
 func (w *Watcher) checkClient(ctx context.Context, rc *resolvedClient) {
 	hashes := make([]string, 0, len(rc.deliveries))
 	for _, d := range rc.deliveries {
@@ -181,20 +193,34 @@ func (w *Watcher) checkClient(ctx context.Context, rc *resolvedClient) {
 		w.log.Warn().Err(err).Msg("client status query failed")
 		return
 	}
-	done := map[string]bool{}
-	for _, st := range statuses {
-		// "Finished downloading" = the bytes are on disk: actively seeding, or
-		// 100% in any state. A torrent that downloaded fully then stopped or
-		// errored still counts as complete (the download itself succeeded).
-		if st.State == registry.StateSeeding || st.PercentDone >= 1.0 {
-			done[strings.ToLower(st.Hash)] = true
-		}
-	}
+
+	byHash := make(map[string]*domain.InFlightDelivery, len(rc.deliveries))
 	for _, d := range rc.deliveries {
-		if !done[strings.ToLower(d.Infohash)] {
+		byHash[strings.ToLower(d.Infohash)] = d
+	}
+	for _, st := range statuses {
+		hash := strings.ToLower(st.Hash)
+		d := byHash[hash]
+		if d == nil {
 			continue
 		}
-		w.complete(ctx, d)
+		// Completion wins: seeding or 100% → mark + (on won transition)
+		// download.completed. No progress event for a finished torrent.
+		if st.State == registry.StateSeeding || st.PercentDone >= 1.0 {
+			w.complete(ctx, d)
+			delete(w.lastSeen, hash) // stop tracking a finished torrent
+			continue
+		}
+		// Live progress: emit only when (percent,state) changed since last poll.
+		key := progressKey{percent: st.PercentDone, state: st.State}
+		if w.lastSeen[hash] != key {
+			w.lastSeen[hash] = key
+			w.emit.Emit(ctx, events.Event{
+				UserID: d.UserID, TopicID: &d.TopicID, NotifierID: d.NotifierID,
+				Type: events.DownloadProgress, Severity: "info",
+				Data: map[string]any{"infohash": d.Infohash, "percent_done": st.PercentDone, "state": st.State},
+			})
+		}
 	}
 }
 
