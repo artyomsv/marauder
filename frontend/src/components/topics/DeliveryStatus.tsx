@@ -4,6 +4,7 @@ import { CheckCircle2, Download } from "lucide-react";
 import { api, type DeliveryStatus as Delivery, type TopicStatus } from "@/lib/api";
 import { QK } from "@/lib/queryKeys";
 import { useT } from "@/i18n";
+import { useSseStatus } from "@/lib/sse-status";
 import { cn } from "@/lib/utils";
 
 interface DeliveryStatusProps {
@@ -18,8 +19,20 @@ const ACTIVE_STATES = new Set(["downloading", "checking", "queued"]);
 // baseline otherwise so a freshly-added topic's first delivery (and a
 // settled torrent flipping to "finished") appears without a manual page
 // refresh. The baseline is deliberately gentle for self-hosted setups.
-const ACTIVE_POLL_MS = 3000;
-const IDLE_POLL_MS = 20000;
+export const ACTIVE_POLL_MS = 3000;
+export const IDLE_POLL_MS = 20000;
+
+// pollInterval decides the /status refetch cadence. While SSE is connected,
+// live updates arrive via setQueryData, so polling is disabled; otherwise it
+// falls back to fast-while-active / slow-baseline.
+export function pollInterval(
+  sseConnected: boolean,
+  deliveries: { state: string }[] | undefined,
+): number | false {
+  if (sseConnected) return false;
+  const active = deliveries?.some((x) => ACTIVE_STATES.has(x.state));
+  return active ? ACTIVE_POLL_MS : IDLE_POLL_MS;
+}
 
 // Episodic labels are "sNNeNN" (LostFilm). Anything else (a RuTracker
 // release name, etc.) is a single-torrent delivery shown ungrouped.
@@ -72,16 +85,15 @@ function group(deliveries: Delivery[]): { seasons: SeasonGroup[]; loose: Deliver
 // untouched topics stay visually quiet.
 export function DeliveryStatus({ topicId }: DeliveryStatusProps) {
   const t = useT();
+  const sseConnected = useSseStatus((s) => s.connected);
   const { data } = useQuery<TopicStatus>({
     queryKey: QK.topicStatus(topicId),
     queryFn: () => api.topicStatus(topicId),
     // Fast poll while a download is in flight, slow baseline otherwise so
     // new deliveries and finished-flips surface without a page refresh.
-    refetchInterval: (query) => {
-      const d = query.state.data;
-      const active = d?.deliveries.some((x) => ACTIVE_STATES.has(x.state));
-      return active ? ACTIVE_POLL_MS : IDLE_POLL_MS;
-    },
+    // SSE takes precedence — when connected, polling is disabled as live
+    // updates arrive via setQueryData.
+    refetchInterval: (query) => pollInterval(sseConnected, query.state.data?.deliveries),
   });
 
   const deliveries = data?.deliveries ?? [];
