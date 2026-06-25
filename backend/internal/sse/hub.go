@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 
+	"github.com/artyomsv/marauder/backend/internal/domain"
 	"github.com/artyomsv/marauder/backend/internal/events"
 	"github.com/artyomsv/marauder/backend/internal/metrics"
 )
@@ -122,6 +123,22 @@ type wireEvent struct {
 	Body     string         `json:"body,omitempty"`
 	Link     string         `json:"link,omitempty"`
 	Data     map[string]any `json:"data,omitempty"`
+}
+
+// FrameFromTopicEvent renders a persisted history row as an SSE frame for
+// Last-Event-ID replay — same wire shape as a live frame.
+func FrameFromTopicEvent(e *domain.TopicEvent) []byte {
+	w := wireEvent{
+		ID: e.ID, Type: e.EventType, TopicID: e.TopicID.String(),
+		Severity: e.Severity, Title: e.Message, Data: e.Data,
+	}
+	payload, err := json.Marshal(w)
+	if err != nil {
+		return nil
+	}
+	b := []byte(fmt.Sprintf("id: %d\ndata: ", e.ID))
+	b = append(b, payload...)
+	return append(b, "\n\n"...)
 }
 
 // serializeFrame renders an SSE frame. Persisted events (id>0) get an `id:`

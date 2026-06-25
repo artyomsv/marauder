@@ -22,6 +22,7 @@ import (
 	"github.com/artyomsv/marauder/backend/internal/db/repo"
 	"github.com/artyomsv/marauder/backend/internal/events"
 	"github.com/artyomsv/marauder/backend/internal/scheduler"
+	"github.com/artyomsv/marauder/backend/internal/sse"
 )
 
 // Deps is the bag of dependencies handed to NewRouter.
@@ -43,6 +44,8 @@ type Deps struct {
 	AuditLog   *audit.Logger
 	OIDC       *auth.OIDCProvider
 	Scheduler  *scheduler.Scheduler
+	Hub        *sse.Hub
+	Tickets    *sse.TicketStore
 	// Emit is the events.Bus.Emit hook wired to the topics handler so it can
 	// publish topic.added on create. Nil-safe: omitting it disables emission.
 	Emit func(ctx context.Context, ev events.Event)
@@ -125,6 +128,13 @@ func NewRouter(d Deps) http.Handler {
 	}
 	trackersH := &handlers.Trackers{BaseURL: d.Cfg.PublicBaseURL}
 	credsH := handlers.NewCredentials(d.Creds, d.Master, d.AuditLog, d.Cfg.PublicBaseURL)
+	sseH := &handlers.SSE{
+		Hub:               d.Hub,
+		Tickets:           d.Tickets,
+		Events:            d.TopicEvents,
+		HeartbeatInterval: 25 * time.Second,
+		BaseURL:           d.Cfg.PublicBaseURL,
+	}
 
 	r.Route("/api/v1", func(r chi.Router) {
 		// Public auth endpoints
@@ -137,11 +147,15 @@ func NewRouter(d Deps) http.Handler {
 		// System info (public but terse)
 		r.Get("/system/info", sysH.Info)
 
+		// SSE stream — ticket-gated in the handler (EventSource cannot send Authorization header)
+		r.Get("/events", sseH.Stream)
+
 		// Authenticated
 		r.Group(func(r chi.Router) {
 			r.Use(middleware.RequireAuth(d.Manager, d.Cfg.PublicBaseURL))
 
 			r.Get("/auth/me", authH.Me)
+			r.Post("/events/ticket", sseH.Ticket)
 			r.Post("/auth/me/password", authH.ChangePassword)
 			r.Get("/system/status", sysH.Status)
 			r.Get("/trackers/match", trackersH.Match)

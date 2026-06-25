@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 
+	"github.com/artyomsv/marauder/backend/internal/domain"
 	"github.com/artyomsv/marauder/backend/internal/events"
 )
 
@@ -108,6 +109,27 @@ func TestUnsubscribe_StopsDelivery(t *testing.T) {
 		}
 	case <-time.After(200 * time.Millisecond):
 		// also acceptable: nothing delivered
+	}
+}
+
+func TestFrameFromTopicEvent_ContainsIDAndType(t *testing.T) {
+	tid := uuid.New()
+	e := &domain.TopicEvent{
+		ID:        7,
+		TopicID:   tid,
+		EventType: "check.started",
+		Severity:  "info",
+		Message:   "started",
+	}
+	frame := FrameFromTopicEvent(e)
+	if frame == nil {
+		t.Fatal("FrameFromTopicEvent returned nil")
+	}
+	if !bytes.Contains(frame, []byte("id: 7")) {
+		t.Errorf("frame missing 'id: 7': %s", frame)
+	}
+	if !bytes.Contains(frame, []byte("check.started")) {
+		t.Errorf("frame missing event type: %s", frame)
 	}
 }
 
