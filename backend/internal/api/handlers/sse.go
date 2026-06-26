@@ -77,9 +77,16 @@ func (h *SSE) Stream(w http.ResponseWriter, r *http.Request) {
 	rc := http.NewResponseController(w)
 	_ = rc.SetWriteDeadline(time.Time{})
 
-	// EventSource sets Last-Event-ID on its own auto-reconnect, but the
-	// frontend does a manual reconnect (fresh ticket each time) on which the
-	// browser can't set the header — so accept ?last_event_id= as a fallback.
+	// Subscribe BEFORE replaying history: live frames published during the
+	// replay query are buffered in the channel instead of being lost in the
+	// gap between the SELECT and Subscribe. A persisted event committed in the
+	// tiny overlap may be delivered twice (once replayed, once live); that is
+	// harmless because the frontend's event handlers are idempotent.
+	frames, unsub := h.Hub.Subscribe(uid)
+	defer unsub()
+
+	// Replay missed persisted events on reconnect. Last-Event-ID header wins;
+	// the frontend's manual reconnect passes ?last_event_id= as a fallback.
 	lastIDStr := r.Header.Get("Last-Event-ID")
 	if lastIDStr == "" {
 		lastIDStr = r.URL.Query().Get("last_event_id")
@@ -88,15 +95,14 @@ func (h *SSE) Stream(w http.ResponseWriter, r *http.Request) {
 		if rows, lerr := h.Events.ListForUserSince(r.Context(), uid, lastID); lerr == nil {
 			for _, e := range rows {
 				if frame := sse.FrameFromTopicEvent(e); frame != nil {
-					_, _ = w.Write(frame)
+					if _, werr := w.Write(frame); werr != nil {
+						return
+					}
 				}
 			}
 			flusher.Flush()
 		}
 	}
-
-	frames, unsub := h.Hub.Subscribe(uid)
-	defer unsub()
 
 	hb := time.NewTicker(h.HeartbeatInterval)
 	defer hb.Stop()

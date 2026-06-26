@@ -14,6 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Live updates over Server-Sent Events: the backend now streams events (checks, releases, download progress/finished) to the UI via `GET /api/v1/events` with one-time ticket auth and reconnect replay (#93).
 - The web UI now consumes the live event stream: download progress, "checking…"/next-check status, and new-release/finished updates arrive over SSE in real time (the status poll is now only a fallback) (#93).
 
+### Changed
+
+- Existing notifiers subscribed to the legacy `updated` event now also fire on `download.completed` ("download finished"): the legacy alias maps to the full new-release / sent-to-client / finished set (#93).
+
 ## [1.4.1] - 2026-06-25
 
 ### Fixed

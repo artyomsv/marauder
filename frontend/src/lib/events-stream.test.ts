@@ -42,4 +42,29 @@ describe("applyEvent", () => {
     applyEvent(qc, { id: 9, type: "download.completed", topic_id: "t1" });
     expect(spy).toHaveBeenCalledWith({ queryKey: QK.topicStatus("t1") });
   });
+
+  it("invalidates topicStatus when download.progress arrives and no cache is seeded", () => {
+    const qc = new QueryClient();
+    const spy = vi.spyOn(qc, "invalidateQueries");
+    applyEvent(qc, {
+      id: 10, type: "download.progress", topic_id: "t1",
+      data: { infohash: "aabbcc", percent_done: 0.5, state: "downloading" },
+    });
+    expect(spy).toHaveBeenCalledWith({ queryKey: QK.topicStatus("t1") });
+  });
+
+  it("sets check store to error phase on check.failed", () => {
+    const qc = new QueryClient();
+    applyEvent(qc, { id: 11, type: "check.failed", topic_id: "t2", body: "timeout" });
+    const entry = useCheckStatus.getState().byTopic["t2"];
+    expect(entry.phase).toBe("error");
+    expect(entry.error).toBe("timeout");
+  });
+
+  it("invalidates topicEvents on a persisted event (release.found)", () => {
+    const qc = new QueryClient();
+    const spy = vi.spyOn(qc, "invalidateQueries");
+    applyEvent(qc, { id: 12, type: "release.found", topic_id: "t3" });
+    expect(spy).toHaveBeenCalledWith({ queryKey: QK.topicEvents("t3") });
+  });
 });

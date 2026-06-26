@@ -132,7 +132,7 @@ func NewRouter(d Deps) http.Handler {
 		Hub:               d.Hub,
 		Tickets:           d.Tickets,
 		Events:            d.TopicEvents,
-		HeartbeatInterval: 25 * time.Second,
+		HeartbeatInterval: d.Cfg.SSEHeartbeatInterval,
 		BaseURL:           d.Cfg.PublicBaseURL,
 	}
 

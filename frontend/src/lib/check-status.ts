@@ -15,6 +15,7 @@ interface CheckStatusState {
   setChecking: (topicId: string) => void;
   setChecked: (topicId: string, nextCheckAt?: string) => void;
   setFailed: (topicId: string, error?: string) => void;
+  clear: (topicId: string) => void;
 }
 
 export const useCheckStatus = create<CheckStatusState>((set) => ({
@@ -25,4 +26,6 @@ export const useCheckStatus = create<CheckStatusState>((set) => ({
     set((s) => ({ byTopic: { ...s.byTopic, [topicId]: { phase: "idle", nextCheckAt } } })),
   setFailed: (topicId, error) =>
     set((s) => ({ byTopic: { ...s.byTopic, [topicId]: { phase: "error", error } } })),
+  clear: (topicId) =>
+    set((s) => { const { [topicId]: _omit, ...rest } = s.byTopic; return { byTopic: rest }; }),
 }));

@@ -21,7 +21,6 @@ import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { cn, formatRelative } from "@/lib/utils";
 import { usePrefs } from "@/lib/prefs";
-import { useT } from "@/i18n";
 import { DeleteConfirm } from "@/components/shared/DeleteConfirm";
 import { QK } from "@/lib/queryKeys";
 import { useArmedConfirm } from "@/lib/hooks/useArmedConfirm";
@@ -31,10 +30,11 @@ import { ClientBadge, type ClientRef } from "@/components/topics/ClientBadge";
 import { NotifierBadge, type NotifierRef } from "@/components/topics/NotifierBadge";
 import { SonarrBadge } from "@/components/topics/SonarrBadge";
 import { DeliveryStatus } from "@/components/topics/DeliveryStatus";
-import { TopicEventsTimeline } from "@/components/topics/TopicEventsTimeline";
 import { PosterImage } from "@/components/topics/PosterImage";
 import { TopicUrl } from "@/components/topics/TopicUrl";
 import { TopicCheckStatus } from "@/components/topics/TopicCheckStatus";
+import { TopicHistoryDisclosure } from "@/components/topics/TopicHistoryDisclosure";
+import { useCheckStatus } from "@/lib/check-status";
 
 // Re-exported so existing imports (and tests) that reference AddTopicCard
 // from this page module keep resolving after the extraction.
@@ -71,7 +71,10 @@ export function TopicsPage() {
 
   const del = useMutation({
     mutationFn: (id: string) => api.del<void>(`/topics/${id}`),
-    onSuccess: () => qc.invalidateQueries({ queryKey: QK.topics }),
+    onSuccess: (_data, id) => {
+      useCheckStatus.getState().clear(id);
+      qc.invalidateQueries({ queryKey: QK.topics });
+    },
   });
   const pause = useMutation({
     mutationFn: (id: string) => api.post<void>(`/topics/${id}/pause`),
@@ -405,23 +408,6 @@ function EmptyState({ onAdd }: { onAdd: () => void }) {
         <Plus className="size-4" />
         Add your first topic
       </Button>
-    </div>
-  );
-}
-
-function TopicHistoryDisclosure({ topicId }: { topicId: string }) {
-  const t = useT();
-  const [open, setOpen] = useState(false);
-  return (
-    <div className="mt-1">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        className="text-xs text-muted-foreground hover:text-foreground"
-      >
-        {open ? t("topics.history.hide") : t("topics.history.show")}
-      </button>
-      {open && <TopicEventsTimeline topicId={topicId} />}
     </div>
   );
 }

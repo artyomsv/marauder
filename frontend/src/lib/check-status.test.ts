@@ -19,4 +19,11 @@ describe("useCheckStatus", () => {
     expect(e.phase).toBe("error");
     expect(e.error).toBe("boom");
   });
+
+  it("clear removes the entry for the given topic", () => {
+    useCheckStatus.getState().setChecking("t3");
+    expect(useCheckStatus.getState().byTopic["t3"]).toBeDefined();
+    useCheckStatus.getState().clear("t3");
+    expect(useCheckStatus.getState().byTopic["t3"]).toBeUndefined();
+  });
 });

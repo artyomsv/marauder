@@ -99,6 +99,7 @@ func (h *Hub) Publish(userID uuid.UUID, ev events.Event, id int64) {
 	}
 	h.mu.Unlock()
 	for _, s := range targets {
+		// The send is non-blocking (default drops on full), so holding s.mu across it cannot block the hub; the lock exists solely to exclude unsubscribe's close (a send on a closed channel panics even inside a select).
 		s.mu.Lock()
 		if !s.closed {
 			select {

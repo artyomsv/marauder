@@ -16,10 +16,18 @@ export interface WireEvent {
   data?: Record<string, unknown>;
 }
 
+const PERSISTED = new Set([
+  "topic.added", "release.found", "download.submitted",
+  "download.completed", "check.failed", "session.expired",
+]);
+
 // applyEvent routes one live event into the React Query cache / check store.
 // Pure w.r.t. its inputs (no network); safe to unit-test.
 export function applyEvent(qc: QueryClient, ev: WireEvent): void {
   const topicId = ev.topic_id;
+  if (topicId && PERSISTED.has(ev.type)) {
+    qc.invalidateQueries({ queryKey: QK.topicEvents(topicId) });
+  }
   switch (ev.type) {
     case "download.progress": {
       // Progress events carry {infohash, percent_done, state} — patch in place.

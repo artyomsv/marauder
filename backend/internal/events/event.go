@@ -28,6 +28,7 @@ type Policy struct {
 	SSE        bool // push over the live feed
 }
 
+// policies is read-only after package init; never mutate it at runtime.
 var policies = map[Type]Policy{
 	TopicAdded:        {Persist: true, Notifiable: false, SSE: true},
 	CheckStarted:      {Persist: false, Notifiable: false, SSE: true},

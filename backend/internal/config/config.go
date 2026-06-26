@@ -73,6 +73,7 @@ type Config struct {
 	// Progress watcher (download-completion detection)
 	ProgressWatcherEnabled bool          `env:"MARAUDER_PROGRESS_WATCHER_ENABLED" envDefault:"true"`
 	ProgressPollInterval   time.Duration `env:"MARAUDER_PROGRESS_POLL_INTERVAL" envDefault:"5s"`
+	SSEHeartbeatInterval   time.Duration `env:"MARAUDER_SSE_HEARTBEAT_INTERVAL" envDefault:"25s"`
 
 	// Optional Cloudflare solver sidecar
 	CFSolverEnabled bool   `env:"MARAUDER_CFSOLVER_ENABLED" envDefault:"false"`
@@ -105,6 +106,9 @@ func (c *Config) validate() error {
 	}
 	if c.ProgressPollInterval <= 0 {
 		return errors.New("MARAUDER_PROGRESS_POLL_INTERVAL must be > 0")
+	}
+	if c.SSEHeartbeatInterval <= 0 {
+		return errors.New("MARAUDER_SSE_HEARTBEAT_INTERVAL must be > 0")
 	}
 	return nil
 }
