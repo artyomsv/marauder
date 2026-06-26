@@ -124,6 +124,20 @@ type TopicDelivery struct {
 	DeliveredAt time.Time
 }
 
+// InFlightDelivery is a not-yet-completed delivery joined with its topic's
+// owner, notifier override, and display name — the read model the progress
+// watcher needs to poll the client and route a download.completed event.
+type InFlightDelivery struct {
+	DeliveryID  uuid.UUID
+	TopicID     uuid.UUID
+	UserID      uuid.UUID
+	NotifierID  *uuid.UUID
+	ClientID    *uuid.UUID
+	Infohash    string
+	Label       string
+	DisplayName string
+}
+
 // TopicEvent is a single entry in a topic's history.
 type TopicEvent struct {
 	ID        int64

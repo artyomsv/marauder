@@ -32,6 +32,9 @@ import { SonarrBadge } from "@/components/topics/SonarrBadge";
 import { DeliveryStatus } from "@/components/topics/DeliveryStatus";
 import { PosterImage } from "@/components/topics/PosterImage";
 import { TopicUrl } from "@/components/topics/TopicUrl";
+import { TopicCheckStatus } from "@/components/topics/TopicCheckStatus";
+import { TopicHistoryDisclosure } from "@/components/topics/TopicHistoryDisclosure";
+import { useCheckStatus } from "@/lib/check-status";
 
 // Re-exported so existing imports (and tests) that reference AddTopicCard
 // from this page module keep resolving after the extraction.
@@ -68,7 +71,10 @@ export function TopicsPage() {
 
   const del = useMutation({
     mutationFn: (id: string) => api.del<void>(`/topics/${id}`),
-    onSuccess: () => qc.invalidateQueries({ queryKey: QK.topics }),
+    onSuccess: (_data, id) => {
+      useCheckStatus.getState().clear(id);
+      qc.invalidateQueries({ queryKey: QK.topics });
+    },
   });
   const pause = useMutation({
     mutationFn: (id: string) => api.post<void>(`/topics/${id}/pause`),
@@ -220,6 +226,8 @@ export function TopicsPage() {
                       </div>
                     )}
                     {!compact && <DeliveryStatus topicId={t.ID} />}
+                    {!compact && <TopicCheckStatus topicId={t.ID} />}
+                    {!compact && <TopicHistoryDisclosure topicId={t.ID} />}
                     <div className="mt-2 flex flex-wrap items-center gap-2">
                       <Badge variant="default" className="shrink-0 font-mono">
                         {t.TrackerName}

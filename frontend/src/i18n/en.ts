@@ -149,17 +149,41 @@ const en: Record<string, string> = {
   "settings.sonarr.saving": "Saving…",
   "settings.sonarr.saved": "Settings saved.",
 
+  // Topic live check status (fed by SSE check.* events)
+  "topics.check.checking": "Checking…",
+  "topics.check.error": "Check error",
+  "topics.check.next": "Next check {time}",
+
   // Topic delivery status
   "topics.delivery.delivered": "Delivered",
   "topics.delivery.downloading": "Downloading",
   "topics.delivery.finished": "Finished",
   "topics.delivery.count": "{n} delivered",
   "topics.delivery.season": "Season {n}",
+  "topics.delivery.reissued": "{n} versions · tracker re-issued this torrent · newest {date}",
+  "topics.delivery.deliveredOn": "delivered {date}",
+  "topics.delivery.copy": "Copy label",
+  "topics.delivery.copied": "Copied",
 
   // Notifier event subscriptions (which events a notifier fires on)
   "notifiers.events.prefix": "Notifies on",
-  "notifiers.event.updated": "new releases",
-  "notifiers.event.error": "errors",
+  "notifiers.notify_on": "Notify on",
+
+  // Canonical event labels (notifier picker + topic timeline)
+  "events.topic_added": "topic added",
+  "events.check_started": "check started",
+  "events.check_completed": "check completed",
+  "events.release_found": "new release",
+  "events.download_submitted": "sent to client",
+  "events.download_progress": "download progress",
+  "events.download_completed": "download finished",
+  "events.check_failed": "error",
+  "events.session_expired": "session expired",
+
+  // Topic history timeline
+  "topics.history.empty": "No history yet",
+  "topics.history.show": "History",
+  "topics.history.hide": "Hide history",
 
   // Generic
   "common.loading": "Loading...",

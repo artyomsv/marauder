@@ -77,6 +77,9 @@ services:
       MARAUDER_SCHEDULER_ENABLED: ${MARAUDER_SCHEDULER_ENABLED:-true}
       MARAUDER_SCHEDULER_WORKERS: ${MARAUDER_SCHEDULER_WORKERS:-8}
       MARAUDER_SCHEDULER_MAX_EPISODES_PER_TICK: ${MARAUDER_SCHEDULER_MAX_EPISODES_PER_TICK:-25}
+      MARAUDER_PROGRESS_WATCHER_ENABLED: ${MARAUDER_PROGRESS_WATCHER_ENABLED:-true}
+      MARAUDER_PROGRESS_POLL_INTERVAL: ${MARAUDER_PROGRESS_POLL_INTERVAL:-5s}
+      MARAUDER_SSE_HEARTBEAT_INTERVAL: ${MARAUDER_SSE_HEARTBEAT_INTERVAL:-25s}
       MARAUDER_ADMIN_INITIAL_USERNAME: ${MARAUDER_ADMIN_INITIAL_USERNAME:-}
       MARAUDER_ADMIN_INITIAL_PASSWORD: ${MARAUDER_ADMIN_INITIAL_PASSWORD:-}
       MARAUDER_OIDC_ENABLED: ${MARAUDER_OIDC_ENABLED:-false}
@@ -184,6 +187,20 @@ configs:
           add_header X-Frame-Options "DENY" always;
           add_header Referrer-Policy "strict-origin-when-cross-origin" always;
           add_header Permissions-Policy "camera=(), microphone=(), geolocation=(), interest-cohort=()" always;
+
+          # --- SSE live event stream (no buffering, long-lived) ---
+          location /api/v1/events {
+              proxy_pass         http://marauder_backend;
+              proxy_http_version 1.1;
+              proxy_set_header   Host              $$host;
+              proxy_set_header   X-Real-IP         $$remote_addr;
+              proxy_set_header   X-Forwarded-For   $$proxy_add_x_forwarded_for;
+              proxy_set_header   X-Forwarded-Proto $$scheme;
+              proxy_set_header   X-Request-ID      $$request_id;
+              proxy_buffering    off;
+              proxy_cache        off;
+              proxy_read_timeout 3600s;
+          }
 
           # --- API ---
           location /api/ {

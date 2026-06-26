@@ -151,17 +151,41 @@ const ru: Record<string, string> = {
   "settings.sonarr.saving": "Сохранение…",
   "settings.sonarr.saved": "Настройки сохранены.",
 
+  // Topic live check status (fed by SSE check.* events)
+  "topics.check.checking": "Проверка…",
+  "topics.check.error": "Ошибка проверки",
+  "topics.check.next": "Следующая проверка {time}",
+
   // Topic delivery status
   "topics.delivery.delivered": "Доставлено",
   "topics.delivery.downloading": "Загружается",
   "topics.delivery.finished": "Завершено",
   "topics.delivery.count": "Доставлено: {n}",
   "topics.delivery.season": "Сезон {n}",
+  "topics.delivery.reissued": "{n} версии · трекер перевыпустил торрент · последняя {date}",
+  "topics.delivery.deliveredOn": "доставлено {date}",
+  "topics.delivery.copy": "Скопировать метку",
+  "topics.delivery.copied": "Скопировано",
 
   // Notifier event subscriptions (which events a notifier fires on)
   "notifiers.events.prefix": "Уведомлять о",
-  "notifiers.event.updated": "новых релизах",
-  "notifiers.event.error": "ошибках",
+  "notifiers.notify_on": "Уведомлять о",
+
+  // Canonical event labels (notifier picker + topic timeline)
+  "events.topic_added": "тема добавлена",
+  "events.check_started": "проверка начата",
+  "events.check_completed": "проверка завершена",
+  "events.release_found": "новый релиз",
+  "events.download_submitted": "отправлено клиенту",
+  "events.download_progress": "прогресс загрузки",
+  "events.download_completed": "загрузка завершена",
+  "events.check_failed": "ошибка",
+  "events.session_expired": "сессия истекла",
+
+  // Topic history timeline
+  "topics.history.empty": "История пока пуста",
+  "topics.history.show": "История",
+  "topics.history.hide": "Скрыть историю",
 
   // Generic
   "common.loading": "Загрузка...",

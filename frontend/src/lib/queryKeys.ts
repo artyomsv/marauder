@@ -53,4 +53,7 @@ export const QK = {
   // /topics/{id}/status — delivered torrents + live download progress.
   // Polled while a topic has an in-progress download and the row is shown.
   topicStatus: (id: string) => ["topicStatus", id] as const,
+
+  // /topics/{id}/events — read-only per-topic history timeline.
+  topicEvents: (id: string) => ["topicEvents", id] as const,
 } as const;

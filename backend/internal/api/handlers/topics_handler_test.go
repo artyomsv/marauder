@@ -10,6 +10,7 @@ import (
 
 	"github.com/artyomsv/marauder/backend/internal/db/repo"
 	"github.com/artyomsv/marauder/backend/internal/domain"
+	"github.com/artyomsv/marauder/backend/internal/events"
 	"github.com/artyomsv/marauder/backend/internal/plugins/registry"
 )
 
@@ -219,6 +220,30 @@ func TestTopicsUpdate_BadQuality(t *testing.T) {
 }
 
 func intPtr(n int) *int { return &n }
+
+// TestTopics_Create_EmitsTopicAdded asserts that a successful POST /topics
+// calls h.Emit exactly once with events.TopicAdded.
+func TestTopics_Create_EmitsTopicAdded(t *testing.T) {
+	var got []events.Event
+	store := &fakeTopicStore{}
+	h := &Topics{
+		Topics:  store,
+		BaseURL: "http://test",
+		Emit:    func(_ context.Context, ev events.Event) { got = append(got, ev) },
+	}
+
+	body := createTopicReq{URL: "fake-create://topic/emit-test"}
+	w := httptest.NewRecorder()
+	req := authedReq(t, uuid.New(), body)
+	h.Create(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body=%s", w.Code, w.Body.String())
+	}
+	if len(got) != 1 || got[0].Type != events.TopicAdded {
+		t.Fatalf("want one topic.added event, got %+v", got)
+	}
+}
 
 // ---------------------------------------------------------------------------
 // Fake ownership-validation lookups

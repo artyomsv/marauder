@@ -316,3 +316,39 @@ func TestSendVia_NilID_DefaultRespectsSubscription(t *testing.T) {
 		t.Errorf("want 0 (default not subscribed to updated), got %d", got)
 	}
 }
+
+func TestSubscribed_LegacyUpdated_MatchesNewReleaseEvents(t *testing.T) {
+	legacy := []string{"updated", "error"}
+	for _, ev := range []string{"release.found", "download.submitted", "download.completed"} {
+		if !subscribed(legacy, ev) {
+			t.Errorf("legacy 'updated' should match %s", ev)
+		}
+	}
+}
+
+func TestSubscribed_LegacyError_MatchesErrorEvents(t *testing.T) {
+	legacy := []string{"error"}
+	for _, ev := range []string{"check.failed", "session.expired"} {
+		if !subscribed(legacy, ev) {
+			t.Errorf("legacy 'error' should match %s", ev)
+		}
+	}
+	if subscribed(legacy, "release.found") {
+		t.Error("legacy 'error' must NOT match release.found")
+	}
+}
+
+func TestSubscribed_Canonical_DirectMatch(t *testing.T) {
+	if !subscribed([]string{"download.completed"}, "download.completed") {
+		t.Error("canonical event should match itself")
+	}
+	if subscribed([]string{"download.completed"}, "release.found") {
+		t.Error("canonical subscription must not match a different event")
+	}
+}
+
+func TestSubscribed_EmptyMeansAll(t *testing.T) {
+	if !subscribed(nil, "anything") {
+		t.Error("empty subscription should match all")
+	}
+}

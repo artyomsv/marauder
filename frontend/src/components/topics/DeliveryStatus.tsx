@@ -1,9 +1,11 @@
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { CheckCircle2, Download } from "lucide-react";
+import { Check, CheckCircle2, Copy, Download, Info } from "lucide-react";
 
 import { api, type DeliveryStatus as Delivery, type TopicStatus } from "@/lib/api";
 import { QK } from "@/lib/queryKeys";
 import { useT } from "@/i18n";
+import { useSseStatus } from "@/lib/sse-status";
 import { cn } from "@/lib/utils";
 
 interface DeliveryStatusProps {
@@ -18,8 +20,20 @@ const ACTIVE_STATES = new Set(["downloading", "checking", "queued"]);
 // baseline otherwise so a freshly-added topic's first delivery (and a
 // settled torrent flipping to "finished") appears without a manual page
 // refresh. The baseline is deliberately gentle for self-hosted setups.
-const ACTIVE_POLL_MS = 3000;
-const IDLE_POLL_MS = 20000;
+export const ACTIVE_POLL_MS = 3000;
+export const IDLE_POLL_MS = 20000;
+
+// pollInterval decides the /status refetch cadence. While SSE is connected,
+// live updates arrive via setQueryData, so polling is disabled; otherwise it
+// falls back to fast-while-active / slow-baseline.
+export function pollInterval(
+  sseConnected: boolean,
+  deliveries: { state: string }[] | undefined,
+): number | false {
+  if (sseConnected) return false;
+  const active = deliveries?.some((x) => ACTIVE_STATES.has(x.state));
+  return active ? ACTIVE_POLL_MS : IDLE_POLL_MS;
+}
 
 // Episodic labels are "sNNeNN" (LostFilm). Anything else (a RuTracker
 // release name, etc.) is a single-torrent delivery shown ungrouped.
@@ -31,6 +45,19 @@ function classify(d: Delivery): Kind {
   if (d.percent_done == null) return "delivered";
   if (d.percent_done >= 1 || d.state === "seeding") return "finished";
   return "downloading";
+}
+
+// Short, locale-aware date for delivery timestamps (e.g. "Jun 26").
+function fmtDate(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+// Newest delivered_at among a set (ISO-8601 strings sort lexicographically).
+function newestDeliveredAt(ds: Delivery[]): string {
+  if (ds.length === 0) return "";
+  return ds.reduce((a, b) => (a.delivered_at > b.delivered_at ? a : b)).delivered_at;
 }
 
 interface SeasonGroup {
@@ -72,16 +99,15 @@ function group(deliveries: Delivery[]): { seasons: SeasonGroup[]; loose: Deliver
 // untouched topics stay visually quiet.
 export function DeliveryStatus({ topicId }: DeliveryStatusProps) {
   const t = useT();
+  const sseConnected = useSseStatus((s) => s.connected);
   const { data } = useQuery<TopicStatus>({
     queryKey: QK.topicStatus(topicId),
     queryFn: () => api.topicStatus(topicId),
     // Fast poll while a download is in flight, slow baseline otherwise so
     // new deliveries and finished-flips surface without a page refresh.
-    refetchInterval: (query) => {
-      const d = query.state.data;
-      const active = d?.deliveries.some((x) => ACTIVE_STATES.has(x.state));
-      return active ? ACTIVE_POLL_MS : IDLE_POLL_MS;
-    },
+    // SSE takes precedence — when connected, polling is disabled as live
+    // updates arrive via setQueryData.
+    refetchInterval: (query) => pollInterval(sseConnected, query.state.data?.deliveries),
   });
 
   const deliveries = data?.deliveries ?? [];
@@ -113,10 +139,21 @@ export function DeliveryStatus({ topicId }: DeliveryStatusProps) {
         );
       })}
       {loose.length > 0 && (
-        <div className="flex flex-wrap items-center gap-1">
-          {loose.map((d) => (
-            <DeliveryChip key={d.infohash} delivery={d} label={d.label} t={t} />
-          ))}
+        <div className="flex flex-col gap-1">
+          {loose.length >= 2 && (
+            <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+              <Info className="size-3 shrink-0" />
+              {t("topics.delivery.reissued", {
+                n: loose.length,
+                date: fmtDate(newestDeliveredAt(loose)),
+              })}
+            </span>
+          )}
+          <div className="flex flex-wrap items-center gap-1">
+            {loose.map((d) => (
+              <DeliveryChip key={d.infohash} delivery={d} label={d.label} copyable t={t} />
+            ))}
+          </div>
         </div>
       )}
     </div>
@@ -126,47 +163,66 @@ export function DeliveryStatus({ topicId }: DeliveryStatusProps) {
 interface DeliveryChipProps {
   delivery: Delivery;
   label: string;
+  // copyable marks a single-torrent release chip: its (potentially long)
+  // label truncates, the tooltip shows the full label + delivered date, and a
+  // copy button lifts the full label to the clipboard. Episode chips (short)
+  // leave it false.
+  copyable?: boolean;
   t: (key: string, vars?: Record<string, string | number>) => string;
 }
 
-function DeliveryChip({ delivery, label, t }: DeliveryChipProps) {
+const CHIP_STYLE: Record<Kind, string> = {
+  downloading: "border-primary/40 text-primary",
+  finished: "border-emerald-500/40 text-emerald-600 dark:text-emerald-400",
+  delivered: "border-border text-muted-foreground",
+};
+
+function DeliveryChip({ delivery, label, copyable, t }: DeliveryChipProps) {
+  const [copied, setCopied] = useState(false);
   const kind = classify(delivery);
   const text = label || delivery.infohash.slice(0, 8);
+  const stateTitle = t(`topics.delivery.${kind}`);
+  // A copyable chip's tooltip is the full label + when it was delivered; a
+  // plain chip's tooltip is just its state.
+  const title = copyable
+    ? `${text} · ${t("topics.delivery.deliveredOn", { date: fmtDate(delivery.delivered_at) })}`
+    : stateTitle;
 
-  if (kind === "downloading") {
-    const pct = Math.round((delivery.percent_done ?? 0) * 100);
-    return (
-      <span
-        className={cn(
-          "inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-xs",
-          "border-primary/40 text-primary",
-        )}
-        title={t("topics.delivery.downloading")}
-      >
-        <Download className="size-3" />
-        {text} {pct}%
-      </span>
-    );
-  }
-
-  if (kind === "finished") {
-    return (
-      <span
-        className="inline-flex items-center gap-1 rounded border border-emerald-500/40 px-1.5 py-0.5 text-xs text-emerald-600 dark:text-emerald-400"
-        title={t("topics.delivery.finished")}
-      >
-        <CheckCircle2 className="size-3" />
-        {text}
-      </span>
-    );
-  }
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard?.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // clipboard unavailable (insecure context / denied) — leave the chip as-is
+    }
+  };
 
   return (
     <span
-      className="inline-flex items-center gap-1 rounded border border-border px-1.5 py-0.5 text-xs text-muted-foreground"
-      title={t("topics.delivery.delivered")}
+      className={cn(
+        "inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-xs",
+        CHIP_STYLE[kind],
+      )}
+      title={title}
     >
-      {text}
+      {kind === "downloading" && <Download className="size-3 shrink-0" />}
+      {kind === "finished" && <CheckCircle2 className="size-3 shrink-0" />}
+      <span className={cn(copyable && "max-w-[16rem] truncate")}>{text}</span>
+      {kind === "downloading" && (
+        <span className="shrink-0">{Math.round((delivery.percent_done ?? 0) * 100)}%</span>
+      )}
+      {copyable && (
+        <button
+          type="button"
+          onClick={handleCopy}
+          title={copied ? t("topics.delivery.copied") : t("topics.delivery.copy")}
+          aria-label={t("topics.delivery.copy")}
+          className="shrink-0 opacity-60 transition-opacity hover:opacity-100"
+        >
+          {copied ? <Check className="size-3" /> : <Copy className="size-3" />}
+        </button>
+      )}
     </span>
   );
 }

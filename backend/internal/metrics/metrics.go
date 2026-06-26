@@ -106,6 +106,16 @@ var (
 	)
 )
 
+// Progress watcher metrics -----------------------------------------------
+
+var (
+	// ProgressCompletionsTotal counts download.completed events the watcher fired.
+	ProgressCompletionsTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "marauder_progress_completions_total",
+		Help: "Total downloads the progress watcher detected as finished.",
+	})
+)
+
 // Sonarr integration metrics ---------------------------------------------
 
 var (
@@ -134,6 +144,17 @@ var (
 		},
 		[]string{"outcome"}, // created|updated|duplicate|no_tracker|disallowed|error
 	)
+)
+
+// SSE metrics ------------------------------------------------------------
+
+var (
+	// SSEDroppedFramesTotal counts SSE frames dropped because a subscriber's
+	// buffer was full (slow client) — drop-on-full keeps the hub non-blocking.
+	SSEDroppedFramesTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "marauder_sse_dropped_frames_total",
+		Help: "SSE frames dropped due to a full subscriber buffer.",
+	})
 )
 
 // ObserveHTTP is a convenience helper for the logging middleware.

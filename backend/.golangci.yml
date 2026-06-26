@@ -61,6 +61,11 @@ linters:
         # is built from trusted server config (BaseURL) plus server-generated
         # tokens, never user-controlled input.
         - G710
+        # G705 (XSS via taint) — false positive: the SSE handler writes
+        # text/event-stream frames (JSON-encoded event data), not HTML, to the
+        # ResponseWriter. The backend is a JSON/SSE API consumed by a separate
+        # SPA; there is no server-side HTML-rendering sink where XSS applies.
+        - G705
     errcheck:
       check-blank: false
       # The .Close() and .Rollback() methods are idiomatically deferred

@@ -49,11 +49,13 @@ techdebt/       Debt-tracking files (one per issue, see global rule)
 | `cfsolver` | in-process client to the standalone `cfsolver/` service |
 | `config` | env-driven config struct (caarlos0/env) — **add new env vars here** |
 | `crypto` | AES-256-GCM for tracker credentials and client config blobs |
-| `db` / `db/repo` | pgxpool wrapper + repository structs (`Topics`, `Clients`, `Notifiers`, `Users`, `TrackerCredentials`, `Deliveries`, `Audit`, `Settings`). `Settings` (repo added for the Sonarr integration) reads/writes the singleton `settings` row — `GetSonarr`/`UpsertSonarr` (API key encrypted at rest like `oidc_client_secret_enc`, migration `0009`) + `UpdateSonarrCursor` (history-poll cursor). `Topics` adds `GetByURL(user,url)` for the poller's dedup pre-check; `Users` adds `GetInitialAdmin`. `Topics` also carries `display_name_is_placeholder` (migration `0010`): true while the title is a tracker-generated placeholder, set false once resolved (metadata, first self-heal, or a user rename). `UpdateDisplayName` clears it; `Update` clears it only when the submitted name changes. `TrackerCredentials` carries encrypted `secret_enc` (password) **and** `session_enc`/`session_nonce` (cookie-session blob; migration `0002`), plus a nullable `session_expired_at` marker (migration `0003`) the scheduler uses to dedupe expiry notifications (atomic `MarkSessionExpired`, cleared by `SetSession` on re-auth). `Deliveries` (migration `0006`, `topic_deliveries`) records every torrent pushed to a client — `{topic_id, infohash, label, client_id, delivered_at}`, unique on `(topic_id, infohash)` so `Record` is idempotent (`ON CONFLICT DO NOTHING`). `Notifiers` gains `is_default bool` (migration `0008`, per-type unique partial index) + `Update(ctx, id, userID, name, displayName string, events []string, isDefault bool, configEnc, configNonce []byte) error` |
-| **`notify`** | reusable notification dispatcher — `Send(userID, domain.Message)` fans out to all of a user's configured notifiers (best-effort, metered); `SendVia(userID, notifierID, …)` scopes the same fan-out to one notifier when a topic overrides it (nil ⇒ the user's **default** notifiers only (strict; none set ⇒ no send)). Consumers: scheduler new-release alerts + topic-error alerts (both per-topic via `SendVia`; error events deduped to fire once per error episode, on the first failure) + credential session-expiry alerts (global). The single event→notifier fan-out point |
+| `db` / `db/repo` | pgxpool wrapper + repository structs (`Topics`, `Clients`, `Notifiers`, `Users`, `TrackerCredentials`, `Deliveries`, `Audit`, `Settings`). `Settings` (repo added for the Sonarr integration) reads/writes the singleton `settings` row — `GetSonarr`/`UpsertSonarr` (API key encrypted at rest like `oidc_client_secret_enc`, migration `0009`) + `UpdateSonarrCursor` (history-poll cursor). `Topics` adds `GetByURL(user,url)` for the poller's dedup pre-check; `Users` adds `GetInitialAdmin`. `Topics` also carries `display_name_is_placeholder` (migration `0010`): true while the title is a tracker-generated placeholder, set false once resolved (metadata, first self-heal, or a user rename). `UpdateDisplayName` clears it; `Update` clears it only when the submitted name changes. `TrackerCredentials` carries encrypted `secret_enc` (password) **and** `session_enc`/`session_nonce` (cookie-session blob; migration `0002`), plus a nullable `session_expired_at` marker (migration `0003`) the scheduler uses to dedupe expiry notifications (atomic `MarkSessionExpired`, cleared by `SetSession` on re-auth). `Deliveries` (migration `0006`, `topic_deliveries`) records every torrent pushed to a client — `{topic_id, infohash, label, client_id, delivered_at, completed_at}` (migration `0011` adds `completed_at`); unique on `(topic_id, infohash)` so `Record` is idempotent (`ON CONFLICT DO NOTHING`); `MarkCompleted`/`ListInFlight` support completion tracking. `Notifiers` gains `is_default bool` (migration `0008`, per-type unique partial index) + `Update(ctx, id, userID, name, displayName string, events []string, isDefault bool, configEnc, configNonce []byte) error` |
+| **`notify`** | reusable notification dispatcher — `Send(userID, domain.Message)` fans out to all of a user's configured notifiers (best-effort, metered); `SendVia(userID, notifierID, …)` scopes the same fan-out to one notifier when a topic overrides it (nil ⇒ the user's **default** notifiers only (strict; none set ⇒ no send)). Consumers: the `events.Bus` fan-out (per-event subscription, wired via `subscribed()` which maps typed `events.Type` to notifier event list; legacy `['updated','error']` rows kept working via dispatcher aliases). The single event→notifier fan-out point. Error events are deduped to fire once per error episode (on the first failure); session-expiry alerts are global one-shot |
 | `domain` | core types: `Topic` (incl. per-topic `ClientID`, **`NotifierID`** (per-topic notifier override, migration `0007`), `DownloadDir`, `Category`, `ImageURL`), `Check`, `Payload`, `TrackerCredential`, `TopicDelivery`, `AddOptions` (`DownloadDir` + `Category`) |
-| **`topics`** | shared `BuildAndCreate(store, CreateInput)` — the one tracker-match → `Parse` → fail-open `ResolveMetadata` → build → persist sequence, used by BOTH the `POST /topics` handler and the Sonarr poller (no duplication). Idempotent: a `(user_id,url)` unique-violation returns `Result{Created:false}` instead of erroring. Sentinels `ErrNoTracker`/`ErrParse`/`ErrQualityUnsupported` |
+| **`events`** | canonical event taxonomy (`Type` consts: topic.added, check.{started,completed,failed}, release.found, download.submitted, session.expired, download.{progress,completed}) + per-type `Policy` (persist/notifiable/sse) + `Bus.Emit` — the single event→sinks fan-out (history `topic_events`, notifier dispatcher, SSE hub). SSE publisher is the `sse.Hub` (Phase 3). `download.completed` is emitted by the `progress` watcher (Phase 2); `download.progress` is emitted by the watcher on change and pushed over SSE. `GET /api/v1/topics/{id}/events` endpoint reads the history. Frontend: `components/topics/TopicEventsTimeline`, `components/notifiers/EventPicker`, `lib/events.ts` |
+| **`topics`** | shared `BuildAndCreate(store, CreateInput)` — the one tracker-match → `Parse` → fail-open `ResolveMetadata` → build → persist sequence, used by BOTH the `POST /topics` handler and the Sonarr poller (no duplication). Idempotent: a `(user_id,url)` unique-violation returns `Result{Created:false}` instead of erroring. Sentinels `ErrNoTracker`/`ErrParse`/`ErrQualityUnsupported`. **`TopicEvents`** sibling repo (history feed: `Record`/`ListForTopic`/`ListForUserSince`) |
 | **`sonarr`** | Sonarr integration (issue #86): a typed read-only API `Client` (`SystemStatus` for the Test button; `GrabHistorySince` reads `eventType=grabbed` history, extracting `data.nzbInfoUrl` — the tracker topic URL, **not** `guid`) + a `Poller` that mirrors the scheduler (ticker loop, ctx-cancel, fail-open). Self-gates on the DB `settings.sonarr_enabled`, resolves the owner (configured admin ⇒ first admin), dedups history by URL, filters by allowed trackers, and auto-creates topics via `topics.BuildAndCreate` with configured default client/category/dir. First enable is go-forward only (cursor stamped, no historical import). Admin config UI: **Integrations** page (`pages/Integrations.tsx` → `components/integrations/SonarrCard`); API `GET/PUT/POST /api/v1/system/sonarr{,/test}` |
+| **`sse`** | live Server-Sent-Events fan-out: in-memory per-user `Hub` (the `events.Publisher` impl, wired into the bus) + one-time 30s `TicketStore`. `POST /api/v1/events/ticket` (JWT-authed) exchanges the access token for a single-use ticket; `GET /api/v1/events?ticket=…` (ticket-gated, public route) streams `text/event-stream` with `Last-Event-ID` replay (persisted events) + 25s heartbeats. Drop-on-full per slow client. Single-process (Redis/NATS fan-out is the multi-replica escape hatch) |
 | **`infohash`** | derives the BitTorrent v1 infohash (lowercase hex) from a `Payload` — `FromMagnet` (parses `xt=urn:btih:`, hex or base32) / `FromTorrent` (SHA-1 of the bencoded `info` dict via a length-based scanner) / `FromPayload`. The universal key linking a delivery to a client's live torrent status |
 | **`extra`** | shared `extra.Int / StringSlice / String` helpers for the untyped `map[string]any` blobs in `Topic.Extra` and `Check.Extra` (added 2026-04-07; **use this instead of writing local helpers**) |
 | `logging` | zerolog setup (JSON in prod, pretty in dev) |
@@ -67,6 +69,7 @@ techdebt/       Debt-tracking files (one per issue, see global rule)
 | `plugins/forumcommon` | shared cookie-jar `Session` type for forum-tracker plugins |
 | `plugins/e2etest` | shared `HostRewriteTransport` test helper for tracker e2e tests |
 | `problem` | RFC-7807 error responses |
+| **`progress`** | background download-completion watcher: polls `WithStatus` clients for in-flight `topic_deliveries` (`completed_at IS NULL`), and on seeding/100% atomically marks `completed_at` (NULL→now, dedup survives restart); emits `events.DownloadProgress` (Data: infohash/percent_done/state) on each change and `events.DownloadCompleted` via the bus. Go-forward only — migration `0011` backfills existing deliveries as complete so upgrading doesn't back-notify. Gated by `MARAUDER_PROGRESS_WATCHER_ENABLED`, polls every `MARAUDER_PROGRESS_POLL_INTERVAL` (default 5s); zero idle cost |
 | `scheduler` | per-topic check loop with bounded worker pool, exponential backoff, per-episode multi-download loop, and unit tests |
 | `version` | build-time version stamping (`-ldflags -X`) |
 
@@ -91,6 +94,8 @@ techdebt/       Debt-tracking files (one per issue, see global rule)
 4. `recordResult` — persists `next_check_at` (with exponential backoff
    on errors, capped at 6h) and writes the run summary metrics.
 
+**Event emission:** the scheduler emits typed `events.Event`s via `events.Bus.Emit` at key points: `check.started`/`check.completed`/`check.failed` (per check cycle), `release.found` (per new torrent detected), `download.submitted` (after client send), and `session.expired` (on credential session loss). (`topic.added` is emitted separately by the topics HTTP handler on `POST /topics`, not by the scheduler.) The bus fans out to `topic_events` history table (all events persisted if policy allows), the notifier dispatcher (for event-type subscriptions), and the SSE hub (wired as of Phase 3 — `sse.Hub`, the live `events.Publisher`).
+
 **Per-topic delivery:** `sendViaClient` passes `domain.AddOptions{DownloadDir:
 t.DownloadDir, Category: t.Category}` to the client plugin. Category is a
 **path segment, not a client-native label**: each client config carries an
@@ -111,7 +116,8 @@ missing recorder, undecodable payload, or DB error is logged and never fails
 the check. `GET /api/v1/topics/{id}/status` reads these rows and, when the
 topic's client implements `registry.WithStatus`, augments each with live
 percent/state by infohash (10s timeout, fail-open to "delivered" labels);
-no background poller — the scheduler stays a pure monitor.
+completion is detected by the `progress` watcher (separate goroutine), not
+the scheduler — the scheduler stays a pure monitor for checking.
 
 **Errored-topic retry:** `DueForCheck` selects `WHERE status IN
 ('active','error')`, so a topic that errors keeps retrying on its already-
@@ -130,10 +136,16 @@ src/
 ├── App.tsx                    Route table + Suspense boundary
 ├── main.tsx                   ReactDOM entrypoint
 ├── components/
+│   ├── EventStreamProvider.tsx Single app-wide SSE connection (mounted in ProtectedLayout, authed-only)
 │   ├── layout/AppShell.tsx    Header + sidebar + outlet
 │   ├── shared/                Reusable across pages
 │   │   ├── DeleteConfirm.tsx  Two-click destructive confirm (uses useArmedConfirm)
 │   │   └── ResourceCard.tsx   Slot-based card chrome for list pages
+│   ├── topics/                Page-specific topic components
+│   │   ├── TopicEventsTimeline.tsx  Per-topic event history feed (read-only)
+│   │   └── TopicCheckStatus.tsx     Live checking/next-check chip (fed by check.* SSE events)
+│   ├── notifiers/             Page-specific notifier components
+│   │   └── EventPicker.tsx    Event type checkbox list (for notifier subscription)
 │   └── ui/                    shadcn primitives — DO NOT hand-edit
 ├── hooks/                     (legacy folder, mostly empty — prefer lib/hooks)
 ├── i18n/                      en/ru dictionaries + useT hook
@@ -143,8 +155,13 @@ src/
 │   ├── prefs.ts               zustand store: theme, locale, density
 │   ├── queryKeys.ts           Centralised React Query key factory (QK)
 │   ├── utils.ts               cn() helper
+│   ├── events.ts              Event type defs + `eventLabel()` i18n helper
+│   ├── check-status.ts        zustand store: live per-topic check phase (checking/idle/error)
+│   ├── sse-status.ts          zustand store: SSE connection state (connected boolean)
+│   ├── events-stream.ts       `applyEvent` router: patches React Query cache + check store on SSE events
 │   └── hooks/
 │       ├── useArmedConfirm.ts  Two-state idle⇄armed machine with timeout
+│       ├── useEventStream.ts   Single live SSE connection; manual reconnect with ticket + last_event_id
 │       ├── useDebouncedValue.ts Generic debounce for query inputs
 │       ├── useLogout.ts        Revoke refresh token + clear store + nav
 │       └── useSystemInfo.ts    Shared /system/info query (5-min stale)
@@ -164,6 +181,19 @@ src/
 └── test/
     └── setup.ts                Vitest + RTL global setup
 ```
+
+### Live updates — SSE consumption layer (Phase 3b)
+
+The frontend consumes the backend `GET /api/v1/events` Server-Sent Events stream via a centralized, single-connection pattern:
+
+- **`useEventStream` hook** — maintains one live `EventSource` per app session. Since the SSE ticket is single-use, reconnection is manual: fetch a fresh ticket on each connect attempt and carry the last-seen `event.lastEventId` forward as a `last_event_id=` query param to survive reconnects with replay. Backoff is exponential (1s → 30s max).
+- **`EventStreamProvider` component** — lifecycle host mounted in `ProtectedLayout` (in `App.tsx`), wrapping the authenticated `Outlet`. Runs `useEventStream` only when logged in; cleanly closes on logout.
+- **`applyEvent` function** (`lib/events-stream.ts`) — routes typed SSE events into two sinks: React Query cache (invalidations on `release.found` / `download.submitted` / `topic.added` / `download.completed`; in-place patch on `download.progress`) and the `useCheckStatus` store (check.started/completed/failed phases). Pure function, safe to unit-test.
+- **`useSseStatus` store** — boolean `connected` flag so views can disable polling fallbacks while SSE is live.
+- **`useCheckStatus` store** — per-topic `{phase, nextCheckAt?, error?}` tracking, fed by `check.*` events. Drives the `TopicCheckStatus` chip (shows a "Checking…" pulse, an error chip, or the next-check time — refreshed on each `check.*` event, not a per-second countdown). A "Checking…" pulse whose terminal `check.completed`/`check.failed` is missed (ephemeral `check.*` carry no id and aren't replayed across an SSE gap) auto-reverts to idle after `CHECKING_STALE_MS` (90s) so it can't spin forever.
+- **`TopicCheckStatus` component** — renders live check phase and next-check time via `useCheckStatus`; subscribes to topic-level updates.
+
+The **status poll fallback** (in `DeliveryStatus`) is now gated by `useSseStatus.connected` — it only polls when SSE is down or not yet connected. On reconnect, the backend's `?last_event_id=` query fallback replays missed **persisted** events (releases, submissions, completions, errors), so those aren't lost across a restart; ephemeral `download.progress`/`check.*` frames carry no `id:` and re-sync from the next live frame instead.
 
 ### Conventions
 

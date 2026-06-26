@@ -5,8 +5,10 @@ import { Plus, Loader2, CheckCircle2, Bell, AlertCircle, Pencil } from "lucide-r
 
 import { api } from "@/lib/api";
 import { useT } from "@/i18n";
+import { ALL_NOTIFIABLE_EVENTS, EVENT_LABELS } from "@/lib/events";
 import { useSystemInfo } from "@/lib/hooks/useSystemInfo";
 import { QK } from "@/lib/queryKeys";
+import { EventPicker } from "@/components/notifiers/EventPicker";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -28,15 +30,11 @@ type NotifierView = {
 type NotifiersList = { notifiers: NotifierView[] | null };
 
 // eventLabel maps a notifier's subscribed event key to a human phrase, so a
-// card reads "Notifies on: new releases, errors" instead of bare "updated"
-// / "error" chips that look like a status. Unknown events fall back to the
-// raw key.
+// card reads "Notifies on: new releases, errors" instead of bare event keys.
+// Unknown events fall back to the raw key.
 function eventLabel(event: string, t: (key: string) => string): string {
-  const known: Record<string, string> = {
-    updated: t("notifiers.event.updated"),
-    error: t("notifiers.event.error"),
-  };
-  return known[event] ?? event;
+  const labelKey = EVENT_LABELS[event];
+  return labelKey ? t(labelKey) : event;
 }
 
 export function NotifiersPage() {
@@ -228,7 +226,7 @@ function AddNotifierCard({
 }) {
   const [pluginName, setPluginName] = useState(plugins[0]?.name ?? "");
   const [displayName, setDisplayName] = useState("");
-  const [events, setEvents] = useState<string[]>(["updated", "error"]);
+  const [events, setEvents] = useState<string[]>(ALL_NOTIFIABLE_EVENTS);
   const [isDefault, setIsDefault] = useState(false);
   const [config, setConfig] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
@@ -315,23 +313,7 @@ function AddNotifierCard({
             ))}
           </div>
 
-          <div className="flex flex-wrap items-center gap-4 text-sm">
-            <span className="text-muted-foreground">Notify on:</span>
-            {(["updated", "error"] as const).map((ev) => (
-              <label key={ev} className="inline-flex items-center gap-1.5">
-                <input
-                  type="checkbox"
-                  checked={events.includes(ev)}
-                  onChange={(e) =>
-                    setEvents((prev) =>
-                      e.target.checked ? [...prev, ev] : prev.filter((x) => x !== ev),
-                    )
-                  }
-                />
-                {ev === "updated" ? "new releases" : "errors"}
-              </label>
-            ))}
-          </div>
+          <EventPicker value={events} onChange={setEvents} />
           <label className="inline-flex items-center gap-2 text-sm">
             <input
               type="checkbox"

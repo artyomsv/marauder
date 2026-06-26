@@ -73,3 +73,45 @@ ORDER BY delivered_at DESC`
 	}
 	return out, rows.Err()
 }
+
+// MarkCompleted atomically stamps completed_at for a delivery, but only if it
+// was still NULL. Returns true when this call won the NULL→now() transition —
+// the caller that gets true is the one (and only one) that should fire the
+// download.completed event. Survives restarts: a completed row never fires again.
+func (r *Deliveries) MarkCompleted(ctx context.Context, deliveryID uuid.UUID) (bool, error) {
+	const q = `UPDATE topic_deliveries SET completed_at = now() WHERE id = $1 AND completed_at IS NULL`
+	ct, err := r.pool.Exec(ctx, q, deliveryID)
+	if err != nil {
+		return false, fmt.Errorf("deliveries: mark completed: %w", err)
+	}
+	return ct.RowsAffected() > 0, nil
+}
+
+// ListInFlight returns deliveries not yet marked complete, joined with their
+// topic's owner, notifier override, and display name. Bounded to the last 30
+// days and to deliveries with a known client, so rows that can never complete
+// (client without WithStatus, removed torrents) age out of the working set
+// instead of being polled forever.
+func (r *Deliveries) ListInFlight(ctx context.Context) ([]*domain.InFlightDelivery, error) {
+	const q = `
+SELECT d.id, d.topic_id, t.user_id, t.notifier_id, d.client_id, d.infohash, d.label, t.display_name
+FROM topic_deliveries d
+JOIN topics t ON t.id = d.topic_id
+WHERE d.completed_at IS NULL
+  AND d.client_id IS NOT NULL
+  AND d.delivered_at > now() - interval '30 days'`
+	rows, err := r.pool.Query(ctx, q)
+	if err != nil {
+		return nil, fmt.Errorf("deliveries: list in-flight: %w", err)
+	}
+	defer rows.Close()
+	var out []*domain.InFlightDelivery
+	for rows.Next() {
+		var d domain.InFlightDelivery
+		if err := rows.Scan(&d.DeliveryID, &d.TopicID, &d.UserID, &d.NotifierID, &d.ClientID, &d.Infohash, &d.Label, &d.DisplayName); err != nil {
+			return nil, fmt.Errorf("deliveries: scan in-flight: %w", err)
+		}
+		out = append(out, &d)
+	}
+	return out, rows.Err()
+}

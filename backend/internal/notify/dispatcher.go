@@ -115,10 +115,20 @@ func (d *Dispatcher) sendOne(ctx context.Context, n *domain.Notifier, event stri
 	return true
 }
 
+// legacyAliases maps a pre-taxonomy subscription keyword to the canonical
+// event types it now covers, so notifiers created before per-event
+// subscription (events = ['updated','error']) keep delivering. "updated" is
+// intentionally broad — new releases, client submissions, and completions.
+var legacyAliases = map[string][]string{
+	"updated": {"release.found", "download.submitted", "download.completed"},
+	"error":   {"check.failed", "session.expired"},
+}
+
 // subscribed reports whether a notifier with the given event subscription
 // list should receive an event. An empty list (or empty event) means "all
 // events" — a defensive default so a notifier created before event
 // filtering, or a caller that doesn't categorise, still delivers.
+// A subscription entry matches directly, or via its legacy alias expansion.
 func subscribed(events []string, event string) bool {
 	if len(events) == 0 || event == "" {
 		return true
@@ -126,6 +136,11 @@ func subscribed(events []string, event string) bool {
 	for _, e := range events {
 		if e == event {
 			return true
+		}
+		for _, alias := range legacyAliases[e] {
+			if alias == event {
+				return true
+			}
 		}
 	}
 	return false

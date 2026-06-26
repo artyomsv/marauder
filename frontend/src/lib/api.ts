@@ -172,6 +172,10 @@ export const api = {
   topicStatus: (id: string) =>
     request<TopicStatus>("GET", `/topics/${id}/status`),
 
+  // /topics/{id}/events — read-only per-topic history timeline.
+  topicEvents: (id: string) =>
+    request<{ events: TopicEvent[] }>("GET", `/topics/${id}/events`),
+
   // GET /notifiers/{id} — includes decrypted config for the edit form.
   getNotifier: (id: string) =>
     request<NotifierDetail>("GET", `/notifiers/${id}`),
@@ -188,6 +192,10 @@ export const api = {
     request<SonarrConfig>("PUT", "/system/sonarr", body),
   testSonarr: (body: { sonarr_url?: string; api_key?: string }) =>
     request<SonarrTestResult>("POST", "/system/sonarr/test", body),
+
+  // --- Server-Sent Events. POST /events/ticket exchanges the access token
+  // for a single-use ticket; GET /events?ticket=… streams event-stream.
+  eventsTicket: () => request<{ ticket: string }>("POST", "/events/ticket"),
 };
 
 // GET /system/sonarr — the API key is intentionally absent (api_key_set only).
@@ -239,6 +247,16 @@ export interface DeliveryStatus {
 export interface TopicStatus {
   client_supports_status: boolean;
   deliveries: DeliveryStatus[];
+}
+
+// One event in the per-topic history timeline (GET /topics/{id}/events).
+export interface TopicEvent {
+  id: number;
+  event_type: string;
+  severity: "info" | "warn" | "error";
+  message: string;
+  data?: Record<string, unknown>;
+  created_at: string;
 }
 
 // Response of GET /trackers/preview. Either field may be empty.

@@ -21,10 +21,13 @@ import (
 	"github.com/artyomsv/marauder/backend/internal/db"
 	"github.com/artyomsv/marauder/backend/internal/db/repo"
 	"github.com/artyomsv/marauder/backend/internal/domain"
+	"github.com/artyomsv/marauder/backend/internal/events"
 	"github.com/artyomsv/marauder/backend/internal/logging"
 	"github.com/artyomsv/marauder/backend/internal/notify"
+	"github.com/artyomsv/marauder/backend/internal/progress"
 	"github.com/artyomsv/marauder/backend/internal/scheduler"
 	"github.com/artyomsv/marauder/backend/internal/sonarr"
+	"github.com/artyomsv/marauder/backend/internal/sse"
 	"github.com/artyomsv/marauder/backend/internal/version"
 
 	// Register bundled plugins via blank imports. This activates their
@@ -140,13 +143,30 @@ func run() error {
 	}
 
 	// Scheduler
+	topicEventsRepo := repo.NewTopicEvents(pool)
 	disp := notify.New(notifiersRepo, master, logger)
-	sch := scheduler.New(cfg, logger, topicsRepo, clientsRepo, credsRepo, deliveriesRepo, master, disp)
+	hub := sse.NewHub(logger)
+	tickets := sse.NewTicketStore()
+	bus := events.New(topicEventsRepo, disp, hub, logger) // hub is the live SSE publisher
+	sch := scheduler.New(cfg, logger, topicsRepo, clientsRepo, credsRepo, deliveriesRepo, master, bus)
 	go func() {
 		if err := sch.Start(rootCtx); err != nil {
 			logger.Error().Err(err).Msg("scheduler exited with error")
 		}
 	}()
+
+	// Progress watcher: detects when in-flight deliveries finish downloading
+	// and emits download.completed events. Gated by MARAUDER_PROGRESS_WATCHER_ENABLED.
+	if cfg.ProgressWatcherEnabled {
+		watcher := progress.New(
+			deliveriesRepo, clientsRepo, master, bus,
+			progress.Config{PollInterval: cfg.ProgressPollInterval, PublicBaseURL: cfg.PublicBaseURL},
+			logger,
+		)
+		if err := watcher.Start(rootCtx); err != nil {
+			logger.Error().Err(err).Msg("progress watcher failed to start")
+		}
+	}
 
 	// Sonarr integration poller. Self-gates on the DB-stored config
 	// (settings.sonarr_enabled), so it's always started; it no-ops while
@@ -160,22 +180,26 @@ func run() error {
 
 	// HTTP server
 	router := api.NewRouter(api.Deps{
-		Cfg:        cfg,
-		Log:        logger,
-		Pool:       pool,
-		Manager:    mgr,
-		Master:     master,
-		Users:      users,
-		Topics:     topicsRepo,
-		Clients:    clientsRepo,
-		Notifiers:  notifiersRepo,
-		Creds:      credsRepo,
-		Deliveries: deliveriesRepo,
-		Settings:   settingsRepo,
-		Audit:      auditRepo,
-		AuditLog:   auditLogger,
-		OIDC:       oidcProvider,
-		Scheduler:  sch,
+		Cfg:         cfg,
+		Log:         logger,
+		Pool:        pool,
+		Manager:     mgr,
+		Master:      master,
+		Users:       users,
+		Topics:      topicsRepo,
+		Clients:     clientsRepo,
+		Notifiers:   notifiersRepo,
+		Creds:       credsRepo,
+		Deliveries:  deliveriesRepo,
+		TopicEvents: topicEventsRepo,
+		Settings:    settingsRepo,
+		Audit:       auditRepo,
+		AuditLog:    auditLogger,
+		OIDC:        oidcProvider,
+		Scheduler:   sch,
+		Emit:        bus.Emit,
+		Hub:         hub,
+		Tickets:     tickets,
 	})
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,

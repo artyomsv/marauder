@@ -14,6 +14,7 @@ import (
 	"github.com/artyomsv/marauder/backend/internal/api/middleware"
 	"github.com/artyomsv/marauder/backend/internal/db/repo"
 	"github.com/artyomsv/marauder/backend/internal/domain"
+	"github.com/artyomsv/marauder/backend/internal/events"
 	"github.com/artyomsv/marauder/backend/internal/plugins/registry"
 	"github.com/artyomsv/marauder/backend/internal/problem"
 	"github.com/artyomsv/marauder/backend/internal/topics"
@@ -67,6 +68,9 @@ type Topics struct {
 	Notifiers  notifiersLookup
 	Master     configDecryptor
 	BaseURL    string
+	// Emit is an optional hook called after a topic is successfully created.
+	// Nil-safe: existing handler tests that don't set Emit continue to pass.
+	Emit func(ctx context.Context, ev events.Event)
 }
 
 type createTopicReq struct {
@@ -151,7 +155,20 @@ func (h *Topics) Create(w http.ResponseWriter, r *http.Request) {
 				"A topic for this URL already exists."))
 		return
 	}
-	writeJSON(w, http.StatusCreated, res.Topic)
+	created := res.Topic
+	if h.Emit != nil {
+		h.Emit(r.Context(), events.Event{
+			UserID:     created.UserID,
+			TopicID:    &created.ID,
+			NotifierID: created.NotifierID,
+			Type:       events.TopicAdded,
+			Severity:   "info",
+			Title:      created.DisplayName,
+			Body:       "Topic added",
+			Link:       h.BaseURL + "/topics",
+		})
+	}
+	writeJSON(w, http.StatusCreated, created)
 }
 
 // topicCreateProblem maps a topics.BuildAndCreate error to an RFC-7807
