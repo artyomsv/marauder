@@ -27,25 +27,25 @@ import (
 
 // Deps is the bag of dependencies handed to NewRouter.
 type Deps struct {
-	Cfg        *config.Config
-	Log        zerolog.Logger
-	Pool       *pgxpool.Pool
-	Manager    *auth.Manager
-	Master     *crypto.MasterKey
-	Users      *repo.Users
-	Topics     *repo.Topics
-	Clients    *repo.Clients
-	Notifiers  *repo.Notifiers
-	Creds      *repo.TrackerCredentials
+	Cfg         *config.Config
+	Log         zerolog.Logger
+	Pool        *pgxpool.Pool
+	Manager     *auth.Manager
+	Master      *crypto.MasterKey
+	Users       *repo.Users
+	Topics      *repo.Topics
+	Clients     *repo.Clients
+	Notifiers   *repo.Notifiers
+	Creds       *repo.TrackerCredentials
 	Deliveries  *repo.Deliveries
 	TopicEvents *repo.TopicEvents
 	Settings    *repo.Settings
-	Audit      *repo.Audit
-	AuditLog   *audit.Logger
-	OIDC       *auth.OIDCProvider
-	Scheduler  *scheduler.Scheduler
-	Hub        *sse.Hub
-	Tickets    *sse.TicketStore
+	Audit       *repo.Audit
+	AuditLog    *audit.Logger
+	OIDC        *auth.OIDCProvider
+	Scheduler   *scheduler.Scheduler
+	Hub         *sse.Hub
+	Tickets     *sse.TicketStore
 	// Emit is the events.Bus.Emit hook wired to the topics handler so it can
 	// publish topic.added on create. Nil-safe: omitting it disables emission.
 	Emit func(ctx context.Context, ev events.Event)

@@ -4,8 +4,8 @@ import "testing"
 
 func TestPolicyFor(t *testing.T) {
 	tests := []struct {
-		typ                       Type
-		persist, notify, sse      bool
+		typ                  Type
+		persist, notify, sse bool
 	}{
 		{TopicAdded, true, false, true},
 		{CheckStarted, false, false, true},

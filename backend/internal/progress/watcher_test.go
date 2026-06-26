@@ -42,9 +42,9 @@ func (f *fakeEmitter) Emit(_ context.Context, ev events.Event) { f.events = appe
 
 type fakeStatus struct{ statuses []registry.TorrentStatus }
 
-func (f fakeStatus) Name() string                  { return "fake" }
-func (f fakeStatus) DisplayName() string            { return "Fake" }
-func (f fakeStatus) ConfigSchema() map[string]any   { return nil }
+func (f fakeStatus) Name() string                       { return "fake" }
+func (f fakeStatus) DisplayName() string                { return "Fake" }
+func (f fakeStatus) ConfigSchema() map[string]any       { return nil }
 func (f fakeStatus) Test(context.Context, []byte) error { return nil }
 func (f fakeStatus) Add(context.Context, []byte, *domain.Payload, domain.AddOptions) error {
 	return nil
