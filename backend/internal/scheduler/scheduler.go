@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"math"
 	"net"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -51,7 +52,7 @@ import (
 // topicsRepo is the subset of *repo.Topics that the scheduler uses.
 type topicsRepo interface {
 	DueForCheck(ctx context.Context, limit int) ([]*domain.Topic, error)
-	RecordCheckResult(ctx context.Context, id uuid.UUID, hash string, updated bool, nextCheckAt time.Time, errMsg string) error
+	RecordCheckResult(ctx context.Context, id uuid.UUID, hash string, updated bool, nextCheckAt time.Time, errMsg, errCode string) error
 	UpdateExtra(ctx context.Context, id uuid.UUID, extra map[string]any) error
 }
 
@@ -307,7 +308,11 @@ func (s *Scheduler) worker(ctx context.Context, id int) {
 // (rare) persistence failure rather than discarding it. Persistence
 // errors are non-fatal here — the next tick re-evaluates the topic.
 func (s *Scheduler) recordResult(ctx context.Context, log zerolog.Logger, id uuid.UUID, hash string, updated bool, nextCheckAt time.Time, errMsg string) {
-	if err := s.topics.RecordCheckResult(ctx, id, hash, updated, nextCheckAt, errMsg); err != nil {
+	var errCode string
+	if errMsg != "" {
+		errCode = classifyError(errMsg)
+	}
+	if err := s.topics.RecordCheckResult(ctx, id, hash, updated, nextCheckAt, errMsg, errCode); err != nil {
 		log.Warn().Err(err).Msg("RecordCheckResult failed")
 	}
 }
@@ -771,6 +776,92 @@ func (s *Scheduler) backoff(t *domain.Topic, failure bool, cause error) time.Tim
 		d = s.cfg.CheckMaxBackoff
 	}
 	return time.Now().UTC().Add(d)
+}
+
+// Error codes are stable, machine-readable classifications of a check
+// failure. They are persisted in topics.last_error_code and consumed by the
+// frontend to render a localised, user-friendly message (the raw LastError is
+// kept for debugging). Keep these strings in sync with the frontend's
+// topics.error.* i18n keys (frontend/src/components/topics/TopicError.tsx).
+const (
+	errCodeTimeout       = "timeout"
+	errCodeUnreachable   = "unreachable"
+	errCodeAuth          = "auth"
+	errCodeParse         = "parse"
+	errCodePluginMissing = "plugin_missing"
+	errCodeUnknown       = "unknown"
+)
+
+// urlInError matches an http(s) URL embedded in an error message. Tracker
+// errors carry the topic URL (e.g. `kinozal GET https://…/details.php?id=15221
+// -> 522`), whose numeric id would otherwise be matched as an HTTP status code
+// ("15221" contains "522"). We strip URLs before classifying; the real status
+// code is reported separately (`-> <code>` / `status <code>`) and survives.
+var urlInError = regexp.MustCompile(`https?://[^\s"']+`)
+
+// httpStatusInError extracts the HTTP status code a tracker plugin reports,
+// anchored to the conventional `GET <url> -> <code>` / `unexpected status
+// <code>` formats so we never pick up an arbitrary 3-digit run.
+var httpStatusInError = regexp.MustCompile(`(?:->|status:?)\s*(\d{3})\b`)
+
+// classifyError maps a raw error message into one of the stable errCode*
+// constants. It matches on substrings of the lowercased message because the
+// underlying errors come from many layers (net, tls, http, tracker plugins)
+// and are not all typed sentinels. Order matters: the most specific buckets
+// are checked first. An unrecognised message falls back to errCodeUnknown, in
+// which case the UI shows the raw detail rather than a generic phrase.
+func classifyError(msg string) string {
+	// Strip embedded URLs first so a topic id like `id=15221` cannot be
+	// mistaken for an HTTP status ("522"). The real status — reported as
+	// `-> <code>` after the URL — is left intact.
+	clean := urlInError.ReplaceAllString(msg, "")
+	m := strings.ToLower(clean)
+
+	if strings.Contains(m, "plugin not installed") {
+		return errCodePluginMissing
+	}
+
+	// HTTP status code reported by the tracker plugin. Range-map rather than
+	// enumerate: 401/403/407 are auth; 429 and any 5xx (incl. Cloudflare
+	// 520-526) are unreachable. Other codes (e.g. 404) fall through to the
+	// keyword pass and ultimately to unknown so the UI shows the raw detail.
+	if g := httpStatusInError.FindStringSubmatch(clean); g != nil {
+		switch code := g[1]; {
+		case code == "401" || code == "403" || code == "407":
+			return errCodeAuth
+		case code == "429" || (code >= "500" && code <= "599"):
+			return errCodeUnreachable
+		}
+	}
+
+	switch {
+	case containsAny(m, "auth failed", "session expired", "unauthorized",
+		"invalid api key", "invalid credentials", "captcha", "login failed",
+		"requires credentials"):
+		return errCodeAuth
+	case containsAny(m, "context deadline exceeded", "deadline exceeded",
+		"timeout", "i/o timeout", "client.timeout"):
+		return errCodeTimeout
+	case containsAny(m, "connection refused", "connection reset",
+		"no such host", "server misbehaving", "no route to host",
+		"network is unreachable", "tls handshake", "eof"):
+		return errCodeUnreachable
+	case containsAny(m, "parse", "unparseable", "malformed",
+		"invalid character", "decode"):
+		return errCodeParse
+	default:
+		return errCodeUnknown
+	}
+}
+
+// containsAny reports whether s contains any of the given substrings.
+func containsAny(s string, subs ...string) bool {
+	for _, sub := range subs {
+		if strings.Contains(s, sub) {
+			return true
+		}
+	}
+	return false
 }
 
 // isTransientError reports whether err is a transient network/infra failure —

@@ -89,8 +89,14 @@ type Topic struct {
 	ConsecutiveErrors        int
 	Status                   TopicStatus
 	LastError                string
-	CreatedAt                time.Time
-	UpdatedAt                time.Time
+	// LastErrorCode is a stable, machine-readable classification of
+	// LastError (timeout / unreachable / auth / parse / plugin_missing /
+	// unknown) so the UI can render a localised, user-friendly message
+	// while LastError keeps the raw detail for debugging. Empty when the
+	// last check succeeded.
+	LastErrorCode string
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
 }
 
 // TrackerCredential holds a user's login details for a tracker plugin.

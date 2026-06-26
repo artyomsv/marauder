@@ -112,6 +112,7 @@ const EXISTING_TOPIC: Topic = {
   ConsecutiveErrors: 0,
   Status: "active",
   LastError: "",
+  LastErrorCode: "",
   CreatedAt: "",
   UpdatedAt: "",
 };

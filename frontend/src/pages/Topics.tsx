@@ -5,7 +5,6 @@ import {
   Plus,
   Trash2,
   Loader2,
-  AlertTriangle,
   Pause,
   Play,
   Pencil,
@@ -29,6 +28,7 @@ import { EditTopicCard } from "@/components/topics/EditTopicCard";
 import { ClientBadge, type ClientRef } from "@/components/topics/ClientBadge";
 import { NotifierBadge, type NotifierRef } from "@/components/topics/NotifierBadge";
 import { SonarrBadge } from "@/components/topics/SonarrBadge";
+import { TopicError } from "@/components/topics/TopicError";
 import { DeliveryStatus } from "@/components/topics/DeliveryStatus";
 import { PosterImage } from "@/components/topics/PosterImage";
 import { TopicUrl } from "@/components/topics/TopicUrl";
@@ -219,12 +219,7 @@ export function TopicsPage() {
                       </span>
                     </div>
                     {!compact && <TopicUrl url={t.URL} />}
-                    {t.LastError && (
-                      <div className="mt-1 flex items-center gap-1.5 text-xs text-destructive">
-                        <AlertTriangle className="size-3" />
-                        {t.LastError}
-                      </div>
-                    )}
+                    <TopicError topic={t} />
                     {!compact && <DeliveryStatus topicId={t.ID} />}
                     {!compact && <TopicCheckStatus topicId={t.ID} />}
                     {!compact && <TopicHistoryDisclosure topicId={t.ID} />}

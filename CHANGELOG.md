@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Friendly topic check-errors** — when a tracker check fails, the scheduler
+  now classifies the failure into a stable code (`timeout`, `unreachable`,
+  `auth`, `parse`, `plugin_missing`) stored in `topics.last_error_code`
+  alongside the raw error. The Topics UI renders a localised, human-readable
+  message (English + Russian) instead of raw Go errors like
+  `context deadline exceeded`, while keeping the raw detail in a hover tooltip
+  for debugging.
+
 ## [1.5.0] - 2026-06-26
 
 ### Added
