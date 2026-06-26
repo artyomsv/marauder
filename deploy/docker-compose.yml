@@ -49,8 +49,8 @@ services:
       context: ../backend
       dockerfile: Dockerfile
       args:
-        VERSION: "1.4.1"
-    image: marauder-backend:1.4.1
+        VERSION: "1.5.0"
+    image: marauder-backend:1.5.0
     restart: unless-stopped
     depends_on:
       db:
@@ -96,7 +96,7 @@ services:
     build:
       context: ../frontend
       dockerfile: Dockerfile
-    image: marauder-frontend:1.4.1
+    image: marauder-frontend:1.5.0
     restart: unless-stopped
     depends_on:
       - backend
@@ -118,7 +118,7 @@ services:
     build:
       context: ../cfsolver
       dockerfile: Dockerfile
-    image: marauder-cfsolver:1.4.1
+    image: marauder-cfsolver:1.5.0
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:9244/health"]
