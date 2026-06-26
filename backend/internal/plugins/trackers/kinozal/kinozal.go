@@ -178,6 +178,33 @@ func extractImageURL(body []byte, host string) string {
 	}
 }
 
+// parseTopicID extracts the numeric Kinozal topic id from the "id" query
+// parameter of rawURL. Shared by canonicalDetailsURL and fetchInfohash so the
+// url.Parse → id logic lives in exactly one place.
+func parseTopicID(rawURL string) (int, error) {
+	u, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil {
+		return 0, fmt.Errorf("kinozal: parse url: %w", err)
+	}
+	id, err := strconv.Atoi(u.Query().Get("id"))
+	if err != nil {
+		return 0, fmt.Errorf("kinozal: topic id: %w", err)
+	}
+	return id, nil
+}
+
+// canonicalDetailsURL rebuilds the details URL from the trusted host (p.domain)
+// + the numeric id parsed from rawURL — never the raw user URL. Avoids request
+// forgery (CodeQL go/request-forgery) and pins the request to p.domain so
+// Check's title matches ResolveMetadata's (issue #90).
+func (p *plugin) canonicalDetailsURL(rawURL string) (string, error) {
+	id, err := parseTopicID(rawURL)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("https://%s/details.php?id=%d", p.domain, id), nil
+}
+
 // Check makes TWO requests per tick: the details page for the display title,
 // then get_srv_details.php for the infohash (Kinozal exposes the hash only
 // there, not on the details page). Both run under the scheduler's single
@@ -186,7 +213,11 @@ func extractImageURL(body []byte, host string) string {
 // already-fetched title is intentionally discarded — title self-heal simply
 // retries next tick rather than persisting a title with no matching hash.
 func (p *plugin) Check(ctx context.Context, topic *domain.Topic, creds *domain.TrackerCredential) (*domain.Check, error) {
-	body, err := p.fetch(ctx, topic.URL, creds)
+	canonical, err := p.canonicalDetailsURL(topic.URL)
+	if err != nil {
+		return nil, err
+	}
+	body, err := p.fetch(ctx, canonical, creds)
 	if err != nil {
 		return nil, err
 	}
@@ -208,13 +239,9 @@ func (p *plugin) Check(ctx context.Context, topic *domain.Topic, creds *domain.T
 // rebuilt from the trusted domain + numeric id (never the raw user URL) to
 // avoid request forgery (CodeQL go/request-forgery), mirroring Download.
 func (p *plugin) fetchInfohash(ctx context.Context, rawURL string, creds *domain.TrackerCredential) (string, error) {
-	u, err := url.Parse(strings.TrimSpace(rawURL))
+	id, err := parseTopicID(rawURL)
 	if err != nil {
-		return "", fmt.Errorf("kinozal: parse url: %w", err)
-	}
-	id, err := strconv.Atoi(u.Query().Get("id"))
-	if err != nil {
-		return "", fmt.Errorf("kinozal: topic id: %w", err)
+		return "", err
 	}
 	srvURL := fmt.Sprintf("https://%s/get_srv_details.php?id=%d&action=2", p.domain, id)
 	body, err := p.fetch(ctx, srvURL, creds)
@@ -240,18 +267,10 @@ var _ registry.WithMetadata = (*plugin)(nil)
 // is publicly viewable, so a session isn't required. Image URL is "" when the
 // page exposes no poster; the caller treats errors as fail-open.
 func (p *plugin) ResolveMetadata(ctx context.Context, rawURL string, creds *domain.TrackerCredential) (*registry.Metadata, error) {
-	m := urlPattern.FindStringSubmatch(strings.TrimSpace(rawURL))
-	if m == nil {
-		return nil, errors.New("resolve metadata: not a kinozal details URL")
-	}
-	id, err := strconv.Atoi(m[1])
+	canonical, err := p.canonicalDetailsURL(rawURL)
 	if err != nil {
-		return nil, fmt.Errorf("resolve metadata: topic id: %w", err)
+		return nil, fmt.Errorf("resolve metadata: %w", err)
 	}
-	// Rebuild the URL from the trusted host (p.domain) + the numeric id, never
-	// the raw user-supplied URL, so a crafted URL cannot redirect the request
-	// to an arbitrary host (CodeQL go/request-forgery). Mirrors Download.
-	canonical := fmt.Sprintf("https://%s/details.php?id=%d", p.domain, id)
 	body, err := p.fetch(ctx, canonical, creds)
 	if err != nil {
 		return nil, fmt.Errorf("resolve metadata: %w", err)

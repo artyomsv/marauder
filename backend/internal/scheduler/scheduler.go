@@ -411,10 +411,11 @@ func (s *Scheduler) runCheck(ctx context.Context, log zerolog.Logger, t *domain.
 		}
 	}
 
-	// Self-heal the display name: a tracker's Check often resolves the real
-	// title (e.g. RuTracker's <title>) that wasn't available at add time.
-	// Persist it when it changed so placeholder names upgrade themselves.
-	if check.DisplayName != "" && check.DisplayName != t.DisplayName {
+	// Self-heal the display name only while it's still a generated placeholder.
+	// Once a real title is resolved (add-time metadata, a prior self-heal, or a
+	// user rename) the topic is locked, so a noisier Check title can't downgrade
+	// it (issue #90).
+	if check.DisplayName != "" && check.DisplayName != t.DisplayName && t.DisplayNameIsPlaceholder {
 		if p, ok := s.topics.(displayNamePersister); ok {
 			if err := p.UpdateDisplayName(ctx, t.ID, check.DisplayName); err != nil {
 				log.Warn().Err(err).Msg("UpdateDisplayName failed")
