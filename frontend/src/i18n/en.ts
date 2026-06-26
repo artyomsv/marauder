@@ -160,6 +160,10 @@ const en: Record<string, string> = {
   "topics.delivery.finished": "Finished",
   "topics.delivery.count": "{n} delivered",
   "topics.delivery.season": "Season {n}",
+  "topics.delivery.reissued": "{n} versions · tracker re-issued this torrent · newest {date}",
+  "topics.delivery.deliveredOn": "delivered {date}",
+  "topics.delivery.copy": "Copy label",
+  "topics.delivery.copied": "Copied",
 
   // Notifier event subscriptions (which events a notifier fires on)
   "notifiers.events.prefix": "Notifies on",

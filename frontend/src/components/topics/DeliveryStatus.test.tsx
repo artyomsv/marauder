@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { type ReactNode } from "react";
 import { pollInterval, ACTIVE_POLL_MS, IDLE_POLL_MS } from "@/components/topics/DeliveryStatus";
@@ -62,8 +63,10 @@ describe("DeliveryStatus", () => {
 
     // Season header shows done/total (e02 finished, e01 still downloading).
     expect(await screen.findByText("Season 1 · 1/2")).toBeInTheDocument();
-    // Episode chips are labelled E01/E02, not the raw sNNeNN form.
-    expect(await screen.findByText(/E01\s+42%/)).toBeInTheDocument();
+    // Episode chips are labelled E01/E02, not the raw sNNeNN form; the live
+    // percentage renders in its own span beside the label.
+    expect(await screen.findByText("E01")).toBeInTheDocument();
+    expect(await screen.findByText("42%")).toBeInTheDocument();
     expect(await screen.findByText("E02")).toBeInTheDocument();
     expect(await screen.findByText("2 delivered")).toBeInTheDocument();
   });
@@ -103,6 +106,45 @@ describe("DeliveryStatus", () => {
     render(<DeliveryStatus topicId="t1" />, { wrapper: wrap() });
 
     expect(await screen.findByText("Some.Release.1080p")).toBeInTheDocument();
+  });
+
+  it("explains 2+ single-torrent deliveries as a re-issue and copies the full label", async () => {
+    const longLabel =
+      "Малахит (1 сезон: 1-4 серии из 8) / 2026 / РУ, СТ / 4K, HEVC, SDR / WEB-DL (2160p)";
+    mockApi.topicStatus.mockResolvedValue({
+      client_supports_status: true,
+      deliveries: [
+        { label: longLabel, infohash: "93cd6247", delivered_at: "2026-06-24T12:24:00Z", state: "seeding", percent_done: 1 },
+        { label: longLabel, infohash: "ba3353cb", delivered_at: "2026-06-26T08:16:00Z", state: "downloading", percent_done: 0 },
+      ],
+    });
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.assign(navigator, { clipboard: { writeText } });
+
+    render(<DeliveryStatus topicId="t1" />, { wrapper: wrap() });
+
+    // The re-issue note appears once two distinct torrents were delivered.
+    expect(await screen.findByText(/tracker re-issued this torrent/)).toBeInTheDocument();
+    // The full (untruncated) label stays in the DOM for both versions.
+    expect(screen.getAllByText(longLabel).length).toBe(2);
+
+    // The copy button lifts the full label (not a truncated view) to clipboard.
+    const copyButtons = screen.getAllByRole("button", { name: "Copy label" });
+    expect(copyButtons.length).toBe(2);
+    await userEvent.click(copyButtons[0]);
+    expect(writeText).toHaveBeenCalledWith(longLabel);
+  });
+
+  it("omits the re-issue note for a single delivery", async () => {
+    mockApi.topicStatus.mockResolvedValue({
+      client_supports_status: false,
+      deliveries: [
+        { label: "Some.Release.1080p", infohash: "ccc", delivered_at: "2026-05-30T00:00:00Z", state: "delivered", percent_done: null },
+      ],
+    });
+    render(<DeliveryStatus topicId="t1" />, { wrapper: wrap() });
+    await screen.findByText("Some.Release.1080p");
+    expect(screen.queryByText(/tracker re-issued/)).not.toBeInTheDocument();
   });
 });
 

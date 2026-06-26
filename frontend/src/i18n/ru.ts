@@ -162,6 +162,10 @@ const ru: Record<string, string> = {
   "topics.delivery.finished": "Завершено",
   "topics.delivery.count": "Доставлено: {n}",
   "topics.delivery.season": "Сезон {n}",
+  "topics.delivery.reissued": "{n} версии · трекер перевыпустил торрент · последняя {date}",
+  "topics.delivery.deliveredOn": "доставлено {date}",
+  "topics.delivery.copy": "Скопировать метку",
+  "topics.delivery.copied": "Скопировано",
 
   // Notifier event subscriptions (which events a notifier fires on)
   "notifiers.events.prefix": "Уведомлять о",
