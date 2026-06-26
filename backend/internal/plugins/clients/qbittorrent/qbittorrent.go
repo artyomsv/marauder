@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -49,8 +50,11 @@ type session struct {
 	expiresAt time.Time
 }
 
-// Compile-time guarantee the plugin reports live status.
-var _ registry.WithStatus = (*plugin)(nil)
+// Compile-time guarantee the plugin reports live status and lists categories.
+var (
+	_ registry.WithStatus     = (*plugin)(nil)
+	_ registry.WithCategories = (*plugin)(nil)
+)
 
 func init() {
 	registry.RegisterClient(&plugin{sessions: map[string]*session{}})
@@ -276,6 +280,52 @@ func (p *plugin) Status(ctx context.Context, rawConfig []byte, hashes []string) 
 		})
 	}
 	return out, nil
+}
+
+// Categories implements registry.WithCategories. It queries
+// /api/v2/torrents/categories — qBittorrent returns a JSON object keyed by
+// category name, e.g. {"TV":{"name":"TV","savePath":"/downloads/tv"}} — and
+// returns the category names sorted. Nested categories ("TV/Anime") arrive as
+// slash-joined names and are kept verbatim (valid path-segment values).
+func (p *plugin) Categories(ctx context.Context, rawConfig []byte) ([]string, error) {
+	var cfg Config
+	if err := json.Unmarshal(rawConfig, &cfg); err != nil {
+		return nil, fmt.Errorf("bad config: %w", err)
+	}
+	s, err := p.session(ctx, cfg)
+	if err != nil {
+		return nil, err
+	}
+	endpoint := strings.TrimRight(cfg.URL, "/") + "/api/v2/torrents/categories"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("qbit categories: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("qbit categories %d: %s", resp.StatusCode, string(b))
+	}
+	var m map[string]struct {
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&m); err != nil {
+		return nil, fmt.Errorf("decode qbit categories: %w", err)
+	}
+	names := make([]string, 0, len(m))
+	for k := range m {
+		names = append(names, k)
+	}
+	// Case-insensitive sort so the dropdown reads naturally regardless of the
+	// casing qBittorrent reports (e.g. "anime" doesn't sort after "Movies").
+	sort.Slice(names, func(i, j int) bool {
+		return strings.ToLower(names[i]) < strings.ToLower(names[j])
+	})
+	return names, nil
 }
 
 // qbitState maps a qBittorrent native state string to the normalised

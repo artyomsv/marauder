@@ -56,4 +56,8 @@ export const QK = {
 
   // /topics/{id}/events — read-only per-topic history timeline.
   topicEvents: (id: string) => ["topicEvents", id] as const,
+
+  // /clients/{id}/categories — existing client categories (qBittorrent) used
+  // to suggest values in the AddTopic form's category combobox.
+  clientCategories: (id: string) => ["clientCategories", id] as const,
 } as const;

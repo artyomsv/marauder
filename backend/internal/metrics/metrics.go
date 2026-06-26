@@ -146,6 +146,22 @@ var (
 	)
 )
 
+// Client metrics ---------------------------------------------------------
+
+var (
+	// ClientCategoriesFailOpenTotal counts times the category-list fetch for a
+	// client failed and the GET /clients/{id}/categories endpoint fell open to
+	// an empty list (the AddTopic field degrades to free-text). A persistently
+	// non-zero value for a client signals its category fetch is quietly broken.
+	ClientCategoriesFailOpenTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "marauder_client_categories_fail_open_total",
+			Help: "Times a client category list fetch failed and degraded to free-text, by client.",
+		},
+		[]string{"client"},
+	)
+)
+
 // SSE metrics ------------------------------------------------------------
 
 var (

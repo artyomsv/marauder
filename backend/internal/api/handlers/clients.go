@@ -1,26 +1,52 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/rs/zerolog"
 
 	"github.com/artyomsv/marauder/backend/internal/audit"
-	"github.com/artyomsv/marauder/backend/internal/crypto"
 	"github.com/artyomsv/marauder/backend/internal/db/repo"
 	"github.com/artyomsv/marauder/backend/internal/domain"
+	"github.com/artyomsv/marauder/backend/internal/metrics"
 	"github.com/artyomsv/marauder/backend/internal/plugins/registry"
 	"github.com/artyomsv/marauder/backend/internal/problem"
 )
 
+// categoriesFetchTimeout bounds the GET /clients/{id}/categories upstream call
+// (qBittorrent login + list) so one slow client can't hold a request open for
+// the plugin client's full ~30s worst case. Mirrors the topic-status path.
+const categoriesFetchTimeout = 10 * time.Second
+
+// clientStore is the persistence seam for the Clients handler, satisfied by
+// *repo.Clients. Defined at the consumer so the handler is unit-testable with
+// a fake store (no DB).
+type clientStore interface {
+	ListForUser(ctx context.Context, userID uuid.UUID) ([]*domain.Client, error)
+	Create(ctx context.Context, c *domain.Client) (*domain.Client, error)
+	GetByID(ctx context.Context, id, userID uuid.UUID) (*domain.Client, error)
+	Update(ctx context.Context, id, userID uuid.UUID, displayName string, isDefault bool, configEnc, configNonce []byte) error
+	Delete(ctx context.Context, id, userID uuid.UUID) error
+}
+
+// cryptor is the encryption seam, satisfied by *crypto.MasterKey.
+type cryptor interface {
+	Encrypt(plaintext []byte) (ct, nonce []byte, err error)
+	Decrypt(ct, nonce []byte) ([]byte, error)
+}
+
 // Clients handles /clients.
 type Clients struct {
-	Clients *repo.Clients
-	Master  *crypto.MasterKey
+	Clients clientStore
+	Master  cryptor
 	Audit   *audit.Logger
+	Log     zerolog.Logger
 	BaseURL string
 }
 
@@ -266,6 +292,94 @@ func (h *Clients) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// Categories handles GET /clients/{id}/categories. It returns the categories
+// the client already knows about (qBittorrent), so the AddTopic form can offer
+// them as suggestions while still accepting free-text. The response shape is
+// {"supported": bool, "categories": [string]}.
+//
+// Fail-open: a client whose plugin can't list categories yields
+// supported:false, and a transient fetch error (client unreachable, bad creds)
+// yields supported:true with an empty list — in both cases the category field
+// simply degrades to plain free-text entry, never a hard error. Category is a
+// path segment in Marauder (see registry.EffectiveDownloadDir); this list only
+// helps pick a value, it does not constrain it.
+func (h *Clients) Categories(w http.ResponseWriter, r *http.Request) {
+	uid, perr := currentUserID(r)
+	if perr != nil {
+		problem.Write(w, r, h.BaseURL, perr)
+		return
+	}
+	id, ierr := uuid.Parse(chi.URLParam(r, "id"))
+	if ierr != nil {
+		problem.Write(w, r, h.BaseURL, problem.ErrBadRequest("invalid id"))
+		return
+	}
+	c, err := h.Clients.GetByID(r.Context(), id, uid)
+	if err != nil {
+		if errors.Is(err, repo.ErrNotFound) {
+			problem.Write(w, r, h.BaseURL, problem.ErrNotFound("client not found"))
+			return
+		}
+		problem.Write(w, r, h.BaseURL, problem.ErrInternal(err.Error()))
+		return
+	}
+
+	plugin := registry.GetClient(c.ClientName)
+
+	// Only decrypt the config when the plugin can actually list categories —
+	// an unsupported client never needs the secret blob.
+	if _, ok := plugin.(registry.WithCategories); !ok {
+		writeJSON(w, http.StatusOK, categoriesView(false, nil))
+		return
+	}
+	raw, err := h.Master.Decrypt(c.ConfigEnc, c.ConfigNonce)
+	if err != nil {
+		problem.Write(w, r, h.BaseURL, problem.ErrInternal("decrypt config: "+err.Error()))
+		return
+	}
+
+	// Bound the upstream fetch so a slow client can't hold the request open.
+	ctx, cancel := context.WithTimeout(r.Context(), categoriesFetchTimeout)
+	defer cancel()
+	logger := h.Log.With().Str("client_id", id.String()).Str("user_id", uid.String()).Logger()
+	supported, names := resolveCategories(ctx, plugin, raw, logger)
+	writeJSON(w, http.StatusOK, categoriesView(supported, names))
+}
+
+// resolveCategories asks a client plugin for its category list. It is the
+// testable core of the Categories handler, isolated from auth/DB/decryption.
+//
+// Returns (supported, names). A plugin that does not implement
+// registry.WithCategories is unsupported (free-text fallback). A plugin that
+// supports listing but errors fails open: supported=true with a nil list, so
+// the field degrades to free-text rather than the request failing — a warning
+// is logged and a metric incremented so the silent degradation is observable.
+func resolveCategories(ctx context.Context, plugin registry.Client, raw []byte, logger zerolog.Logger) (bool, []string) {
+	lister, ok := plugin.(registry.WithCategories)
+	if plugin == nil || !ok {
+		return false, nil
+	}
+	names, err := lister.Categories(ctx, raw)
+	if err != nil {
+		// The dropdown is a convenience; degrade to free-text rather than
+		// failing the request.
+		metrics.ClientCategoriesFailOpenTotal.WithLabelValues(plugin.Name()).Inc()
+		logger.Warn().Err(err).Str("client_name", plugin.Name()).
+			Msg("list client categories failed; degrading to free-text")
+		return true, nil
+	}
+	return true, names
+}
+
+// categoriesView builds the GET /clients/{id}/categories response body,
+// ensuring categories is always a non-nil JSON array.
+func categoriesView(supported bool, names []string) map[string]any {
+	if names == nil {
+		names = []string{}
+	}
+	return map[string]any{"supported": supported, "categories": names}
 }
 
 // Test handles POST /clients/{id}/test — tests the stored config without
