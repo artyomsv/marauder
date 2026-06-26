@@ -40,7 +40,7 @@ const topicColumns = `id, user_id, tracker_name, url, display_name,
 		COALESCE(download_dir,''), COALESCE(category,''), extra, COALESCE(last_hash,''),
 		last_checked_at, last_updated_at, next_check_at,
 		check_interval_sec, consecutive_errors, status,
-		COALESCE(last_error,''), created_at, updated_at, display_name_is_placeholder`
+		COALESCE(last_error,''), COALESCE(last_error_code,''), created_at, updated_at, display_name_is_placeholder`
 
 func scanTopic(row pgx.Row) (*domain.Topic, error) {
 	var t domain.Topic
@@ -53,7 +53,7 @@ func scanTopic(row pgx.Row) (*domain.Topic, error) {
 		&t.ImageURL, &clientID, &notifierID, &t.DownloadDir, &t.Category, &extraRaw, &t.LastHash,
 		&lastChecked, &lastUpdated, &t.NextCheckAt,
 		&t.CheckIntervalSec, &t.ConsecutiveErrors, &status,
-		&t.LastError, &t.CreatedAt, &t.UpdatedAt, &t.DisplayNameIsPlaceholder,
+		&t.LastError, &t.LastErrorCode, &t.CreatedAt, &t.UpdatedAt, &t.DisplayNameIsPlaceholder,
 	)
 	if err != nil {
 		return nil, err
@@ -167,7 +167,7 @@ func (r *Topics) UpdateStatus(ctx context.Context, id uuid.UUID, userID uuid.UUI
 // RecordCheckResult updates the state after a scheduler run.
 func (r *Topics) RecordCheckResult(
 	ctx context.Context, id uuid.UUID, hash string, updated bool,
-	nextCheckAt time.Time, errMsg string,
+	nextCheckAt time.Time, errMsg, errCode string,
 ) error {
 	q := `
 UPDATE topics SET
@@ -176,11 +176,12 @@ UPDATE topics SET
     last_updated_at   = CASE WHEN $3 THEN now() ELSE last_updated_at END,
     next_check_at     = $4,
     last_error        = NULLIF($5,''),
+    last_error_code   = CASE WHEN $5 = '' THEN '' ELSE $6 END,
     consecutive_errors = CASE WHEN $5 = '' THEN 0 ELSE consecutive_errors + 1 END,
     status            = CASE WHEN $5 = '' THEN 'active' ELSE 'error' END,
     updated_at        = now()
 WHERE id = $1`
-	_, err := r.pool.Exec(ctx, q, id, hash, updated, nextCheckAt, errMsg)
+	_, err := r.pool.Exec(ctx, q, id, hash, updated, nextCheckAt, errMsg, errCode)
 	return err
 }
 

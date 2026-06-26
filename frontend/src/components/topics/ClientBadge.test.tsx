@@ -34,6 +34,7 @@ function topicWith(clientID: string | null): Topic {
     ConsecutiveErrors: 0,
     Status: "active",
     LastError: "",
+    LastErrorCode: "",
     CreatedAt: "",
     UpdatedAt: "",
   };

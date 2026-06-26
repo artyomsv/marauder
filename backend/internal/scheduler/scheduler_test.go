@@ -89,6 +89,7 @@ type recordCall struct {
 	updated     bool
 	nextCheckAt time.Time
 	errMsg      string
+	errCode     string
 }
 
 type updateExtraCall struct {
@@ -110,8 +111,8 @@ func (f *fakeTopics) DueForCheck(_ context.Context, _ int) ([]*domain.Topic, err
 	return nil, nil
 }
 
-func (f *fakeTopics) RecordCheckResult(_ context.Context, id uuid.UUID, hash string, updated bool, nextCheckAt time.Time, errMsg string) error {
-	f.recordCalls = append(f.recordCalls, recordCall{id, hash, updated, nextCheckAt, errMsg})
+func (f *fakeTopics) RecordCheckResult(_ context.Context, id uuid.UUID, hash string, updated bool, nextCheckAt time.Time, errMsg, errCode string) error {
+	f.recordCalls = append(f.recordCalls, recordCall{id, hash, updated, nextCheckAt, errMsg, errCode})
 	return nil
 }
 
@@ -1352,5 +1353,80 @@ func TestRunCheck_SelfHeal_ResolvedName_DoesNotDowngrade(t *testing.T) {
 	if len(f.topics.updateDisplayNameCalls) != 0 {
 		t.Errorf("want 0 UpdateDisplayName calls for a resolved title, got %d",
 			len(f.topics.updateDisplayNameCalls))
+	}
+}
+
+// --- classifyError ------------------------------------------------------
+
+func TestClassifyError_MapsKnownPatternsToCodes(t *testing.T) {
+	tests := []struct {
+		name string
+		msg  string
+		want string
+	}{
+		{"kinozal timeout (the #86 case)", `kinozal GET: Get "https://kinozal.tv/details.php?id=1": context deadline exceeded`, errCodeTimeout},
+		{"http client timeout", `Get "https://x": net/http: request canceled (Client.Timeout exceeded)`, errCodeTimeout},
+		{"i/o timeout", "read tcp 1.2.3.4:443: i/o timeout", errCodeTimeout},
+		{"connection refused", "dial tcp 127.0.0.1:80: connect: connection refused", errCodeUnreachable},
+		{"dns no such host", `Get "https://nope": dial tcp: lookup nope: no such host`, errCodeUnreachable},
+		{"cloudflare 522 origin down", "rutracker GET: unexpected status 522", errCodeUnreachable},
+		{"tracker GET arrow status 522", `kinozal GET https://kinozal.tv/details.php?id=1805143 -> 522`, errCodeUnreachable},
+		{"server 500 via unexpected status", "generictorrentfile: unexpected status 500", errCodeUnreachable},
+		{"rate limited 429", `rutracker GET https://rutracker.org/forum/viewtopic.php?t=1 -> 429`, errCodeUnreachable},
+		{"tls handshake timeout", "net/http: TLS handshake timeout", errCodeTimeout},
+		{"tls handshake error (no timeout word)", "net/http: TLS handshake error from 1.2.3.4", errCodeUnreachable},
+		{"connection reset", "read: connection reset by peer", errCodeUnreachable},
+		{"auth failed prefix", "auth failed: invalid credentials", errCodeAuth},
+		{"session expired", "lostfilm: session expired", errCodeAuth},
+		{"unauthorized 401", "unexpected status 401 unauthorized", errCodeAuth},
+		{"forbidden 403 status", `lostfilm GET https://lostfilm.tv/series/x -> 403`, errCodeAuth},
+		{"captcha required", "captcha required to log in", errCodeAuth},
+		{"plugin missing", "tracker plugin not installed", errCodePluginMissing},
+		{"parse failure", "parse: could not find magnet link", errCodeParse},
+		{"unexpected token", "invalid character '<' looking for beginning of value", errCodeParse},
+		// Regression for the URL-id false positive (review HIGH): a real
+		// timeout whose topic id embeds "522"/"403" must NOT be misread as a
+		// status code — the URL is stripped before matching.
+		{"timeout, url id contains 522", `kinozal GET: Get "https://kinozal.tv/details.php?id=15221": context deadline exceeded`, errCodeTimeout},
+		{"timeout, url id contains 403", `kinozal GET: Get "https://kinozal.tv/details.php?id=40312": context deadline exceeded`, errCodeTimeout},
+		{"refused, url id contains 401", `nnm-club GET: Get "https://nnmclub.to/forum/viewtopic.php?t=4012": dial tcp 1.2.3.4:80: connect: connection refused`, errCodeUnreachable},
+		// Other 4xx (e.g. 404) is neither auth nor a 5xx: falls through to
+		// unknown so the UI shows the raw detail instead of a wrong phrase.
+		{"not-found 404 falls through to unknown", `freetorrents GET https://x.invalid/?id=1 -> 404`, errCodeUnknown},
+		{"unrecognised", "something completely different happened", errCodeUnknown},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := classifyError(tt.msg); got != tt.want {
+				t.Errorf("classifyError(%q) = %q, want %q", tt.msg, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRecordResult_ClassifiesAndPersistsErrorCode(t *testing.T) {
+	f := newFixture(t, &fakeTracker{}, false)
+	id := uuid.New()
+	f.s.recordResult(
+		context.Background(), zerolog.Nop(), id, "", false,
+		time.Now(), `kinozal GET: Get "https://kinozal.tv/details.php?id=1": context deadline exceeded`,
+	)
+	if len(f.topics.recordCalls) != 1 {
+		t.Fatalf("want 1 record call, got %d", len(f.topics.recordCalls))
+	}
+	if got := f.topics.recordCalls[0].errCode; got != errCodeTimeout {
+		t.Errorf("errCode = %q, want %q", got, errCodeTimeout)
+	}
+}
+
+func TestRecordResult_SuccessLeavesErrorCodeEmpty(t *testing.T) {
+	f := newFixture(t, &fakeTracker{}, false)
+	id := uuid.New()
+	f.s.recordResult(context.Background(), zerolog.Nop(), id, "abc", true, time.Now(), "")
+	if len(f.topics.recordCalls) != 1 {
+		t.Fatalf("want 1 record call, got %d", len(f.topics.recordCalls))
+	}
+	if got := f.topics.recordCalls[0].errCode; got != "" {
+		t.Errorf("errCode = %q, want empty on success", got)
 	}
 }

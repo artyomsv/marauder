@@ -59,6 +59,17 @@ const en: Record<string, string> = {
   "topics.add.submit": "Add topic",
   "topics.col.checked": "checked",
   "topics.col.updated": "updated",
+  // Friendly check-error messages keyed by backend last_error_code.
+  "topics.error.timeout":
+    "Tracker didn't respond in time — it may be temporarily down. Retrying automatically.",
+  "topics.error.unreachable":
+    "Couldn't reach the tracker — it may be offline or blocking requests. Retrying automatically.",
+  "topics.error.auth":
+    "Login failed or the session expired — check this tracker's credentials.",
+  "topics.error.parse":
+    "Couldn't read the tracker's page — its layout may have changed.",
+  "topics.error.pluginMissing":
+    "This tracker isn't supported by the current Marauder version.",
 
   // Clients
   "clients.section": "delivery",

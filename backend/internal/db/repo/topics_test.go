@@ -197,7 +197,7 @@ func TestTopics_MarkEpisodeDownloaded_DBError(t *testing.T) {
 // ---------- scanTopic malformed extra ----------
 
 // topicRow returns a pgxmock row slice that matches topicColumns exactly
-// (22 columns as of migration 0010, which added display_name_is_placeholder).
+// (23 columns as of migration 0012, which added last_error_code).
 // Callers override individual fields as needed. The helper centralises
 // column-order so tests don't drift.
 func topicRow(id, userID uuid.UUID, now time.Time) []any {
@@ -212,18 +212,18 @@ func topicRow(id, userID uuid.UUID, now time.Time) []any {
 		"",                            // last_hash
 		(*time.Time)(nil), (*time.Time)(nil), now,
 		3600, 0, "active",
-		"", now, now,
+		"", "", now, now, // last_error, last_error_code, created_at, updated_at
 		false, // display_name_is_placeholder
 	}
 }
 
-// topicColumnsAll mirrors the header slice for pgxmock.NewRows (22 cols).
+// topicColumnsAll mirrors the header slice for pgxmock.NewRows (23 cols).
 var topicColumnsAll = []string{
 	"id", "user_id", "tracker_name", "url", "display_name", "image_url", "client_id", "notifier_id",
 	"download_dir", "category", "extra", "last_hash",
 	"last_checked_at", "last_updated_at", "next_check_at",
 	"check_interval_sec", "consecutive_errors", "status",
-	"last_error", "created_at", "updated_at", "display_name_is_placeholder",
+	"last_error", "last_error_code", "created_at", "updated_at", "display_name_is_placeholder",
 }
 
 // TestTopics_ScanTopic_MalformedExtra drives GetByID through a mocked
@@ -238,7 +238,7 @@ func TestTopics_ScanTopic_MalformedExtra(t *testing.T) {
 	userID := uuid.New()
 	now := time.Now().UTC()
 
-	// Build a row that matches topicColumns exactly (22 columns).
+	// Build a row that matches topicColumns exactly (23 columns).
 	rows := pgxmock.NewRows(topicColumnsAll).AddRow(
 		id, userID, "faketracker", "https://example.invalid/t/1",
 		"My Topic", "", // display_name, image_url
@@ -248,7 +248,7 @@ func TestTopics_ScanTopic_MalformedExtra(t *testing.T) {
 		[]byte("{not valid json"), "",
 		(*time.Time)(nil), (*time.Time)(nil), now,
 		3600, 0, "active",
-		"", now, now,
+		"", "", now, now, // last_error, last_error_code, created_at, updated_at
 		false, // display_name_is_placeholder
 	)
 
@@ -555,5 +555,47 @@ func TestTopics_GetByURL_NotFound(t *testing.T) {
 
 	if _, err := repo.GetByURL(context.Background(), uuid.New(), "x"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("GetByURL: want ErrNotFound, got %v", err)
+	}
+}
+
+// ---------- RecordCheckResult ----------
+
+// TestTopics_RecordCheckResult_PersistsErrorCode asserts the UPDATE carries the
+// last_error_code column via the `CASE WHEN $5=” THEN ” ELSE $6 END` clause
+// and binds the classified code as $6. Guards against a dropped CASE / renamed
+// column that the scheduler-fake tests cannot catch (review QA gap).
+func TestTopics_RecordCheckResult_PersistsErrorCode(t *testing.T) {
+	repo, mock := newMockTopics(t)
+	t.Cleanup(func() { assertExpectationsMet(t, mock) })
+
+	id := uuid.New()
+	next := time.Now().Add(time.Hour)
+	mock.ExpectExec(`UPDATE topics SET[\s\S]*last_error_code\s+= CASE WHEN \$5 = '' THEN '' ELSE \$6 END[\s\S]*WHERE id = \$1`).
+		WithArgs(id, "", false, next, "kinozal GET: context deadline exceeded", "timeout").
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+
+	err := repo.RecordCheckResult(context.Background(), id, "", false, next,
+		"kinozal GET: context deadline exceeded", "timeout")
+	if err != nil {
+		t.Fatalf("RecordCheckResult: unexpected error: %v", err)
+	}
+}
+
+// TestTopics_RecordCheckResult_SuccessClearsCode asserts a successful check
+// (empty errMsg) still binds an empty errCode at $6; the SQL CASE then writes
+// ” regardless, clearing any prior code.
+func TestTopics_RecordCheckResult_SuccessClearsCode(t *testing.T) {
+	repo, mock := newMockTopics(t)
+	t.Cleanup(func() { assertExpectationsMet(t, mock) })
+
+	id := uuid.New()
+	next := time.Now().Add(time.Hour)
+	mock.ExpectExec(`UPDATE topics SET[\s\S]*last_error_code\s+= CASE WHEN \$5 = '' THEN '' ELSE \$6 END`).
+		WithArgs(id, "new-hash", true, next, "", "").
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+
+	err := repo.RecordCheckResult(context.Background(), id, "new-hash", true, next, "", "")
+	if err != nil {
+		t.Fatalf("RecordCheckResult: unexpected error: %v", err)
 	}
 }

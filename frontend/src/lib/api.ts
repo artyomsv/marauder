@@ -383,6 +383,7 @@ export type Topic = {
   ConsecutiveErrors: number;
   Status: "active" | "paused" | "error";
   LastError: string;
+  LastErrorCode: string;
   CreatedAt: string;
   UpdatedAt: string;
 };
