@@ -24,6 +24,9 @@ interface CheckStatusState {
   setChecked: (topicId: string, nextCheckAt?: string) => void;
   setFailed: (topicId: string, error?: string) => void;
   clear: (topicId: string) => void;
+  // Drain all entries + their staleness timers — called on SSE teardown
+  // (logout) so a fresh session never shows a stale "checking" pulse.
+  clearAll: () => void;
 }
 
 // Per-topic staleness timers live outside the store (they aren't render state).
@@ -67,5 +70,9 @@ export const useCheckStatus = create<CheckStatusState>((set, get) => ({
       const { [topicId]: _omit, ...rest } = s.byTopic;
       return { byTopic: rest };
     });
+  },
+  clearAll: () => {
+    for (const id of Object.keys(staleTimers)) cancelStale(id);
+    set({ byTopic: {} });
   },
 }));

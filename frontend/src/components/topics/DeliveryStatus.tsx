@@ -56,6 +56,7 @@ function fmtDate(iso: string): string {
 
 // Newest delivered_at among a set (ISO-8601 strings sort lexicographically).
 function newestDeliveredAt(ds: Delivery[]): string {
+  if (ds.length === 0) return "";
   return ds.reduce((a, b) => (a.delivered_at > b.delivered_at ? a : b)).delivered_at;
 }
 

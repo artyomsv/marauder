@@ -4,6 +4,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { api, API_BASE } from "@/lib/api";
 import { applyEvent, type WireEvent } from "@/lib/events-stream";
 import { useSseStatus } from "@/lib/sse-status";
+import { useCheckStatus } from "@/lib/check-status";
 
 const BACKOFF_START = 1000;
 const BACKOFF_MAX = 30000;
@@ -66,6 +67,9 @@ export function useEventStream(): void {
       if (timer) clearTimeout(timer);
       es?.close();
       useSseStatus.getState().setConnected(false);
+      // No live source anymore (logout/unmount) — drop check-status entries and
+      // their staleness timers so a fresh session starts clean.
+      useCheckStatus.getState().clearAll();
     };
   }, [qc]);
 }

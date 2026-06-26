@@ -46,4 +46,16 @@ describe("useCheckStatus", () => {
     expect(e.phase).toBe("error");
     expect(e.error).toBe("boom");
   });
+
+  it("clearAll drops every entry and cancels pending staleness timers", () => {
+    vi.useFakeTimers();
+    useCheckStatus.getState().setChecking("a");
+    useCheckStatus.getState().setChecking("b");
+    expect(Object.keys(useCheckStatus.getState().byTopic)).toHaveLength(2);
+    useCheckStatus.getState().clearAll();
+    expect(useCheckStatus.getState().byTopic).toEqual({});
+    // Timers were cancelled — advancing past the window must not resurrect entries.
+    vi.advanceTimersByTime(CHECKING_STALE_MS + 1);
+    expect(useCheckStatus.getState().byTopic).toEqual({});
+  });
 });
