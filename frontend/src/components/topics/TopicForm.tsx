@@ -11,6 +11,7 @@ import { useDebouncedValue } from "@/lib/hooks/useDebouncedValue";
 import { SeasonEpisodePicker, SELECT_CLASS } from "./SeasonEpisodePicker";
 import { PosterImage } from "./PosterImage";
 import { NotifierSelect } from "./NotifierSelect";
+import { CategoryField } from "./CategoryField";
 
 // Shape of GET /trackers/match. Drives which optional sections the form
 // renders (quality, season/episode filter, credentials hint).
@@ -27,10 +28,13 @@ export interface TrackerMatch {
 }
 
 // Minimal shape of a torrent client for the picker. The full ClientView
-// lives in Clients.tsx; the form only needs id + display_name.
+// lives in Clients.tsx; the form needs id + display_name to render the select
+// and is_default to resolve which client's categories to suggest when the
+// user leaves the picker on "Use default client".
 interface ClientOption {
   id: string;
   display_name: string;
+  is_default: boolean;
 }
 
 // The mutable fields the user edits. Grouped into one object so the form
@@ -192,6 +196,22 @@ export function TopicForm({
     downloadDir: initial.downloadDir,
     category: initial.category,
   });
+
+  // The category combobox suggests the categories of whichever client will
+  // actually receive the topic: the one picked in the form, or the user's
+  // default client when "Use default client" is selected.
+  const effectiveClientId =
+    delivery.clientId || clients.find((c) => c.is_default)?.id || "";
+  const categoriesQuery = useQuery({
+    queryKey: QK.clientCategories(effectiveClientId),
+    queryFn: () => api.getClientCategories(effectiveClientId),
+    enabled: !!effectiveClientId,
+    staleTime: 60_000,
+    retry: false,
+  });
+  const categorySuggestions = categoriesQuery.data?.supported
+    ? categoriesQuery.data.categories
+    : [];
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -366,18 +386,11 @@ export function TopicForm({
             Full path; overrides the client folder and category below.
           </p>
         </div>
-        <div className="space-y-1.5">
-          <Label htmlFor="category">Category (optional)</Label>
-          <Input
-            id="category"
-            value={delivery.category}
-            onChange={(e) => setDelivery((d) => ({ ...d, category: e.target.value }))}
-            placeholder="tv"
-          />
-          <p className="text-xs text-muted-foreground">
-            Nested under the client's base download folder.
-          </p>
-        </div>
+        <CategoryField
+          value={delivery.category}
+          onChange={(v) => setDelivery((d) => ({ ...d, category: v }))}
+          suggestions={categorySuggestions}
+        />
       </div>
 
       {error && (

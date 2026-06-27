@@ -176,6 +176,16 @@ export const api = {
   topicEvents: (id: string) =>
     request<{ events: TopicEvent[] }>("GET", `/topics/${id}/events`),
 
+  // List the categories a configured client already knows about (qBittorrent),
+  // so the AddTopic form can suggest them. `supported` is false for clients
+  // without a category concept; on any fetch failure the list is empty and the
+  // field stays free-text.
+  getClientCategories: (id: string) =>
+    request<{ supported: boolean; categories: string[] }>(
+      "GET",
+      `/clients/${id}/categories`,
+    ),
+
   // GET /notifiers/{id} — includes decrypted config for the edit form.
   getNotifier: (id: string) =>
     request<NotifierDetail>("GET", `/notifiers/${id}`),

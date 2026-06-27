@@ -182,6 +182,18 @@ type WithStatus interface {
 	Status(ctx context.Context, rawConfig []byte, hashes []string) ([]TorrentStatus, error)
 }
 
+// WithCategories is an optional client capability: enumerate the categories
+// the client already knows about, so the UI can offer them as suggestions when
+// picking a topic's category. Clients without a category concept (Transmission,
+// downloadfolder, …) simply don't implement it, and callers fall back to plain
+// free-text entry. Category remains a path segment in Marauder (see
+// EffectiveDownloadDir / SanitizeCategory) — this list is a convenience for
+// picking a value, not a constraint on it.
+type WithCategories interface {
+	Client
+	Categories(ctx context.Context, rawConfig []byte) ([]string, error)
+}
+
 // Notifier is a notification target plugin.
 type Notifier interface {
 	Name() string

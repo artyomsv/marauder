@@ -60,10 +60,10 @@ techdebt/       Debt-tracking files (one per issue, see global rule)
 | **`extra`** | shared `extra.Int / StringSlice / String` helpers for the untyped `map[string]any` blobs in `Topic.Extra` and `Check.Extra` (added 2026-04-07; **use this instead of writing local helpers**) |
 | `logging` | zerolog setup (JSON in prod, pretty in dev) |
 | `metrics` | Prometheus collectors (HTTP, scheduler, tracker, client) |
-| `plugins/registry` | plugin interfaces + global registry + tracker capability interfaces (`WithQuality`, `WithEpisodeFilter`, `WithCredentials`, `WithCloudflare`, `WithInteractiveLogin`, `WithSeasonCatalog`, `WithMetadata`) + client capability `WithStatus` (`Status(ctx, rawConfig, hashes) []TorrentStatus` — live download status by infohash; normalised `State*` vocabulary) + the `registry.EffectiveDownloadDir(base, override, category)` save-path helper + typed sentinels **`registry.ErrNoPendingEpisodes`**, `ErrCaptchaRequired`, `ErrSessionExpired` |
+| `plugins/registry` | plugin interfaces + global registry + tracker capability interfaces (`WithQuality`, `WithEpisodeFilter`, `WithCredentials`, `WithCloudflare`, `WithInteractiveLogin`, `WithSeasonCatalog`, `WithMetadata`) + client capabilities `WithStatus` (`Status(ctx, rawConfig, hashes) []TorrentStatus` — live download status by infohash; normalised `State*` vocabulary) and `WithCategories` (`Categories(ctx, rawConfig) []string` — list the categories a client already knows about, for the AddTopic category combobox; qBittorrent-only today, served by `GET /api/v1/clients/{id}/categories`, fail-open) + the `registry.EffectiveDownloadDir(base, override, category)` save-path helper + typed sentinels **`registry.ErrNoPendingEpisodes`**, `ErrCaptchaRequired`, `ErrSessionExpired` |
 | **`plugins/captchalogin`** | reusable human-in-the-loop interactive captcha-login engine (`Begin`/`Complete`/`Refresh` + TTL pending-session store). A tracker supplies a `Config` (LoginURL, CaptchaURL, CookieNames, BuildForm, Classify); first consumer is LostFilm. See `WithInteractiveLogin` |
 | `plugins/trackers/<name>` | one package per tracker plugin (16 plugins as of v1.0.0+) |
-| `plugins/clients/<name>` | one package per torrent client (qBittorrent, Transmission, Deluge, µTorrent, downloadfolder). qBittorrent + Transmission also implement `registry.WithStatus` for live progress |
+| `plugins/clients/<name>` | one package per torrent client (qBittorrent, Transmission, Deluge, µTorrent, downloadfolder). qBittorrent + Transmission also implement `registry.WithStatus` for live progress; qBittorrent also implements `registry.WithCategories` (lists its categories for the AddTopic combobox) |
 | `plugins/notifiers/<name>` | telegram, email, webhook, pushover |
 | `plugins/torznabcommon` / `torznab` / `newznab` | shared scaffolding for the Torznab/Newznab indexer adapters |
 | `plugins/forumcommon` | shared cookie-jar `Session` type for forum-tracker plugins |
@@ -206,7 +206,8 @@ The **status poll fallback** (in `DeliveryStatus`) is now gated by `useSseStatus
 - **Icons**: `lucide-react` exclusively.
 - **i18n**: `useT()` from `i18n/`. English + Russian dictionaries.
 - **Component size**: max 250 lines per file (currently breached by
-  `Topics.tsx` and `Clients.tsx` — pre-existing tech debt).
+  `Topics.tsx`, `Clients.tsx`, and `TopicForm.tsx` — pre-existing tech debt,
+  tracked in `techdebt/frontend/`).
 - **Path alias**: `@/` maps to `src/`.
 - **Tests**: Vitest + `@testing-library/react` + `userEvent` + jsdom.
   Co-locate `*.test.tsx` next to the component. Run with `npm test`.
