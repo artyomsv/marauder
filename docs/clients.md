@@ -40,13 +40,14 @@ written to the audit log.
 - The **category** field, if set, tags every torrent Marauder
   submits — useful for sorting in the qBittorrent UI and for
   per-category save paths.
-- **Category autocomplete.** When you add or edit a topic and pick a
-  qBittorrent client, the Category field suggests the categories that
-  already exist in that qBittorrent instance (fetched live via
-  `/api/v2/torrents/categories`). It's a convenience only — you can
-  still type a brand-new category, and the value is always treated as a
-  path segment (nested under the client's base download folder). Other
-  clients fall back to plain free-text entry.
+- **Category dropdown.** When you add or edit a topic and pick a
+  qBittorrent client, the Category field becomes a dropdown of the
+  categories that already exist in that qBittorrent instance (fetched
+  live via `/api/v2/torrents/categories`), plus a **Custom category…**
+  option. It's a convenience only — pick **Custom** to type a brand-new
+  category, and the value is always treated as a path segment (nested
+  under the client's base download folder). Other clients fall back to
+  plain free-text entry.
 
 ---
 
