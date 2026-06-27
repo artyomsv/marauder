@@ -17,24 +17,25 @@ import (
 	"github.com/artyomsv/marauder/backend/internal/topics"
 )
 
-// minPollInterval floors the configured poll interval so a misconfiguration
-// can't hammer Sonarr.
+// minPollInterval floors a configured poll interval so a misconfiguration
+// can't hammer Sonarr. It is also the manager loop's tick cadence.
 const minPollInterval = 60 * time.Second
 
-// defaultPollInterval is used when none is configured.
+// defaultPollInterval is used when an instance configures none.
 const defaultPollInterval = 15 * time.Minute
 
 // topicSourceSonarr tags topics auto-created by this poller (stored in
 // extra["source"]) so the UI can badge them. Mirrored by the frontend.
 const topicSourceSonarr = "sonarr"
 
-// settingsStore reads the integration config and advances the poll cursor.
-type settingsStore interface {
-	GetSonarr(ctx context.Context, master *crypto.MasterKey) (*domain.SonarrConfig, error)
-	UpdateSonarrCursor(ctx context.Context, lastSeen time.Time) error
+// instancesStore lists the enabled Sonarr instances and advances per-instance
+// poll cursors.
+type instancesStore interface {
+	ListEnabled(ctx context.Context, master *crypto.MasterKey) ([]domain.SonarrInstance, error)
+	UpdateCursor(ctx context.Context, id uuid.UUID, lastSeen time.Time) error
 }
 
-// adminResolver resolves the fallback owner when none is configured.
+// adminResolver resolves the fallback owner when an instance configures none.
 type adminResolver interface {
 	GetInitialAdmin(ctx context.Context) (*domain.User, error)
 }
@@ -47,47 +48,46 @@ type topicsStore interface {
 	Update(ctx context.Context, id, userID uuid.UUID, displayName string, clientID, notifierID *uuid.UUID, downloadDir, category string, extra map[string]any) (*domain.Topic, error)
 }
 
-// Poller periodically reads Sonarr grab history and auto-creates Marauder
-// topics for grabs from supported forum trackers. It mirrors the scheduler:
-// a ticker loop, ctx-cancellation, and fail-open resilience (a Sonarr blip
-// never crashes the loop or advances the cursor past unprocessed records).
+// Poller periodically reads each enabled Sonarr instance's grab history and
+// auto-creates Marauder topics for grabs from supported forum trackers. It
+// mirrors the scheduler: a ticker loop, ctx-cancellation, and fail-open
+// resilience (a Sonarr blip never crashes the loop or advances a cursor past
+// unprocessed records).
 type Poller struct {
-	log      zerolog.Logger
-	master   *crypto.MasterKey
-	settings settingsStore
-	admin    adminResolver
-	topics   topicsStore
+	log       zerolog.Logger
+	master    *crypto.MasterKey
+	instances instancesStore
+	admin     adminResolver
+	topics    topicsStore
 
 	// newClient is injectable so tests can point at an httptest server.
 	newClient func(baseURL, apiKey string) *Client
 }
 
 // New constructs a Poller.
-func New(log zerolog.Logger, master *crypto.MasterKey, settings settingsStore, admin adminResolver, topicsStore topicsStore, httpTimeout time.Duration) *Poller {
+func New(log zerolog.Logger, master *crypto.MasterKey, instances instancesStore, admin adminResolver, topicsStore topicsStore, httpTimeout time.Duration) *Poller {
 	return &Poller{
-		log:      log.With().Str("component", "sonarr-poller").Logger(),
-		master:   master,
-		settings: settings,
-		admin:    admin,
-		topics:   topicsStore,
+		log:       log.With().Str("component", "sonarr-poller").Logger(),
+		master:    master,
+		instances: instances,
+		admin:     admin,
+		topics:    topicsStore,
 		newClient: func(baseURL, apiKey string) *Client {
 			return NewClient(baseURL, apiKey, httpTimeout)
 		},
 	}
 }
 
-// Start runs the poll loop until ctx is cancelled. It polls once immediately,
-// then on the configured interval, re-reading settings each tick. Config
-// changes (enable/disable, interval) are picked up on the NEXT tick, not
-// instantly: a just-enabled integration with a long interval waits up to one
-// interval before its first poll, and an interval change applies from the
-// following tick (the ticker is reset only after a tick observes the new
-// value). This is acceptable for a background poller; it is not a restart-free
-// instant-apply.
+// Start runs the manager loop until ctx is cancelled. It ticks every
+// minPollInterval; each tick lists the enabled instances and polls any instance
+// whose own poll interval has elapsed since it was last polled. Adding,
+// editing, enabling, disabling, or deleting an instance therefore takes effect
+// on the next tick with no goroutine lifecycle to manage.
 func (p *Poller) Start(ctx context.Context) error {
 	p.log.Info().Msg("sonarr poller starting")
-	interval := p.pollOnce(ctx)
-	ticker := time.NewTicker(interval)
+	lastPolled := map[uuid.UUID]time.Time{}
+	p.tick(ctx, lastPolled)
+	ticker := time.NewTicker(minPollInterval)
 	defer ticker.Stop()
 	for {
 		select {
@@ -95,70 +95,81 @@ func (p *Poller) Start(ctx context.Context) error {
 			p.log.Info().Msg("sonarr poller stopping")
 			return nil
 		case <-ticker.C:
-			next := p.pollOnce(ctx)
-			if next != interval {
-				interval = next
-				ticker.Reset(interval)
-			}
+			p.tick(ctx, lastPolled)
 		}
 	}
 }
 
-// pollOnce performs one poll and returns the interval to use until the next
-// one. It is fail-open: every error path logs and returns the interval
-// without advancing the cursor, so the same history window is retried.
-func (p *Poller) pollOnce(ctx context.Context) time.Duration {
-	cfg, err := p.settings.GetSonarr(ctx, p.master)
+// tick polls every enabled instance that is due. lastPolled is carried across
+// ticks to enforce per-instance intervals; entries for instances no longer
+// enabled are pruned so a re-enabled instance polls immediately.
+func (p *Poller) tick(ctx context.Context, lastPolled map[uuid.UUID]time.Time) {
+	instances, err := p.instances.ListEnabled(ctx, p.master)
 	if err != nil {
-		p.log.Warn().Err(err).Msg("read sonarr config failed")
-		return defaultPollInterval
+		p.log.Warn().Err(err).Msg("list sonarr instances failed")
+		return
 	}
-	interval := pollInterval(cfg.PollIntervalSec)
-	if !cfg.Enabled {
-		return interval
+	present := make(map[uuid.UUID]struct{}, len(instances))
+	for _, inst := range instances {
+		present[inst.ID] = struct{}{}
+		if last, seen := lastPolled[inst.ID]; seen && time.Since(last) < pollInterval(inst.PollIntervalSec) {
+			continue // not due yet
+		}
+		p.pollOnce(ctx, inst)
+		lastPolled[inst.ID] = time.Now()
 	}
-	if cfg.URL == "" || cfg.APIKey == "" {
-		p.log.Warn().Msg("sonarr enabled but url/api key not set")
-		return interval
+	for id := range lastPolled {
+		if _, ok := present[id]; !ok {
+			delete(lastPolled, id)
+		}
+	}
+}
+
+// pollOnce performs one poll for a single instance. It is fail-open: every
+// error path logs and returns without advancing the cursor, so the same history
+// window is retried on the next due tick.
+func (p *Poller) pollOnce(ctx context.Context, inst domain.SonarrInstance) {
+	if inst.URL == "" || inst.APIKey == "" {
+		p.log.Warn().Str("instance", inst.Name).Msg("sonarr instance enabled but url/api key not set")
+		return
 	}
 
-	ownerID, ok := p.resolveOwner(ctx, cfg)
+	ownerID, ok := p.resolveOwner(ctx, inst)
 	if !ok {
-		return interval
+		return
 	}
 
 	// First run (no cursor): go-forward only. Stamp the cursor to now and
-	// import nothing, so enabling the integration can never flood Marauder
-	// with a topic per historical grab. New grabs flow from here on.
-	if cfg.LastSeenAt == nil {
-		if err := p.settings.UpdateSonarrCursor(ctx, time.Now().UTC()); err != nil {
-			p.log.Warn().Err(err).Msg("init sonarr cursor failed")
+	// import nothing, so enabling an instance can never flood Marauder with a
+	// topic per historical grab. New grabs flow from here on.
+	if inst.LastSeenAt == nil {
+		if err := p.instances.UpdateCursor(ctx, inst.ID, time.Now().UTC()); err != nil {
+			p.log.Warn().Err(err).Str("instance", inst.Name).Msg("init sonarr cursor failed")
 		}
-		p.log.Info().Msg("sonarr cursor initialised (go-forward); no historical import")
-		return interval
+		p.log.Info().Str("instance", inst.Name).Msg("sonarr cursor initialised (go-forward); no historical import")
+		return
 	}
 
-	client := p.newClient(cfg.URL, cfg.APIKey)
-	records, err := client.GrabHistorySince(ctx, *cfg.LastSeenAt)
+	client := p.newClient(inst.URL, inst.APIKey)
+	records, err := client.GrabHistorySince(ctx, *inst.LastSeenAt)
 	if err != nil {
-		p.log.Warn().Err(err).Msg("fetch sonarr history failed")
+		p.log.Warn().Err(err).Str("instance", inst.Name).Msg("fetch sonarr history failed")
 		metrics.SonarrPollsTotal.WithLabelValues("error").Inc()
-		return interval // do NOT advance cursor — retry next tick
+		return // do NOT advance cursor — retry next due tick
 	}
 
-	maxDate := p.processRecords(ctx, cfg, ownerID, records)
-	if maxDate.After(*cfg.LastSeenAt) {
-		if err := p.settings.UpdateSonarrCursor(ctx, maxDate); err != nil {
-			p.log.Warn().Err(err).Msg("advance sonarr cursor failed")
+	maxDate := p.processRecords(ctx, inst, ownerID, records)
+	if maxDate.After(*inst.LastSeenAt) {
+		if err := p.instances.UpdateCursor(ctx, inst.ID, maxDate); err != nil {
+			p.log.Warn().Err(err).Str("instance", inst.Name).Msg("advance sonarr cursor failed")
 		}
 	}
 	metrics.SonarrPollsTotal.WithLabelValues("ok").Inc()
-	return interval
 }
 
 // processRecords dedupes the batch by topic URL and processes each unique URL
 // in chronological order. Returns the newest record Date seen (the cursor).
-func (p *Poller) processRecords(ctx context.Context, cfg *domain.SonarrConfig, ownerID uuid.UUID, records []HistoryRecord) time.Time {
+func (p *Poller) processRecords(ctx context.Context, inst domain.SonarrInstance, ownerID uuid.UUID, records []HistoryRecord) time.Time {
 	// maxDate advances over EVERY record — including ones skipped below (empty
 	// URL, duplicate, or unmatched/disallowed tracker) — so the cursor moves
 	// past records we deliberately don't act on instead of re-fetching them on
@@ -177,20 +188,20 @@ func (p *Poller) processRecords(ctx context.Context, cfg *domain.SonarrConfig, o
 			continue
 		}
 		seen[url] = struct{}{}
-		p.processURL(ctx, cfg, ownerID, url)
+		p.processURL(ctx, inst, ownerID, url)
 	}
 	return maxDate
 }
 
 // processURL handles a single topic URL: match → allowed-filter → dedup →
 // create or (optionally) update.
-func (p *Poller) processURL(ctx context.Context, cfg *domain.SonarrConfig, ownerID uuid.UUID, url string) {
+func (p *Poller) processURL(ctx context.Context, inst domain.SonarrInstance, ownerID uuid.UUID, url string) {
 	tracker := registry.FindTrackerForURL(url)
 	if tracker == nil {
 		metrics.SonarrRecordsProcessedTotal.WithLabelValues("no_tracker").Inc()
 		return
 	}
-	if len(cfg.AllowedTrackers) > 0 && !slices.Contains(cfg.AllowedTrackers, tracker.Name()) {
+	if len(inst.AllowedTrackers) > 0 && !slices.Contains(inst.AllowedTrackers, tracker.Name()) {
 		metrics.SonarrRecordsProcessedTotal.WithLabelValues("disallowed").Inc()
 		return
 	}
@@ -198,7 +209,7 @@ func (p *Poller) processURL(ctx context.Context, cfg *domain.SonarrConfig, owner
 	existing, err := p.topics.GetByURL(ctx, ownerID, url)
 	switch {
 	case err == nil:
-		p.handleExisting(ctx, cfg, ownerID, existing)
+		p.handleExisting(ctx, inst, ownerID, existing)
 		return
 	case !errors.Is(err, repo.ErrNotFound):
 		p.log.Warn().Err(err).Str("url", url).Msg("topic lookup failed")
@@ -209,9 +220,9 @@ func (p *Poller) processURL(ctx context.Context, cfg *domain.SonarrConfig, owner
 	res, err := topics.BuildAndCreate(ctx, p.topics, topics.CreateInput{
 		UserID:      ownerID,
 		URL:         url,
-		ClientID:    cfg.DefaultClientID,
-		Category:    cfg.DefaultCategory,
-		DownloadDir: cfg.DefaultDownloadDir,
+		ClientID:    inst.DefaultClientID,
+		Category:    inst.DefaultCategory,
+		DownloadDir: inst.DefaultDownloadDir,
 		Source:      topicSourceSonarr,
 	})
 	if err != nil {
@@ -224,33 +235,35 @@ func (p *Poller) processURL(ctx context.Context, cfg *domain.SonarrConfig, owner
 		return
 	}
 	p.log.Info().Str("url", url).Str("tracker", tracker.Name()).
-		Str("topic_id", res.Topic.ID.String()).Msg("auto-created topic from sonarr grab")
+		Str("instance", inst.Name).Str("topic_id", res.Topic.ID.String()).
+		Msg("auto-created topic from sonarr grab")
 	metrics.SonarrTopicsCreatedTotal.Inc()
 	metrics.SonarrRecordsProcessedTotal.WithLabelValues("created").Inc()
 }
 
 // handleExisting optionally realigns an already-monitored topic's client,
-// category, and download dir with the configured Sonarr defaults.
-func (p *Poller) handleExisting(ctx context.Context, cfg *domain.SonarrConfig, ownerID uuid.UUID, existing *domain.Topic) {
-	if !cfg.UpdateExisting || !needsRealign(existing, cfg) {
+// category, and download dir with the instance's configured defaults.
+func (p *Poller) handleExisting(ctx context.Context, inst domain.SonarrInstance, ownerID uuid.UUID, existing *domain.Topic) {
+	if !inst.UpdateExisting || !needsRealign(existing, inst) {
 		metrics.SonarrRecordsProcessedTotal.WithLabelValues("duplicate").Inc()
 		return
 	}
 	if _, err := p.topics.Update(ctx, existing.ID, ownerID, existing.DisplayName,
-		cfg.DefaultClientID, existing.NotifierID, cfg.DefaultDownloadDir, cfg.DefaultCategory,
+		inst.DefaultClientID, existing.NotifierID, inst.DefaultDownloadDir, inst.DefaultCategory,
 		existing.Extra); err != nil {
 		p.log.Warn().Err(err).Str("url", existing.URL).Msg("realign existing topic failed")
 		metrics.SonarrRecordsProcessedTotal.WithLabelValues("error").Inc()
 		return
 	}
-	p.log.Info().Str("url", existing.URL).Msg("realigned existing topic to sonarr defaults")
+	p.log.Info().Str("url", existing.URL).Str("instance", inst.Name).Msg("realigned existing topic to sonarr defaults")
 	metrics.SonarrRecordsProcessedTotal.WithLabelValues("updated").Inc()
 }
 
-// resolveOwner returns the configured owner, falling back to the first admin.
-func (p *Poller) resolveOwner(ctx context.Context, cfg *domain.SonarrConfig) (uuid.UUID, bool) {
-	if cfg.OwnerUserID != nil {
-		return *cfg.OwnerUserID, true
+// resolveOwner returns the instance's configured owner, falling back to the
+// first admin.
+func (p *Poller) resolveOwner(ctx context.Context, inst domain.SonarrInstance) (uuid.UUID, bool) {
+	if inst.OwnerUserID != nil {
+		return *inst.OwnerUserID, true
 	}
 	admin, err := p.admin.GetInitialAdmin(ctx)
 	if err != nil {
@@ -260,10 +273,10 @@ func (p *Poller) resolveOwner(ctx context.Context, cfg *domain.SonarrConfig) (uu
 	return admin.ID, true
 }
 
-func needsRealign(t *domain.Topic, cfg *domain.SonarrConfig) bool {
-	return !ptrUUIDEqual(t.ClientID, cfg.DefaultClientID) ||
-		t.Category != cfg.DefaultCategory ||
-		t.DownloadDir != cfg.DefaultDownloadDir
+func needsRealign(t *domain.Topic, inst domain.SonarrInstance) bool {
+	return !ptrUUIDEqual(t.ClientID, inst.DefaultClientID) ||
+		t.Category != inst.DefaultCategory ||
+		t.DownloadDir != inst.DefaultDownloadDir
 }
 
 func pollInterval(sec int) time.Duration {
