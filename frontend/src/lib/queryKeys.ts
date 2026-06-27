@@ -35,8 +35,9 @@ export const QK = {
   // Audit log entries (admin only).
   audit: ["audit"] as const,
 
-  // /system/sonarr — Sonarr integration config (admin only).
-  sonarrConfig: ["sonarr-config"] as const,
+  // /system/sonarr/instances — Sonarr integration instances (admin only).
+  sonarrInstances: ["sonarr-instances"] as const,
+  sonarrInstance: (id: string) => ["sonarr-instances", id] as const,
 
   // /trackers/match?url=… lookup. Used by Topics AddTopicCard to
   // detect which plugin handles a pasted URL.

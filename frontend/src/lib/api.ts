@@ -194,13 +194,23 @@ export const api = {
   updateNotifier: (id: string, body: UpdateNotifierBody) =>
     request<{ id: string }>("PUT", `/notifiers/${id}`, body),
 
-  // --- Sonarr integration (admin only). The API key is never returned;
-  // the view exposes only `api_key_set`. An empty api_key on save keeps the
+  // --- Sonarr integration (admin only). Multiple instances, each with its
+  // own enable flag and history cursor. The API key is never returned; the
+  // view exposes only `api_key_set`. An empty api_key on save keeps the
   // stored key.
-  getSonarrConfig: () => request<SonarrConfig>("GET", "/system/sonarr"),
-  updateSonarrConfig: (body: SonarrConfigUpdate) =>
-    request<SonarrConfig>("PUT", "/system/sonarr", body),
-  testSonarr: (body: { sonarr_url?: string; api_key?: string }) =>
+  listSonarrInstances: () =>
+    request<SonarrInstance[]>("GET", "/system/sonarr/instances"),
+  createSonarrInstance: (body: SonarrInstanceBody) =>
+    request<SonarrInstance>("POST", "/system/sonarr/instances", body),
+  updateSonarrInstance: (id: string, body: SonarrInstanceBody) =>
+    request<SonarrInstance>("PUT", `/system/sonarr/instances/${id}`, body),
+  deleteSonarrInstance: (id: string) =>
+    request<void>("DELETE", `/system/sonarr/instances/${id}`),
+  // Connectivity check against an existing instance's stored url + key.
+  testSonarrInstance: (id: string) =>
+    request<SonarrTestResult>("POST", `/system/sonarr/instances/${id}/test`, {}),
+  // Ad-hoc connectivity check for the add form (before the instance exists).
+  testSonarr: (body: { sonarr_url: string; api_key: string }) =>
     request<SonarrTestResult>("POST", "/system/sonarr/test", body),
 
   // --- Server-Sent Events. POST /events/ticket exchanges the access token
@@ -208,8 +218,11 @@ export const api = {
   eventsTicket: () => request<{ ticket: string }>("POST", "/events/ticket"),
 };
 
-// GET /system/sonarr — the API key is intentionally absent (api_key_set only).
-export interface SonarrConfig {
+// One configured Sonarr instance. The API key is intentionally absent
+// (api_key_set only).
+export interface SonarrInstance {
+  id: string;
+  name: string;
   enabled: boolean;
   sonarr_url: string;
   api_key_set: boolean;
@@ -220,10 +233,14 @@ export interface SonarrConfig {
   default_download_dir: string;
   update_existing: boolean;
   last_seen_at: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
-// Body of PUT /system/sonarr. An empty/omitted api_key keeps the stored one.
-export interface SonarrConfigUpdate {
+// Body of POST/PUT /system/sonarr/instances. An empty api_key keeps the stored
+// one on update (and means "no key" on create).
+export interface SonarrInstanceBody {
+  name: string;
   enabled: boolean;
   sonarr_url: string;
   api_key: string;

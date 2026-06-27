@@ -2,7 +2,7 @@ import { motion } from "framer-motion";
 import { Navigate } from "react-router-dom";
 
 import { useAuthStore } from "@/lib/auth-store";
-import { SonarrCard } from "@/components/integrations/SonarrCard";
+import { SonarrInstanceList } from "@/components/integrations/SonarrInstanceList";
 import { useT } from "@/i18n";
 
 /**
@@ -33,7 +33,7 @@ export function IntegrationsPage() {
         <p className="mt-2 text-sm text-muted-foreground">{t("integrations.blurb")}</p>
       </motion.header>
 
-      <SonarrCard />
+      <SonarrInstanceList />
     </div>
   );
 }
