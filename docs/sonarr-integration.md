@@ -44,22 +44,40 @@ The poll is deliberately conservative:
 - **Fail-open** — if Sonarr is unreachable the poll logs a warning and retries
   next tick; the cursor never advances past unprocessed grabs.
 
+## Multiple instances
+
+Marauder supports **any number of Sonarr instances** — e.g. one Sonarr for
+regular TV and a separate one for anime, each with its own download client,
+category, save path, allowed-tracker set, and **independent history cursor**.
+Each instance polls on its own interval and is enabled/disabled independently.
+
+In the Marauder UI, open **Integrations → Sonarr** (admin only). You'll see a
+card per configured instance with its status (**Active**, **Paused**, or
+**Draft**), and an **Add instance** button. Each card lets you enable/disable,
+test, edit, or delete that instance.
+
+A new instance defaults to **disabled** ("Draft") so you can fill it in and
+**Test connection** before it starts polling — flip **Enable** when ready.
+
 ## Configuration
 
-In the Marauder UI, open **Integrations → Sonarr** (admin only):
+Each instance has these fields:
 
 | Field | What it does |
 |---|---|
-| **Enable integration** | Turns the poller on. |
-| **Sonarr URL** | Your Sonarr base URL, reachable from the Marauder backend (e.g. `http://sonarr:8989` on the same Docker network). |
+| **Name** | A label to tell instances apart (e.g. `TV`, `Anime`). |
+| **Enable integration** | Turns this instance's poller on. |
+| **Sonarr URL** | This Sonarr's base URL, reachable from the Marauder backend (e.g. `http://sonarr:8989` on the same Docker network). |
 | **API key** | Sonarr → Settings → General → API Key. Stored encrypted at rest; never returned by the API (the UI shows only whether one is set). Leave blank when editing other fields to keep the stored key. |
 | **Test connection** | Verifies the URL + key against Sonarr's `system/status`. |
-| **Poll interval** | How often to check Sonarr's grab history (minimum 60s). |
+| **Poll interval** | How often to check this Sonarr's grab history (minimum 60s). |
 | **Allowed trackers** | Optional allow-list of tracker plugins to auto-import. Leave all unchecked to allow every supported tracker. |
-| **Default client / category / download dir** | Applied to every auto-created topic. Point these at the **same** qBittorrent + category Sonarr imports from (e.g. `tv-sonarr`) so Sonarr keeps importing Marauder's future downloads. |
+| **Default client / category / download dir** | Applied to every topic this instance auto-creates. Point these at the **same** qBittorrent + category this Sonarr imports from (e.g. `tv-sonarr`) so Sonarr keeps importing Marauder's future downloads. |
 
-The config lives in the database (encrypted API key) and is editable at runtime
-— no restart, no env vars. Config changes take effect on the next poll tick.
+Each instance lives as its own row in the database (encrypted API key) and is
+editable at runtime — no restart, no env vars. Changes take effect on the next
+poll tick. **Go-forward on first enable** applies per instance: enabling an
+instance stamps *its* cursor to "now" and imports nothing historical.
 
 ## Trying it out
 
@@ -84,5 +102,5 @@ attach-to-existing flow.
   Kinozal) won't be able to download until you add that tracker account under
   **Accounts**; the topic is still created and the scheduler surfaces the
   missing-credential state. RuTracker downloads work anonymously.
-- **Owner.** Auto-created topics are owned by the admin who saved the config
+- **Owner.** Auto-created topics are owned by the admin who saved the instance
   (falling back to the first admin), since the poller runs headless.
