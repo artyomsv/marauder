@@ -11,7 +11,9 @@ import { useT } from "@/i18n";
 import { SonarrInstanceCard } from "@/components/integrations/SonarrInstanceCard";
 import { SonarrInstanceForm, type ClientOption } from "@/components/integrations/SonarrInstanceForm";
 
-type ClientsList = { clients: ClientOption[] | null };
+interface ClientsList {
+  clients: ClientOption[] | null;
+}
 
 /**
  * Lists the configured Sonarr instances as cards, with an inline add form and

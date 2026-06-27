@@ -376,6 +376,34 @@ func TestPoller_SkipsDisabledInstance(t *testing.T) {
 	}
 }
 
+func TestPoller_ReenabledInstancePollsImmediately(t *testing.T) {
+	now := time.Now().UTC()
+	srv, hits := countingHistoryServer([]HistoryRecord{
+		{ID: 1, Date: now, Data: HistoryData{NzbInfoURL: fakeURL}},
+	})
+	defer srv.Close()
+
+	owner := uuid.New()
+	past := now.Add(-time.Hour)
+	inst := baseInstance(srv.URL, owner) // 900s interval
+	fi := &fakeInstances{
+		list:    []domain.SonarrInstance{inst},
+		cursors: map[uuid.UUID]*time.Time{inst.ID: &past},
+	}
+	p := newTestPoller(fi, fakeAdmin{}, &fakeTopics{})
+
+	lastPolled := map[uuid.UUID]time.Time{}
+	p.tick(context.Background(), lastPolled) // enabled → polled (hit 1)
+	fi.list[0].Enabled = false
+	p.tick(context.Background(), lastPolled) // disabled → pruned from lastPolled
+	fi.list[0].Enabled = true
+	p.tick(context.Background(), lastPolled) // re-enabled → pruned, so polls now (hit 2)
+
+	if got := atomic.LoadInt32(hits); got != 2 {
+		t.Errorf("re-enabled instance must poll immediately (lastPolled pruned): got %d hits, want 2", got)
+	}
+}
+
 func TestPoller_PerInstanceIntervalDue(t *testing.T) {
 	now := time.Now().UTC()
 	srv, hits := countingHistoryServer([]HistoryRecord{

@@ -160,6 +160,8 @@ const en: Record<string, string> = {
   "settings.sonarr.testing": "Testing…",
   "settings.sonarr.testOk": "Connected to Sonarr",
   "settings.sonarr.testFailed": "Connection failed",
+  "settings.sonarr.toggleFailed": "Could not change the instance state",
+  "settings.sonarr.deleteFailed": "Could not delete the instance",
   "settings.sonarr.save": "Save",
   "settings.sonarr.saving": "Saving…",
   "settings.sonarr.saved": "Settings saved.",

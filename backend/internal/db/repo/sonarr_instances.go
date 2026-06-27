@@ -2,6 +2,7 @@ package repo
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -103,6 +104,9 @@ func (r *SonarrInstances) Get(ctx context.Context, master *crypto.MasterKey, id 
 	row := r.pool.QueryRow(ctx, `SELECT `+sonarrCols+` FROM sonarr_instances WHERE id = $1`, id)
 	inst, err := scanInstance(row, master)
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrNotFound
+		}
 		return nil, fmt.Errorf("sonarr_instances: get: %w", err)
 	}
 	return &inst, nil
@@ -179,6 +183,9 @@ UPDATE sonarr_instances SET
 	}
 	updated, err := scanInstance(r.pool.QueryRow(ctx, q, args...), master)
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrNotFound
+		}
 		return nil, fmt.Errorf("sonarr_instances: update: %w", err)
 	}
 	return &updated, nil

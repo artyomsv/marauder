@@ -162,6 +162,8 @@ func (h *Sonarr) Update(w http.ResponseWriter, r *http.Request) {
 
 // Delete handles DELETE /system/sonarr/instances/{id} (admin).
 func (h *Sonarr) Delete(w http.ResponseWriter, r *http.Request) {
+	// uid is only for the audit actor; RequireAdmin guarantees a valid claims
+	// context, and a missing actor degrades the audit entry to nil — not fatal.
 	uid, _ := currentUserID(r)
 	id, ierr := uuid.Parse(chi.URLParam(r, "id"))
 	if ierr != nil {
@@ -218,6 +220,8 @@ func (h *Sonarr) runTest(w http.ResponseWriter, r *http.Request, targetURL, apiK
 			"could not connect to Sonarr — verify the URL is reachable and the API key is correct"))
 		return
 	}
+	// uid is only the audit actor (nil-safe via nilIfNil); RequireAdmin already
+	// guaranteed a valid claims context, so a parse miss here is non-fatal.
 	uid, _ := currentUserID(r)
 	h.audit(nilIfNil(uid), "sonarr.instance.test", "", nil)
 	writeJSON(w, http.StatusOK, map[string]any{

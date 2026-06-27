@@ -57,11 +57,13 @@ export function SonarrInstanceCard({ instance, clients, trackers }: Props) {
         enabled: !instance.enabled,
       }),
     onSuccess: () => qc.invalidateQueries({ queryKey: QK.sonarrInstances }),
+    onError: () => setTestMsg({ kind: "err", text: t("settings.sonarr.toggleFailed") }),
   });
 
   const deleteMut = useMutation({
     mutationFn: () => api.deleteSonarrInstance(instance.id),
     onSuccess: () => qc.invalidateQueries({ queryKey: QK.sonarrInstances }),
+    onError: () => setTestMsg({ kind: "err", text: t("settings.sonarr.deleteFailed") }),
   });
 
   const testMut = useMutation({
@@ -131,7 +133,8 @@ export function SonarrInstanceCard({ instance, clients, trackers }: Props) {
             variant={instance.enabled ? "outline" : "default"}
             size="sm"
             onClick={() => toggleMut.mutate()}
-            disabled={toggleMut.isPending}
+            // Can't enable a draft with no URL — the backend would 422 anyway.
+            disabled={toggleMut.isPending || (!instance.enabled && !instance.sonarr_url)}
           >
             {toggleMut.isPending && <Loader2 className="mr-1.5 size-3.5 animate-spin" />}
             {instance.enabled ? t("settings.sonarr.actions.disable") : t("settings.sonarr.actions.enable")}

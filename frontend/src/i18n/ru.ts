@@ -162,6 +162,8 @@ const ru: Record<string, string> = {
   "settings.sonarr.testing": "Проверка…",
   "settings.sonarr.testOk": "Подключено к Sonarr",
   "settings.sonarr.testFailed": "Не удалось подключиться",
+  "settings.sonarr.toggleFailed": "Не удалось изменить состояние экземпляра",
+  "settings.sonarr.deleteFailed": "Не удалось удалить экземпляр",
   "settings.sonarr.save": "Сохранить",
   "settings.sonarr.saving": "Сохранение…",
   "settings.sonarr.saved": "Настройки сохранены.",

@@ -109,14 +109,18 @@ func (p *Poller) tick(ctx context.Context, lastPolled map[uuid.UUID]time.Time) {
 		p.log.Warn().Err(err).Msg("list sonarr instances failed")
 		return
 	}
+	// A single `now` for the whole tick: stamping lastPolled with the same
+	// instant used for the due-check keeps poll duration out of the cadence, so
+	// an instance at the 60s floor actually polls every 60s (not 120s).
+	now := time.Now()
 	present := make(map[uuid.UUID]struct{}, len(instances))
 	for _, inst := range instances {
 		present[inst.ID] = struct{}{}
-		if last, seen := lastPolled[inst.ID]; seen && time.Since(last) < pollInterval(inst.PollIntervalSec) {
+		if last, seen := lastPolled[inst.ID]; seen && now.Sub(last) < pollInterval(inst.PollIntervalSec) {
 			continue // not due yet
 		}
 		p.pollOnce(ctx, inst)
-		lastPolled[inst.ID] = time.Now()
+		lastPolled[inst.ID] = now
 	}
 	for id := range lastPolled {
 		if _, ok := present[id]; !ok {
