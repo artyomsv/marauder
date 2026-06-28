@@ -25,6 +25,8 @@ function topicWith(clientID: string | null): Topic {
     NotifierID: null,
     DownloadDir: "",
     Category: "",
+    ReplaceOnUpdate: false,
+    ReplaceDeleteData: true,
     Extra: null,
     LastHash: "",
     LastCheckedAt: null,

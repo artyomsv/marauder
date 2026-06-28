@@ -87,6 +87,23 @@ func (r *Deliveries) MarkCompleted(ctx context.Context, deliveryID uuid.UUID) (b
 	return ct.RowsAffected() > 0, nil
 }
 
+// DeleteByInfohashes removes a topic's delivery rows whose infohash is in the
+// supplied set. The scheduler's "replace previous version" policy (issue #101)
+// calls this after the old torrents have been removed from the client, so the
+// status view and progress watcher stop tracking torrents that no longer exist.
+// A no-op for an empty set. Returns the number of rows removed.
+func (r *Deliveries) DeleteByInfohashes(ctx context.Context, topicID uuid.UUID, hashes []string) (int64, error) {
+	if len(hashes) == 0 {
+		return 0, nil
+	}
+	const q = `DELETE FROM topic_deliveries WHERE topic_id = $1 AND infohash = ANY($2)`
+	ct, err := r.pool.Exec(ctx, q, topicID, hashes)
+	if err != nil {
+		return 0, fmt.Errorf("deliveries: delete by infohashes: %w", err)
+	}
+	return ct.RowsAffected(), nil
+}
+
 // ListInFlight returns deliveries not yet marked complete, joined with their
 // topic's owner, notifier override, and display name. Bounded to the last 30
 // days and to deliveries with a known client, so rows that can never complete

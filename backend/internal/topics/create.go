@@ -55,9 +55,15 @@ type CreateInput struct {
 	DownloadDir      string
 	Category         string
 	CheckIntervalSec int
-	Quality          string
-	StartSeason      *int
-	StartEpisode     *int
+	// ReplaceOnUpdate opts the topic into the "replace previous version" policy
+	// (issue #101). ReplaceDeleteData controls whether the old torrent's data is
+	// also deleted; nil means the default (true), so callers that don't set it
+	// get the same default as the DB column.
+	ReplaceOnUpdate   bool
+	ReplaceDeleteData *bool
+	Quality           string
+	StartSeason       *int
+	StartEpisode      *int
 	// Source tags how the topic was created (e.g. "sonarr"). Stored in
 	// extra["source"] so the UI can badge auto-imported topics. Empty for
 	// manually-added topics.
@@ -123,6 +129,13 @@ func BuildAndCreate(ctx context.Context, store Store, in CreateInput) (*Result, 
 		extra["source"] = in.Source
 	}
 
+	// Replace-on-update: keep the DB column's default (delete data = true) when
+	// the caller doesn't specify, so an omitted flag matches the column default.
+	replaceDeleteData := true
+	if in.ReplaceDeleteData != nil {
+		replaceDeleteData = *in.ReplaceDeleteData
+	}
+
 	t := &domain.Topic{
 		UserID:                   in.UserID,
 		TrackerName:              tracker.Name(),
@@ -134,6 +147,8 @@ func BuildAndCreate(ctx context.Context, store Store, in CreateInput) (*Result, 
 		NotifierID:               in.NotifierID,
 		DownloadDir:              in.DownloadDir,
 		Category:                 in.Category,
+		ReplaceOnUpdate:          in.ReplaceOnUpdate,
+		ReplaceDeleteData:        replaceDeleteData,
 		Extra:                    extra,
 		CheckIntervalSec:         interval,
 		NextCheckAt:              time.Now().UTC(),

@@ -99,7 +99,7 @@ func (f *fakeTopics) GetByURL(_ context.Context, _ uuid.UUID, url string) (*doma
 	}
 	return nil, repo.ErrNotFound
 }
-func (f *fakeTopics) Update(_ context.Context, id, _ uuid.UUID, _ string, _, _ *uuid.UUID, _, _ string, _ map[string]any) (*domain.Topic, error) {
+func (f *fakeTopics) Update(_ context.Context, id, _ uuid.UUID, _ string, _, _ *uuid.UUID, _, _ string, _, _ bool, _ map[string]any) (*domain.Topic, error) {
 	f.updated = append(f.updated, id)
 	return &domain.Topic{ID: id}, nil
 }

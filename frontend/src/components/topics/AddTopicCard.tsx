@@ -21,6 +21,10 @@ const EMPTY: TopicFormValues = {
   notifierId: "",
   downloadDir: "",
   category: "",
+  // Default to the historical behaviour: keep every version. Delete-data is the
+  // default once replace is enabled, matching the backend column default.
+  replaceOnUpdate: false,
+  replaceDeleteData: true,
 };
 
 // Card wrapping the shared TopicForm for creating a new topic via
@@ -40,6 +44,8 @@ export function AddTopicCard({ onClose, onCreated }: AddTopicCardProps) {
         notifier_id: v.notifierId || undefined,
         download_dir: v.downloadDir || undefined,
         category: v.category || undefined,
+        replace_on_update: v.replaceOnUpdate,
+        replace_delete_data: v.replaceDeleteData,
       }),
     onSuccess: () => onCreated(),
     onError: (err) => setError(err instanceof Error ? err.message : "Failed"),

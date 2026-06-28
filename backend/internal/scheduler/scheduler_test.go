@@ -29,6 +29,10 @@ type fakeTracker struct {
 	name      string
 	checks    []checkResult
 	downloads []downloadResult
+	// episodic makes the tracker advertise registry.WithEpisodeFilter, so the
+	// scheduler treats it as a per-episode tracker (replace-on-update is then
+	// skipped to protect sibling episodes — issue #101).
+	episodic bool
 
 	callsCheck    int
 	callsDownload int
@@ -60,6 +64,10 @@ func (f *fakeTracker) Check(_ context.Context, _ *domain.Topic, _ *domain.Tracke
 	r := f.checks[idx]
 	return r.check, r.err
 }
+
+// SupportsEpisodeFilter makes *fakeTracker satisfy registry.WithEpisodeFilter.
+// It reports true only when the test opted in via the episodic flag.
+func (f *fakeTracker) SupportsEpisodeFilter() bool { return f.episodic }
 
 func (f *fakeTracker) Download(_ context.Context, _ *domain.Topic, _ *domain.Check, _ *domain.TrackerCredential) (*domain.Payload, error) {
 	idx := f.callsDownload
@@ -147,10 +155,12 @@ func (f *fakeTopicsAtomic) MarkEpisodeDownloaded(_ context.Context, id uuid.UUID
 // fakeClients records GetByID / GetDefault calls and always returns a
 // fixed Client whose ClientName matches the registered fakeClientPlugin.
 type fakeClients struct {
-	client *domain.Client
+	client       *domain.Client
+	getByIDCalls []uuid.UUID
 }
 
-func (f *fakeClients) GetByID(_ context.Context, _ uuid.UUID, _ uuid.UUID) (*domain.Client, error) {
+func (f *fakeClients) GetByID(_ context.Context, id uuid.UUID, _ uuid.UUID) (*domain.Client, error) {
+	f.getByIDCalls = append(f.getByIDCalls, id)
 	return f.client, nil
 }
 
@@ -234,10 +244,17 @@ type fakeDecryptor struct{}
 
 func (f *fakeDecryptor) Decrypt(ct, _ []byte) ([]byte, error) { return ct, nil }
 
-// fakeDeliveries records every delivery the scheduler logs.
+// fakeDeliveries records every delivery the scheduler logs and serves the
+// configured prior deliveries for the replace-on-update path.
 type fakeDeliveries struct {
 	recorded []*domain.TopicDelivery
 	err      error
+
+	// prior is returned by ListForTopic (the pre-update snapshot).
+	prior   []*domain.TopicDelivery
+	listErr error
+	// deletedHashes captures the hashes passed to DeleteByInfohashes.
+	deletedHashes []string
 }
 
 func (f *fakeDeliveries) Record(_ context.Context, d *domain.TopicDelivery) (bool, error) {
@@ -245,12 +262,28 @@ func (f *fakeDeliveries) Record(_ context.Context, d *domain.TopicDelivery) (boo
 	return f.err == nil, f.err
 }
 
-// fakeClientPlugin satisfies registry.Client and records every Add call.
+func (f *fakeDeliveries) ListForTopic(_ context.Context, _ uuid.UUID) ([]*domain.TopicDelivery, error) {
+	return f.prior, f.listErr
+}
+
+func (f *fakeDeliveries) DeleteByInfohashes(_ context.Context, _ uuid.UUID, hashes []string) (int64, error) {
+	f.deletedHashes = append(f.deletedHashes, hashes...)
+	return int64(len(hashes)), nil
+}
+
+// fakeClientPlugin satisfies registry.Client (and registry.WithRemoval) and
+// records every Add / Remove call.
 type fakeClientPlugin struct {
 	name     string
 	addCalls int
 	addErr   error
 	lastOpts domain.AddOptions
+
+	// Remove tracking for the replace-on-update path.
+	removeCalls      int
+	removeHashes     []string
+	removeDeleteData bool
+	removeErr        error
 }
 
 func (f *fakeClientPlugin) Name() string                 { return f.name }
@@ -263,6 +296,13 @@ func (f *fakeClientPlugin) Add(_ context.Context, _ []byte, _ *domain.Payload, o
 	f.addCalls++
 	f.lastOpts = opts
 	return f.addErr
+}
+
+func (f *fakeClientPlugin) Remove(_ context.Context, _ []byte, hashes []string, deleteData bool) error {
+	f.removeCalls++
+	f.removeHashes = append(f.removeHashes, hashes...)
+	f.removeDeleteData = deleteData
+	return f.removeErr
 }
 
 // --- Test setup helpers ------------------------------------------------
@@ -904,6 +944,188 @@ func TestRunCheck_NonAtomicFallback(t *testing.T) {
 	}
 	if got := len(f.topics.updateExtraCalls); got != 2 {
 		t.Errorf("expected 2 UpdateExtra calls in fallback path, got %d", got)
+	}
+}
+
+// --- replace-on-update (issue #101) -------------------------------------
+
+// singlePayloadTracker returns one new release then signals "no pending" — the
+// shape of every single-release (non-episodic) tracker.
+func singlePayloadTracker(newHash string) *fakeTracker {
+	return &fakeTracker{
+		name: "faketracker",
+		checks: []checkResult{
+			{check: &domain.Check{Hash: "new-hash"}},
+		},
+		downloads: []downloadResult{
+			{payload: &domain.Payload{MagnetURI: "magnet:?xt=urn:btih:" + newHash}},
+			{err: registry.ErrNoPendingEpisodes},
+		},
+	}
+}
+
+func TestRunCheck_ReplaceOnUpdate_RemovesPreviousAndPrunes(t *testing.T) {
+	const oldHash = "1111111111111111111111111111111111111111"
+	const newHash = "c12fe1c06bba254a9dc9f519b335aa7c1367a88a"
+	f := newFixture(t, singlePayloadTracker(newHash), false)
+	f.topic.ReplaceOnUpdate = true
+	f.topic.ReplaceDeleteData = true
+	f.deliveries.prior = []*domain.TopicDelivery{
+		{Infohash: oldHash, ClientID: f.topic.ClientID},
+	}
+
+	f.s.runCheck(context.Background(), f.s.log, f.topic)
+
+	if f.clientPlugin.removeCalls != 1 {
+		t.Fatalf("remove calls = %d, want 1", f.clientPlugin.removeCalls)
+	}
+	if len(f.clientPlugin.removeHashes) != 1 || f.clientPlugin.removeHashes[0] != oldHash {
+		t.Errorf("removed hashes = %v, want [%s]", f.clientPlugin.removeHashes, oldHash)
+	}
+	if !f.clientPlugin.removeDeleteData {
+		t.Errorf("deleteData = false, want true")
+	}
+	if len(f.deliveries.deletedHashes) != 1 || f.deliveries.deletedHashes[0] != oldHash {
+		t.Errorf("pruned delivery rows = %v, want [%s]", f.deliveries.deletedHashes, oldHash)
+	}
+	// The new release must still be delivered and recorded as updated.
+	if f.clientPlugin.addCalls != 1 {
+		t.Errorf("add calls = %d, want 1", f.clientPlugin.addCalls)
+	}
+	if rec := f.lastRecord(t); !rec.updated || rec.errMsg != "" {
+		t.Errorf("record = %+v, want updated with no error", rec)
+	}
+}
+
+func TestRunCheck_ReplaceOnUpdate_KeepData(t *testing.T) {
+	const oldHash = "1111111111111111111111111111111111111111"
+	const newHash = "c12fe1c06bba254a9dc9f519b335aa7c1367a88a"
+	f := newFixture(t, singlePayloadTracker(newHash), false)
+	f.topic.ReplaceOnUpdate = true
+	f.topic.ReplaceDeleteData = false
+	f.deliveries.prior = []*domain.TopicDelivery{{Infohash: oldHash, ClientID: f.topic.ClientID}}
+
+	f.s.runCheck(context.Background(), f.s.log, f.topic)
+
+	if f.clientPlugin.removeCalls != 1 {
+		t.Fatalf("remove calls = %d, want 1", f.clientPlugin.removeCalls)
+	}
+	if f.clientPlugin.removeDeleteData {
+		t.Errorf("deleteData = true, want false (keep-data sub-option)")
+	}
+	// The torrent is removed from the client regardless of the file-deletion
+	// flag, so its delivery row must still be pruned.
+	if len(f.deliveries.deletedHashes) != 1 || f.deliveries.deletedHashes[0] != oldHash {
+		t.Errorf("pruned rows = %v, want [%s] even when keeping data", f.deliveries.deletedHashes, oldHash)
+	}
+}
+
+func TestRunCheck_ReplaceOnUpdate_SkipsCurrentInfohash(t *testing.T) {
+	// Edge: the tracker bumped its opaque check hash but the torrent (infohash)
+	// is unchanged, so the "previous" snapshot contains the SAME infohash that
+	// was just (re)delivered. The guard must never remove it.
+	const sameHash = "c12fe1c06bba254a9dc9f519b335aa7c1367a88a"
+	f := newFixture(t, singlePayloadTracker(sameHash), false)
+	f.topic.ReplaceOnUpdate = true
+	f.deliveries.prior = []*domain.TopicDelivery{{Infohash: sameHash, ClientID: f.topic.ClientID}}
+
+	f.s.runCheck(context.Background(), f.s.log, f.topic)
+
+	if f.clientPlugin.removeCalls != 0 {
+		t.Errorf("remove calls = %d, want 0 — the just-delivered torrent must not be removed", f.clientPlugin.removeCalls)
+	}
+	if len(f.deliveries.deletedHashes) != 0 {
+		t.Errorf("pruned rows = %v, want none for the current infohash", f.deliveries.deletedHashes)
+	}
+}
+
+func TestRunCheck_ReplaceOnUpdate_RemovesFromEachHoldingClient(t *testing.T) {
+	// Prior deliveries can live on different clients than the topic's current
+	// one (the user reassigned the client). Each must be removed from the client
+	// that actually holds it — i.e. GetByID is called per distinct client_id.
+	const h1 = "1111111111111111111111111111111111111111"
+	const h2 = "2222222222222222222222222222222222222222"
+	const newHash = "c12fe1c06bba254a9dc9f519b335aa7c1367a88a"
+	clientA := uuid.New()
+	clientB := uuid.New()
+	f := newFixture(t, singlePayloadTracker(newHash), false)
+	f.topic.ReplaceOnUpdate = true
+	f.deliveries.prior = []*domain.TopicDelivery{
+		{Infohash: h1, ClientID: &clientA},
+		{Infohash: h2, ClientID: &clientB},
+	}
+
+	f.s.runCheck(context.Background(), f.s.log, f.topic)
+
+	calls := f.s.clients.(*fakeClients).getByIDCalls
+	seen := map[uuid.UUID]bool{}
+	for _, id := range calls {
+		seen[id] = true
+	}
+	if !seen[clientA] || !seen[clientB] {
+		t.Errorf("GetByID called for %v, want both holding clients %s and %s", calls, clientA, clientB)
+	}
+	if f.clientPlugin.removeCalls != 2 {
+		t.Errorf("remove calls = %d, want 2 (one per holding client)", f.clientPlugin.removeCalls)
+	}
+}
+
+func TestRunCheck_ReplaceDisabled_NoRemoval(t *testing.T) {
+	const oldHash = "1111111111111111111111111111111111111111"
+	const newHash = "c12fe1c06bba254a9dc9f519b335aa7c1367a88a"
+	f := newFixture(t, singlePayloadTracker(newHash), false)
+	f.topic.ReplaceOnUpdate = false // default — keep all versions
+	f.deliveries.prior = []*domain.TopicDelivery{{Infohash: oldHash, ClientID: f.topic.ClientID}}
+
+	f.s.runCheck(context.Background(), f.s.log, f.topic)
+
+	if f.clientPlugin.removeCalls != 0 {
+		t.Errorf("remove calls = %d, want 0 when replace is disabled", f.clientPlugin.removeCalls)
+	}
+	if len(f.deliveries.deletedHashes) != 0 {
+		t.Errorf("pruned rows = %v, want none when replace is disabled", f.deliveries.deletedHashes)
+	}
+}
+
+func TestRunCheck_ReplaceOnUpdate_Episodic_NoRemoval(t *testing.T) {
+	// A per-episode tracker accumulates episodes; replacing would delete
+	// siblings. The scheduler must skip removal even with replace enabled.
+	const oldHash = "1111111111111111111111111111111111111111"
+	const newHash = "c12fe1c06bba254a9dc9f519b335aa7c1367a88a"
+	tr := singlePayloadTracker(newHash)
+	tr.episodic = true
+	f := newFixture(t, tr, false)
+	f.topic.ReplaceOnUpdate = true
+	f.deliveries.prior = []*domain.TopicDelivery{{Infohash: oldHash, ClientID: f.topic.ClientID}}
+
+	f.s.runCheck(context.Background(), f.s.log, f.topic)
+
+	if f.clientPlugin.removeCalls != 0 {
+		t.Errorf("remove calls = %d, want 0 for an episodic tracker", f.clientPlugin.removeCalls)
+	}
+}
+
+func TestRunCheck_ReplaceOnUpdate_RemoveFailsOpen(t *testing.T) {
+	// A removal failure must not fail the check: the new release was delivered.
+	const oldHash = "1111111111111111111111111111111111111111"
+	const newHash = "c12fe1c06bba254a9dc9f519b335aa7c1367a88a"
+	f := newFixture(t, singlePayloadTracker(newHash), false)
+	f.topic.ReplaceOnUpdate = true
+	f.deliveries.prior = []*domain.TopicDelivery{{Infohash: oldHash, ClientID: f.topic.ClientID}}
+	f.clientPlugin.removeErr = errors.New("qbit unreachable")
+
+	f.s.runCheck(context.Background(), f.s.log, f.topic)
+
+	rec := f.lastRecord(t)
+	if !rec.updated {
+		t.Errorf("expected updated=true despite removal failure")
+	}
+	if rec.errMsg != "" {
+		t.Errorf("expected no error recorded on a fail-open removal, got %q", rec.errMsg)
+	}
+	// A failed removal must NOT prune the delivery row (the torrent is still there).
+	if len(f.deliveries.deletedHashes) != 0 {
+		t.Errorf("pruned rows = %v, want none when removal failed", f.deliveries.deletedHashes)
 	}
 }
 

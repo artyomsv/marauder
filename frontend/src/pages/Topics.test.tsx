@@ -103,6 +103,8 @@ const EXISTING_TOPIC: Topic = {
   NotifierID: null,
   DownloadDir: "/downloads/shows",
   Category: "series",
+  ReplaceOnUpdate: false,
+  ReplaceDeleteData: true,
   Extra: { quality: "1080p", start_season: 2, start_episode: 3 },
   LastHash: "",
   LastCheckedAt: null,
@@ -372,6 +374,45 @@ describe("AddTopicCard — client picker + download folder + category", () => {
     );
   });
 
+  it("defaults replace-on-update off and hides the delete-data sub-option", async () => {
+    const user = userEvent.setup();
+    routeGet(() => Promise.resolve({ seasons: [] }));
+    mockApi.post.mockResolvedValue({});
+
+    renderCard();
+    await user.type(screen.getByLabelText(/url or magnet link/i), LOSTFILM_URL);
+    await screen.findByLabelText(/^client \(optional\)$/i);
+
+    // The delete-data sub-option only renders once replace is enabled.
+    expect(screen.queryByLabelText(/delete the old files/i)).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /add topic/i }));
+    expect(mockApi.post).toHaveBeenCalledWith(
+      "/topics",
+      expect.objectContaining({ replace_on_update: false, replace_delete_data: true }),
+    );
+  });
+
+  it("sends replace_on_update with delete-data toggled off in the create payload", async () => {
+    const user = userEvent.setup();
+    routeGet(() => Promise.resolve({ seasons: [] }));
+    mockApi.post.mockResolvedValue({});
+
+    renderCard();
+    await user.type(screen.getByLabelText(/url or magnet link/i), LOSTFILM_URL);
+    await screen.findByLabelText(/^client \(optional\)$/i);
+
+    await user.click(screen.getByLabelText(/replace previous version on update/i));
+    // Sub-option now visible; turn off the default delete-data behaviour.
+    await user.click(await screen.findByLabelText(/delete the old files/i));
+
+    await user.click(screen.getByRole("button", { name: /add topic/i }));
+    expect(mockApi.post).toHaveBeenCalledWith(
+      "/topics",
+      expect.objectContaining({ replace_on_update: true, replace_delete_data: false }),
+    );
+  });
+
   it("lists the user's notifiers plus a default option", async () => {
     const user = userEvent.setup();
     routeGet(() => Promise.resolve({ seasons: [] }));
@@ -518,6 +559,29 @@ describe("EditTopicCard — prefill + update", () => {
       }),
     );
     expect(onSaved).toHaveBeenCalled();
+  });
+
+  it("pre-fills the replace toggle from the topic and sends it on save", async () => {
+    const user = userEvent.setup();
+    routeGetWithQuality(() => Promise.resolve({ seasons: [] }));
+    mockApi.updateTopic.mockResolvedValue({});
+
+    renderEdit({ ...EXISTING_TOPIC, ReplaceOnUpdate: true, ReplaceDeleteData: false });
+
+    const replaceToggle = (await screen.findByLabelText(
+      /replace previous version on update/i,
+    )) as HTMLInputElement;
+    expect(replaceToggle.checked).toBe(true);
+    // Sub-option is visible (replace is on) and pre-filled to keep-data.
+    const deleteToggle = screen.getByLabelText(/delete the old files/i) as HTMLInputElement;
+    expect(deleteToggle.checked).toBe(false);
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    expect(mockApi.updateTopic).toHaveBeenCalledWith(
+      "t-1",
+      expect.objectContaining({ replace_on_update: true, replace_delete_data: false }),
+    );
   });
 
   it("sends download_dir: \"\" when the folder is emptied (explicit clear)", async () => {

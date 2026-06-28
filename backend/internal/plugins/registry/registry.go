@@ -182,6 +182,19 @@ type WithStatus interface {
 	Status(ctx context.Context, rawConfig []byte, hashes []string) ([]TorrentStatus, error)
 }
 
+// WithRemoval is an optional client capability: remove torrents by infohash.
+// When deleteData is true the client also deletes the downloaded files from
+// disk. It powers the per-topic "replace previous version on update" policy
+// (issue #101): when a single-release topic gets a new infohash, the scheduler
+// removes the previously delivered torrent so updated releases don't pile up
+// duplicate downloads on disk. Hashes the client no longer knows are ignored
+// (idempotent). Clients without a remove concept (downloadfolder) simply don't
+// implement it, and the scheduler keeps the old torrent in place.
+type WithRemoval interface {
+	Client
+	Remove(ctx context.Context, rawConfig []byte, hashes []string, deleteData bool) error
+}
+
 // WithCategories is an optional client capability: enumerate the categories
 // the client already knows about, so the UI can offer them as suggestions when
 // picking a topic's category. Clients without a category concept (Transmission,

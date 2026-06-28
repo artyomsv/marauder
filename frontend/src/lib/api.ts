@@ -299,6 +299,10 @@ export interface UpdateTopicBody {
   notifier_id?: string | null;
   download_dir?: string;
   category?: string;
+  // Replace-on-update policy (issue #101). replace_delete_data only matters
+  // when replace_on_update is true.
+  replace_on_update?: boolean;
+  replace_delete_data?: boolean;
   quality?: string;
   start_season?: number;
   start_episode?: number;
@@ -401,6 +405,8 @@ export type Topic = {
   NotifierID: string | null;
   DownloadDir: string;
   Category: string;
+  ReplaceOnUpdate: boolean;
+  ReplaceDeleteData: boolean;
   Extra: TopicExtra | null;
   LastHash: string;
   LastCheckedAt: string | null;

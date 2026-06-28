@@ -45,7 +45,7 @@ type adminResolver interface {
 type topicsStore interface {
 	topics.Store
 	GetByURL(ctx context.Context, userID uuid.UUID, url string) (*domain.Topic, error)
-	Update(ctx context.Context, id, userID uuid.UUID, displayName string, clientID, notifierID *uuid.UUID, downloadDir, category string, extra map[string]any) (*domain.Topic, error)
+	Update(ctx context.Context, id, userID uuid.UUID, displayName string, clientID, notifierID *uuid.UUID, downloadDir, category string, replaceOnUpdate, replaceDeleteData bool, extra map[string]any) (*domain.Topic, error)
 }
 
 // Poller periodically reads each enabled Sonarr instance's grab history and
@@ -254,7 +254,7 @@ func (p *Poller) handleExisting(ctx context.Context, inst domain.SonarrInstance,
 	}
 	if _, err := p.topics.Update(ctx, existing.ID, ownerID, existing.DisplayName,
 		inst.DefaultClientID, existing.NotifierID, inst.DefaultDownloadDir, inst.DefaultCategory,
-		existing.Extra); err != nil {
+		existing.ReplaceOnUpdate, existing.ReplaceDeleteData, existing.Extra); err != nil {
 		p.log.Warn().Err(err).Str("url", existing.URL).Msg("realign existing topic failed")
 		metrics.SonarrRecordsProcessedTotal.WithLabelValues("error").Inc()
 		return

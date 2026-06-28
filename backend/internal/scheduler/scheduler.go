@@ -98,11 +98,15 @@ type decryptor interface {
 }
 
 // deliveriesRecorder is the subset of *repo.Deliveries the scheduler uses
-// to log what it pushed to a client. Best-effort: a failure here is logged
-// and never affects the download/check outcome. Defined as an interface so
-// it's nil-safe in unit tests that don't exercise delivery tracking.
+// to log what it pushed to a client and — for the "replace previous version"
+// policy (issue #101) — to find and prune a topic's prior deliveries.
+// Best-effort: a failure here is logged and never affects the download/check
+// outcome. Defined as an interface so it's nil-safe in unit tests that don't
+// exercise delivery tracking.
 type deliveriesRecorder interface {
 	Record(ctx context.Context, d *domain.TopicDelivery) (bool, error)
+	ListForTopic(ctx context.Context, topicID uuid.UUID) ([]*domain.TopicDelivery, error)
+	DeleteByInfohashes(ctx context.Context, topicID uuid.UUID, hashes []string) (int64, error)
 }
 
 // trackerLookupFn is a test seam: the scheduler resolves a tracker by
@@ -389,8 +393,20 @@ func (s *Scheduler) runCheck(ctx context.Context, log zerolog.Logger, t *domain.
 			})
 		}
 
+		// For the "replace previous version" policy (issue #101) snapshot the
+		// topic's existing deliveries BEFORE this tick adds the new release, so
+		// the set is unambiguously "the previous versions" — never what we're
+		// about to deliver. Gated to single-release topics: per-episode trackers
+		// accumulate episodes legitimately, so removing prior deliveries there
+		// would wipe sibling episodes.
+		var priorDeliveries []*domain.TopicDelivery
+		if t.ReplaceOnUpdate && s.deliveries != nil && !isEpisodic(tr) {
+			priorDeliveries = s.listPriorDeliveries(ctx, log, t.ID)
+		}
+
 		var dlErr error
-		delivered, dlErr = s.downloadAllPending(ctx, log, t, tr, check, creds)
+		var deliveredHashes []string
+		delivered, deliveredHashes, dlErr = s.downloadAllPending(ctx, log, t, tr, check, creds)
 		anySubmitted = len(delivered) > 0
 		if dlErr != nil {
 			// A failed download loop must NOT advance the persisted hash.
@@ -413,6 +429,13 @@ func (s *Scheduler) runCheck(ctx context.Context, log zerolog.Logger, t *domain.
 			s.notifyError(ctx, t, dlErr.Error())
 			s.recordChecked(true, true)
 			return
+		}
+
+		// The new release is fully delivered. Replace the previous version(s)
+		// when the topic opts in: remove the old torrent(s) from their client
+		// (deleting data per the topic's flag) so updates don't accumulate.
+		if anySubmitted && len(priorDeliveries) > 0 {
+			s.replacePrevious(ctx, log, t, priorDeliveries, deliveredHashes)
 		}
 	}
 
@@ -554,24 +577,25 @@ func (s *Scheduler) loadCredentials(ctx context.Context, checkCtx context.Contex
 // downloadAllPending drains every pending episode for a topic in one
 // tick. The loop runs at most cfg.SchedulerMaxEpisodesPerTick times.
 //
-// Returns (delivered, error) where delivered is the human label of every
-// payload successfully handed off to the client this tick (episodic:
-// "s05e01"; single-torrent: the topic display name). error is non-nil if
-// the loop terminated abnormally. The caller uses len(delivered) > 0 to
-// decide whether to record an "updated" timestamp and notify even when an
-// error occurred mid-loop.
+// Returns (delivered, deliveredHashes, error). delivered is the human label of
+// every payload successfully handed off to the client this tick (episodic:
+// "s05e01"; single-torrent: the topic display name); deliveredHashes is the
+// BitTorrent infohash of each of those payloads (used by the replace-on-update
+// policy to never remove a torrent it just delivered). error is non-nil if the
+// loop terminated abnormally. The caller uses len(delivered) > 0 to decide
+// whether to record an "updated" timestamp and notify even when an error
+// occurred mid-loop.
 //
 // Each iteration uses its own context derived from ctx with a
 // TrackerHTTPTimeout deadline so a slow download cannot starve the
 // remaining iterations. Persistence calls (MarkEpisodeDownloaded) use
 // the parent ctx so they survive a per-iteration deadline expiry.
-func (s *Scheduler) downloadAllPending(ctx context.Context, log zerolog.Logger, t *domain.Topic, tr registry.Tracker, check *domain.Check, creds *domain.TrackerCredential) ([]string, error) {
+func (s *Scheduler) downloadAllPending(ctx context.Context, log zerolog.Logger, t *domain.Topic, tr registry.Tracker, check *domain.Check, creds *domain.TrackerCredential) (delivered []string, deliveredHashes []string, err error) {
 	maxPerTick := s.cfg.SchedulerMaxEpisodesPerTick
 	if maxPerTick <= 0 {
 		maxPerTick = 25
 	}
 
-	var delivered []string
 	var i int
 	for i = 0; i < maxPerTick; i++ {
 		// The human label for the episode about to be downloaded. The
@@ -599,14 +623,14 @@ func (s *Scheduler) downloadAllPending(ctx context.Context, log zerolog.Logger, 
 				// episode) is a legitimate no-op, not a failure; returning
 				// nil lets runCheck advance the hash to the now-current
 				// state instead of erroring and stranding the topic.
-				return delivered, nil
+				return delivered, deliveredHashes, nil
 			}
-			return delivered, derr
+			return delivered, deliveredHashes, derr
 		}
 
 		if err := s.submitToClient(ctx, log, t, payload, label); err != nil {
 			metrics.SchedulerTopicChecksTotal.WithLabelValues(t.TrackerName, "submit_error").Inc()
-			return delivered, fmt.Errorf("submit: %w", err)
+			return delivered, deliveredHashes, fmt.Errorf("submit: %w", err)
 		}
 		// Record the human label of what was just delivered. Episodic
 		// trackers supply it via pending_human; single-torrent trackers fall
@@ -616,6 +640,12 @@ func (s *Scheduler) downloadAllPending(ctx context.Context, log zerolog.Logger, 
 		} else {
 			delivered = append(delivered, t.DisplayName)
 		}
+		// Track the delivered infohash so the replace-on-update policy never
+		// removes a torrent it just (re)added — covers the edge where a tracker
+		// bumps its opaque check hash while the torrent (infohash) is unchanged.
+		if ih, herr := infohash.FromPayload(payload.MagnetURI, payload.TorrentFile); herr == nil && ih != "" {
+			deliveredHashes = append(deliveredHashes, ih)
+		}
 
 		// Mark this episode downloaded. Use the parent ctx (not the
 		// per-iteration one) so persistence survives even if the
@@ -623,16 +653,16 @@ func (s *Scheduler) downloadAllPending(ctx context.Context, log zerolog.Logger, 
 		pending := extra.StringSlice(check.Extra, "pending_episodes")
 		if len(pending) == 0 {
 			// Single-payload plugin (most trackers) — done.
-			return delivered, nil
+			return delivered, deliveredHashes, nil
 		}
 		if err := s.markDownloaded(ctx, t, pending[0]); err != nil {
-			return delivered, fmt.Errorf("persist downloaded: %w", err)
+			return delivered, deliveredHashes, fmt.Errorf("persist downloaded: %w", err)
 		}
 		log.Info().Str("packed", pending[0]).Msg("marked episode downloaded")
 
 		// Derive remaining locally; no second tr.Check call needed.
 		if len(pending) <= 1 {
-			return delivered, nil
+			return delivered, deliveredHashes, nil
 		}
 		check.Extra["pending_episodes"] = pending[1:]
 		// Keep the human labels aligned with the packed list as we consume.
@@ -647,7 +677,7 @@ func (s *Scheduler) downloadAllPending(ctx context.Context, log zerolog.Logger, 
 		log.Warn().Int("max_per_tick", maxPerTick).Msg("scheduler hit per-tick episode cap")
 		metrics.SchedulerEpisodesPerTickCappedTotal.WithLabelValues(t.TrackerName).Inc()
 	}
-	return delivered, nil
+	return delivered, deliveredHashes, nil
 }
 
 // markDownloaded persists the fact that one packed episode id was
@@ -745,6 +775,124 @@ func (s *Scheduler) recordDelivery(ctx context.Context, log zerolog.Logger, t *d
 	}); err != nil {
 		log.Warn().Err(err).Msg("record delivery failed")
 	}
+}
+
+// isEpisodic reports whether a tracker delivers per-episode (currently only
+// LostFilm). The "replace previous version" policy (issue #101) is unsafe for
+// such trackers: each new infohash is an additional episode, not a replacement,
+// so removing the prior deliveries would delete sibling episodes.
+func isEpisodic(tr registry.Tracker) bool {
+	wef, ok := tr.(registry.WithEpisodeFilter)
+	return ok && wef.SupportsEpisodeFilter()
+}
+
+// listPriorDeliveries returns the topic's current deliveries (best-effort).
+// A lookup failure logs and yields nil so replace-on-update degrades to the
+// historical "keep all versions" behaviour rather than failing the check.
+func (s *Scheduler) listPriorDeliveries(ctx context.Context, log zerolog.Logger, topicID uuid.UUID) []*domain.TopicDelivery {
+	prior, err := s.deliveries.ListForTopic(ctx, topicID)
+	if err != nil {
+		log.Warn().Err(err).Msg("replace-on-update: list prior deliveries failed")
+		return nil
+	}
+	return prior
+}
+
+// replacePrevious removes a topic's previously delivered torrents (the
+// pre-update snapshot) from the clients that hold them, optionally deleting
+// their on-disk data, then prunes the now-stale delivery rows. This is the
+// "replace previous version" policy (issue #101) for single-release topics so
+// updated releases don't accumulate duplicate downloads and fill the disk.
+//
+// Best-effort / fail-open throughout: the new release was already delivered
+// successfully, so every failure here is logged and metered but never affects
+// the check result. Each prior delivery is removed from the client it was
+// actually sent to (grouped by client_id), which may differ from the topic's
+// current client if the user reassigned it.
+func (s *Scheduler) replacePrevious(ctx context.Context, log zerolog.Logger, t *domain.Topic, prior []*domain.TopicDelivery, keepHashes []string) {
+	// Never remove a torrent that was just (re)delivered this tick: if a tracker
+	// bumped its opaque check hash while the torrent itself is unchanged, the
+	// "previous" snapshot would contain the current infohash. Infohashes are
+	// stored lowercase hex; compare case-insensitively to be safe.
+	keep := make(map[string]struct{}, len(keepHashes))
+	for _, h := range keepHashes {
+		keep[strings.ToLower(h)] = struct{}{}
+	}
+	byClient := map[uuid.UUID][]string{}
+	for _, d := range prior {
+		if d.ClientID == nil {
+			// Orphan row with no client (legacy/edge — recordDelivery always
+			// sets one): we can't address a client to remove it, so leave it.
+			continue
+		}
+		if _, ok := keep[strings.ToLower(d.Infohash)]; ok {
+			continue // still the current delivery — never remove it
+		}
+		byClient[*d.ClientID] = append(byClient[*d.ClientID], d.Infohash)
+	}
+
+	var removed []string
+	for clientID, hashes := range byClient {
+		if s.removeFromClient(ctx, log, t, clientID, hashes) {
+			removed = append(removed, hashes...)
+		}
+	}
+	if len(removed) == 0 {
+		return
+	}
+	if _, err := s.deliveries.DeleteByInfohashes(ctx, t.ID, removed); err != nil {
+		log.Warn().Err(err).Msg("replace-on-update: prune delivery rows failed")
+	}
+	log.Info().
+		Int("removed", len(removed)).
+		Bool("delete_data", t.ReplaceDeleteData).
+		Msg("replaced previous version")
+}
+
+// removeFromClient removes the given infohashes from one client. Returns true
+// only when the client confirmed the removal, so the caller knows it is safe to
+// drop the corresponding delivery rows. A client that can't remove (no
+// WithRemoval capability — e.g. downloadfolder) is logged and skipped, leaving
+// the old torrent in place rather than orphaning its delivery record.
+func (s *Scheduler) removeFromClient(ctx context.Context, log zerolog.Logger, t *domain.Topic, clientID uuid.UUID, hashes []string) bool {
+	cfg, err := s.clients.GetByID(ctx, clientID, t.UserID)
+	if err != nil {
+		log.Warn().Err(err).Msg("replace-on-update: load client failed")
+		return false
+	}
+	// The metric counts torrents (not calls) uniformly across every result
+	// label, matching its Help text; n is the number of torrents this call
+	// would have removed.
+	n := float64(len(hashes))
+	plugin := s.lookupClient(cfg.ClientName)
+	if plugin == nil {
+		log.Warn().Str("client", cfg.ClientName).
+			Msg("replace-on-update: client plugin not installed; keeping previous version")
+		metrics.SchedulerReplacedPreviousTotal.WithLabelValues(cfg.ClientName, "no_plugin").Add(n)
+		return false
+	}
+	remover, ok := plugin.(registry.WithRemoval)
+	if !ok {
+		log.Warn().Str("client", cfg.ClientName).
+			Msg("replace-on-update: client cannot remove torrents; keeping previous version")
+		metrics.SchedulerReplacedPreviousTotal.WithLabelValues(cfg.ClientName, "unsupported").Add(n)
+		return false
+	}
+	rawConfig, err := s.master.Decrypt(cfg.ConfigEnc, cfg.ConfigNonce)
+	if err != nil {
+		log.Warn().Err(err).Msg("replace-on-update: decrypt client config failed")
+		metrics.SchedulerReplacedPreviousTotal.WithLabelValues(cfg.ClientName, "error").Add(n)
+		return false
+	}
+	rctx, cancel := context.WithTimeout(ctx, s.cfg.TrackerHTTPTimeout)
+	defer cancel()
+	if err := remover.Remove(rctx, rawConfig, hashes, t.ReplaceDeleteData); err != nil {
+		log.Warn().Err(err).Msg("replace-on-update: remove from client failed")
+		metrics.SchedulerReplacedPreviousTotal.WithLabelValues(cfg.ClientName, "error").Add(n)
+		return false
+	}
+	metrics.SchedulerReplacedPreviousTotal.WithLabelValues(cfg.ClientName, "ok").Add(n)
+	return true
 }
 
 // transientRetryDelay is how soon a topic is re-checked after a transient

@@ -18,6 +18,7 @@ import (
 	"net/http/cookiejar"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -50,10 +51,12 @@ type session struct {
 	expiresAt time.Time
 }
 
-// Compile-time guarantee the plugin reports live status and lists categories.
+// Compile-time guarantee the plugin reports live status, lists categories, and
+// can remove torrents.
 var (
 	_ registry.WithStatus     = (*plugin)(nil)
 	_ registry.WithCategories = (*plugin)(nil)
+	_ registry.WithRemoval    = (*plugin)(nil)
 )
 
 func init() {
@@ -326,6 +329,43 @@ func (p *plugin) Categories(ctx context.Context, rawConfig []byte) ([]string, er
 		return strings.ToLower(names[i]) < strings.ToLower(names[j])
 	})
 	return names, nil
+}
+
+// Remove implements registry.WithRemoval. It calls /api/v2/torrents/delete
+// with the pipe-joined hashes and deleteFiles=true|false. qBittorrent silently
+// ignores hashes it no longer knows, so the call is idempotent.
+func (p *plugin) Remove(ctx context.Context, rawConfig []byte, hashes []string, deleteData bool) error {
+	if len(hashes) == 0 {
+		return nil
+	}
+	var cfg Config
+	if err := json.Unmarshal(rawConfig, &cfg); err != nil {
+		return fmt.Errorf("bad config: %w", err)
+	}
+	s, err := p.session(ctx, cfg)
+	if err != nil {
+		return err
+	}
+	form := url.Values{
+		"hashes":      {strings.Join(hashes, "|")},
+		"deleteFiles": {strconv.FormatBool(deleteData)},
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		strings.TrimRight(cfg.URL, "/")+"/api/v2/torrents/delete", strings.NewReader(form.Encode()))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("remove torrent: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("qbit remove status %d: %s", resp.StatusCode, strings.TrimSpace(string(b)))
+	}
+	return nil
 }
 
 // qbitState maps a qBittorrent native state string to the normalised

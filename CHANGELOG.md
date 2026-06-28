@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- feat(topics): replace the previous version on update instead of stacking
+  duplicate torrents (issue #101). A per-topic "Replace previous version on
+  update" toggle (with an optional "delete old files from disk" sub-option, on
+  by default) makes the scheduler remove the previously delivered torrent from
+  its download client when a single-release topic is updated. Implemented for
+  qBittorrent, Transmission, Deluge and µTorrent via a new `WithRemoval` client
+  capability. Default is unchanged (keep all versions); per-episode trackers are
+  never affected.
+
 ## [1.8.1] - 2026-06-28
 
 ### Fixed

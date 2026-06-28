@@ -43,8 +43,11 @@ type plugin struct {
 	client   *http.Client
 }
 
-// Compile-time guarantee the plugin reports live status.
-var _ registry.WithStatus = (*plugin)(nil)
+// Compile-time guarantee the plugin reports live status and can remove torrents.
+var (
+	_ registry.WithStatus  = (*plugin)(nil)
+	_ registry.WithRemoval = (*plugin)(nil)
+)
 
 func init() {
 	registry.RegisterClient(&plugin{
@@ -111,6 +114,34 @@ func (p *plugin) Add(ctx context.Context, rawConfig []byte, payload *domain.Payl
 	// Transmission returns "result":"success" or an error string
 	if result, _ := resp["result"].(string); result != "success" {
 		return fmt.Errorf("transmission rejected torrent: %v", result)
+	}
+	return nil
+}
+
+// Remove implements registry.WithRemoval. It calls torrent-remove with the
+// requested infohashes as ids and delete-local-data set per deleteData.
+// Transmission ignores ids it no longer knows, so the call is idempotent.
+func (p *plugin) Remove(ctx context.Context, rawConfig []byte, hashes []string, deleteData bool) error {
+	if len(hashes) == 0 {
+		return nil
+	}
+	var c Config
+	if err := json.Unmarshal(rawConfig, &c); err != nil {
+		return fmt.Errorf("bad config: %w", err)
+	}
+	ids := make([]any, len(hashes))
+	for i, h := range hashes {
+		ids[i] = h
+	}
+	resp, err := p.do(ctx, c, "torrent-remove", map[string]any{
+		"ids":               ids,
+		"delete-local-data": deleteData,
+	})
+	if err != nil {
+		return err
+	}
+	if result, _ := resp["result"].(string); result != "success" {
+		return fmt.Errorf("transmission rejected remove: %v", result)
 	}
 	return nil
 }

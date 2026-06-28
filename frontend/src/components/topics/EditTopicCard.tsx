@@ -29,6 +29,8 @@ function initialFrom(topic: Topic): TopicFormValues {
     notifierId: topic.NotifierID ?? "",
     downloadDir: topic.DownloadDir ?? "",
     category: topic.Category ?? "",
+    replaceOnUpdate: topic.ReplaceOnUpdate ?? false,
+    replaceDeleteData: topic.ReplaceDeleteData ?? true,
   };
 }
 
@@ -49,6 +51,8 @@ export function EditTopicCard({ topic, onClose, onSaved }: EditTopicCardProps) {
         // matching the always-overwrite semantics.
         download_dir: v.downloadDir,
         category: v.category,
+        replace_on_update: v.replaceOnUpdate,
+        replace_delete_data: v.replaceDeleteData,
         quality: v.quality || undefined,
         start_season: v.startSeason ? parseInt(v.startSeason, 10) : undefined,
         start_episode: v.startEpisode ? parseInt(v.startEpisode, 10) : undefined,

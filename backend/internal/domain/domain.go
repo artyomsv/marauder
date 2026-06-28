@@ -80,15 +80,25 @@ type Topic struct {
 	NotifierID               *uuid.UUID
 	DownloadDir              string
 	Category                 string
-	Extra                    map[string]any
-	LastHash                 string
-	LastCheckedAt            *time.Time
-	LastUpdatedAt            *time.Time
-	NextCheckAt              time.Time
-	CheckIntervalSec         int
-	ConsecutiveErrors        int
-	Status                   TopicStatus
-	LastError                string
+	// ReplaceOnUpdate enables the "replace previous version" delivery policy
+	// (issue #101): when a single-release topic gets a new infohash, the
+	// scheduler removes the previously delivered torrent from its client
+	// instead of leaving updated releases to accumulate duplicate downloads.
+	// ReplaceDeleteData additionally deletes the old torrent's files from disk.
+	// Defaults are (false, true) — opt-in, but delete data once enabled. The
+	// policy only applies to single-release topics; per-episode trackers keep
+	// every episode (see scheduler.isEpisodic).
+	ReplaceOnUpdate   bool
+	ReplaceDeleteData bool
+	Extra             map[string]any
+	LastHash          string
+	LastCheckedAt     *time.Time
+	LastUpdatedAt     *time.Time
+	NextCheckAt       time.Time
+	CheckIntervalSec  int
+	ConsecutiveErrors int
+	Status            TopicStatus
+	LastError         string
 	// LastErrorCode is a stable, machine-readable classification of
 	// LastError (timeout / unreachable / auth / parse / plugin_missing /
 	// unknown) so the UI can render a localised, user-friendly message

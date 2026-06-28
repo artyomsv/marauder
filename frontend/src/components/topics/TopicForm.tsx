@@ -49,6 +49,10 @@ export interface TopicFormValues {
   notifierId: string;
   downloadDir: string;
   category: string;
+  // Replace-on-update policy (issue #101). replaceDeleteData only applies when
+  // replaceOnUpdate is on.
+  replaceOnUpdate: boolean;
+  replaceDeleteData: boolean;
 }
 
 interface TopicFormProps {
@@ -195,6 +199,8 @@ export function TopicForm({
     notifierId: initial.notifierId,
     downloadDir: initial.downloadDir,
     category: initial.category,
+    replaceOnUpdate: initial.replaceOnUpdate,
+    replaceDeleteData: initial.replaceDeleteData,
   });
 
   // The category combobox suggests the categories of whichever client will
@@ -225,6 +231,8 @@ export function TopicForm({
       notifierId: delivery.notifierId,
       downloadDir: delivery.downloadDir,
       category: delivery.category,
+      replaceOnUpdate: delivery.replaceOnUpdate,
+      replaceDeleteData: delivery.replaceDeleteData,
     });
   };
 
@@ -391,6 +399,36 @@ export function TopicForm({
           onChange={(v) => setDelivery((d) => ({ ...d, category: v }))}
           suggestions={categorySuggestions}
         />
+      </div>
+
+      <div className="space-y-2 rounded-md border border-border/60 bg-muted/20 p-3">
+        <label className="flex items-center gap-2 text-sm font-medium text-foreground">
+          <input
+            type="checkbox"
+            checked={delivery.replaceOnUpdate}
+            onChange={(e) =>
+              setDelivery((d) => ({ ...d, replaceOnUpdate: e.target.checked }))
+            }
+          />
+          <span>Replace previous version on update</span>
+        </label>
+        <p className="text-xs text-muted-foreground">
+          When a new release is detected, remove the previously downloaded torrent
+          from the client instead of keeping every version. Best for single
+          releases (movies, repacked seasons) — not per-episode shows.
+        </p>
+        {delivery.replaceOnUpdate && (
+          <label className="flex items-center gap-2 pt-1 text-sm">
+            <input
+              type="checkbox"
+              checked={delivery.replaceDeleteData}
+              onChange={(e) =>
+                setDelivery((d) => ({ ...d, replaceDeleteData: e.target.checked }))
+              }
+            />
+            <span>Also delete the old files from disk</span>
+          </label>
+        )}
       </div>
 
       {error && (
