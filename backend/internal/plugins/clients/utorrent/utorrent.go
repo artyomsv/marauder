@@ -55,6 +55,9 @@ type session struct {
 	expiresAt time.Time
 }
 
+// Compile-time guarantee the plugin can remove torrents.
+var _ registry.WithRemoval = (*plugin)(nil)
+
 func init() {
 	registry.RegisterClient(&plugin{sessions: map[string]*session{}})
 }
@@ -142,6 +145,47 @@ func (p *plugin) Add(ctx context.Context, raw []byte, payload *domain.Payload, o
 	default:
 		return errors.New("empty payload")
 	}
+}
+
+// Remove implements registry.WithRemoval. µTorrent exposes two actions:
+// `remove` (drop the torrent, keep files) and `removedata` (drop the torrent
+// and delete its files). The hash query parameter is repeated once per torrent
+// and µTorrent reports infohashes in uppercase, so we upper-case ours to match.
+func (p *plugin) Remove(ctx context.Context, raw []byte, hashes []string, deleteData bool) error {
+	if len(hashes) == 0 {
+		return nil
+	}
+	var c Config
+	if err := json.Unmarshal(raw, &c); err != nil {
+		return fmt.Errorf("bad config: %w", err)
+	}
+	s, err := p.session(ctx, c)
+	if err != nil {
+		return err
+	}
+	action := "remove"
+	if deleteData {
+		action = "removedata"
+	}
+	q := url.Values{"token": {s.token}, "action": {action}}
+	for _, h := range hashes {
+		q.Add("hash", strings.ToUpper(h))
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		strings.TrimRight(c.URL, "/")+"/gui/?"+q.Encode(), nil)
+	if err != nil {
+		return err
+	}
+	req.SetBasicAuth(c.Username, c.Password)
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("utorrent %s status %d", action, resp.StatusCode)
+	}
+	return nil
 }
 
 var tokenRe = regexp.MustCompile(`<div id=['"]token['"][^>]*>([^<]+)</div>`)

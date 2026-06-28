@@ -213,17 +213,19 @@ func topicRow(id, userID uuid.UUID, now time.Time) []any {
 		(*time.Time)(nil), (*time.Time)(nil), now,
 		3600, 0, "active",
 		"", "", now, now, // last_error, last_error_code, created_at, updated_at
-		false, // display_name_is_placeholder
+		false,       // display_name_is_placeholder
+		false, true, // replace_on_update, replace_delete_data
 	}
 }
 
-// topicColumnsAll mirrors the header slice for pgxmock.NewRows (23 cols).
+// topicColumnsAll mirrors the header slice for pgxmock.NewRows (25 cols).
 var topicColumnsAll = []string{
 	"id", "user_id", "tracker_name", "url", "display_name", "image_url", "client_id", "notifier_id",
 	"download_dir", "category", "extra", "last_hash",
 	"last_checked_at", "last_updated_at", "next_check_at",
 	"check_interval_sec", "consecutive_errors", "status",
 	"last_error", "last_error_code", "created_at", "updated_at", "display_name_is_placeholder",
+	"replace_on_update", "replace_delete_data",
 }
 
 // TestTopics_ScanTopic_MalformedExtra drives GetByID through a mocked
@@ -249,7 +251,8 @@ func TestTopics_ScanTopic_MalformedExtra(t *testing.T) {
 		(*time.Time)(nil), (*time.Time)(nil), now,
 		3600, 0, "active",
 		"", "", now, now, // last_error, last_error_code, created_at, updated_at
-		false, // display_name_is_placeholder
+		false,       // display_name_is_placeholder
+		false, true, // replace_on_update, replace_delete_data
 	)
 
 	mock.ExpectQuery(`SELECT .* FROM topics WHERE id = \$1`).
@@ -354,22 +357,24 @@ func TestTopics_Create_RoundTripsCategory(t *testing.T) {
 			"movies",          // category
 			pgxmock.AnyArg(),  // extra (JSON)
 			3600, pgxmock.AnyArg(), "active",
-			false, // display_name_is_placeholder
+			false,       // display_name_is_placeholder
+			false, true, // replace_on_update, replace_delete_data
 		).
 		WillReturnRows(rows)
 
 	in := &domain.Topic{
-		UserID:           userID,
-		TrackerName:      "faketracker",
-		URL:              "https://example.invalid/t/1",
-		DisplayName:      "My Topic",
-		ClientID:         nil,
-		DownloadDir:      "",
-		Category:         "movies",
-		Extra:            map[string]any{"quality": "1080p"},
-		CheckIntervalSec: 3600,
-		NextCheckAt:      now,
-		Status:           domain.TopicStatusActive,
+		UserID:            userID,
+		TrackerName:       "faketracker",
+		URL:               "https://example.invalid/t/1",
+		DisplayName:       "My Topic",
+		ClientID:          nil,
+		DownloadDir:       "",
+		Category:          "movies",
+		ReplaceDeleteData: true,
+		Extra:             map[string]any{"quality": "1080p"},
+		CheckIntervalSec:  3600,
+		NextCheckAt:       now,
+		Status:            domain.TopicStatusActive,
 	}
 
 	got, err := repo.Create(context.Background(), in)
@@ -412,11 +417,13 @@ func TestTopics_Update_HappyPath(t *testing.T) {
 			"",                // $6 download_dir
 			"series",          // $7 category
 			pgxmock.AnyArg(),  // $8 extra (JSON)
+			true,              // $9 replace_on_update
+			false,             // $10 replace_delete_data
 		).
 		WillReturnRows(rows)
 
 	extra := map[string]any{"quality": "720p", "start_season": 2}
-	got, err := r.Update(context.Background(), id, userID, "Updated Name", nil, nil, "", "series", extra)
+	got, err := r.Update(context.Background(), id, userID, "Updated Name", nil, nil, "", "series", true, false, extra)
 	if err != nil {
 		t.Fatalf("Update: unexpected error: %v", err)
 	}
@@ -438,10 +445,10 @@ func TestTopics_Update_NotFound(t *testing.T) {
 	userID := uuid.New()
 
 	mock.ExpectQuery(`UPDATE topics SET`).
-		WithArgs(id, userID, pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
+		WithArgs(id, userID, pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
 		WillReturnError(pgx.ErrNoRows)
 
-	_, err := r.Update(context.Background(), id, userID, "X", nil, nil, "", "", map[string]any{})
+	_, err := r.Update(context.Background(), id, userID, "X", nil, nil, "", "", false, true, map[string]any{})
 	if !errors.Is(err, ErrNotFound) {
 		t.Fatalf("Update: want ErrNotFound, got %v", err)
 	}
@@ -458,10 +465,10 @@ func TestTopics_Update_DBError(t *testing.T) {
 	dbErr := errors.New("connection reset")
 
 	mock.ExpectQuery(`UPDATE topics SET`).
-		WithArgs(id, userID, pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
+		WithArgs(id, userID, pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
 		WillReturnError(dbErr)
 
-	_, err := r.Update(context.Background(), id, userID, "X", nil, nil, "", "", map[string]any{})
+	_, err := r.Update(context.Background(), id, userID, "X", nil, nil, "", "", false, true, map[string]any{})
 	if err == nil {
 		t.Fatal("Update: want error, got nil")
 	}
@@ -495,7 +502,8 @@ func TestTopics_Create_RoundTripsNotifierID(t *testing.T) {
 			"", "",
 			pgxmock.AnyArg(),
 			3600, pgxmock.AnyArg(), "active",
-			false, // display_name_is_placeholder
+			false,        // display_name_is_placeholder
+			false, false, // replace_on_update, replace_delete_data (unset on this raw topic)
 		).
 		WillReturnRows(rows)
 

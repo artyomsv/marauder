@@ -46,6 +46,40 @@ func TestDeliveries_Record_InsertsNew(t *testing.T) {
 	}
 }
 
+func TestDeliveries_DeleteByInfohashes_EmptyIsNoOp(t *testing.T) {
+	repo, mock := newMockDeliveries(t)
+	t.Cleanup(func() { assertExpectationsMet(t, mock) })
+
+	// No SQL expectation registered: an empty set must short-circuit without
+	// touching the pool.
+	n, err := repo.DeleteByInfohashes(context.Background(), uuid.New(), nil)
+	if err != nil {
+		t.Fatalf("DeleteByInfohashes(empty): %v", err)
+	}
+	if n != 0 {
+		t.Errorf("rows = %d, want 0 for an empty set", n)
+	}
+}
+
+func TestDeliveries_DeleteByInfohashes_DeletesRows(t *testing.T) {
+	repo, mock := newMockDeliveries(t)
+	t.Cleanup(func() { assertExpectationsMet(t, mock) })
+
+	topicID := uuid.New()
+	hashes := []string{"aaa", "bbb"}
+	mock.ExpectExec(`DELETE FROM topic_deliveries WHERE topic_id = \$1 AND infohash = ANY\(\$2\)`).
+		WithArgs(topicID, hashes).
+		WillReturnResult(pgconn.NewCommandTag("DELETE 2"))
+
+	n, err := repo.DeleteByInfohashes(context.Background(), topicID, hashes)
+	if err != nil {
+		t.Fatalf("DeleteByInfohashes: %v", err)
+	}
+	if n != 2 {
+		t.Errorf("rows = %d, want 2", n)
+	}
+}
+
 func TestDeliveries_Record_DuplicateIsNoOp(t *testing.T) {
 	repo, mock := newMockDeliveries(t)
 	t.Cleanup(func() { assertExpectationsMet(t, mock) })

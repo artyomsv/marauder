@@ -75,14 +75,16 @@ type fakeTopicStore struct {
 	created *domain.Topic
 
 	// Captured Update arguments.
-	updateCalled      bool
-	updateDisplayName string
-	updateClientID    *uuid.UUID
-	updateNotifierID  *uuid.UUID
-	updateDownloadDir string
-	updateCategory    string
-	updateExtra       map[string]any
-	updateReturn      *domain.Topic
+	updateCalled            bool
+	updateDisplayName       string
+	updateClientID          *uuid.UUID
+	updateNotifierID        *uuid.UUID
+	updateDownloadDir       string
+	updateCategory          string
+	updateReplaceOnUpdate   bool
+	updateReplaceDeleteData bool
+	updateExtra             map[string]any
+	updateReturn            *domain.Topic
 }
 
 func (s *fakeTopicStore) Create(_ context.Context, t *domain.Topic) (*domain.Topic, error) {
@@ -101,13 +103,15 @@ func (s *fakeTopicStore) Delete(context.Context, uuid.UUID, uuid.UUID) error { r
 func (s *fakeTopicStore) UpdateStatus(context.Context, uuid.UUID, uuid.UUID, domain.TopicStatus) error {
 	return nil
 }
-func (s *fakeTopicStore) Update(_ context.Context, _, _ uuid.UUID, displayName string, clientID, notifierID *uuid.UUID, downloadDir, category string, extra map[string]any) (*domain.Topic, error) {
+func (s *fakeTopicStore) Update(_ context.Context, _, _ uuid.UUID, displayName string, clientID, notifierID *uuid.UUID, downloadDir, category string, replaceOnUpdate, replaceDeleteData bool, extra map[string]any) (*domain.Topic, error) {
 	s.updateCalled = true
 	s.updateDisplayName = displayName
 	s.updateClientID = clientID
 	s.updateNotifierID = notifierID
 	s.updateDownloadDir = downloadDir
 	s.updateCategory = category
+	s.updateReplaceOnUpdate = replaceOnUpdate
+	s.updateReplaceDeleteData = replaceDeleteData
 	s.updateExtra = extra
 	if s.updateReturn != nil {
 		return s.updateReturn, nil
@@ -178,6 +182,66 @@ func TestTopicsUpdate_PreservesDownloadedEpisodes(t *testing.T) {
 	}
 }
 
+func TestTopicsUpdate_PassesReplaceFlags(t *testing.T) {
+	store := &fakeTopicStore{
+		getByID: &domain.Topic{
+			ID:          uuid.New(),
+			TrackerName: fakeQualityTrackerName,
+			DisplayName: "Show",
+		},
+	}
+	h := &Topics{Topics: store, BaseURL: "http://test"}
+
+	body := updateTopicReq{
+		DisplayName:       "Show",
+		ReplaceOnUpdate:   boolPtr(true),
+		ReplaceDeleteData: boolPtr(false),
+	}
+	w := httptest.NewRecorder()
+	req := withURLParam(authedReq(t, uuid.New(), body), "id", uuid.New().String())
+	h.Update(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("status %d, want 200; body %s", w.Code, w.Body.String())
+	}
+	if !store.updateReplaceOnUpdate {
+		t.Error("replace_on_update should be passed through as true")
+	}
+	if store.updateReplaceDeleteData {
+		t.Error("replace_delete_data should be passed through as false")
+	}
+}
+
+func TestTopicsUpdate_OmittedReplaceFlags_PreserveExisting(t *testing.T) {
+	// An update body without the replace fields must keep the topic's stored
+	// values (pointer semantics), not reset them to false.
+	store := &fakeTopicStore{
+		getByID: &domain.Topic{
+			ID:                uuid.New(),
+			TrackerName:       fakeQualityTrackerName,
+			DisplayName:       "Show",
+			ReplaceOnUpdate:   true,
+			ReplaceDeleteData: false,
+		},
+	}
+	h := &Topics{Topics: store, BaseURL: "http://test"}
+
+	body := updateTopicReq{DisplayName: "Show"} // no replace fields
+	w := httptest.NewRecorder()
+	req := withURLParam(authedReq(t, uuid.New(), body), "id", uuid.New().String())
+	h.Update(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("status %d, want 200; body %s", w.Code, w.Body.String())
+	}
+	if !store.updateReplaceOnUpdate {
+		t.Error("omitted replace_on_update should preserve the stored true")
+	}
+	if store.updateReplaceDeleteData {
+		t.Error("omitted replace_delete_data should preserve the stored false")
+	}
+}
+
 // TestTopicsUpdate_NotFound: GetByID returns (nil, nil) => 404.
 func TestTopicsUpdate_NotFound(t *testing.T) {
 	store := &fakeTopicStore{getByID: nil}
@@ -219,7 +283,8 @@ func TestTopicsUpdate_BadQuality(t *testing.T) {
 	}
 }
 
-func intPtr(n int) *int { return &n }
+func intPtr(n int) *int    { return &n }
+func boolPtr(b bool) *bool { return &b }
 
 // TestTopics_Create_EmitsTopicAdded asserts that a successful POST /topics
 // calls h.Emit exactly once with events.TopicAdded.

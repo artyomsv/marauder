@@ -91,6 +91,18 @@ var (
 		},
 		[]string{"tracker"},
 	)
+
+	// SchedulerReplacedPreviousTotal counts how many previously delivered
+	// torrents the "replace previous version" policy (issue #101) removed from
+	// a client when a single-release topic was updated, partitioned by client
+	// and result ("ok" / "error").
+	SchedulerReplacedPreviousTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "marauder_scheduler_replaced_previous_total",
+			Help: "Number of previously delivered torrents removed by the replace-on-update policy, partitioned by client and result.",
+		},
+		[]string{"client", "result"},
+	)
 )
 
 // Notifier metrics --------------------------------------------------------

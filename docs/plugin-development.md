@@ -219,6 +219,37 @@ type Client interface {
 - **`Add`** receives the **decrypted** raw config bytes from the
   scheduler — you don't see ciphertext.
 
+#### Optional client capabilities
+
+Implement any of these in addition to `Client`:
+
+```go
+// Report live download status by infohash (powers the topic status view and
+// the download-completion watcher). qBittorrent + Transmission implement it.
+type WithStatus interface {
+    Client
+    Status(ctx context.Context, rawConfig []byte, hashes []string) ([]TorrentStatus, error)
+}
+
+// List the categories the client already knows (AddTopic category combobox).
+// qBittorrent-only today.
+type WithCategories interface {
+    Client
+    Categories(ctx context.Context, rawConfig []byte) ([]string, error)
+}
+
+// Remove torrents by infohash, optionally deleting their on-disk data. Powers
+// the per-topic "replace previous version on update" policy (issue #101): when
+// a single-release topic is updated, the scheduler removes the previously
+// delivered torrent so updates don't accumulate. Implemented by every
+// networked client (qBittorrent, Transmission, Deluge, µTorrent). Make it
+// idempotent — silently ignore hashes the client no longer knows.
+type WithRemoval interface {
+    Client
+    Remove(ctx context.Context, rawConfig []byte, hashes []string, deleteData bool) error
+}
+```
+
 ### Testing a client plugin
 
 Stand up a tiny `net/http/httptest.Server` that mimics the real

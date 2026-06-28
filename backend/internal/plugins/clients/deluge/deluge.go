@@ -54,6 +54,9 @@ type session struct {
 	idSeq  int
 }
 
+// Compile-time guarantee the plugin can remove torrents.
+var _ registry.WithRemoval = (*plugin)(nil)
+
 func init() {
 	registry.RegisterClient(&plugin{sessions: map[string]*session{}})
 }
@@ -118,6 +121,56 @@ func (p *plugin) Add(ctx context.Context, rawConfig []byte, payload *domain.Payl
 		return errors.New("empty payload")
 	}
 	return err
+}
+
+// Remove implements registry.WithRemoval. Deluge keys torrents by their
+// infohash (the torrent_id), so each hash maps directly to a
+// core.remove_torrent(torrent_id, remove_data) call.
+//
+// Unlike qBittorrent/Transmission (which silently ignore unknown hashes),
+// Deluge raises InvalidTorrentError for a torrent_id it no longer knows, which
+// callOnce surfaces as an RPC error. We treat that as already-removed so the
+// removal is idempotent. We also attempt every hash rather than aborting on the
+// first failure, so one stale hash can't strand the rest of the batch; only a
+// genuine RPC/transport error on at least one hash makes Remove fail.
+func (p *plugin) Remove(ctx context.Context, rawConfig []byte, hashes []string, deleteData bool) error {
+	if len(hashes) == 0 {
+		return nil
+	}
+	var c Config
+	if err := json.Unmarshal(rawConfig, &c); err != nil {
+		return fmt.Errorf("bad config: %w", err)
+	}
+	s, err := p.session(ctx, c)
+	if err != nil {
+		return err
+	}
+	var failed []string
+	for _, h := range hashes {
+		if _, err := p.call(ctx, s, c.URL, "core.remove_torrent", []any{h, deleteData}); err != nil {
+			if isUnknownTorrent(err) {
+				continue // already gone — idempotent removal
+			}
+			failed = append(failed, h)
+		}
+	}
+	if len(failed) > 0 {
+		return fmt.Errorf("deluge: failed to remove %d torrent(s): %v", len(failed), failed)
+	}
+	return nil
+}
+
+// isUnknownTorrent reports whether a Deluge RPC error means the torrent_id is no
+// longer in the session (InvalidTorrentError). Such an error is benign for a
+// removal — the desired end state (torrent gone) already holds.
+func isUnknownTorrent(err error) bool {
+	if err == nil {
+		return false
+	}
+	m := strings.ToLower(err.Error())
+	return strings.Contains(m, "invalidtorrent") ||
+		strings.Contains(m, "not in session") ||
+		strings.Contains(m, "unknown torrent")
 }
 
 func (p *plugin) session(ctx context.Context, c Config) (*session, error) {

@@ -30,7 +30,7 @@ type topicStore interface {
 	ListForUser(ctx context.Context, userID uuid.UUID) ([]*domain.Topic, error)
 	Delete(ctx context.Context, id, userID uuid.UUID) error
 	UpdateStatus(ctx context.Context, id, userID uuid.UUID, status domain.TopicStatus) error
-	Update(ctx context.Context, id, userID uuid.UUID, displayName string, clientID, notifierID *uuid.UUID, downloadDir, category string, extra map[string]any) (*domain.Topic, error)
+	Update(ctx context.Context, id, userID uuid.UUID, displayName string, clientID, notifierID *uuid.UUID, downloadDir, category string, replaceOnUpdate, replaceDeleteData bool, extra map[string]any) (*domain.Topic, error)
 }
 
 // deliveriesStore is the consumer seam over *repo.Deliveries for the
@@ -81,6 +81,12 @@ type createTopicReq struct {
 	DownloadDir      string     `json:"download_dir"`
 	Category         string     `json:"category"`
 	CheckIntervalSec int        `json:"check_interval_sec"`
+	// ReplaceOnUpdate opts the topic into the "replace previous version" policy
+	// (issue #101); ReplaceDeleteData (default true when omitted) also deletes
+	// the old torrent's data. Pointer so an omitted flag falls back to the
+	// delete-data default rather than false.
+	ReplaceOnUpdate   bool  `json:"replace_on_update,omitempty"`
+	ReplaceDeleteData *bool `json:"replace_delete_data,omitempty"`
 	// Optional capability-driven fields. The frontend learns whether a
 	// tracker accepts these via GET /api/v1/trackers/match. Plugins read
 	// them from topic.Extra in Check / Download.
@@ -132,17 +138,19 @@ func (h *Topics) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	res, err := topics.BuildAndCreate(r.Context(), h.Topics, topics.CreateInput{
-		UserID:           uid,
-		URL:              req.URL,
-		DisplayName:      req.DisplayName,
-		ClientID:         req.ClientID,
-		NotifierID:       req.NotifierID,
-		DownloadDir:      req.DownloadDir,
-		Category:         req.Category,
-		CheckIntervalSec: req.CheckIntervalSec,
-		Quality:          req.Quality,
-		StartSeason:      req.StartSeason,
-		StartEpisode:     req.StartEpisode,
+		UserID:            uid,
+		URL:               req.URL,
+		DisplayName:       req.DisplayName,
+		ClientID:          req.ClientID,
+		NotifierID:        req.NotifierID,
+		DownloadDir:       req.DownloadDir,
+		Category:          req.Category,
+		CheckIntervalSec:  req.CheckIntervalSec,
+		ReplaceOnUpdate:   req.ReplaceOnUpdate,
+		ReplaceDeleteData: req.ReplaceDeleteData,
+		Quality:           req.Quality,
+		StartSeason:       req.StartSeason,
+		StartEpisode:      req.StartEpisode,
 	})
 	if err != nil {
 		problem.Write(w, r, h.BaseURL, topicCreateProblem(err, req.URL))
@@ -192,14 +200,18 @@ func topicCreateProblem(err error, url string) error {
 }
 
 type updateTopicReq struct {
-	DisplayName  string     `json:"display_name"`
-	ClientID     *uuid.UUID `json:"client_id"`
-	NotifierID   *uuid.UUID `json:"notifier_id"`
-	DownloadDir  string     `json:"download_dir"`
-	Category     string     `json:"category"`
-	Quality      string     `json:"quality,omitempty"`
-	StartSeason  *int       `json:"start_season,omitempty"`
-	StartEpisode *int       `json:"start_episode,omitempty"`
+	DisplayName string     `json:"display_name"`
+	ClientID    *uuid.UUID `json:"client_id"`
+	NotifierID  *uuid.UUID `json:"notifier_id"`
+	DownloadDir string     `json:"download_dir"`
+	Category    string     `json:"category"`
+	// ReplaceOnUpdate / ReplaceDeleteData are pointers so an omitted field
+	// preserves the topic's current value (issue #101).
+	ReplaceOnUpdate   *bool  `json:"replace_on_update,omitempty"`
+	ReplaceDeleteData *bool  `json:"replace_delete_data,omitempty"`
+	Quality           string `json:"quality,omitempty"`
+	StartSeason       *int   `json:"start_season,omitempty"`
+	StartEpisode      *int   `json:"start_episode,omitempty"`
 }
 
 // Update handles PUT /topics/{id}.
@@ -271,7 +283,17 @@ func (h *Topics) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	updated, uerr := h.Topics.Update(r.Context(), id, uid, req.DisplayName, req.ClientID, req.NotifierID, req.DownloadDir, req.Category, extra)
+	// Pointer flags preserve the topic's current value when omitted.
+	replaceOnUpdate := existing.ReplaceOnUpdate
+	if req.ReplaceOnUpdate != nil {
+		replaceOnUpdate = *req.ReplaceOnUpdate
+	}
+	replaceDeleteData := existing.ReplaceDeleteData
+	if req.ReplaceDeleteData != nil {
+		replaceDeleteData = *req.ReplaceDeleteData
+	}
+
+	updated, uerr := h.Topics.Update(r.Context(), id, uid, req.DisplayName, req.ClientID, req.NotifierID, req.DownloadDir, req.Category, replaceOnUpdate, replaceDeleteData, extra)
 	if uerr != nil {
 		if errors.Is(uerr, repo.ErrNotFound) {
 			problem.Write(w, r, h.BaseURL, problem.ErrNotFound("topic not found"))
