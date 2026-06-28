@@ -23,7 +23,9 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH:-amd64} \
 # has reliable chromium packages and Alpine's chromium is hit-or-miss.
 FROM debian:13-slim
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get update \
+ && apt-get upgrade -y --no-install-recommends \
+ && apt-get install -y --no-install-recommends \
     chromium \
     ca-certificates \
     fonts-liberation \
