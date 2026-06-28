@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.8.1] - 2026-06-28
+
+### Fixed
+
+- fix(security): close tracker SSRF, fix CI security-scan blind spots
+
 ## [1.8.0] - 2026-06-28
 
 ### Added
