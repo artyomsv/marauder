@@ -35,7 +35,6 @@ func TestE2E(t *testing.T) {
 			testHost := strings.TrimPrefix(srv.URL, "http://")
 			p := &plugin{
 				sessions: forumcommon.New(),
-				domain:   "nnmclub.to",
 				transport: &e2etest.HostRewriteTransport{
 					From: "nnmclub.to",
 					To:   testHost,
