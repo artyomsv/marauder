@@ -154,7 +154,35 @@ func (p *plugin) ResolveMetadata(ctx context.Context, rawURL string, creds *doma
 	return meta, nil
 }
 
+// allowHost parses target and confirms it is an http(s) URL pointing at one
+// of NNM-Club's hosts (the configured domain, plus the known nnmclub.to /
+// nnmclub.me family and their www. forms). It is the SSRF barrier for every
+// outbound fetch: a topic URL is user-controlled, so anything off-site is
+// refused before a request is built.
+func (p *plugin) allowHost(target string) error {
+	u, err := url.Parse(strings.TrimSpace(target))
+	if err != nil {
+		return fmt.Errorf("nnm-club: invalid URL: %w", err)
+	}
+	if u.Scheme != "https" && u.Scheme != "http" {
+		return fmt.Errorf("nnm-club: refusing URL scheme %q", u.Scheme)
+	}
+	host := strings.ToLower(u.Host)
+	bare := strings.TrimPrefix(host, "www.")
+	if bare == p.domain || bare == "nnmclub.to" || bare == "nnmclub.me" {
+		return nil
+	}
+	return fmt.Errorf("nnm-club: refusing to fetch off-site host %q", u.Host)
+}
+
 func (p *plugin) fetch(ctx context.Context, target string, creds *domain.TrackerCredential) ([]byte, error) {
+	// SSRF guard: `target` is a user-supplied topic URL, so confine the
+	// outbound request to NNM-Club's own hosts before dialing. Without this
+	// an attacker could register a topic whose URL points at an internal
+	// service (cloud metadata, localhost) and have the backend fetch it.
+	if err := p.allowHost(target); err != nil {
+		return nil, err
+	}
 	key := pluginName + ":nocreds"
 	if creds != nil {
 		key = forumcommon.SessionKey(pluginName, creds.UserID.String())

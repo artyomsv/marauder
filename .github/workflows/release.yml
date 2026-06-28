@@ -102,6 +102,10 @@ jobs:
             BUILD_DATE=${{ steps.bm.outputs.date }}
           provenance: true
           sbom: true
+          # cfsolver builds fresh so each release ships a chromium with the
+          # latest security patches rather than a frozen GHA cache layer that
+          # would silently go stale over weeks between releases.
+          no-cache: ${{ matrix.image.name == 'cfsolver' }}
           cache-from: type=gha,scope=release-${{ matrix.image.name }}
           cache-to: type=gha,scope=release-${{ matrix.image.name }},mode=max
 

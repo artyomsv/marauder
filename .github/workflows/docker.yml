@@ -50,6 +50,10 @@ jobs:
           push: false
           load: true
           tags: ${{ matrix.image.tag }}
+          # cfsolver builds fresh: its chromium layer carries security patches
+          # that a frozen GHA cache would mask, making the Trivy scan report
+          # phantom CVEs from a stale layer that the shipped image doesn't have.
+          no-cache: ${{ matrix.image.name == 'cfsolver' }}
           cache-from: type=gha,scope=${{ matrix.image.name }}
           cache-to: type=gha,scope=${{ matrix.image.name }},mode=max
 

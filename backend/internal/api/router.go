@@ -60,7 +60,7 @@ func NewRouter(d Deps) http.Handler {
 	r.Use(middleware.Logger(d.Log))
 	r.Use(middleware.Recover(d.Log, d.Cfg.PublicBaseURL))
 	r.Use(middleware.SecurityHeaders)
-	r.Use(chimw.RealIP)
+	r.Use(middleware.RealIP)
 	r.Use(chimw.Heartbeat("/health"))
 
 	// CORS
