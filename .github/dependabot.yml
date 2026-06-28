@@ -66,10 +66,6 @@ updates:
       frontend-minor-patch:
         patterns: ["*"]
         update-types: [minor, patch]
-      frontend-types:
-        patterns:
-          - "@types/*"
-        update-types: [major, minor, patch]
     ignore:
       # Pin to React 19 / Vite 8 / Tailwind 4 majors per the
       # tech-stack lock in CHANGELOG. Dependabot will still propose
