@@ -153,6 +153,9 @@ const en: Record<string, string> = {
   "settings.sonarr.defaultClient": "Default download client",
   "settings.sonarr.defaultClientNone": "None (use account default)",
   "settings.sonarr.defaultCategory": "Default category",
+  "settings.sonarr.categoryHintSuggestions":
+    "Pick an existing client category, or choose Custom to enter your own.",
+  "settings.sonarr.categoryHintFree": "Nested under the client's base download folder.",
   "settings.sonarr.defaultDownloadDir": "Default download directory",
   "settings.sonarr.updateExisting": "Realign existing topics to these defaults",
   "settings.sonarr.lastSeen": "Last poll",

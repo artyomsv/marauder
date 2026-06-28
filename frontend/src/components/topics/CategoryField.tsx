@@ -10,6 +10,11 @@ interface CategoryFieldProps {
   // Existing client categories to offer (empty when the client has none or
   // doesn't support listing them — the field then behaves as plain free-text).
   suggestions: string[];
+  // Optional label/help overrides so a localized form can supply its own copy.
+  // Default to the topic form's English strings when omitted.
+  label?: string;
+  helpWithSuggestions?: string;
+  helpWithoutSuggestions?: string;
 }
 
 // Sentinel option value for "I want to type my own category".
@@ -22,7 +27,14 @@ const CUSTOM = "__custom__";
 // segment in Marauder, so a brand-new value is always allowed — the dropdown
 // only makes the common case obvious, it never constrains the input. When the
 // client exposes no categories, the field is a plain free-text input.
-export function CategoryField({ value, onChange, suggestions }: CategoryFieldProps) {
+export function CategoryField({
+  value,
+  onChange,
+  suggestions,
+  label = "Category (optional)",
+  helpWithSuggestions = "Pick an existing client category, or choose Custom to enter your own.",
+  helpWithoutSuggestions = "Nested under the client's base download folder.",
+}: CategoryFieldProps) {
   const selectId = useId();
   const inputId = useId();
   const hasSuggestions = suggestions.length > 0;
@@ -34,14 +46,12 @@ export function CategoryField({ value, onChange, suggestions }: CategoryFieldPro
   const valueInList = suggestions.includes(value);
   const showCustomInput = custom || (!!value && !valueInList);
 
-  const helpText = hasSuggestions
-    ? "Pick an existing client category, or choose Custom to enter your own."
-    : "Nested under the client's base download folder.";
+  const helpText = hasSuggestions ? helpWithSuggestions : helpWithoutSuggestions;
 
   if (!hasSuggestions) {
     return (
       <div className="space-y-1.5">
-        <Label htmlFor={inputId}>Category (optional)</Label>
+        <Label htmlFor={inputId}>{label}</Label>
         <Input
           id={inputId}
           value={value}
@@ -67,7 +77,7 @@ export function CategoryField({ value, onChange, suggestions }: CategoryFieldPro
 
   return (
     <div className="space-y-1.5">
-      <Label htmlFor={selectId}>Category (optional)</Label>
+      <Label htmlFor={selectId}>{label}</Label>
       <select
         id={selectId}
         value={showCustomInput ? CUSTOM : value}

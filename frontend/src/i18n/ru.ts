@@ -155,6 +155,9 @@ const ru: Record<string, string> = {
   "settings.sonarr.defaultClient": "Клиент загрузки по умолчанию",
   "settings.sonarr.defaultClientNone": "Нет (использовать клиент по умолчанию)",
   "settings.sonarr.defaultCategory": "Категория по умолчанию",
+  "settings.sonarr.categoryHintSuggestions":
+    "Выберите существующую категорию клиента или «Своя…», чтобы ввести свою.",
+  "settings.sonarr.categoryHintFree": "Вкладывается в базовую папку загрузки клиента.",
   "settings.sonarr.defaultDownloadDir": "Папка загрузки по умолчанию",
   "settings.sonarr.updateExisting": "Приводить существующие темы к этим значениям",
   "settings.sonarr.lastSeen": "Последний опрос",

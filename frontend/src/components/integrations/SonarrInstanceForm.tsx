@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -8,6 +8,8 @@ import { QK } from "@/lib/queryKeys";
 import { useT } from "@/i18n";
 import { cn } from "@/lib/utils";
 import { Field, CheckRow } from "@/components/integrations/SonarrFields";
+import { CategoryField } from "@/components/topics/CategoryField";
+import { SELECT_CLASS } from "@/components/topics/SeasonEpisodePicker";
 import {
   EMPTY_FORM,
   errText,
@@ -49,6 +51,19 @@ export function SonarrInstanceForm({ initial, clients, trackers, onDone, onCance
   const keyStored = initial?.api_key_set ?? false;
   const [message, setMessage] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
 
+  // When a default client is chosen, offer its existing categories (qBittorrent)
+  // so the user can pick one or type a new one — same as the AddTopic form.
+  const categoriesQuery = useQuery({
+    queryKey: QK.clientCategories(form.default_client_id),
+    queryFn: () => api.getClientCategories(form.default_client_id),
+    enabled: !!form.default_client_id,
+    staleTime: 60_000,
+    retry: false,
+  });
+  const categorySuggestions = categoriesQuery.data?.supported
+    ? categoriesQuery.data.categories
+    : [];
+
   const update = <K extends keyof SonarrForm>(k: K, v: SonarrForm[K]) =>
     setForm((f) => ({ ...f, [k]: v }));
 
@@ -86,83 +101,86 @@ export function SonarrInstanceForm({ initial, clients, trackers, onDone, onCance
 
   return (
     <div className="space-y-5">
-      <Field label={t("settings.sonarr.name")}>
-        <Input
-          value={form.name}
-          placeholder={t("settings.sonarr.namePlaceholder")}
-          onChange={(e) => update("name", e.target.value)}
-        />
-      </Field>
-
       <CheckRow
         label={t("settings.sonarr.enabled")}
         checked={form.enabled}
         onChange={(v) => update("enabled", v)}
       />
 
-      <Field label={t("settings.sonarr.url")}>
-        <Input
-          value={form.sonarr_url}
-          placeholder="http://sonarr:8989"
-          onChange={(e) => update("sonarr_url", e.target.value)}
-        />
-      </Field>
+      <div className="grid gap-4 sm:grid-cols-2">
+        <Field label={t("settings.sonarr.name")}>
+          <Input
+            value={form.name}
+            placeholder={t("settings.sonarr.namePlaceholder")}
+            onChange={(e) => update("name", e.target.value)}
+          />
+        </Field>
 
-      <Field label={t("settings.sonarr.apiKey")}>
-        <Input
-          type="password"
-          value={form.api_key}
-          placeholder={keyStored ? t("settings.sonarr.apiKeySet") : ""}
-          onChange={(e) => update("api_key", e.target.value)}
-          autoComplete="off"
-        />
-      </Field>
+        <Field label={t("settings.sonarr.url")}>
+          <Input
+            value={form.sonarr_url}
+            placeholder="http://sonarr:8989"
+            onChange={(e) => update("sonarr_url", e.target.value)}
+          />
+        </Field>
 
-      <Field label={t("settings.sonarr.pollInterval")}>
-        <Input
-          type="number"
-          min={60}
-          value={form.poll_interval_sec}
-          onChange={(e) => update("poll_interval_sec", Number(e.target.value))}
-        />
-      </Field>
+        <Field label={t("settings.sonarr.apiKey")}>
+          <Input
+            type="password"
+            value={form.api_key}
+            placeholder={keyStored ? t("settings.sonarr.apiKeySet") : ""}
+            onChange={(e) => update("api_key", e.target.value)}
+            autoComplete="off"
+          />
+        </Field>
 
-      <Field label={t("settings.sonarr.defaultClient")}>
-        <select
-          value={form.default_client_id}
-          onChange={(e) => update("default_client_id", e.target.value)}
-          className="h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm"
-        >
-          <option value="">{t("settings.sonarr.defaultClientNone")}</option>
-          {clients.map((c) => (
-            <option key={c.id} value={c.id}>
-              {c.display_name}
-            </option>
-          ))}
-        </select>
-      </Field>
+        <Field label={t("settings.sonarr.pollInterval")}>
+          <Input
+            type="number"
+            min={60}
+            value={form.poll_interval_sec}
+            onChange={(e) => update("poll_interval_sec", Number(e.target.value))}
+          />
+        </Field>
 
-      <Field label={t("settings.sonarr.defaultCategory")}>
-        <Input
+        <Field label={t("settings.sonarr.defaultClient")}>
+          <select
+            value={form.default_client_id}
+            onChange={(e) => update("default_client_id", e.target.value)}
+            className={SELECT_CLASS}
+          >
+            <option value="">{t("settings.sonarr.defaultClientNone")}</option>
+            {clients.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.display_name}
+              </option>
+            ))}
+          </select>
+        </Field>
+
+        <CategoryField
           value={form.default_category}
-          placeholder="tv-sonarr"
-          onChange={(e) => update("default_category", e.target.value)}
+          onChange={(v) => update("default_category", v)}
+          suggestions={categorySuggestions}
+          label={t("settings.sonarr.defaultCategory")}
+          helpWithSuggestions={t("settings.sonarr.categoryHintSuggestions")}
+          helpWithoutSuggestions={t("settings.sonarr.categoryHintFree")}
         />
-      </Field>
 
-      <Field label={t("settings.sonarr.defaultDownloadDir")}>
-        <Input
-          value={form.default_download_dir}
-          onChange={(e) => update("default_download_dir", e.target.value)}
-        />
-      </Field>
+        <Field label={t("settings.sonarr.defaultDownloadDir")}>
+          <Input
+            value={form.default_download_dir}
+            onChange={(e) => update("default_download_dir", e.target.value)}
+          />
+        </Field>
+      </div>
 
       <div className="space-y-2">
         <span className="text-sm font-medium text-foreground">
           {t("settings.sonarr.allowedTrackers")}
         </span>
         <p className="text-xs text-muted-foreground">{t("settings.sonarr.allowedTrackersHint")}</p>
-        <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-3">
+        <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-3 lg:grid-cols-4">
           {trackers.map((tr) => (
             <label key={tr.name} className="flex items-center gap-2 text-sm">
               <input

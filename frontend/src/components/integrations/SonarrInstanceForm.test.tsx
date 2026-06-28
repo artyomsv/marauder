@@ -13,6 +13,7 @@ vi.mock("@/lib/api", async () => {
       updateSonarrInstance: vi.fn(),
       testSonarr: vi.fn(),
       testSonarrInstance: vi.fn(),
+      getClientCategories: vi.fn(),
     },
   };
 });
@@ -25,6 +26,24 @@ const mockApi = api as unknown as {
   updateSonarrInstance: ReturnType<typeof vi.fn>;
   testSonarr: ReturnType<typeof vi.fn>;
   testSonarrInstance: ReturnType<typeof vi.fn>;
+  getClientCategories: ReturnType<typeof vi.fn>;
+};
+
+const editableInstance = {
+  id: "i1",
+  name: "TV",
+  enabled: true,
+  sonarr_url: "http://sonarr:8989",
+  api_key_set: true,
+  poll_interval_sec: 900,
+  allowed_trackers: [] as string[],
+  default_client_id: "c1",
+  default_category: "",
+  default_download_dir: "",
+  update_existing: false,
+  last_seen_at: null,
+  created_at: "2026-06-27T00:00:00Z",
+  updated_at: "2026-06-27T00:00:00Z",
 };
 
 function wrap(node: ReactNode) {
@@ -51,6 +70,28 @@ describe("SonarrInstanceForm", () => {
     expect(body.name).toBe("Anime");
     expect(body.api_key).toBe("");
     await waitFor(() => expect(onDone).toHaveBeenCalled());
+  });
+
+  it("offers the selected client's categories in the category combobox", async () => {
+    mockApi.getClientCategories.mockResolvedValue({
+      supported: true,
+      categories: ["tv-sonarr", "sonarr-e2e"],
+    });
+    const clients = [{ id: "c1", display_name: "qBittorrent" }];
+    wrap(
+      <SonarrInstanceForm
+        initial={editableInstance}
+        clients={clients}
+        trackers={[]}
+        onDone={() => {}}
+        onCancel={() => {}}
+      />,
+    );
+
+    // The combobox renders the fetched categories as options once loaded.
+    expect(await screen.findByRole("option", { name: "tv-sonarr" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "sonarr-e2e" })).toBeInTheDocument();
+    expect(mockApi.getClientCategories).toHaveBeenCalledWith("c1");
   });
 
   it("tests an existing instance's stored key when the key field is blank", async () => {
