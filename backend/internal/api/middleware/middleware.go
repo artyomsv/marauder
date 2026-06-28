@@ -3,6 +3,7 @@ package middleware
 
 import (
 	"context"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -38,6 +39,49 @@ func RequestID(next http.Handler) http.Handler {
 		ctx := context.WithValue(r.Context(), CtxRequestID, id)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+// realIPHeaders is the precedence order for proxy-supplied client IPs,
+// matching chi's historical middleware.RealIP.
+var realIPHeaders = []string{"True-Client-IP", "X-Real-IP", "X-Forwarded-For"}
+
+// RealIP rewrites r.RemoteAddr from the reverse proxy's forwarded-for headers
+// so downstream logging/audit see the originating client IP rather than the
+// gateway's.
+//
+// This replaces chi's middleware.RealIP, deprecated in chi v5.3 as spoofable
+// (GHSA-3fxj-6jh8-hvhx) because it trusts these headers unconditionally. The
+// same trust assumption is safe here: Marauder's backend is never exposed
+// directly — only the nginx gateway is published, and it sets X-Forwarded-For
+// — and RemoteAddr feeds only the access log and audit display, never an
+// authn/authz or rate-limit decision. It is deliberately not used as a
+// security control.
+func RealIP(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if ip := realIP(r); ip != "" {
+			r.RemoteAddr = ip
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func realIP(r *http.Request) string {
+	for _, h := range realIPHeaders {
+		v := r.Header.Get(h)
+		if v == "" {
+			continue
+		}
+		if h == "X-Forwarded-For" {
+			if i := strings.Index(v, ","); i >= 0 {
+				v = v[:i]
+			}
+		}
+		v = strings.TrimSpace(v)
+		if net.ParseIP(v) != nil {
+			return v
+		}
+	}
+	return ""
 }
 
 // Logger wraps every request in a zerolog event AND records HTTP
