@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -41,18 +42,33 @@ func init() { registry.RegisterTracker(pollerFakeTracker{}) }
 
 // --- fakes ---------------------------------------------------------------
 
-type fakeSettings struct {
-	cfg    domain.SonarrConfig
-	cursor *time.Time
+// fakeInstances mimics repo.SonarrInstances: ListEnabled filters by Enabled and
+// applies the per-instance cursor; UpdateCursor records the advance.
+type fakeInstances struct {
+	list    []domain.SonarrInstance
+	cursors map[uuid.UUID]*time.Time
 }
 
-func (f *fakeSettings) GetSonarr(context.Context, *crypto.MasterKey) (*domain.SonarrConfig, error) {
-	c := f.cfg
-	c.LastSeenAt = f.cursor
-	return &c, nil
+func (f *fakeInstances) ListEnabled(context.Context, *crypto.MasterKey) ([]domain.SonarrInstance, error) {
+	out := []domain.SonarrInstance{}
+	for _, inst := range f.list {
+		if !inst.Enabled {
+			continue
+		}
+		if c, ok := f.cursors[inst.ID]; ok {
+			inst.LastSeenAt = c
+		}
+		out = append(out, inst)
+	}
+	return out, nil
 }
-func (f *fakeSettings) UpdateSonarrCursor(_ context.Context, t time.Time) error {
-	f.cursor = &t
+
+func (f *fakeInstances) UpdateCursor(_ context.Context, id uuid.UUID, t time.Time) error {
+	if f.cursors == nil {
+		f.cursors = map[uuid.UUID]*time.Time{}
+	}
+	tt := t
+	f.cursors[id] = &tt
 	return nil
 }
 
@@ -99,18 +115,28 @@ func historyServer(records []HistoryRecord) *httptest.Server {
 	}))
 }
 
-func baseConfig(serverURL string, owner uuid.UUID) domain.SonarrConfig {
-	return domain.SonarrConfig{
-		Enabled: true, URL: serverURL, APIKey: "k",
+// countingHistoryServer also reports how many times it was hit.
+func countingHistoryServer(records []HistoryRecord) (*httptest.Server, *int32) {
+	var hits int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		atomic.AddInt32(&hits, 1)
+		_ = json.NewEncoder(w).Encode(records)
+	}))
+	return srv, &hits
+}
+
+func baseInstance(serverURL string, owner uuid.UUID) domain.SonarrInstance {
+	return domain.SonarrInstance{
+		ID: uuid.New(), Name: "TV", Enabled: true, URL: serverURL, APIKey: "k",
 		PollIntervalSec: 900, OwnerUserID: &owner, DefaultCategory: "tv-sonarr",
 	}
 }
 
-func newTestPoller(s settingsStore, a adminResolver, ts topicsStore) *Poller {
+func newTestPoller(s instancesStore, a adminResolver, ts topicsStore) *Poller {
 	return New(zerolog.Nop(), nil, s, a, ts, 5*time.Second)
 }
 
-// --- tests ---------------------------------------------------------------
+// --- single-instance behaviour (via pollOnce) ----------------------------
 
 func TestPoller_CreatesTopic(t *testing.T) {
 	srv := historyServer([]HistoryRecord{
@@ -120,10 +146,12 @@ func TestPoller_CreatesTopic(t *testing.T) {
 
 	owner := uuid.New()
 	past := time.Now().Add(-time.Hour).UTC()
-	s := &fakeSettings{cfg: baseConfig(srv.URL, owner), cursor: &past}
+	inst := baseInstance(srv.URL, owner)
+	inst.LastSeenAt = &past
+	fi := &fakeInstances{}
 	ts := &fakeTopics{}
 
-	newTestPoller(s, fakeAdmin{}, ts).pollOnce(context.Background())
+	newTestPoller(fi, fakeAdmin{}, ts).pollOnce(context.Background(), inst)
 
 	if len(ts.created) != 1 {
 		t.Fatalf("want 1 created, got %d", len(ts.created))
@@ -134,7 +162,7 @@ func TestPoller_CreatesTopic(t *testing.T) {
 	if ts.created[0].Extra["source"] != "sonarr" {
 		t.Errorf("topic should be tagged source=sonarr, got %v", ts.created[0].Extra["source"])
 	}
-	if s.cursor == nil || !s.cursor.After(past) {
+	if c := fi.cursors[inst.ID]; c == nil || !c.After(past) {
 		t.Errorf("cursor not advanced")
 	}
 }
@@ -150,10 +178,11 @@ func TestPoller_SeasonPackDedup(t *testing.T) {
 
 	owner := uuid.New()
 	past := now.Add(-time.Hour)
-	s := &fakeSettings{cfg: baseConfig(srv.URL, owner), cursor: &past}
+	inst := baseInstance(srv.URL, owner)
+	inst.LastSeenAt = &past
 	ts := &fakeTopics{}
 
-	newTestPoller(s, fakeAdmin{}, ts).pollOnce(context.Background())
+	newTestPoller(&fakeInstances{}, fakeAdmin{}, ts).pollOnce(context.Background(), inst)
 
 	if len(ts.created) != 1 {
 		t.Fatalf("season pack (3 records, 1 url) should create 1 topic, got %d", len(ts.created))
@@ -168,12 +197,13 @@ func TestPoller_DuplicateSkipped(t *testing.T) {
 
 	owner := uuid.New()
 	past := time.Now().Add(-time.Hour).UTC()
-	s := &fakeSettings{cfg: baseConfig(srv.URL, owner), cursor: &past}
+	inst := baseInstance(srv.URL, owner)
+	inst.LastSeenAt = &past
 	ts := &fakeTopics{byURL: map[string]*domain.Topic{
 		fakeURL: {ID: uuid.New(), URL: fakeURL, Category: "tv-sonarr"},
 	}}
 
-	newTestPoller(s, fakeAdmin{}, ts).pollOnce(context.Background())
+	newTestPoller(&fakeInstances{}, fakeAdmin{}, ts).pollOnce(context.Background(), inst)
 
 	if len(ts.created) != 0 || len(ts.updated) != 0 {
 		t.Errorf("existing topic must be left alone: created=%d updated=%d", len(ts.created), len(ts.updated))
@@ -188,15 +218,15 @@ func TestPoller_UpdateExistingRealigns(t *testing.T) {
 
 	owner := uuid.New()
 	past := time.Now().Add(-time.Hour).UTC()
-	cfg := baseConfig(srv.URL, owner)
-	cfg.UpdateExisting = true
-	cfg.DefaultCategory = "tv-sonarr"
-	s := &fakeSettings{cfg: cfg, cursor: &past}
+	inst := baseInstance(srv.URL, owner)
+	inst.LastSeenAt = &past
+	inst.UpdateExisting = true
+	inst.DefaultCategory = "tv-sonarr"
 	ts := &fakeTopics{byURL: map[string]*domain.Topic{
 		fakeURL: {ID: uuid.New(), URL: fakeURL, Category: "old-category"}, // differs
 	}}
 
-	newTestPoller(s, fakeAdmin{}, ts).pollOnce(context.Background())
+	newTestPoller(&fakeInstances{}, fakeAdmin{}, ts).pollOnce(context.Background(), inst)
 
 	if len(ts.updated) != 1 {
 		t.Errorf("want 1 realign update, got %d", len(ts.updated))
@@ -211,10 +241,11 @@ func TestPoller_NonMatchingURLIgnored(t *testing.T) {
 
 	owner := uuid.New()
 	past := time.Now().Add(-time.Hour).UTC()
-	s := &fakeSettings{cfg: baseConfig(srv.URL, owner), cursor: &past}
+	inst := baseInstance(srv.URL, owner)
+	inst.LastSeenAt = &past
 	ts := &fakeTopics{}
 
-	newTestPoller(s, fakeAdmin{}, ts).pollOnce(context.Background())
+	newTestPoller(&fakeInstances{}, fakeAdmin{}, ts).pollOnce(context.Background(), inst)
 
 	if len(ts.created) != 0 {
 		t.Errorf("unmatched URL must not create a topic, got %d", len(ts.created))
@@ -229,12 +260,12 @@ func TestPoller_DisallowedTrackerSkipped(t *testing.T) {
 
 	owner := uuid.New()
 	past := time.Now().Add(-time.Hour).UTC()
-	cfg := baseConfig(srv.URL, owner)
-	cfg.AllowedTrackers = []string{"some-other-tracker"}
-	s := &fakeSettings{cfg: cfg, cursor: &past}
+	inst := baseInstance(srv.URL, owner)
+	inst.LastSeenAt = &past
+	inst.AllowedTrackers = []string{"some-other-tracker"}
 	ts := &fakeTopics{}
 
-	newTestPoller(s, fakeAdmin{}, ts).pollOnce(context.Background())
+	newTestPoller(&fakeInstances{}, fakeAdmin{}, ts).pollOnce(context.Background(), inst)
 
 	if len(ts.created) != 0 {
 		t.Errorf("disallowed tracker must be skipped, got %d created", len(ts.created))
@@ -249,34 +280,18 @@ func TestPoller_FailOpenOnSonarrError(t *testing.T) {
 
 	owner := uuid.New()
 	past := time.Now().Add(-time.Hour).UTC()
-	s := &fakeSettings{cfg: baseConfig(srv.URL, owner), cursor: &past}
+	inst := baseInstance(srv.URL, owner)
+	inst.LastSeenAt = &past
+	fi := &fakeInstances{}
 	ts := &fakeTopics{}
 
-	newTestPoller(s, fakeAdmin{}, ts).pollOnce(context.Background())
+	newTestPoller(fi, fakeAdmin{}, ts).pollOnce(context.Background(), inst)
 
-	if s.cursor == nil || !s.cursor.Equal(past) {
+	if fi.cursors[inst.ID] != nil {
 		t.Errorf("cursor must NOT advance when Sonarr errors")
 	}
 	if len(ts.created) != 0 {
 		t.Errorf("no topics on Sonarr error")
-	}
-}
-
-func TestPoller_DisabledNoOp(t *testing.T) {
-	owner := uuid.New()
-	past := time.Now().Add(-time.Hour).UTC()
-	cfg := baseConfig("http://unused.invalid", owner)
-	cfg.Enabled = false
-	s := &fakeSettings{cfg: cfg, cursor: &past}
-	ts := &fakeTopics{}
-
-	newTestPoller(s, fakeAdmin{}, ts).pollOnce(context.Background())
-
-	if len(ts.created) != 0 {
-		t.Errorf("disabled poller must do nothing")
-	}
-	if !s.cursor.Equal(past) {
-		t.Errorf("disabled poller must not touch cursor")
 	}
 }
 
@@ -287,15 +302,130 @@ func TestPoller_FirstRunGoesForward(t *testing.T) {
 	defer srv.Close()
 
 	owner := uuid.New()
-	s := &fakeSettings{cfg: baseConfig(srv.URL, owner), cursor: nil} // no cursor yet
+	inst := baseInstance(srv.URL, owner)
+	inst.LastSeenAt = nil // no cursor yet
+	fi := &fakeInstances{}
 	ts := &fakeTopics{}
 
-	newTestPoller(s, fakeAdmin{}, ts).pollOnce(context.Background())
+	newTestPoller(fi, fakeAdmin{}, ts).pollOnce(context.Background(), inst)
 
 	if len(ts.created) != 0 {
 		t.Errorf("first run must go-forward (import nothing), got %d created", len(ts.created))
 	}
-	if s.cursor == nil {
+	if fi.cursors[inst.ID] == nil {
 		t.Errorf("first run must initialise the cursor")
+	}
+}
+
+// --- multi-instance behaviour (via tick) ---------------------------------
+
+func TestPoller_PollsEachEnabledInstanceWithOwnCursor(t *testing.T) {
+	now := time.Now().UTC()
+	srv := historyServer([]HistoryRecord{
+		{ID: 1, Date: now, Data: HistoryData{NzbInfoURL: fakeURL}},
+	})
+	defer srv.Close()
+
+	owner := uuid.New()
+	past := now.Add(-time.Hour)
+	tv := baseInstance(srv.URL, owner)
+	tv.Name = "TV"
+	anime := baseInstance(srv.URL, owner)
+	anime.Name = "Anime"
+	fi := &fakeInstances{
+		list:    []domain.SonarrInstance{tv, anime},
+		cursors: map[uuid.UUID]*time.Time{tv.ID: &past, anime.ID: &past},
+	}
+	ts := &fakeTopics{}
+
+	newTestPoller(fi, fakeAdmin{}, ts).tick(context.Background(), map[uuid.UUID]time.Time{})
+
+	if c := fi.cursors[tv.ID]; c == nil || !c.After(past) {
+		t.Errorf("TV cursor not advanced independently")
+	}
+	if c := fi.cursors[anime.ID]; c == nil || !c.After(past) {
+		t.Errorf("Anime cursor not advanced independently")
+	}
+}
+
+func TestPoller_SkipsDisabledInstance(t *testing.T) {
+	now := time.Now().UTC()
+	srv := historyServer([]HistoryRecord{
+		{ID: 1, Date: now, Data: HistoryData{NzbInfoURL: fakeURL}},
+	})
+	defer srv.Close()
+
+	owner := uuid.New()
+	past := now.Add(-time.Hour)
+	on := baseInstance(srv.URL, owner)
+	off := baseInstance(srv.URL, owner)
+	off.Enabled = false
+	fi := &fakeInstances{
+		list:    []domain.SonarrInstance{on, off},
+		cursors: map[uuid.UUID]*time.Time{on.ID: &past, off.ID: &past},
+	}
+	ts := &fakeTopics{}
+
+	newTestPoller(fi, fakeAdmin{}, ts).tick(context.Background(), map[uuid.UUID]time.Time{})
+
+	if c := fi.cursors[on.ID]; c == nil || !c.After(past) {
+		t.Errorf("enabled instance should have polled and advanced cursor")
+	}
+	if c := fi.cursors[off.ID]; c == nil || !c.Equal(past) {
+		t.Errorf("disabled instance cursor must be untouched")
+	}
+}
+
+func TestPoller_ReenabledInstancePollsImmediately(t *testing.T) {
+	now := time.Now().UTC()
+	srv, hits := countingHistoryServer([]HistoryRecord{
+		{ID: 1, Date: now, Data: HistoryData{NzbInfoURL: fakeURL}},
+	})
+	defer srv.Close()
+
+	owner := uuid.New()
+	past := now.Add(-time.Hour)
+	inst := baseInstance(srv.URL, owner) // 900s interval
+	fi := &fakeInstances{
+		list:    []domain.SonarrInstance{inst},
+		cursors: map[uuid.UUID]*time.Time{inst.ID: &past},
+	}
+	p := newTestPoller(fi, fakeAdmin{}, &fakeTopics{})
+
+	lastPolled := map[uuid.UUID]time.Time{}
+	p.tick(context.Background(), lastPolled) // enabled → polled (hit 1)
+	fi.list[0].Enabled = false
+	p.tick(context.Background(), lastPolled) // disabled → pruned from lastPolled
+	fi.list[0].Enabled = true
+	p.tick(context.Background(), lastPolled) // re-enabled → pruned, so polls now (hit 2)
+
+	if got := atomic.LoadInt32(hits); got != 2 {
+		t.Errorf("re-enabled instance must poll immediately (lastPolled pruned): got %d hits, want 2", got)
+	}
+}
+
+func TestPoller_PerInstanceIntervalDue(t *testing.T) {
+	now := time.Now().UTC()
+	srv, hits := countingHistoryServer([]HistoryRecord{
+		{ID: 1, Date: now, Data: HistoryData{NzbInfoURL: fakeURL}},
+	})
+	defer srv.Close()
+
+	owner := uuid.New()
+	past := now.Add(-time.Hour)
+	inst := baseInstance(srv.URL, owner) // 900s interval
+	fi := &fakeInstances{
+		list:    []domain.SonarrInstance{inst},
+		cursors: map[uuid.UUID]*time.Time{inst.ID: &past},
+	}
+	ts := &fakeTopics{}
+	p := newTestPoller(fi, fakeAdmin{}, ts)
+
+	lastPolled := map[uuid.UUID]time.Time{}
+	p.tick(context.Background(), lastPolled) // due (never polled) → 1 hit
+	p.tick(context.Background(), lastPolled) // within interval → skipped
+
+	if got := atomic.LoadInt32(hits); got != 1 {
+		t.Errorf("instance within its interval must not be re-polled: got %d hits, want 1", got)
 	}
 }

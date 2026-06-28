@@ -27,25 +27,25 @@ import (
 
 // Deps is the bag of dependencies handed to NewRouter.
 type Deps struct {
-	Cfg         *config.Config
-	Log         zerolog.Logger
-	Pool        *pgxpool.Pool
-	Manager     *auth.Manager
-	Master      *crypto.MasterKey
-	Users       *repo.Users
-	Topics      *repo.Topics
-	Clients     *repo.Clients
-	Notifiers   *repo.Notifiers
-	Creds       *repo.TrackerCredentials
-	Deliveries  *repo.Deliveries
-	TopicEvents *repo.TopicEvents
-	Settings    *repo.Settings
-	Audit       *repo.Audit
-	AuditLog    *audit.Logger
-	OIDC        *auth.OIDCProvider
-	Scheduler   *scheduler.Scheduler
-	Hub         *sse.Hub
-	Tickets     *sse.TicketStore
+	Cfg             *config.Config
+	Log             zerolog.Logger
+	Pool            *pgxpool.Pool
+	Manager         *auth.Manager
+	Master          *crypto.MasterKey
+	Users           *repo.Users
+	Topics          *repo.Topics
+	Clients         *repo.Clients
+	Notifiers       *repo.Notifiers
+	Creds           *repo.TrackerCredentials
+	Deliveries      *repo.Deliveries
+	TopicEvents     *repo.TopicEvents
+	SonarrInstances *repo.SonarrInstances
+	Audit           *repo.Audit
+	AuditLog        *audit.Logger
+	OIDC            *auth.OIDCProvider
+	Scheduler       *scheduler.Scheduler
+	Hub             *sse.Hub
+	Tickets         *sse.TicketStore
 	// Emit is the events.Bus.Emit hook wired to the topics handler so it can
 	// publish topic.added on create. Nil-safe: omitting it disables emission.
 	Emit func(ctx context.Context, ev events.Event)
@@ -120,12 +120,12 @@ func NewRouter(d Deps) http.Handler {
 	}
 	sysH := &handlers.System{BaseURL: d.Cfg.PublicBaseURL, Scheduler: d.Scheduler, Audit: d.Audit}
 	sonarrH := &handlers.Sonarr{
-		Settings: d.Settings,
-		Master:   d.Master,
-		Audit:    d.AuditLog,
-		Log:      d.Log,
-		Timeout:  10 * time.Second,
-		BaseURL:  d.Cfg.PublicBaseURL,
+		Instances: d.SonarrInstances,
+		Master:    d.Master,
+		Audit:     d.AuditLog,
+		Log:       d.Log,
+		Timeout:   10 * time.Second,
+		BaseURL:   d.Cfg.PublicBaseURL,
 	}
 	trackersH := &handlers.Trackers{BaseURL: d.Cfg.PublicBaseURL}
 	credsH := handlers.NewCredentials(d.Creds, d.Master, d.AuditLog, d.Cfg.PublicBaseURL)
@@ -203,8 +203,12 @@ func NewRouter(d Deps) http.Handler {
 			r.Group(func(r chi.Router) {
 				r.Use(middleware.RequireAdmin(d.Cfg.PublicBaseURL))
 				r.Get("/system/audit", sysH.AuditList)
-				r.Get("/system/sonarr", sonarrH.Get)
-				r.Put("/system/sonarr", sonarrH.Update)
+				r.Get("/system/sonarr/instances", sonarrH.List)
+				r.Post("/system/sonarr/instances", sonarrH.Create)
+				r.Get("/system/sonarr/instances/{id}", sonarrH.Get)
+				r.Put("/system/sonarr/instances/{id}", sonarrH.Update)
+				r.Delete("/system/sonarr/instances/{id}", sonarrH.Delete)
+				r.Post("/system/sonarr/instances/{id}/test", sonarrH.TestExisting)
 				r.Post("/system/sonarr/test", sonarrH.Test)
 			})
 		})

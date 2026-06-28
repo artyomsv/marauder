@@ -108,7 +108,7 @@ func run() error {
 	notifiersRepo := repo.NewNotifiers(pool)
 	credsRepo := repo.NewTrackerCredentials(pool)
 	deliveriesRepo := repo.NewDeliveries(pool)
-	settingsRepo := repo.NewSettings(pool)
+	sonarrInstancesRepo := repo.NewSonarrInstances(pool)
 	auditRepo := repo.NewAudit(pool)
 	auditLogger := audit.NewLogger(rootCtx, auditRepo, logger)
 
@@ -168,10 +168,10 @@ func run() error {
 		}
 	}
 
-	// Sonarr integration poller. Self-gates on the DB-stored config
-	// (settings.sonarr_enabled), so it's always started; it no-ops while
-	// disabled. See issue #86.
-	sonarrPoller := sonarr.New(logger, master, settingsRepo, users, topicsRepo, cfg.TrackerHTTPTimeout)
+	// Sonarr integration poller. Self-gates on the DB-stored instances
+	// (sonarr_instances.enabled), so it's always started; it no-ops while no
+	// instance is enabled. See issues #86, #92.
+	sonarrPoller := sonarr.New(logger, master, sonarrInstancesRepo, users, topicsRepo, cfg.TrackerHTTPTimeout)
 	go func() {
 		if err := sonarrPoller.Start(rootCtx); err != nil {
 			logger.Error().Err(err).Msg("sonarr poller exited with error")
@@ -180,26 +180,26 @@ func run() error {
 
 	// HTTP server
 	router := api.NewRouter(api.Deps{
-		Cfg:         cfg,
-		Log:         logger,
-		Pool:        pool,
-		Manager:     mgr,
-		Master:      master,
-		Users:       users,
-		Topics:      topicsRepo,
-		Clients:     clientsRepo,
-		Notifiers:   notifiersRepo,
-		Creds:       credsRepo,
-		Deliveries:  deliveriesRepo,
-		TopicEvents: topicEventsRepo,
-		Settings:    settingsRepo,
-		Audit:       auditRepo,
-		AuditLog:    auditLogger,
-		OIDC:        oidcProvider,
-		Scheduler:   sch,
-		Emit:        bus.Emit,
-		Hub:         hub,
-		Tickets:     tickets,
+		Cfg:             cfg,
+		Log:             logger,
+		Pool:            pool,
+		Manager:         mgr,
+		Master:          master,
+		Users:           users,
+		Topics:          topicsRepo,
+		Clients:         clientsRepo,
+		Notifiers:       notifiersRepo,
+		Creds:           credsRepo,
+		Deliveries:      deliveriesRepo,
+		TopicEvents:     topicEventsRepo,
+		SonarrInstances: sonarrInstancesRepo,
+		Audit:           auditRepo,
+		AuditLog:        auditLogger,
+		OIDC:            oidcProvider,
+		Scheduler:       sch,
+		Emit:            bus.Emit,
+		Hub:             hub,
+		Tickets:         tickets,
 	})
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
