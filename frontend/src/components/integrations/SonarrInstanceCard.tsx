@@ -74,7 +74,9 @@ export function SonarrInstanceCard({ instance, clients, trackers }: Props) {
 
   if (editing) {
     return (
-      <Card>
+      // Span both columns of the parent cards grid so the edit form gets the
+      // full width (its inner 2-column field grid needs the room).
+      <Card className="lg:col-span-2">
         <CardHeader>
           <CardTitle>{instance.name}</CardTitle>
         </CardHeader>
