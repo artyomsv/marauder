@@ -28,24 +28,21 @@ import (
 )
 
 const (
-	pluginName    = "nnmclub"
-	displayName   = "NNM-Club.to"
-	defaultDomain = "nnmclub.to"
-	userAgent     = "Marauder/0.3 (+https://marauder.cc)"
+	pluginName  = "nnmclub"
+	displayName = "NNM-Club.to"
+	userAgent   = "Marauder/0.3 (+https://marauder.cc)"
 )
 
 var urlPattern = regexp.MustCompile(`^https?://(?:www\.)?nnmclub\.(?:to|me)/forum/viewtopic\.php\?t=(\d+)`)
 
 type plugin struct {
 	sessions  *forumcommon.SessionStore
-	domain    string
 	transport http.RoundTripper
 }
 
 func init() {
 	registry.RegisterTracker(&plugin{
 		sessions: forumcommon.New(),
-		domain:   defaultDomain,
 	})
 }
 
@@ -167,12 +164,12 @@ func (p *plugin) fetch(ctx context.Context, target string, creds *domain.Tracker
 	if u.Scheme != "https" && u.Scheme != "http" {
 		return nil, fmt.Errorf("nnm-club: refusing URL scheme %q", u.Scheme)
 	}
-	allowed := p.domain
-	if i := strings.LastIndex(allowed, ":"); i >= 0 {
-		allowed = allowed[:i] // strip the port the httptest server appends
-	}
-	switch strings.TrimPrefix(strings.ToLower(u.Hostname()), "www.") {
-	case allowed, "nnmclub.to", "nnmclub.me":
+	// Allowlist the host against compile-time constants only (url.Parse has
+	// already lower-cased it). Checking u.Hostname() against literal hosts is
+	// the form CodeQL recognises as a request-forgery barrier, so the
+	// u.String() dialed below is treated as sanitised.
+	switch u.Hostname() {
+	case "nnmclub.to", "www.nnmclub.to", "nnmclub.me", "www.nnmclub.me":
 		// a permitted NNM-Club host — fall through and fetch
 	default:
 		return nil, fmt.Errorf("nnm-club: refusing to fetch off-site host %q", u.Hostname())

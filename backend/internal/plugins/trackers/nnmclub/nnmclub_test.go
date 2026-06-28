@@ -21,6 +21,10 @@ const fixtureViewtopicHTML = `<html><head>
 <a href="download.php?id=379398" rel="nofollow">Скачать</a>
 </body></html>`
 
+// testTopicURL is a real NNM-Club host so it passes the fetch() SSRF
+// allowlist; hostRewrite redirects the actual connection to the test server.
+const testTopicURL = "https://nnmclub.to/forum/viewtopic.php?t=42"
+
 func newTestPlugin(t *testing.T) *plugin {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -34,20 +38,19 @@ func newTestPlugin(t *testing.T) *plugin {
 	}))
 	t.Cleanup(srv.Close)
 
-	host := strings.TrimPrefix(srv.URL, "http://")
 	return &plugin{
 		sessions:  forumcommon.New(),
-		domain:    host,
-		transport: &schemeRewrite{},
+		transport: &hostRewrite{host: strings.TrimPrefix(srv.URL, "http://")},
 	}
 }
 
-type schemeRewrite struct{}
+// hostRewrite reroutes every request to the test server while leaving the
+// request's declared URL (a real nnmclub.to host) intact for the SSRF guard.
+type hostRewrite struct{ host string }
 
-func (s *schemeRewrite) RoundTrip(req *http.Request) (*http.Response, error) {
-	if req.URL.Scheme == "https" {
-		req.URL.Scheme = "http"
-	}
+func (h *hostRewrite) RoundTrip(req *http.Request) (*http.Response, error) {
+	req.URL.Scheme = "http"
+	req.URL.Host = h.host
 	return http.DefaultTransport.RoundTrip(req)
 }
 
@@ -87,7 +90,7 @@ func TestParse(t *testing.T) {
 
 func TestCheck(t *testing.T) {
 	p := newTestPlugin(t)
-	topic := &domain.Topic{URL: "https://" + p.domain + "/forum/viewtopic.php?t=42"}
+	topic := &domain.Topic{URL: testTopicURL}
 	check, err := p.Check(context.Background(), topic, nil)
 	if err != nil {
 		t.Fatalf("Check: %v", err)
@@ -105,7 +108,7 @@ func TestCheck(t *testing.T) {
 
 func TestDownload(t *testing.T) {
 	p := newTestPlugin(t)
-	topic := &domain.Topic{URL: "https://" + p.domain + "/forum/viewtopic.php?t=42"}
+	topic := &domain.Topic{URL: testTopicURL}
 	payload, err := p.Download(context.Background(), topic, nil, nil)
 	if err != nil {
 		t.Fatalf("Download: %v", err)
@@ -123,9 +126,8 @@ func TestDownload(t *testing.T) {
 
 func TestFetch_RejectsOffSiteHost(t *testing.T) {
 	// The SSRF guard must refuse any topic URL that is not an NNM-Club host,
-	// before a request is ever dialed. defaultDomain so no test server is
-	// needed — these are rejected up front.
-	p := &plugin{sessions: forumcommon.New(), domain: defaultDomain}
+	// before a request is ever dialed — so no test server is needed here.
+	p := &plugin{sessions: forumcommon.New()}
 	bad := []string{
 		"http://169.254.169.254/latest/meta-data/",
 		"http://localhost:6379/",
@@ -146,7 +148,7 @@ func TestFetch_RejectsOffSiteHost(t *testing.T) {
 
 func TestResolveMetadata(t *testing.T) {
 	p := newTestPlugin(t)
-	meta, err := p.ResolveMetadata(context.Background(), "https://"+p.domain+"/forum/viewtopic.php?t=42", nil)
+	meta, err := p.ResolveMetadata(context.Background(), testTopicURL, nil)
 	if err != nil {
 		t.Fatalf("ResolveMetadata: %v", err)
 	}
