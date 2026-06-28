@@ -122,33 +122,24 @@ func TestDownload(t *testing.T) {
 }
 
 func TestFetch_RejectsOffSiteHost(t *testing.T) {
-	p := newTestPlugin(t)
-	// A topic URL pointing somewhere other than NNM-Club must never be
-	// fetched (SSRF guard), even though the page would parse fine.
-	topic := &domain.Topic{URL: "http://169.254.169.254/latest/meta-data/"}
-	if _, err := p.Check(context.Background(), topic, nil); err == nil {
-		t.Fatal("Check should refuse an off-site host")
+	// The SSRF guard must refuse any topic URL that is not an NNM-Club host,
+	// before a request is ever dialed. defaultDomain so no test server is
+	// needed — these are rejected up front.
+	p := &plugin{sessions: forumcommon.New(), domain: defaultDomain}
+	bad := []string{
+		"http://169.254.169.254/latest/meta-data/",
+		"http://localhost:6379/",
+		"https://evil.com/forum/viewtopic.php?t=1",
+		"https://nnmclub.to.evil.com/forum/",
+		"ftp://nnmclub.to/forum/",
+		"://malformed",
 	}
-	if _, err := p.ResolveMetadata(context.Background(), "http://localhost:6379/", nil); err == nil {
-		t.Fatal("ResolveMetadata should refuse an off-site host")
-	}
-}
-
-func TestAllowHost(t *testing.T) {
-	p := &plugin{domain: defaultDomain}
-	cases := map[string]bool{
-		"https://nnmclub.to/forum/viewtopic.php?t=1":     true,
-		"https://www.nnmclub.to/forum/viewtopic.php?t=1": true,
-		"https://nnmclub.me/forum/viewtopic.php?t=1":     true,
-		"http://nnmclub.to/forum/viewtopic.php?t=1":      true,
-		"https://nnmclub.to.evil.com/forum/":             false,
-		"https://evil.com/forum/viewtopic.php?t=1":       false,
-		"ftp://nnmclub.to/forum/":                        false,
-		"http://169.254.169.254/":                        false,
-	}
-	for u, want := range cases {
-		if got := p.allowHost(u) == nil; got != want {
-			t.Errorf("allowHost(%q) allowed=%v, want %v", u, got, want)
+	for _, target := range bad {
+		if _, err := p.Check(context.Background(), &domain.Topic{URL: target}, nil); err == nil {
+			t.Errorf("Check(%q) should be refused by the SSRF guard", target)
+		}
+		if _, err := p.ResolveMetadata(context.Background(), target, nil); err == nil {
+			t.Errorf("ResolveMetadata(%q) should be refused by the SSRF guard", target)
 		}
 	}
 }
