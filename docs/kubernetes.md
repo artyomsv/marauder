@@ -271,6 +271,14 @@ cluster (k3s v1.31–1.33, MetalLB, Longhorn, local-path) before release:
 The DB password is passed to the backend via `PGPASSWORD` (not embedded in the
 DSN URL), so passwords containing `/`, `+`, `@`, `:` etc. work correctly.
 
+**End-to-end product flow** was also verified on the same cluster: a topic was
+registered (a real, well-seeded public `.torrent` via the Generic .torrent URL
+tracker) against a bundled qBittorrent client. The scheduler detected the
+release, pushed it to qBittorrent, recorded the delivery, and the download ran
+to completion on the shared (Longhorn RWX) downloads volume — with Marauder's
+`/topics/{id}/status` reflecting live progress (`downloading` → `seeding`) read
+back from the client.
+
 ## Upgrades & backups
 
 - **Upgrade:** `helm upgrade marauder deploy/helm/marauder -n marauder --reuse-values`
