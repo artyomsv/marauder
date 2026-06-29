@@ -5,13 +5,14 @@ import { SITE } from "@/data/seo";
 import { breadcrumbSchema, howToSchema } from "@/data/schemas";
 
 const seo = {
-  title: "Install Marauder in 5 minutes (Docker)",
+  title: "Install Marauder — Docker Compose or Kubernetes",
   description:
-    "Step-by-step guide to install Marauder, the self-hosted torrent topic monitor. Pull prebuilt Docker images from GHCR or build from source — PostgreSQL, backend, frontend, and nginx gateway. No host toolchain required.",
+    "Install Marauder, the self-hosted torrent topic monitor. Pull prebuilt Docker images from GHCR, build from source, or deploy to Kubernetes with the Helm chart (simple Postgres or CloudNativePG + S3 backups). No host toolchain required.",
   path: "/install",
   keywords: [
     "marauder install",
     "marauder docker compose",
+    "marauder kubernetes helm",
     "self-hosted torrent monitor install",
     "rutracker monitor install",
     "torrent automation docker",
@@ -57,6 +58,22 @@ cp .env.example .env
 sed -i "s|MARAUDER_MASTER_KEY=.*|MARAUDER_MASTER_KEY=$(openssl rand -base64 32)|" .env
 docker compose --env-file .env up -d`;
 
+const cmdK8s = `git clone https://github.com/artyomsv/marauder.git
+
+# Simple tier (single Postgres pod). Helm chart is the source of truth.
+helm install marauder marauder/deploy/helm/marauder \\
+  -n marauder --create-namespace \\
+  -f marauder/deploy/helm/marauder/values-simple-db.yaml \\
+  --set persistence.downloads.type=pvc \\
+  --set persistence.downloads.pvc.storageClass=YOUR_SC \\
+  --set database.simple.persistence.pvc.storageClass=YOUR_SC \\
+  --set secrets.masterKey="$(openssl rand -base64 32)" \\
+  --set secrets.dbPassword="$(openssl rand -base64 24)" \\
+  --set initialAdmin.password="change-me"
+
+# Reach the UI (gateway defaults to ClusterIP):
+kubectl -n marauder port-forward svc/marauder-gateway 34080:80`;
+
 const cmdHealth = `curl -fsS http://localhost:34080/health
 # .
 
@@ -90,7 +107,9 @@ const cmdLogin = `curl -sS -X POST http://localhost:34080/api/v1/auth/login \\
         Marauder runs as a Docker Compose stack — PostgreSQL, the Go backend,
         the React frontend, and an nginx gateway. The only thing you need on the
         host is Docker. Pull the prebuilt images (recommended) or build from
-        source.
+        source. Running a cluster? There's a first-class
+        <a href="#option-c" class="text-foreground underline decoration-foreground/40 underline-offset-4 hover:decoration-foreground">Kubernetes</a>
+        deployment too.
       </p>
     </header>
 
@@ -129,6 +148,38 @@ const cmdLogin = `curl -sS -X POST http://localhost:34080/api/v1/auth/login \\
         start.
       </p>
       <pre class="mt-4 text-sm"><code>{cmdSource}</code></pre>
+    </section>
+
+    <section class="mb-14" aria-labelledby="option-c">
+      <h2 id="option-c" class="text-2xl font-semibold tracking-tight">
+        Option C — Kubernetes <span class="text-base font-normal text-muted-foreground">(advanced)</span>
+      </h2>
+      <p class="mt-3 text-muted-foreground">
+        Deploy to your own cluster. A single <strong class="text-foreground">Helm chart</strong>
+        is the source of truth, with derived <strong class="text-foreground">Kustomize</strong>
+        overlays and pre-rendered <strong class="text-foreground">plain manifests</strong> —
+        use whichever you prefer. Pick a database tier: <code>simple</code> (one
+        Postgres pod) or <code>cnpg</code>
+        (<a href="https://cloudnative-pg.io/" rel="noopener external" class="text-foreground underline decoration-foreground/40 underline-offset-4 hover:decoration-foreground">CloudNativePG</a>
+        with failover and Barman → S3 point-in-time backups).
+      </p>
+      <pre class="mt-4 text-sm"><code>{cmdK8s}</code></pre>
+      <p class="mt-3 text-muted-foreground">
+        Every volume (DB data, app config, downloads/media) takes a uniform
+        <code>type</code> — <code>existingClaim</code>, <code>pvc</code>,
+        <code>nfs</code>, <code>hostPath</code>, <code>emptyDir</code>, or a
+        <code>raw</code> escape hatch — so you decide how storage is provided.
+        The gateway defaults to a <code>ClusterIP</code> Service, so the chart is
+        load-balancer-agnostic (LoadBalancer, NodePort and Ingress are opt-in).
+        Optional bundled torrent clients and a Sonarr/Prowlarr/FlareSolverr
+        stack are a values toggle away.
+      </p>
+      <p class="mt-3 text-muted-foreground">
+        Full details — the CNPG tier, the volume menu with per-backend examples,
+        exposure options, secrets, and the Kustomize / plain-manifest paths — are
+        in the
+        <a href={SITE.github + "/blob/main/docs/kubernetes.md"} rel="noopener external" class="text-foreground underline decoration-foreground/40 underline-offset-4 hover:decoration-foreground">Kubernetes deployment guide</a>.
+      </p>
     </section>
 
     <section class="mb-14" aria-labelledby="masterkey">
@@ -189,6 +240,10 @@ const cmdLogin = `curl -sS -X POST http://localhost:34080/api/v1/auth/login \\
         <a href={SITE.github + "/blob/main/docs/oidc.md"} rel="noopener external" class="glass-card rounded-xl p-5 transition-colors hover:border-foreground/30">
           <h3 class="font-semibold text-foreground">Enable OIDC sign-in</h3>
           <p class="mt-1 text-sm text-muted-foreground">Drop in Keycloak via the bundled SSO compose profile.</p>
+        </a>
+        <a href={SITE.github + "/blob/main/docs/kubernetes.md"} rel="noopener external" class="glass-card rounded-xl p-5 transition-colors hover:border-foreground/30">
+          <h3 class="font-semibold text-foreground">Deploy on Kubernetes</h3>
+          <p class="mt-1 text-sm text-muted-foreground">Helm / Kustomize / manifests, simple or CNPG + S3-backup tiers, and the volume model.</p>
         </a>
       </div>
     </section>

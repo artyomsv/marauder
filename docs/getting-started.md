@@ -4,7 +4,7 @@ Marauder runs as a small Docker Compose stack — PostgreSQL, the Go backend,
 the React frontend, and an nginx gateway that fronts them on a single host
 port. The only thing you need on the host is Docker.
 
-There are two ways to start it:
+There are three ways to start it:
 
 - **[Option A — prebuilt images](#option-a--prebuilt-images-recommended)**
   pulls published images from GitHub Container Registry. No clone, no build.
@@ -12,8 +12,13 @@ There are two ways to start it:
 - **[Option B — build from source](#option-b--build-from-source)** clones the
   repository and builds the images locally. Use this if you want to modify
   Marauder, add a plugin, or run an unreleased commit.
+- **[Option C — Kubernetes](#option-c--kubernetes-advanced)** deploys Marauder
+  to your own cluster via a Helm chart (or Kustomize / plain manifests), with a
+  choice of a simple single-pod Postgres or a CloudNativePG + S3-backup tier.
+  For advanced users running k3s/k8s.
 
-Both bring up the same stack and open on **<http://localhost:34080>**.
+Options A and B bring up the same Docker Compose stack on
+**<http://localhost:34080>**.
 
 ---
 
@@ -90,6 +95,41 @@ The source stack also ships two overlays you can layer on top:
 
 The Cloudflare-solver sidecar is opt-in on both stacks via the `cfsolver`
 profile: append `--profile cfsolver` to any `up` command.
+
+---
+
+## Option C — Kubernetes (advanced)
+
+For advanced users running their own cluster. Marauder ships a Helm chart as
+the source of truth, with derived Kustomize overlays and pre-rendered plain
+manifests — pick whichever fits your workflow. Two database tiers are offered:
+
+- **`simple`** — a single Postgres pod (no HA, no backups). Good for one user.
+- **`cnpg`** — [CloudNativePG](https://cloudnative-pg.io/) with automatic
+  failover and Barman → S3 point-in-time backups (requires the CNPG operator).
+
+Every persistent volume (DB data, app config, downloads/media) takes a uniform
+`type` (`existingClaim` / `pvc` / `nfs` / `hostPath` / `emptyDir` / `raw`), so
+you decide exactly how storage is provided. The gateway defaults to a
+`ClusterIP` Service, so the chart is load-balancer-agnostic (LoadBalancer,
+NodePort and Ingress are all opt-in).
+
+```bash
+git clone https://github.com/artyomsv/marauder.git
+helm install marauder marauder/deploy/helm/marauder -n marauder --create-namespace \
+  -f marauder/deploy/helm/marauder/values-simple-db.yaml \
+  --set persistence.downloads.type=pvc \
+  --set persistence.downloads.pvc.storageClass=YOUR_SC \
+  --set database.simple.persistence.pvc.storageClass=YOUR_SC \
+  --set secrets.masterKey="$(openssl rand -base64 32)" \
+  --set secrets.dbPassword="$(openssl rand -base64 24)" \
+  --set initialAdmin.password="change-me"
+```
+
+See the **[Kubernetes deployment guide](kubernetes.md)** for the CNPG tier,
+the full volume menu with per-backend examples, exposure options, secrets
+handling, optional bundled clients / *arr stack, and the Kustomize and
+plain-manifest install paths.
 
 ---
 
@@ -186,6 +226,8 @@ docker compose -f docker-compose.ghcr.yml --env-file .env up -d
 - **[Enable OIDC sign-in](oidc.md)** — Keycloak / Authentik / any OIDC provider.
 - **[Connect Torznab / Newznab](torznab-newznab.md)** — reach 500+ indexers via
   Jackett, Prowlarr, or NZBHydra2.
+- **[Deploy on Kubernetes](kubernetes.md)** — Helm / Kustomize / manifests, the
+  simple and CloudNativePG + S3-backup tiers, and the volume model.
 
 ---
 

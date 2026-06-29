@@ -1,0 +1,351 @@
+# ============================================================================
+# Marauder Helm chart values
+#
+# Two ready-made presets ship alongside this file:
+#   values-simple-db.yaml  — single-pod Postgres, no backups (quickstart)
+#   values-cnpg.yaml       — CloudNativePG + Barman → S3 (HA + PITR backups)
+# Override on the CLI with `-f` and/or `--set`.
+# ============================================================================
+
+# Override the generated resource name (defaults to the release name).
+nameOverride: ""
+fullnameOverride: ""
+
+# ---------------------------------------------------------------------------
+# Images. All Marauder components share one tag by default (the released
+# version); override per-component repository/tag below if needed.
+# ---------------------------------------------------------------------------
+image:
+  # Default tag for every marauder-* image. "" falls back to Chart appVersion.
+  tag: ""
+  pullPolicy: IfNotPresent
+# Optional list of imagePullSecrets names (for private registries).
+imagePullSecrets: []
+
+# Security context for the FIRST-PARTY Marauder workloads (backend, cfsolver,
+# frontend, gateway). Conservative defaults that are safe for the Go services,
+# the nginx frontend/gateway and headless-Chromium cfsolver; fully overridable.
+# (Bundled linuxserver clients/arr need root + extra caps and are NOT covered.)
+podSecurityContext:
+  seccompProfile:
+    type: RuntimeDefault
+securityContext:
+  allowPrivilegeEscalation: false
+  # Opt-in hardening (verify your image supports it before enabling):
+  # runAsNonRoot: true
+  # readOnlyRootFilesystem: true
+  # capabilities:
+  #   drop: [ALL]
+
+# Optional NetworkPolicies (default-deny ingress + scoped allows). Off by
+# default since not every cluster runs a CNI that enforces them.
+networkPolicy:
+  enabled: false
+
+serviceAccount:
+  create: true
+  name: ""
+  # No workload calls the Kubernetes API, so the SA token is not mounted.
+  automountServiceAccountToken: false
+  annotations: {}
+
+# First-run admin. Seeded ONLY when the users table is empty (changing these
+# after first boot has no effect — rotate via the UI). Username goes in the
+# ConfigMap; password is stored in the chart/existing Secret.
+initialAdmin:
+  username: "admin"
+  password: ""
+
+# ---------------------------------------------------------------------------
+# Application configuration — becomes a ConfigMap of MARAUDER_* env vars,
+# consumed by the backend. Add any MARAUDER_* key here; it is passed through
+# verbatim. See backend/internal/config for the full list.
+# ---------------------------------------------------------------------------
+config:
+  MARAUDER_LOG_LEVEL: "info"
+  MARAUDER_SCHEDULER_WORKERS: "8"
+  # MARAUDER_PROGRESS_WATCHER_ENABLED: "true"
+# Arbitrary extra env vars injected into the backend (not part of the ConfigMap).
+extraEnv: []
+  # - name: SOME_VAR
+  #   value: "x"
+
+# ---------------------------------------------------------------------------
+# Secrets. MARAUDER_MASTER_KEY is REQUIRED and MUST stay stable across
+# upgrades (it encrypts tracker credentials & client configs). Either let the
+# chart create the Secret from the values below, or point existingSecret at a
+# Secret you manage out-of-band (SealedSecrets / External-Secrets / Vault /
+# kubectl). When existingSecret is set the chart creates no Secret.
+# ---------------------------------------------------------------------------
+secrets:
+  create: true
+  existingSecret: ""
+  # Required when create=true. Generate with: openssl rand -base64 32
+  masterKey: ""
+  # Postgres password (used by the simple tier and as the CNPG app password).
+  dbPassword: ""
+  # Keys the backend reads from the resolved Secret (rarely need changing).
+  masterKeyName: MARAUDER_MASTER_KEY
+  dbPasswordKey: MARAUDER_DB_PASSWORD
+
+# ---------------------------------------------------------------------------
+# Persistence — the reusable volume model. Every block below accepts:
+#
+#   type: existingClaim | pvc | nfs | hostPath | emptyDir | raw
+#     existingClaim: <name>                 # bring your own PVC
+#     pvc: { storageClass: "", size: 10Gi, accessModes: [ReadWriteOnce] }
+#                                           # "" storageClass = cluster default
+#     nfs: { server: <ip/host>, path: <export> }
+#     hostPath: { path: <node-path>, type: DirectoryOrCreate }
+#     emptyDir: {}                          # ephemeral; or { sizeLimit, medium }
+#     raw: { <any native k8s volumeSource> } # escape hatch (CephFS/iSCSI/CSI…)
+#
+# downloads is shared between the backend (downloadfolder client) and any
+# bundled clients/arr. When more than one pod mounts it, it MUST be
+# ReadWriteMany (NFS/CephFS/…). hostPath only works if those pods are pinned
+# to one node.
+# ---------------------------------------------------------------------------
+persistence:
+  # Marauder app config/state (small; the backend is otherwise stateless).
+  config:
+    type: emptyDir
+    existingClaim: ""
+    pvc:
+      storageClass: ""
+      size: 1Gi
+      accessModes: [ReadWriteOnce]
+    nfs: {}
+    hostPath: {}
+    emptyDir: {}
+    raw: {}
+    mountPath: /config
+  # Shared downloads/media volume.
+  downloads:
+    type: emptyDir
+    existingClaim: ""
+    pvc:
+      storageClass: ""
+      size: 100Gi
+      accessModes: [ReadWriteMany]
+    nfs: {}
+    hostPath: {}
+    emptyDir: {}
+    raw: {}
+    mountPath: /downloads
+
+# ---------------------------------------------------------------------------
+# Database. mode selects the tier.
+#   simple — one Postgres pod, no HA, no backups (good for single-user).
+#   cnpg   — CloudNativePG Cluster + Barman → S3 (HA failover + PITR backups).
+#            Requires the CNPG operator + Barman plugin already installed
+#            cluster-wide (see docs/kubernetes.md).
+# ---------------------------------------------------------------------------
+database:
+  mode: simple
+  # Logical database/user (shared by both tiers).
+  name: marauder
+  user: marauder
+  port: 5432
+  # libpq sslmode for the backend DSN. "prefer" is portable: it uses TLS when
+  # the server offers it (CNPG) and falls back to plaintext (simple tier).
+  sslmode: prefer
+
+  simple:
+    image:
+      repository: postgres
+      tag: "17"
+    resources:
+      requests: { cpu: 100m, memory: 256Mi }
+      limits: { memory: 1Gi }
+    persistence:
+      type: pvc
+      existingClaim: ""
+      pvc:
+        storageClass: ""
+        size: 8Gi
+        accessModes: [ReadWriteOnce]
+      nfs: {}
+      hostPath: {}
+      raw: {}
+
+  cnpg:
+    # Fail fast if the CNPG CRDs are absent.
+    assertCRDs: true
+    # CNPG bootstraps the owner role from a basic-auth Secret (username/password).
+    # By default the chart creates one from secrets.dbPassword. If you manage
+    # secrets out-of-band (secrets.existingSecret), you MUST point this at a
+    # basic-auth Secret whose password matches that secret's DB password —
+    # otherwise CNPG and the backend would use different passwords.
+    existingAppSecret: ""
+    instances: 2
+    imageName: ghcr.io/cloudnative-pg/postgresql:17
+    storage:
+      size: 8Gi
+      storageClass: ""        # "" = cluster default
+    # Postgres tuning + WAL settings (carries hard-won backup-safety defaults).
+    parameters:
+      max_connections: "200"
+      shared_buffers: "256MB"
+      archive_timeout: "15min"
+      wal_compression: "lz4"
+    resources: {}
+    backup:
+      enabled: false
+      # ScheduledBackup cron (6-field CNPG format: sec min hour dom mon dow).
+      schedule: "0 0 4 * * *"
+      retentionPolicy: "30d"
+      # Generic S3 — works with AWS S3, MinIO, Backblaze B2, DO Spaces, etc.
+      s3:
+        destinationPath: ""          # e.g. s3://my-bucket/marauder/
+        endpointURL: ""              # e.g. https://s3.amazonaws.com or http://minio:9000
+        # Secret with the S3 credentials. Keys default to ACCESS_KEY_ID /
+        # ACCESS_SECRET_KEY; created from inline creds when create=true.
+        credentials:
+          create: false
+          existingSecret: ""
+          accessKeyId: ""
+          secretAccessKey: ""
+          accessKeyIdKey: ACCESS_KEY_ID
+          secretAccessKeyKey: ACCESS_SECRET_KEY
+      # Compression (Barman plugin). Match to your storage/cost tradeoff.
+      wal:
+        compression: gzip
+      data:
+        compression: gzip
+
+# ---------------------------------------------------------------------------
+# Component sizing / scheduling (applied to the marauder workloads).
+# ---------------------------------------------------------------------------
+backend:
+  replicas: 1
+  resources:
+    requests: { cpu: 50m, memory: 128Mi }
+    limits: { memory: 512Mi }
+  nodeSelector: {}
+  tolerations: []
+  # No default anti-affinity is set. If you raise replicas for HA, add a
+  # podAntiAffinity here (and consider a PodDisruptionBudget) to spread them.
+  affinity: {}
+cfsolver:
+  replicas: 1
+  image:
+    repository: ghcr.io/artyomsv/marauder-cfsolver
+  # Headless Chromium is memory-hungry — keep a limit so it can't OOM the node.
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { memory: 1Gi }
+frontend:
+  replicas: 1
+  image:
+    repository: ghcr.io/artyomsv/marauder-frontend
+  resources:
+    requests: { cpu: 10m, memory: 32Mi }
+    limits: { memory: 128Mi }
+
+backendImage:
+  repository: ghcr.io/artyomsv/marauder-backend
+
+# ---------------------------------------------------------------------------
+# Gateway — the single nginx entrypoint (proxies / -> frontend, /api -> backend).
+# ---------------------------------------------------------------------------
+gateway:
+  replicas: 1
+  image:
+    repository: nginx
+    tag: "1.27-alpine"
+  resources:
+    requests: { cpu: 10m, memory: 32Mi }
+    limits: { memory: 128Mi }
+  service:
+    # ClusterIP (default, LB-agnostic) | LoadBalancer | NodePort
+    type: ClusterIP
+    port: 80
+    # nodePort: 30080            # only when type=NodePort
+    annotations: {}              # e.g. MetalLB/cloud-LB annotations
+    # loadBalancerIP: ""         # static IP for MetalLB/cloud, if supported
+
+# ---------------------------------------------------------------------------
+# Ingress (optional). Generic — no controller assumption. Add controller- or
+# cert-manager-specific behaviour via annotations.
+# ---------------------------------------------------------------------------
+ingress:
+  enabled: false
+  className: ""
+  host: ""
+  path: /
+  pathType: Prefix
+  annotations: {}
+  tls:
+    secretName: ""              # set to enable TLS for `host`
+
+# ---------------------------------------------------------------------------
+# Optional bundled download clients. Off by default. Each shares the
+# persistence.downloads volume and keeps its own config volume.
+# ---------------------------------------------------------------------------
+clients:
+  qbittorrent:
+    enabled: false
+    image:
+      repository: lscr.io/linuxserver/qbittorrent
+      tag: "5.0.3"
+    webuiPort: 8080
+    downloadsMountPath: /downloads
+    config:
+      type: pvc
+      existingClaim: ""
+      pvc: { storageClass: "", size: 1Gi, accessModes: [ReadWriteOnce] }
+      nfs: {}
+      hostPath: {}
+      raw: {}
+  transmission:
+    enabled: false
+    image:
+      repository: lscr.io/linuxserver/transmission
+      tag: "4.0.6"
+    webuiPort: 9091
+    downloadsMountPath: /downloads
+    config:
+      type: pvc
+      existingClaim: ""
+      pvc: { storageClass: "", size: 1Gi, accessModes: [ReadWriteOnce] }
+      nfs: {}
+      hostPath: {}
+      raw: {}
+
+# ---------------------------------------------------------------------------
+# Optional *arr automation stack. Off by default.
+# ---------------------------------------------------------------------------
+arr:
+  sonarr:
+    enabled: false
+    image:
+      repository: lscr.io/linuxserver/sonarr
+      tag: "4.0.15"
+    port: 8989
+    downloadsMountPath: /downloads
+    config:
+      type: pvc
+      existingClaim: ""
+      pvc: { storageClass: "", size: 1Gi, accessModes: [ReadWriteOnce] }
+      nfs: {}
+      hostPath: {}
+      raw: {}
+  prowlarr:
+    enabled: false
+    image:
+      repository: lscr.io/linuxserver/prowlarr
+      tag: "1.31.2"
+    port: 9696
+    config:
+      type: pvc
+      existingClaim: ""
+      pvc: { storageClass: "", size: 1Gi, accessModes: [ReadWriteOnce] }
+      nfs: {}
+      hostPath: {}
+      raw: {}
+  flaresolverr:
+    enabled: false
+    image:
+      repository: ghcr.io/flaresolverr/flaresolverr
+      tag: "v3.3.21"
+    port: 8191

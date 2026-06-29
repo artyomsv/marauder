@@ -1,0 +1,95 @@
+{{- if eq .Values.database.mode "simple" }}
+{{- $data := .Values.database.simple.persistence }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "marauder.fullname" . }}-db
+  labels:
+    {{- include "marauder.componentLabels" (dict "root" $ "component" "database") | nindent 4 }}
+spec:
+  clusterIP: None
+  selector:
+    {{- include "marauder.componentSelectorLabels" (dict "root" $ "component" "database") | nindent 4 }}
+  ports:
+    - name: postgres
+      port: {{ .Values.database.port }}
+      targetPort: postgres
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "marauder.fullname" . }}-db
+  labels:
+    {{- include "marauder.componentLabels" (dict "root" $ "component" "database") | nindent 4 }}
+spec:
+  serviceName: {{ include "marauder.fullname" . }}-db
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "marauder.componentSelectorLabels" (dict "root" $ "component" "database") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "marauder.componentLabels" (dict "root" $ "component" "database") | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "marauder.serviceAccountName" . }}
+      securityContext:
+        {{- with .Values.podSecurityContext }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        fsGroup: 999
+      containers:
+        - name: postgres
+          image: {{ printf "%s:%s" .Values.database.simple.image.repository .Values.database.simple.image.tag }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: postgres
+              containerPort: 5432
+          env:
+            - name: POSTGRES_DB
+              value: {{ .Values.database.name | quote }}
+            - name: POSTGRES_USER
+              value: {{ .Values.database.user | quote }}
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "marauder.secretName" . }}
+                  key: {{ .Values.secrets.dbPasswordKey }}
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", {{ .Values.database.user | quote }}, "-d", {{ .Values.database.name | quote }}]
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-U", {{ .Values.database.user | quote }}, "-d", {{ .Values.database.name | quote }}]
+            initialDelaySeconds: 20
+            periodSeconds: 20
+          {{- with .Values.database.simple.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- if ne $data.type "pvc" }}
+      volumes:
+        {{- include "marauder.volume" (dict "name" "data" "spec" $data "root" $) | nindent 8 }}
+      {{- end }}
+  {{- if eq $data.type "pvc" }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes:
+          {{- toYaml ($data.pvc.accessModes | default (list "ReadWriteOnce")) | nindent 10 }}
+        {{- if $data.pvc.storageClass }}
+        storageClassName: {{ $data.pvc.storageClass | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ $data.pvc.size }}
+  {{- end }}
+{{- end }}

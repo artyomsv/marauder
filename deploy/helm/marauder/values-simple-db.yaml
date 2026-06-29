@@ -1,0 +1,33 @@
+# Preset: simple single-pod Postgres (no HA, no backups).
+# Quickstart for single-user self-hosting. Use with:
+#   helm install marauder deploy/helm/marauder -n marauder --create-namespace \
+#     -f deploy/helm/marauder/values-simple-db.yaml \
+#     --set secrets.masterKey="$(openssl rand -base64 32)" \
+#     --set secrets.dbPassword="$(openssl rand -base64 24)" \
+#     --set initialAdmin.password="change-me"
+
+database:
+  mode: simple
+  simple:
+    persistence:
+      type: pvc
+      pvc:
+        storageClass: ""        # "" = cluster default; or e.g. longhorn / local-path
+        size: 8Gi
+        accessModes: [ReadWriteOnce]
+
+# Downloads volume — pick ONE backend. Default is ephemeral emptyDir; for real
+# use point at durable storage. Example: a dynamic RWX claim.
+persistence:
+  downloads:
+    type: pvc
+    pvc:
+      storageClass: ""          # an RWX-capable class (nfs/cephfs) if clients share it
+      size: 100Gi
+      accessModes: [ReadWriteOnce]
+
+# gateway.service.type ClusterIP is portable (port-forward / add your own
+# Ingress). Set LoadBalancer on clouds/MetalLB, or NodePort on bare metal.
+gateway:
+  service:
+    type: ClusterIP

@@ -1,0 +1,46 @@
+# Overlay: CloudNativePG + Barman → S3 tier.
+#   kubectl kustomize --enable-helm --load-restrictor LoadRestrictionsNone deploy/kustomize/overlays/cnpg
+# NOTE: kustomize renders via `helm template` (no live cluster), so the CRD
+# assertion is disabled here — ensure the CNPG operator + Barman plugin are
+# installed before applying, and fill in real S3 settings below.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: marauder
+
+helmGlobals:
+  chartHome: ../../../helm
+
+helmCharts:
+  - name: marauder
+    releaseName: marauder
+    namespace: marauder
+    valuesInline:
+      # Placeholders — replace before applying (or use secrets.existingSecret).
+      secrets:
+        masterKey: REPLACE_ME_BASE64_32_BYTES
+        dbPassword: REPLACE_ME
+      database:
+        mode: cnpg
+        cnpg:
+          assertCRDs: false
+          instances: 2
+          storage:
+            size: 8Gi
+            storageClass: ""
+          backup:
+            enabled: true
+            retentionPolicy: "30d"
+            s3:
+              destinationPath: "s3://CHANGE-ME-bucket/marauder/"
+              endpointURL: "https://s3.amazonaws.com"
+              credentials:
+                create: true
+                accessKeyId: REPLACE_ME
+                secretAccessKey: REPLACE_ME
+      persistence:
+        downloads:
+          type: pvc
+          pvc:
+            storageClass: ""
+            size: 100Gi
+            accessModes: [ReadWriteMany]

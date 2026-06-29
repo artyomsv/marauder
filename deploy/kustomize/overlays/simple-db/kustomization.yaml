@@ -1,0 +1,34 @@
+# Overlay: simple single-pod Postgres tier.
+#   kubectl kustomize --enable-helm --load-restrictor LoadRestrictionsNone deploy/kustomize/overlays/simple-db
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: marauder
+
+helmGlobals:
+  chartHome: ../../../helm
+
+helmCharts:
+  - name: marauder
+    releaseName: marauder
+    namespace: marauder
+    valuesInline:
+      # Placeholders — replace before applying (or use secrets.existingSecret).
+      secrets:
+        masterKey: REPLACE_ME_BASE64_32_BYTES
+        dbPassword: REPLACE_ME
+      database:
+        mode: simple
+        simple:
+          persistence:
+            type: pvc
+            pvc:
+              storageClass: ""
+              size: 8Gi
+              accessModes: [ReadWriteOnce]
+      persistence:
+        downloads:
+          type: pvc
+          pvc:
+            storageClass: ""
+            size: 100Gi
+            accessModes: [ReadWriteOnce]

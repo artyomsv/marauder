@@ -1,0 +1,67 @@
+{{- if .Values.arr.prowlarr.enabled }}
+{{- $a := .Values.arr.prowlarr }}
+{{- include "marauder.pvc" (dict "name" "prowlarr-config" "spec" $a.config "root" $) }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "marauder.fullname" . }}-prowlarr
+  labels:
+    {{- include "marauder.componentLabels" (dict "root" $ "component" "prowlarr") | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "marauder.componentSelectorLabels" (dict "root" $ "component" "prowlarr") | nindent 6 }}
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        {{- include "marauder.componentLabels" (dict "root" $ "component" "prowlarr") | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "marauder.serviceAccountName" . }}
+      containers:
+        - name: prowlarr
+          image: {{ printf "%s:%s" $a.image.repository $a.image.tag }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: PUID
+              value: "1000"
+            - name: PGID
+              value: "1000"
+            - name: TZ
+              value: "Etc/UTC"
+          ports:
+            - name: http
+              containerPort: {{ $a.port }}
+          readinessProbe:
+            tcpSocket:
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          livenessProbe:
+            tcpSocket:
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 30
+          volumeMounts:
+            {{- include "marauder.volumeMount" (dict "name" "prowlarr-config" "mountPath" "/config") | nindent 12 }}
+      volumes:
+        {{- include "marauder.volume" (dict "name" "prowlarr-config" "spec" $a.config "root" $) | nindent 8 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "marauder.fullname" . }}-prowlarr
+  labels:
+    {{- include "marauder.componentLabels" (dict "root" $ "component" "prowlarr") | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "marauder.componentSelectorLabels" (dict "root" $ "component" "prowlarr") | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ $a.port }}
+      targetPort: http
+{{- end }}

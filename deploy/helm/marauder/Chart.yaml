@@ -1,0 +1,19 @@
+apiVersion: v2
+name: marauder
+description: Self-hosted torrent tracker monitor — backend, frontend, cfsolver and a choice of Postgres tiers (simple single-pod or CloudNativePG + Barman → S3).
+type: application
+# Chart version — bump on chart changes, independent of the app version.
+version: 0.1.0
+# Default Marauder application version (overridable via image.tag).
+appVersion: "1.9.0"
+home: https://marauder.cc
+sources:
+  - https://github.com/artyomsv/marauder
+keywords:
+  - torrent
+  - tracker
+  - monitor
+  - self-hosted
+maintainers:
+  - name: artyomsv
+    url: https://github.com/artyomsv

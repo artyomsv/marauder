@@ -1,0 +1,21 @@
+# Base: inflate the marauder Helm chart with its built-in default values
+# (simple tier). The overlays (simple-db, cnpg) are the intended entry points.
+#
+# Build (Helm 3 recommended; Helm 4's `helm version` dropped the `-c` flag that
+# kubectl's bundled kustomize probes with):
+#   kubectl kustomize --enable-helm --load-restrictor LoadRestrictionsNone deploy/kustomize/base
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+helmGlobals:
+  chartHome: ../../helm
+
+helmCharts:
+  - name: marauder
+    releaseName: marauder
+    namespace: marauder
+    valuesInline:
+      # Placeholders — replace before applying (or use secrets.existingSecret).
+      secrets:
+        masterKey: REPLACE_ME_BASE64_32_BYTES
+        dbPassword: REPLACE_ME
