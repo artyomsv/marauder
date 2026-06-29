@@ -1,0 +1,112 @@
+{{- if .Values.networkPolicy.enabled }}
+{{- /*
+Opt-in Ingress NetworkPolicies. Scoped to THIS release's first-party Marauder
+pods (app.kubernetes.io/part-of=marauder) so CNPG-managed Postgres pods (which
+carry different labels) are left untouched. Egress is not restricted, so DNS and
+the backend→CNPG / backend→external connections keep working.
+*/ -}}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "marauder.fullname" . }}-default-deny
+  labels:
+    {{- include "marauder.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/part-of: marauder
+  policyTypes: [Ingress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "marauder.fullname" . }}-gateway
+  labels:
+    {{- include "marauder.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "marauder.componentSelectorLabels" (dict "root" $ "component" "gateway") | nindent 6 }}
+  policyTypes: [Ingress]
+  ingress:
+    - {}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "marauder.fullname" . }}-backend
+  labels:
+    {{- include "marauder.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "marauder.componentSelectorLabels" (dict "root" $ "component" "backend") | nindent 6 }}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "marauder.componentSelectorLabels" (dict "root" $ "component" "gateway") | nindent 14 }}
+      ports:
+        - { protocol: TCP, port: 8679 }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "marauder.fullname" . }}-frontend
+  labels:
+    {{- include "marauder.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "marauder.componentSelectorLabels" (dict "root" $ "component" "frontend") | nindent 6 }}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "marauder.componentSelectorLabels" (dict "root" $ "component" "gateway") | nindent 14 }}
+      ports:
+        - { protocol: TCP, port: 8081 }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "marauder.fullname" . }}-cfsolver
+  labels:
+    {{- include "marauder.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "marauder.componentSelectorLabels" (dict "root" $ "component" "cfsolver") | nindent 6 }}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "marauder.componentSelectorLabels" (dict "root" $ "component" "backend") | nindent 14 }}
+      ports:
+        - { protocol: TCP, port: 9244 }
+{{- if eq .Values.database.mode "simple" }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "marauder.fullname" . }}-db
+  labels:
+    {{- include "marauder.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "marauder.componentSelectorLabels" (dict "root" $ "component" "database") | nindent 6 }}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "marauder.componentSelectorLabels" (dict "root" $ "component" "backend") | nindent 14 }}
+      ports:
+        - { protocol: TCP, port: 5432 }
+{{- end }}
+{{- end }}

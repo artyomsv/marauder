@@ -18,8 +18,8 @@ Access the UI:
     kubectl -n {{ .Release.Namespace }} get svc {{ include "marauder.fullname" . }}-gateway
 {{- else }}
   Port-forward the gateway:
-    kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "marauder.fullname" . }}-gateway 8080:{{ .Values.gateway.service.port }}
-  then open http://localhost:8080
+    kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "marauder.fullname" . }}-gateway 34080:{{ .Values.gateway.service.port }}
+  then open http://localhost:34080
 {{- end }}
 
 {{- if and .Values.secrets.create (not .Values.secrets.existingSecret) (not .Values.secrets.masterKey) }}
@@ -27,4 +27,9 @@ Access the UI:
 WARNING: secrets.masterKey is empty. MARAUDER_MASTER_KEY is required and must
 stay stable across upgrades. Set it (openssl rand -base64 32) or supply an
 existingSecret, then upgrade.
+{{- end }}
+{{- if and .Values.secrets.create (not .Values.secrets.existingSecret) (not .Values.secrets.dbPassword) }}
+
+WARNING: secrets.dbPassword is empty. Postgres would be created with an empty
+password. Set secrets.dbPassword (openssl rand -base64 24) and upgrade.
 {{- end }}

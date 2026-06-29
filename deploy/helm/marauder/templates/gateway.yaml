@@ -80,6 +80,10 @@ spec:
         checksum/config: {{ include "marauder.gatewayConf" . | sha256sum }}
     spec:
       serviceAccountName: {{ include "marauder.serviceAccountName" . }}
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -88,6 +92,10 @@ spec:
         - name: gateway
           image: {{ include "marauder.image" (dict "image" .Values.gateway.image "root" $) }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           ports:
             - name: http
               containerPort: 6688

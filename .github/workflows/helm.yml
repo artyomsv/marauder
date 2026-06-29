@@ -15,6 +15,9 @@ on:
       - 'deploy/k8s/**'
       - '.github/workflows/helm.yml'
 
+permissions:
+  contents: read
+
 jobs:
   lint-validate:
     runs-on: ubuntu-latest
@@ -27,14 +30,20 @@ jobs:
         run: |
           helm lint deploy/helm/marauder -f deploy/helm/marauder/values-simple-db.yaml
           helm lint deploy/helm/marauder -f deploy/helm/marauder/values-cnpg.yaml --set database.cnpg.assertCRDs=false
+      - name: render assertions (tests/render.sh)
+        run: bash deploy/helm/marauder/tests/render.sh
       - name: render-check (deploy/k8s in sync with chart)
         run: bash deploy/render-manifests.sh --check
-      - name: kubeconform (schema validation)
+      - name: kubeconform (schema validation incl. CNPG CRDs)
         run: |
+          # The CRDs-catalog provides schemas for postgresql.cnpg.io et al.;
+          # -ignore-missing-schemas still tolerates any not yet catalogued.
+          CATALOG='https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json'
           for f in deploy/k8s/simple-db/marauder.yaml deploy/k8s/cnpg/marauder.yaml; do
             echo "== $f =="
             docker run --rm -i ghcr.io/yannh/kubeconform:latest \
-              -strict -ignore-missing-schemas -summary < "$f"
+              -strict -ignore-missing-schemas -summary \
+              -schema-location default -schema-location "$CATALOG" < "$f"
           done
 
   kustomize-build:
@@ -77,6 +86,12 @@ jobs:
         run: |
           kubectl -n marauder rollout status statefulset/marauder-db --timeout=300s
           kubectl -n marauder rollout status deployment/marauder-backend --timeout=300s
+      - name: Assert backend health (app actually responds)
+        run: |
+          kubectl -n marauder exec deploy/marauder-backend -c backend -- \
+            wget -qO- http://localhost:8679/health
+          kubectl -n marauder exec deploy/marauder-backend -c backend -- \
+            wget -qO- http://localhost:8679/api/v1/system/info | grep -q '"version"'
       - name: Dump state on failure
         if: failure()
         run: |

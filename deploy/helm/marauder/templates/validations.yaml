@@ -1,0 +1,27 @@
+{{- /*
+Fail-fast configuration validations. Emits no resources — only `fail`s with an
+actionable message when a value combination would silently misbehave.
+*/ -}}
+
+{{- /* Reserved MARAUDER_* keys the chart sets itself (would duplicate a ConfigMap key). */ -}}
+{{- $reserved := list "MARAUDER_HTTP_ADDR" "MARAUDER_CFSOLVER_ENABLED" "MARAUDER_CFSOLVER_URL" "MARAUDER_ADMIN_INITIAL_USERNAME" -}}
+{{- range $k, $v := .Values.config }}
+{{- if has $k $reserved }}
+{{- fail (printf "config.%s is managed by the chart and must not be set in .Values.config (it would create a duplicate ConfigMap key). Remove it." $k) }}
+{{- end }}
+{{- end }}
+
+{{- /* The downloads volume is shared with any bundled client/arr that mounts it. */ -}}
+{{- $dl := .Values.persistence.downloads -}}
+{{- $sharers := list -}}
+{{- if .Values.clients.qbittorrent.enabled }}{{- $sharers = append $sharers "clients.qbittorrent" }}{{- end }}
+{{- if .Values.clients.transmission.enabled }}{{- $sharers = append $sharers "clients.transmission" }}{{- end }}
+{{- if .Values.arr.sonarr.enabled }}{{- $sharers = append $sharers "arr.sonarr" }}{{- end }}
+{{- if gt (len $sharers) 0 }}
+{{- if eq $dl.type "emptyDir" }}
+{{- fail (printf "persistence.downloads.type=emptyDir is per-pod and NOT shared, but %s need to share it with the backend. Use existingClaim, an RWX pvc, nfs, hostPath or raw for downloads." (join ", " $sharers)) }}
+{{- end }}
+{{- if and (eq $dl.type "pvc") (not (has "ReadWriteMany" ($dl.pvc.accessModes | default list))) }}
+{{- fail (printf "persistence.downloads is a ReadWriteOnce pvc but it is shared with %s. A shared downloads pvc must include ReadWriteMany in accessModes (use an RWX storageClass: NFS/CephFS/Longhorn-RWX), or disable the bundled clients/arr." (join ", " $sharers)) }}
+{{- end }}
+{{- end }}

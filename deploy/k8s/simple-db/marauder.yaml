@@ -16,6 +16,7 @@ metadata:
     app.kubernetes.io/version: "1.9.0"
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/part-of: marauder
+automountServiceAccountToken: false
 
 ---
 # Source: marauder/templates/secret.yaml
@@ -300,8 +301,14 @@ spec:
         app.kubernetes.io/managed-by: Helm
         app.kubernetes.io/part-of: marauder
         app.kubernetes.io/component: backend
+      annotations:
+        checksum/config: 6844128a81a31d43fef53398c3d4cb7fbe0e4f7fbe6deb24136963479bd776d8
+        checksum/secret: 628b2d086135bbd31c7ee1423e570e42a2284ec44783bc2740fe19bc5fc8828d
     spec:
       serviceAccountName: marauder
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
       initContainers:
         - name: wait-for-db
           image: busybox:1.36
@@ -316,6 +323,8 @@ spec:
         - name: backend
           image: ghcr.io/artyomsv/marauder-backend:1.9.0
           imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
           ports:
             - name: http
               containerPort: 8679
@@ -367,6 +376,12 @@ spec:
               port: http
             failureThreshold: 30
             periodSeconds: 5
+          resources:
+            limits:
+              memory: 512Mi
+            requests:
+              cpu: 50m
+              memory: 128Mi
       volumes:
         - name: config
           emptyDir: {}
@@ -406,10 +421,15 @@ spec:
         app.kubernetes.io/component: cfsolver
     spec:
       serviceAccountName: marauder
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: cfsolver
           image: ghcr.io/artyomsv/marauder-cfsolver:1.9.0
           imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
           ports:
             - name: http
               containerPort: 9244
@@ -425,6 +445,12 @@ spec:
               port: http
             initialDelaySeconds: 5
             periodSeconds: 10
+          resources:
+            limits:
+              memory: 1Gi
+            requests:
+              cpu: 100m
+              memory: 256Mi
 ---
 # Source: marauder/templates/frontend.yaml
 apiVersion: apps/v1
@@ -458,10 +484,15 @@ spec:
         app.kubernetes.io/component: frontend
     spec:
       serviceAccountName: marauder
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: frontend
           image: ghcr.io/artyomsv/marauder-frontend:1.9.0
           imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
           ports:
             - name: http
               containerPort: 8081
@@ -477,6 +508,12 @@ spec:
               port: http
             initialDelaySeconds: 5
             periodSeconds: 10
+          resources:
+            limits:
+              memory: 128Mi
+            requests:
+              cpu: 10m
+              memory: 32Mi
 ---
 # Source: marauder/templates/gateway.yaml
 apiVersion: apps/v1
@@ -512,10 +549,15 @@ spec:
         checksum/config: ceb6dcdd7513a28fc8cb3552f3434cc95b02e3bb1c404424bf38de366ff659cb
     spec:
       serviceAccountName: marauder
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: gateway
           image: nginx:1.27-alpine
           imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
           ports:
             - name: http
               containerPort: 6688
@@ -533,6 +575,12 @@ spec:
               port: http
             initialDelaySeconds: 5
             periodSeconds: 10
+          resources:
+            limits:
+              memory: 128Mi
+            requests:
+              cpu: 10m
+              memory: 32Mi
       volumes:
         - name: nginx-config
           configMap:
@@ -605,6 +653,12 @@ spec:
               command: ["pg_isready", "-U", "marauder", "-d", "marauder"]
             initialDelaySeconds: 20
             periodSeconds: 20
+          resources:
+            limits:
+              memory: 1Gi
+            requests:
+              cpu: 100m
+              memory: 256Mi
   volumeClaimTemplates:
     - metadata:
         name: data

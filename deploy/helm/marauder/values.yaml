@@ -22,9 +22,31 @@ image:
 # Optional list of imagePullSecrets names (for private registries).
 imagePullSecrets: []
 
+# Security context for the FIRST-PARTY Marauder workloads (backend, cfsolver,
+# frontend, gateway). Conservative defaults that are safe for the Go services,
+# the nginx frontend/gateway and headless-Chromium cfsolver; fully overridable.
+# (Bundled linuxserver clients/arr need root + extra caps and are NOT covered.)
+podSecurityContext:
+  seccompProfile:
+    type: RuntimeDefault
+securityContext:
+  allowPrivilegeEscalation: false
+  # Opt-in hardening (verify your image supports it before enabling):
+  # runAsNonRoot: true
+  # readOnlyRootFilesystem: true
+  # capabilities:
+  #   drop: [ALL]
+
+# Optional NetworkPolicies (default-deny ingress + scoped allows). Off by
+# default since not every cluster runs a CNI that enforces them.
+networkPolicy:
+  enabled: false
+
 serviceAccount:
   create: true
   name: ""
+  # No workload calls the Kubernetes API, so the SA token is not mounted.
+  automountServiceAccountToken: false
   annotations: {}
 
 # First-run admin. Seeded ONLY when the users table is empty (changing these
@@ -132,7 +154,9 @@ database:
     image:
       repository: postgres
       tag: "17"
-    resources: {}
+    resources:
+      requests: { cpu: 100m, memory: 256Mi }
+      limits: { memory: 1Gi }
     persistence:
       type: pvc
       existingClaim: ""
@@ -147,6 +171,12 @@ database:
   cnpg:
     # Fail fast if the CNPG CRDs are absent.
     assertCRDs: true
+    # CNPG bootstraps the owner role from a basic-auth Secret (username/password).
+    # By default the chart creates one from secrets.dbPassword. If you manage
+    # secrets out-of-band (secrets.existingSecret), you MUST point this at a
+    # basic-auth Secret whose password matches that secret's DB password —
+    # otherwise CNPG and the backend would use different passwords.
+    existingAppSecret: ""
     instances: 2
     imageName: ghcr.io/cloudnative-pg/postgresql:17
     storage:
@@ -188,20 +218,29 @@ database:
 # ---------------------------------------------------------------------------
 backend:
   replicas: 1
-  resources: {}
+  resources:
+    requests: { cpu: 50m, memory: 128Mi }
+    limits: { memory: 512Mi }
   nodeSelector: {}
   tolerations: []
+  # No default anti-affinity is set. If you raise replicas for HA, add a
+  # podAntiAffinity here (and consider a PodDisruptionBudget) to spread them.
   affinity: {}
 cfsolver:
   replicas: 1
   image:
     repository: ghcr.io/artyomsv/marauder-cfsolver
-  resources: {}
+  # Headless Chromium is memory-hungry — keep a limit so it can't OOM the node.
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { memory: 1Gi }
 frontend:
   replicas: 1
   image:
     repository: ghcr.io/artyomsv/marauder-frontend
-  resources: {}
+  resources:
+    requests: { cpu: 10m, memory: 32Mi }
+    limits: { memory: 128Mi }
 
 backendImage:
   repository: ghcr.io/artyomsv/marauder-backend
@@ -214,7 +253,9 @@ gateway:
   image:
     repository: nginx
     tag: "1.27-alpine"
-  resources: {}
+  resources:
+    requests: { cpu: 10m, memory: 32Mi }
+    limits: { memory: 128Mi }
   service:
     # ClusterIP (default, LB-agnostic) | LoadBalancer | NodePort
     type: ClusterIP
@@ -246,7 +287,7 @@ clients:
     enabled: false
     image:
       repository: lscr.io/linuxserver/qbittorrent
-      tag: latest
+      tag: "5.0.3"
     webuiPort: 8080
     downloadsMountPath: /downloads
     config:
@@ -260,7 +301,7 @@ clients:
     enabled: false
     image:
       repository: lscr.io/linuxserver/transmission
-      tag: latest
+      tag: "4.0.6"
     webuiPort: 9091
     downloadsMountPath: /downloads
     config:
@@ -279,7 +320,7 @@ arr:
     enabled: false
     image:
       repository: lscr.io/linuxserver/sonarr
-      tag: latest
+      tag: "4.0.15"
     port: 8989
     downloadsMountPath: /downloads
     config:
@@ -293,7 +334,7 @@ arr:
     enabled: false
     image:
       repository: lscr.io/linuxserver/prowlarr
-      tag: latest
+      tag: "1.31.2"
     port: 9696
     config:
       type: pvc
@@ -306,5 +347,5 @@ arr:
     enabled: false
     image:
       repository: ghcr.io/flaresolverr/flaresolverr
-      tag: latest
+      tag: "v3.3.21"
     port: 8191

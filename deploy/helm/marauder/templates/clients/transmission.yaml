@@ -35,6 +35,16 @@ spec:
           ports:
             - name: http
               containerPort: {{ $c.webuiPort }}
+          readinessProbe:
+            tcpSocket:
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          livenessProbe:
+            tcpSocket:
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 30
           volumeMounts:
             {{- include "marauder.volumeMount" (dict "name" "transmission-config" "mountPath" "/config") | nindent 12 }}
             {{- include "marauder.volumeMount" (dict "name" "downloads" "mountPath" $c.downloadsMountPath) | nindent 12 }}

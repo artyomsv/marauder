@@ -6,6 +6,11 @@ metadata:
     {{- include "marauder.componentLabels" (dict "root" $ "component" "backend") | nindent 4 }}
 spec:
   replicas: {{ .Values.backend.replicas }}
+  {{- if eq .Values.persistence.config.type "pvc" }}
+  # An RWO config PVC can't be held by two pods during a rolling update.
+  strategy:
+    type: Recreate
+  {{- end }}
   selector:
     matchLabels:
       {{- include "marauder.componentSelectorLabels" (dict "root" $ "component" "backend") | nindent 6 }}
@@ -13,8 +18,17 @@ spec:
     metadata:
       labels:
         {{- include "marauder.componentLabels" (dict "root" $ "component" "backend") | nindent 8 }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- if and .Values.secrets.create (not .Values.secrets.existingSecret) }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        {{- end }}
     spec:
       serviceAccountName: {{ include "marauder.serviceAccountName" . }}
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -33,6 +47,10 @@ spec:
         - name: backend
           image: {{ include "marauder.image" (dict "image" .Values.backendImage "root" $) }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           ports:
             - name: http
               containerPort: 8679

@@ -15,6 +15,10 @@ spec:
         {{- include "marauder.componentLabels" (dict "root" $ "component" "frontend") | nindent 8 }}
     spec:
       serviceAccountName: {{ include "marauder.serviceAccountName" . }}
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -23,6 +27,10 @@ spec:
         - name: frontend
           image: {{ include "marauder.image" (dict "image" .Values.frontend.image "root" $) }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           ports:
             - name: http
               containerPort: 8081

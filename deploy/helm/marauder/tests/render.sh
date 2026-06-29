@@ -18,8 +18,10 @@ REL=t                      # release name -> fullname "t-marauder"
 FAIL=0
 PASS=0
 
-# render <args...> -> stdout (stderr folded in so template errors are visible)
-render() { "$HELM" template "$REL" "$CHART" "$@" 2>&1; }
+# render <args...> -> stdout (stderr folded in so template errors are visible).
+# `|| true` so an intentional `fail` (non-zero exit) doesn't trip pipefail and
+# mask grep's result — assertions judge by output content, not exit code.
+render() { "$HELM" template "$REL" "$CHART" "$@" 2>&1 || true; }
 
 # assert_contains "desc" "pattern" -- <helm args>
 assert_contains() {
@@ -35,6 +37,10 @@ assert_absent() {
 }
 
 CNPG="--set database.mode=cnpg --set database.cnpg.assertCRDs=false"
+# A shared downloads volume so enabling a client/arr doesn't trip the RWX guard.
+SHARED="--set persistence.downloads.type=existingClaim --set persistence.downloads.existingClaim=media"
+# CNPG backup base args.
+BK="$CNPG --set database.cnpg.backup.enabled=true --set database.cnpg.backup.s3.destinationPath=s3://b/x --set database.cnpg.backup.s3.endpointURL=http://m:9000"
 
 # --- Task 1: scaffold ---
 assert_contains "serviceaccount present"        'kind: ServiceAccount' --
@@ -87,14 +93,47 @@ assert_contains "cnpg scheduledbackup" 'kind: ScheduledBackup' -- $CNPG --set da
 assert_contains "cnpg retention" 'retentionPolicy: "30d"'  -- $CNPG --set database.cnpg.backup.enabled=true --set database.cnpg.backup.s3.destinationPath=s3://b/x --set database.cnpg.backup.s3.endpointURL=http://m:9000
 assert_absent  "no statefulset in cnpg" 'kind: StatefulSet' -- $CNPG
 
-# --- Task 7/8: optional clients + arr ---
+# --- Task 7/8: optional clients + arr (need a shared downloads volume) ---
 assert_absent  "no qbittorrent default" 'name: t-marauder-qbittorrent' --
-assert_contains "qbittorrent enabled" 'name: t-marauder-qbittorrent' -- --set clients.qbittorrent.enabled=true
-assert_contains "transmission enabled" 'name: t-marauder-transmission' -- --set clients.transmission.enabled=true
+assert_contains "qbittorrent enabled" 'name: t-marauder-qbittorrent' -- --set clients.qbittorrent.enabled=true $SHARED
+assert_contains "qbittorrent tag pinned" 'linuxserver/qbittorrent:5.0.3' -- --set clients.qbittorrent.enabled=true $SHARED
+assert_contains "transmission enabled" 'name: t-marauder-transmission' -- --set clients.transmission.enabled=true $SHARED
 assert_absent  "no sonarr default" 'name: t-marauder-sonarr' --
-assert_contains "sonarr enabled" 'name: t-marauder-sonarr' -- --set arr.sonarr.enabled=true
+assert_contains "sonarr enabled" 'name: t-marauder-sonarr' -- --set arr.sonarr.enabled=true $SHARED
 assert_contains "prowlarr enabled" 'name: t-marauder-prowlarr' -- --set arr.prowlarr.enabled=true
 assert_contains "flaresolverr enabled" 'name: t-marauder-flaresolverr' -- --set arr.flaresolverr.enabled=true
+# multiple clients at once share one downloads volume
+assert_contains "multi: qbittorrent" 'name: t-marauder-qbittorrent' -- --set clients.qbittorrent.enabled=true --set clients.transmission.enabled=true $SHARED
+assert_contains "multi: transmission" 'name: t-marauder-transmission' -- --set clients.qbittorrent.enabled=true --set clients.transmission.enabled=true $SHARED
+
+# --- Hardening (security/code-review round 1) ---
+assert_contains "automount token disabled" 'automountServiceAccountToken: false' --
+assert_contains "pod seccomp RuntimeDefault" 'type: RuntimeDefault' --
+assert_contains "container no-priv-escalation" 'allowPrivilegeEscalation: false' --
+assert_contains "backend has resource limit" 'memory: 512Mi' --
+assert_contains "backend config checksum" 'checksum/config:' --
+assert_absent  "no networkpolicy by default" 'kind: NetworkPolicy' --
+assert_contains "networkpolicy when enabled" 'kind: NetworkPolicy' -- --set networkPolicy.enabled=true
+
+# --- Validations (fail-fast guards) ---
+assert_contains "reserved config key fails" 'managed by the chart' -- --set config.MARAUDER_HTTP_ADDR=:9999
+assert_contains "RWO shared downloads fails" 'must include ReadWriteMany' -- --set clients.qbittorrent.enabled=true --set persistence.downloads.type=pvc --set persistence.downloads.pvc.size=1Gi --set 'persistence.downloads.pvc.accessModes={ReadWriteOnce}'
+assert_contains "emptyDir shared downloads fails" 'NOT shared' -- --set clients.qbittorrent.enabled=true
+
+# --- Coverage gaps (qa round 1) ---
+assert_contains "config volume pvc emitted" 'name: t-marauder-config' -- --set persistence.config.type=pvc --set persistence.config.pvc.size=2Gi
+assert_contains "simple non-pvc inline volume" 'claimName: mydb' -- --set database.simple.persistence.type=existingClaim --set database.simple.persistence.existingClaim=mydb
+assert_absent  "simple no VCT when non-pvc" 'volumeClaimTemplates' -- --set database.simple.persistence.type=existingClaim --set database.simple.persistence.existingClaim=mydb
+assert_contains "nodeport value propagates" 'nodePort: 30080' -- --set gateway.service.type=NodePort --set gateway.service.nodePort=30080
+assert_contains "loadBalancerIP propagates" 'loadBalancerIP: 1.2.3.4' -- --set gateway.service.type=LoadBalancer --set gateway.service.loadBalancerIP=1.2.3.4
+assert_contains "ingress className" 'ingressClassName: nginx' -- --set ingress.enabled=true --set ingress.host=m.example.com --set ingress.className=nginx
+assert_absent  "cnpg no s3 secret w/ existingSecret" 'name: t-marauder-backup-s3' -- $BK --set database.cnpg.backup.s3.credentials.existingSecret=my-s3
+assert_contains "cnpg s3 existingSecret referenced" 'name: my-s3' -- $BK --set database.cnpg.backup.s3.credentials.existingSecret=my-s3
+
+# --- H1: cnpg + existingSecret app-password handling ---
+assert_contains "cnpg+existingSecret guard fails" 'existingAppSecret' -- $CNPG --set secrets.existingSecret=mine
+assert_absent  "cnpg no db-app when existingAppSecret" 'name: t-marauder-db-app' -- $CNPG --set database.cnpg.existingAppSecret=my-app
+assert_contains "cnpg uses existingAppSecret" 'name: my-app' -- $CNPG --set database.cnpg.existingAppSecret=my-app
 
 echo "-----------------------------------------"
 echo "PASS=$PASS FAIL=$FAIL"

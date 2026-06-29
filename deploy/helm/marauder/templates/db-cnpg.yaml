@@ -6,6 +6,11 @@
 {{- fail "database.mode=cnpg requires the CloudNativePG operator, but CRD postgresql.cnpg.io/v1 was not found. Install the operator + Barman plugin (see docs/kubernetes.md), or set database.cnpg.assertCRDs=false to skip this check (e.g. for `helm template` without a cluster)." }}
 {{- end }}
 {{- end }}
+{{- $appSecret := $cnpg.existingAppSecret | default (printf "%s-db-app" $fullname) }}
+{{- if and .Values.secrets.existingSecret (not $cnpg.existingAppSecret) }}
+{{- fail "database.mode=cnpg with secrets.existingSecret also requires database.cnpg.existingAppSecret: a kubernetes.io/basic-auth Secret (username/password) whose password matches the DB password in your existingSecret. Otherwise CNPG and the backend would authenticate with different passwords. See docs/kubernetes.md." }}
+{{- end }}
+{{- if not $cnpg.existingAppSecret }}
 # --- App credentials secret (CNPG bootstrap expects basic-auth username/password) ---
 apiVersion: v1
 kind: Secret
@@ -18,6 +23,7 @@ stringData:
   username: {{ .Values.database.user | quote }}
   password: {{ .Values.secrets.dbPassword | quote }}
 ---
+{{- end }}
 apiVersion: postgresql.cnpg.io/v1
 kind: Cluster
 metadata:
@@ -40,7 +46,7 @@ spec:
       database: {{ .Values.database.name | quote }}
       owner: {{ .Values.database.user | quote }}
       secret:
-        name: {{ $fullname }}-db-app
+        name: {{ $appSecret }}
   {{- with $cnpg.resources }}
   resources:
     {{- toYaml . | nindent 4 }}
