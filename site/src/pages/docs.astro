@@ -4,9 +4,9 @@ import { SITE } from "@/data/seo";
 import { breadcrumbSchema } from "@/data/schemas";
 
 const seo = {
-  title: "Documentation — PRD, plugin guide, OIDC, Torznab",
+  title: "Documentation — PRD, plugin guide, Kubernetes, OIDC, Torznab",
   description:
-    "Marauder's full documentation set: vision, competitors, PRD, roadmap, plugin development guide, Keycloak / OIDC walkthrough, Torznab / Newznab guide, end-to-end test reproducer, and CI documentation.",
+    "Marauder's full documentation set: vision, competitors, PRD, roadmap, plugin development guide, Kubernetes deployment (Helm/Kustomize), Keycloak / OIDC walkthrough, Torznab / Newznab guide, end-to-end test reproducer, and CI documentation.",
   path: "/docs",
   keywords: [
     "marauder docs",
@@ -36,6 +36,7 @@ const sections = [
   {
     title: "How-to guides",
     items: [
+      { name: "Kubernetes deployment",      path: "docs/kubernetes.md",               desc: "Deploy to your own cluster: Helm chart (source of truth) + Kustomize + plain manifests, simple or CloudNativePG + S3-backup tiers, and the uniform volume model." },
       { name: "End-to-end magnet test",     path: "docs/test-e2e-magnet.md",          desc: "Step-by-step reproducer for the magnet → qBittorrent walkthrough using the dev compose overlay." },
       { name: "Replace on update",          path: "docs/replace-on-update.md",        desc: "Stop updated releases stacking duplicate torrents — remove the previous version (and optionally its files) per topic." },
       { name: "Keycloak / OIDC",            path: "docs/oidc.md",                     desc: "How to enable OpenID Connect sign-in via the bundled Keycloak realm or any OIDC provider." },
