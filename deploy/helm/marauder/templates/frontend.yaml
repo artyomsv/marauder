@@ -1,0 +1,59 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "marauder.fullname" . }}-frontend
+  labels:
+    {{- include "marauder.componentLabels" (dict "root" $ "component" "frontend") | nindent 4 }}
+spec:
+  replicas: {{ .Values.frontend.replicas }}
+  selector:
+    matchLabels:
+      {{- include "marauder.componentSelectorLabels" (dict "root" $ "component" "frontend") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "marauder.componentLabels" (dict "root" $ "component" "frontend") | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "marauder.serviceAccountName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: frontend
+          image: {{ include "marauder.image" (dict "image" .Values.frontend.image "root" $) }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8081
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          {{- with .Values.frontend.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "marauder.fullname" . }}-frontend
+  labels:
+    {{- include "marauder.componentLabels" (dict "root" $ "component" "frontend") | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "marauder.componentSelectorLabels" (dict "root" $ "component" "frontend") | nindent 4 }}
+  ports:
+    - name: http
+      port: 8081
+      targetPort: http

@@ -1,0 +1,30 @@
+Marauder {{ .Chart.AppVersion }} has been deployed as release "{{ .Release.Name }}" in namespace "{{ .Release.Namespace }}".
+
+Database tier: {{ .Values.database.mode }}
+{{- if eq .Values.database.mode "simple" }}
+  (single-pod Postgres — NO high-availability and NO backups; suitable for single-user setups)
+{{- else if eq .Values.database.mode "cnpg" }}
+  (CloudNativePG: {{ .Values.database.cnpg.instances }} instances{{ if .Values.database.cnpg.backup.enabled }}, Barman backups to {{ .Values.database.cnpg.backup.s3.destinationPath }}{{ else }}, backups DISABLED{{ end }})
+{{- end }}
+
+Access the UI:
+{{- if .Values.ingress.enabled }}
+  http{{ if .Values.ingress.tls.secretName }}s{{ end }}://{{ .Values.ingress.host }}{{ .Values.ingress.path }}
+{{- else if eq .Values.gateway.service.type "LoadBalancer" }}
+  Wait for the LoadBalancer IP:
+    kubectl -n {{ .Release.Namespace }} get svc {{ include "marauder.fullname" . }}-gateway -w
+{{- else if eq .Values.gateway.service.type "NodePort" }}
+  Get a node IP and the NodePort:
+    kubectl -n {{ .Release.Namespace }} get svc {{ include "marauder.fullname" . }}-gateway
+{{- else }}
+  Port-forward the gateway:
+    kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "marauder.fullname" . }}-gateway 8080:{{ .Values.gateway.service.port }}
+  then open http://localhost:8080
+{{- end }}
+
+{{- if and .Values.secrets.create (not .Values.secrets.existingSecret) (not .Values.secrets.masterKey) }}
+
+WARNING: secrets.masterKey is empty. MARAUDER_MASTER_KEY is required and must
+stay stable across upgrades. Set it (openssl rand -base64 32) or supply an
+existingSecret, then upgrade.
+{{- end }}

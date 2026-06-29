@@ -1,0 +1,45 @@
+{{- if .Values.arr.flaresolverr.enabled }}
+{{- $a := .Values.arr.flaresolverr }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "marauder.fullname" . }}-flaresolverr
+  labels:
+    {{- include "marauder.componentLabels" (dict "root" $ "component" "flaresolverr") | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "marauder.componentSelectorLabels" (dict "root" $ "component" "flaresolverr") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "marauder.componentLabels" (dict "root" $ "component" "flaresolverr") | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "marauder.serviceAccountName" . }}
+      containers:
+        - name: flaresolverr
+          image: {{ printf "%s:%s" $a.image.repository $a.image.tag }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: TZ
+              value: "Etc/UTC"
+          ports:
+            - name: http
+              containerPort: {{ $a.port }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "marauder.fullname" . }}-flaresolverr
+  labels:
+    {{- include "marauder.componentLabels" (dict "root" $ "component" "flaresolverr") | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "marauder.componentSelectorLabels" (dict "root" $ "component" "flaresolverr") | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ $a.port }}
+      targetPort: http
+{{- end }}

@@ -1,0 +1,110 @@
+{{- if eq .Values.database.mode "cnpg" }}
+{{- $cnpg := .Values.database.cnpg }}
+{{- $fullname := include "marauder.fullname" . }}
+{{- if $cnpg.assertCRDs }}
+{{- if not ($.Capabilities.APIVersions.Has "postgresql.cnpg.io/v1") }}
+{{- fail "database.mode=cnpg requires the CloudNativePG operator, but CRD postgresql.cnpg.io/v1 was not found. Install the operator + Barman plugin (see docs/kubernetes.md), or set database.cnpg.assertCRDs=false to skip this check (e.g. for `helm template` without a cluster)." }}
+{{- end }}
+{{- end }}
+# --- App credentials secret (CNPG bootstrap expects basic-auth username/password) ---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $fullname }}-db-app
+  labels:
+    {{- include "marauder.componentLabels" (dict "root" $ "component" "database") | nindent 4 }}
+type: kubernetes.io/basic-auth
+stringData:
+  username: {{ .Values.database.user | quote }}
+  password: {{ .Values.secrets.dbPassword | quote }}
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: {{ $fullname }}-db
+  labels:
+    {{- include "marauder.componentLabels" (dict "root" $ "component" "database") | nindent 4 }}
+spec:
+  instances: {{ $cnpg.instances }}
+  imageName: {{ $cnpg.imageName }}
+  storage:
+    size: {{ $cnpg.storage.size }}
+    {{- if $cnpg.storage.storageClass }}
+    storageClass: {{ $cnpg.storage.storageClass | quote }}
+    {{- end }}
+  postgresql:
+    parameters:
+      {{- toYaml $cnpg.parameters | nindent 6 }}
+  bootstrap:
+    initdb:
+      database: {{ .Values.database.name | quote }}
+      owner: {{ .Values.database.user | quote }}
+      secret:
+        name: {{ $fullname }}-db-app
+  {{- with $cnpg.resources }}
+  resources:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- if $cnpg.backup.enabled }}
+  plugins:
+    - name: barman-cloud.cloudnative-pg.io
+      isWALArchiver: true
+      parameters:
+        barmanObjectName: {{ $fullname }}-backup-store
+  {{- end }}
+{{- if $cnpg.backup.enabled }}
+{{- $creds := $cnpg.backup.s3.credentials }}
+{{- $credsSecret := $creds.existingSecret | default (printf "%s-backup-s3" $fullname) }}
+{{- if and $creds.create (not $creds.existingSecret) }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $fullname }}-backup-s3
+  labels:
+    {{- include "marauder.componentLabels" (dict "root" $ "component" "database") | nindent 4 }}
+type: Opaque
+stringData:
+  {{ $creds.accessKeyIdKey }}: {{ $creds.accessKeyId | quote }}
+  {{ $creds.secretAccessKeyKey }}: {{ $creds.secretAccessKey | quote }}
+{{- end }}
+---
+apiVersion: barmancloud.cnpg.io/v1
+kind: ObjectStore
+metadata:
+  name: {{ $fullname }}-backup-store
+  labels:
+    {{- include "marauder.componentLabels" (dict "root" $ "component" "database") | nindent 4 }}
+spec:
+  retentionPolicy: {{ $cnpg.backup.retentionPolicy | quote }}
+  configuration:
+    destinationPath: {{ required "database.cnpg.backup.s3.destinationPath is required when backup.enabled" $cnpg.backup.s3.destinationPath | quote }}
+    endpointURL: {{ required "database.cnpg.backup.s3.endpointURL is required when backup.enabled" $cnpg.backup.s3.endpointURL | quote }}
+    s3Credentials:
+      accessKeyId:
+        name: {{ $credsSecret }}
+        key: {{ $creds.accessKeyIdKey }}
+      secretAccessKey:
+        name: {{ $credsSecret }}
+        key: {{ $creds.secretAccessKeyKey }}
+    wal:
+      compression: {{ $cnpg.backup.wal.compression }}
+    data:
+      compression: {{ $cnpg.backup.data.compression }}
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: ScheduledBackup
+metadata:
+  name: {{ $fullname }}-db-daily
+  labels:
+    {{- include "marauder.componentLabels" (dict "root" $ "component" "database") | nindent 4 }}
+spec:
+  schedule: {{ $cnpg.backup.schedule | quote }}
+  immediate: true
+  cluster:
+    name: {{ $fullname }}-db
+  method: plugin
+  pluginConfiguration:
+    name: barman-cloud.cloudnative-pg.io
+{{- end }}
+{{- end }}

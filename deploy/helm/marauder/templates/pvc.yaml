@@ -1,0 +1,6 @@
+{{/*
+PersistentVolumeClaims for the shared app volumes (config, downloads) when
+their type is "pvc". Client/arr config PVCs are emitted by their own templates.
+*/}}
+{{- include "marauder.pvc" (dict "name" "config" "spec" .Values.persistence.config "root" $) }}
+{{- include "marauder.pvc" (dict "name" "downloads" "spec" .Values.persistence.downloads "root" $) }}

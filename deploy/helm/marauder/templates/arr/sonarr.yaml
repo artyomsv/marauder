@@ -1,0 +1,59 @@
+{{- if .Values.arr.sonarr.enabled }}
+{{- $a := .Values.arr.sonarr }}
+{{- include "marauder.pvc" (dict "name" "sonarr-config" "spec" $a.config "root" $) }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "marauder.fullname" . }}-sonarr
+  labels:
+    {{- include "marauder.componentLabels" (dict "root" $ "component" "sonarr") | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "marauder.componentSelectorLabels" (dict "root" $ "component" "sonarr") | nindent 6 }}
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        {{- include "marauder.componentLabels" (dict "root" $ "component" "sonarr") | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "marauder.serviceAccountName" . }}
+      containers:
+        - name: sonarr
+          image: {{ printf "%s:%s" $a.image.repository $a.image.tag }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: PUID
+              value: "1000"
+            - name: PGID
+              value: "1000"
+            - name: TZ
+              value: "Etc/UTC"
+          ports:
+            - name: http
+              containerPort: {{ $a.port }}
+          volumeMounts:
+            {{- include "marauder.volumeMount" (dict "name" "sonarr-config" "mountPath" "/config") | nindent 12 }}
+            {{- include "marauder.volumeMount" (dict "name" "downloads" "mountPath" $a.downloadsMountPath) | nindent 12 }}
+      volumes:
+        {{- include "marauder.volume" (dict "name" "sonarr-config" "spec" $a.config "root" $) | nindent 8 }}
+        {{- include "marauder.volume" (dict "name" "downloads" "spec" .Values.persistence.downloads "root" $) | nindent 8 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "marauder.fullname" . }}-sonarr
+  labels:
+    {{- include "marauder.componentLabels" (dict "root" $ "component" "sonarr") | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "marauder.componentSelectorLabels" (dict "root" $ "component" "sonarr") | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ $a.port }}
+      targetPort: http
+{{- end }}
