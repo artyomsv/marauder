@@ -1,0 +1,48 @@
+# Preset: CloudNativePG + Barman → S3 (HA failover + point-in-time backups).
+#
+# PREREQUISITE: the CloudNativePG operator AND the Barman Cloud plugin must be
+# installed cluster-wide first (see docs/kubernetes.md). The chart asserts the
+# CRDs exist and fails fast otherwise.
+#
+#   helm install marauder deploy/helm/marauder -n marauder --create-namespace \
+#     -f deploy/helm/marauder/values-cnpg.yaml \
+#     --set secrets.masterKey="$(openssl rand -base64 32)" \
+#     --set secrets.dbPassword="$(openssl rand -base64 24)" \
+#     --set initialAdmin.password="change-me" \
+#     --set database.cnpg.backup.s3.credentials.accessKeyId=... \
+#     --set database.cnpg.backup.s3.credentials.secretAccessKey=...
+
+database:
+  mode: cnpg
+  cnpg:
+    assertCRDs: true
+    instances: 2
+    storage:
+      size: 8Gi
+      storageClass: ""          # "" = cluster default; or a CNPG-tuned class
+    backup:
+      enabled: true
+      schedule: "0 0 4 * * *"   # daily 04:00 (sec min hour dom mon dow)
+      retentionPolicy: "30d"
+      s3:
+        # Works with AWS S3, MinIO, Backblaze B2, DO Spaces, etc.
+        destinationPath: "s3://CHANGE-ME-bucket/marauder/"
+        endpointURL: "https://s3.amazonaws.com"
+        credentials:
+          create: true          # create a Secret from the keys below…
+          existingSecret: ""     # …or reference one you manage out-of-band
+          accessKeyId: ""        # supply via --set or an existingSecret
+          secretAccessKey: ""
+
+# Shared downloads volume — RWX recommended so bundled clients/arr can share it.
+persistence:
+  downloads:
+    type: pvc
+    pvc:
+      storageClass: ""          # an RWX-capable class (nfs/cephfs)
+      size: 100Gi
+      accessModes: [ReadWriteMany]
+
+gateway:
+  service:
+    type: ClusterIP
