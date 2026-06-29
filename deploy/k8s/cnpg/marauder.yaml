@@ -91,7 +91,7 @@ metadata:
 data:
   MARAUDER_HTTP_ADDR: ":8679"
   MARAUDER_CFSOLVER_ENABLED: "true"
-  MARAUDER_CFSOLVER_URL: "http://marauder-cfsolver:8191"
+  MARAUDER_CFSOLVER_URL: "http://marauder-cfsolver:9244"
   MARAUDER_ADMIN_INITIAL_USERNAME: "admin"
   MARAUDER_LOG_LEVEL: "info"
   MARAUDER_SCHEDULER_WORKERS: "8"
@@ -229,7 +229,7 @@ spec:
     app.kubernetes.io/component: cfsolver
   ports:
     - name: http
-      port: 8191
+      port: 9244
       targetPort: http
 
 ---
@@ -315,6 +315,16 @@ spec:
         app.kubernetes.io/component: backend
     spec:
       serviceAccountName: marauder
+      initContainers:
+        - name: wait-for-db
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              until nc -z marauder-db-rw 5432; do
+                echo "waiting for marauder-db-rw:5432…"; sleep 2;
+              done
       containers:
         - name: backend
           image: ghcr.io/artyomsv/marauder-backend:1.9.0
@@ -331,13 +341,16 @@ spec:
                 secretKeyRef:
                   name: marauder-secrets
                   key: MARAUDER_MASTER_KEY
-            - name: MARAUDER_DB_PASSWORD
+            # Password is passed via PGPASSWORD (libpq/pgx fallback) rather than
+            # embedded in the DSN, so passwords with URL-special characters
+            # (/, +, @, :, etc.) can't corrupt the connection string.
+            - name: PGPASSWORD
               valueFrom:
                 secretKeyRef:
                   name: marauder-secrets
                   key: MARAUDER_DB_PASSWORD
             - name: MARAUDER_DB_URL
-              value: "postgres://marauder:$(MARAUDER_DB_PASSWORD)@marauder-db-rw:5432/marauder?sslmode=prefer"
+              value: "postgres://marauder@marauder-db-rw:5432/marauder?sslmode=prefer"
             - name: MARAUDER_ADMIN_INITIAL_PASSWORD
               valueFrom:
                 secretKeyRef:
@@ -412,14 +425,16 @@ spec:
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
-              containerPort: 8191
+              containerPort: 9244
           livenessProbe:
-            tcpSocket:
+            httpGet:
+              path: /health
               port: http
             initialDelaySeconds: 10
             periodSeconds: 20
           readinessProbe:
-            tcpSocket:
+            httpGet:
+              path: /health
               port: http
             initialDelaySeconds: 5
             periodSeconds: 10

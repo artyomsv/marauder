@@ -19,6 +19,16 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      initContainers:
+        - name: wait-for-db
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              until nc -z {{ include "marauder.dbHost" . }} {{ .Values.database.port }}; do
+                echo "waiting for {{ include "marauder.dbHost" . }}:{{ .Values.database.port }}…"; sleep 2;
+              done
       containers:
         - name: backend
           image: {{ include "marauder.image" (dict "image" .Values.backendImage "root" $) }}
@@ -35,13 +45,16 @@ spec:
                 secretKeyRef:
                   name: {{ include "marauder.secretName" . }}
                   key: {{ .Values.secrets.masterKeyName }}
-            - name: MARAUDER_DB_PASSWORD
+            # Password is passed via PGPASSWORD (libpq/pgx fallback) rather than
+            # embedded in the DSN, so passwords with URL-special characters
+            # (/, +, @, :, etc.) can't corrupt the connection string.
+            - name: PGPASSWORD
               valueFrom:
                 secretKeyRef:
                   name: {{ include "marauder.secretName" . }}
                   key: {{ .Values.secrets.dbPasswordKey }}
             - name: MARAUDER_DB_URL
-              value: "postgres://{{ .Values.database.user }}:$(MARAUDER_DB_PASSWORD)@{{ include "marauder.dbHost" . }}:{{ .Values.database.port }}/{{ .Values.database.name }}?sslmode={{ .Values.database.sslmode }}"
+              value: "postgres://{{ .Values.database.user }}@{{ include "marauder.dbHost" . }}:{{ .Values.database.port }}/{{ .Values.database.name }}?sslmode={{ .Values.database.sslmode }}"
             - name: MARAUDER_ADMIN_INITIAL_PASSWORD
               valueFrom:
                 secretKeyRef:

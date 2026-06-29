@@ -47,6 +47,11 @@ assert_contains "chart secret created"          'kind: Secret'         --
 assert_absent  "no chart secret w/ existing"    'name: t-marauder-secrets' -- --set secrets.existingSecret=mine
 assert_contains "backend refs existing secret"  'name: mine'           -- --set secrets.existingSecret=mine
 assert_contains "cfsolver deployment"           'name: t-marauder-cfsolver' --
+assert_contains "cfsolver port 9244"            'containerPort: 9244'  --
+assert_contains "cfsolver url 9244"             'cfsolver:9244'        --
+assert_contains "backend wait-for-db init"      'name: wait-for-db'    --
+assert_contains "backend uses PGPASSWORD"       'name: PGPASSWORD'     --
+assert_absent  "no password in DSN"             'postgres://[^@"]*:[^@"/]*@' --
 
 # --- Task 2: volume model ---
 assert_contains "nfs source"      'server: 10.0.0.1' -- --set persistence.downloads.type=nfs --set persistence.downloads.nfs.server=10.0.0.1 --set persistence.downloads.nfs.path=/d
