@@ -1,0 +1,85 @@
+name: helm
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'deploy/helm/**'
+      - 'deploy/kustomize/**'
+      - 'deploy/k8s/**'
+      - '.github/workflows/helm.yml'
+  pull_request:
+    paths:
+      - 'deploy/helm/**'
+      - 'deploy/kustomize/**'
+      - 'deploy/k8s/**'
+      - '.github/workflows/helm.yml'
+
+jobs:
+  lint-validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.16.4
+      - name: helm lint (both presets)
+        run: |
+          helm lint deploy/helm/marauder -f deploy/helm/marauder/values-simple-db.yaml
+          helm lint deploy/helm/marauder -f deploy/helm/marauder/values-cnpg.yaml --set database.cnpg.assertCRDs=false
+      - name: render-check (deploy/k8s in sync with chart)
+        run: bash deploy/render-manifests.sh --check
+      - name: kubeconform (schema validation)
+        run: |
+          for f in deploy/k8s/simple-db/marauder.yaml deploy/k8s/cnpg/marauder.yaml; do
+            echo "== $f =="
+            docker run --rm -i ghcr.io/yannh/kubeconform:latest \
+              -strict -ignore-missing-schemas -summary < "$f"
+          done
+
+  kustomize-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.16.4
+      - uses: azure/setup-kubectl@v4
+      - name: kustomize build (base + overlays)
+        run: |
+          for o in base overlays/simple-db overlays/cnpg; do
+            echo "== $o =="
+            kubectl kustomize --enable-helm --load-restrictor LoadRestrictionsNone \
+              "deploy/kustomize/$o" | grep -E '^kind:' | sort | uniq -c
+          done
+
+  install-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.16.4
+      - name: Create kind cluster
+        uses: helm/kind-action@v1
+      - name: helm install (simple tier)
+        run: |
+          helm install marauder deploy/helm/marauder -n marauder --create-namespace \
+            -f deploy/helm/marauder/values-simple-db.yaml \
+            --set image.tag="$(grep '^appVersion:' deploy/helm/marauder/Chart.yaml | awk '{print $2}' | tr -d '\"')" \
+            --set persistence.downloads.type=emptyDir \
+            --set database.simple.persistence.type=pvc \
+            --set database.simple.persistence.pvc.storageClass=standard \
+            --set secrets.masterKey="$(openssl rand -base64 32)" \
+            --set secrets.dbPassword="$(openssl rand -base64 24)" \
+            --set initialAdmin.password="$(openssl rand -base64 12)"
+      - name: Wait for database and backend
+        run: |
+          kubectl -n marauder rollout status statefulset/marauder-db --timeout=300s
+          kubectl -n marauder rollout status deployment/marauder-backend --timeout=300s
+      - name: Dump state on failure
+        if: failure()
+        run: |
+          kubectl -n marauder get pods,svc,pvc
+          kubectl -n marauder describe pods
+          kubectl -n marauder logs -l app.kubernetes.io/component=backend --tail=100 || true
