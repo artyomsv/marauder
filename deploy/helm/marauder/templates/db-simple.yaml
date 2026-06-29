@@ -34,6 +34,9 @@ spec:
     spec:
       serviceAccountName: {{ include "marauder.serviceAccountName" . }}
       securityContext:
+        {{- with .Values.podSecurityContext }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
         fsGroup: 999
       containers:
         - name: postgres

@@ -15,6 +15,10 @@ helmCharts:
     releaseName: marauder
     namespace: marauder
     valuesInline:
+      # Placeholders — replace before applying (or use secrets.existingSecret).
+      secrets:
+        masterKey: REPLACE_ME_BASE64_32_BYTES
+        dbPassword: REPLACE_ME
       database:
         mode: cnpg
         cnpg:

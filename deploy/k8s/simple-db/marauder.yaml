@@ -620,6 +620,8 @@ spec:
     spec:
       serviceAccountName: marauder
       securityContext:
+        seccompProfile:
+          type: RuntimeDefault
         fsGroup: 999
       containers:
         - name: postgres

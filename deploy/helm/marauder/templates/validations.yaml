@@ -3,6 +3,11 @@ Fail-fast configuration validations. Emits no resources — only `fail`s with an
 actionable message when a value combination would silently misbehave.
 */ -}}
 
+{{- /* MARAUDER_MASTER_KEY is required and must be supplied at install time. */ -}}
+{{- if and .Values.secrets.create (not .Values.secrets.existingSecret) (not .Values.secrets.masterKey) }}
+{{- fail "secrets.masterKey is required when secrets.create=true and secrets.existingSecret is unset. It encrypts tracker credentials and must stay stable. Generate one with `openssl rand -base64 32` and pass --set secrets.masterKey=..., or supply secrets.existingSecret." }}
+{{- end }}
+
 {{- /* Reserved MARAUDER_* keys the chart sets itself (would duplicate a ConfigMap key). */ -}}
 {{- $reserved := list "MARAUDER_HTTP_ADDR" "MARAUDER_CFSOLVER_ENABLED" "MARAUDER_CFSOLVER_URL" "MARAUDER_ADMIN_INITIAL_USERNAME" -}}
 {{- range $k, $v := .Values.config }}

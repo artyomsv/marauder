@@ -109,4 +109,32 @@ spec:
       ports:
         - { protocol: TCP, port: 5432 }
 {{- end }}
+{{- /* Allow the bundled clients/arr to receive traffic from any first-party
+       Marauder pod in this release (backend→clients, sonarr→prowlarr, etc.). */ -}}
+{{- range $name, $port := dict "qbittorrent" .Values.clients.qbittorrent.webuiPort "transmission" .Values.clients.transmission.webuiPort "sonarr" .Values.arr.sonarr.port "prowlarr" .Values.arr.prowlarr.port "flaresolverr" .Values.arr.flaresolverr.port }}
+{{- $enabled := false }}
+{{- if hasKey $.Values.clients $name }}{{- $enabled = (index $.Values.clients $name).enabled }}{{- else }}{{- $enabled = (index $.Values.arr $name).enabled }}{{- end }}
+{{- if $enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "marauder.fullname" $ }}-{{ $name }}
+  labels:
+    {{- include "marauder.labels" $ | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "marauder.componentSelectorLabels" (dict "root" $ "component" $name) | nindent 6 }}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/instance: {{ $.Release.Name }}
+              app.kubernetes.io/part-of: marauder
+      ports:
+        - { protocol: TCP, port: {{ $port }} }
+{{- end }}
+{{- end }}
 {{- end }}

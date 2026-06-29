@@ -18,10 +18,14 @@ REL=t                      # release name -> fullname "t-marauder"
 FAIL=0
 PASS=0
 
+# Most assertions don't care about the master key; supply one by default so the
+# required-masterKey guard doesn't trip every render. Override per-assertion.
+DEFAULTS="--set secrets.masterKey=ci-test --set-string secrets.dbPassword=ci-test"
+
 # render <args...> -> stdout (stderr folded in so template errors are visible).
 # `|| true` so an intentional `fail` (non-zero exit) doesn't trip pipefail and
 # mask grep's result — assertions judge by output content, not exit code.
-render() { "$HELM" template "$REL" "$CHART" "$@" 2>&1 || true; }
+render() { "$HELM" template "$REL" "$CHART" $DEFAULTS "$@" 2>&1 || true; }
 
 # assert_contains "desc" "pattern" -- <helm args>
 assert_contains() {
@@ -114,6 +118,11 @@ assert_contains "backend has resource limit" 'memory: 512Mi' --
 assert_contains "backend config checksum" 'checksum/config:' --
 assert_absent  "no networkpolicy by default" 'kind: NetworkPolicy' --
 assert_contains "networkpolicy when enabled" 'kind: NetworkPolicy' -- --set networkPolicy.enabled=true
+# masterKey guard fires when empty (raw call — no DEFAULTS key supplied)
+if { "$HELM" template "$REL" "$CHART" 2>&1 || true; } | grep -Eq 'masterKey is required'; then PASS=$((PASS+1)); else echo "FAIL: masterKey required-guard"; FAIL=$((FAIL+1)); fi
+# enabling a client adds a matching NetworkPolicy allow-rule (6 base -> 7)
+npq=$(render --set networkPolicy.enabled=true --set clients.qbittorrent.enabled=true $SHARED | grep -c 'kind: NetworkPolicy')
+if [ "$npq" -ge 7 ]; then PASS=$((PASS+1)); else echo "FAIL: NP client allow-rule (got $npq policies)"; FAIL=$((FAIL+1)); fi
 
 # --- Validations (fail-fast guards) ---
 assert_contains "reserved config key fails" 'managed by the chart' -- --set config.MARAUDER_HTTP_ADDR=:9999
