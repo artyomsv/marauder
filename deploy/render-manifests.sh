@@ -43,7 +43,9 @@ write_or_check() {
   trap 'rm -rf "$tmp"' RETURN
 
   render_tier simple-db -f "$CHART/values-simple-db.yaml" > "$tmp/simple-db.yaml"
-  render_tier cnpg -f "$CHART/values-cnpg.yaml" --set database.cnpg.assertCRDs=false > "$tmp/cnpg.yaml"
+  render_tier cnpg -f "$CHART/values-cnpg.yaml" --set database.cnpg.assertCRDs=false \
+    --set database.cnpg.backup.s3.credentials.accessKeyId=REPLACE_ME \
+    --set database.cnpg.backup.s3.credentials.secretAccessKey=REPLACE_ME > "$tmp/cnpg.yaml"
 
   for t in simple-db cnpg; do
     local dest="$OUT/$t/marauder.yaml"

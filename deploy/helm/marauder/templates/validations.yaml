@@ -8,6 +8,12 @@ actionable message when a value combination would silently misbehave.
 {{- fail "secrets.masterKey is required when secrets.create=true and secrets.existingSecret is unset. It encrypts tracker credentials and must stay stable. Generate one with `openssl rand -base64 32` and pass --set secrets.masterKey=..., or supply secrets.existingSecret." }}
 {{- end }}
 
+{{- /* dbPassword: an empty value crash-loops the simple tier and silently
+       creates an unauthenticated CNPG cluster, so require it too. */ -}}
+{{- if and .Values.secrets.create (not .Values.secrets.existingSecret) (not .Values.secrets.dbPassword) }}
+{{- fail "secrets.dbPassword is required when secrets.create=true and secrets.existingSecret is unset. Generate one with `openssl rand -base64 24` and pass --set secrets.dbPassword=..., or supply secrets.existingSecret." }}
+{{- end }}
+
 {{- /* Reserved MARAUDER_* keys the chart sets itself (would duplicate a ConfigMap key). */ -}}
 {{- $reserved := list "MARAUDER_HTTP_ADDR" "MARAUDER_CFSOLVER_ENABLED" "MARAUDER_CFSOLVER_URL" "MARAUDER_ADMIN_INITIAL_USERNAME" -}}
 {{- range $k, $v := .Values.config }}

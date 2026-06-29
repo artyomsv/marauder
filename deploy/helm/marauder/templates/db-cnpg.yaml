@@ -62,6 +62,9 @@ spec:
 {{- $creds := $cnpg.backup.s3.credentials }}
 {{- $credsSecret := $creds.existingSecret | default (printf "%s-backup-s3" $fullname) }}
 {{- if and $creds.create (not $creds.existingSecret) }}
+{{- if or (not $creds.accessKeyId) (not $creds.secretAccessKey) }}
+{{- fail "database.cnpg.backup.s3.credentials.accessKeyId and secretAccessKey are required when backup.enabled, credentials.create=true and no existingSecret. Pass --set database.cnpg.backup.s3.credentials.accessKeyId=... and ...secretAccessKey=..., or set credentials.existingSecret." }}
+{{- end }}
 ---
 apiVersion: v1
 kind: Secret

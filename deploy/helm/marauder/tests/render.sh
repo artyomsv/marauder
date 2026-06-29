@@ -120,6 +120,12 @@ assert_absent  "no networkpolicy by default" 'kind: NetworkPolicy' --
 assert_contains "networkpolicy when enabled" 'kind: NetworkPolicy' -- --set networkPolicy.enabled=true
 # masterKey guard fires when empty (raw call — no DEFAULTS key supplied)
 if { "$HELM" template "$REL" "$CHART" 2>&1 || true; } | grep -Eq 'masterKey is required'; then PASS=$((PASS+1)); else echo "FAIL: masterKey required-guard"; FAIL=$((FAIL+1)); fi
+# dbPassword guard fires when empty (masterKey supplied, dbPassword left empty)
+if { "$HELM" template "$REL" "$CHART" --set secrets.masterKey=x 2>&1 || true; } | grep -Eq 'dbPassword is required'; then PASS=$((PASS+1)); else echo "FAIL: dbPassword required-guard"; FAIL=$((FAIL+1)); fi
+# S3 backup creds guard fires when create=true but keys empty
+assert_contains "s3 creds guard fires" 'accessKeyId and secretAccessKey are required' -- $BK --set database.cnpg.backup.s3.credentials.create=true
+# S3 creds secret rendered when create=true + keys supplied
+assert_contains "s3 creds secret created" 'name: t-marauder-backup-s3' -- $BK --set database.cnpg.backup.s3.credentials.create=true --set database.cnpg.backup.s3.credentials.accessKeyId=ak --set database.cnpg.backup.s3.credentials.secretAccessKey=sk
 # enabling a client adds a matching NetworkPolicy allow-rule (6 base -> 7)
 npq=$(render --set networkPolicy.enabled=true --set clients.qbittorrent.enabled=true $SHARED | grep -c 'kind: NetworkPolicy')
 if [ "$npq" -ge 7 ]; then PASS=$((PASS+1)); else echo "FAIL: NP client allow-rule (got $npq policies)"; FAIL=$((FAIL+1)); fi

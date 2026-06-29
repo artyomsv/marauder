@@ -28,8 +28,8 @@ jobs:
           version: v3.16.4
       - name: helm lint (both presets)
         run: |
-          helm lint deploy/helm/marauder -f deploy/helm/marauder/values-simple-db.yaml --set secrets.masterKey=ci
-          helm lint deploy/helm/marauder -f deploy/helm/marauder/values-cnpg.yaml --set database.cnpg.assertCRDs=false --set secrets.masterKey=ci
+          helm lint deploy/helm/marauder -f deploy/helm/marauder/values-simple-db.yaml --set secrets.masterKey=ci --set secrets.dbPassword=ci
+          helm lint deploy/helm/marauder -f deploy/helm/marauder/values-cnpg.yaml --set database.cnpg.assertCRDs=false --set secrets.masterKey=ci --set secrets.dbPassword=ci --set database.cnpg.backup.s3.credentials.accessKeyId=ci --set database.cnpg.backup.s3.credentials.secretAccessKey=ci
       - name: render assertions (tests/render.sh)
         run: bash deploy/helm/marauder/tests/render.sh
       - name: render-check (deploy/k8s in sync with chart)

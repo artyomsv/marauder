@@ -53,8 +53,8 @@ metadata:
     app.kubernetes.io/component: database
 type: Opaque
 stringData:
-  ACCESS_KEY_ID: ""
-  ACCESS_SECRET_KEY: ""
+  ACCESS_KEY_ID: "REPLACE_ME"
+  ACCESS_SECRET_KEY: "REPLACE_ME"
 ---
 # Source: marauder/templates/secret.yaml
 apiVersion: v1

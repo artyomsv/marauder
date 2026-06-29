@@ -35,8 +35,8 @@ helmCharts:
               endpointURL: "https://s3.amazonaws.com"
               credentials:
                 create: true
-                accessKeyId: ""
-                secretAccessKey: ""
+                accessKeyId: REPLACE_ME
+                secretAccessKey: REPLACE_ME
       persistence:
         downloads:
           type: pvc
