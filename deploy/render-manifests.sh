@@ -26,13 +26,16 @@ HEADER="# GENERATED FILE — do not edit by hand.
 render_tier() {
   # $1 = tier name (subdir), $2.. = extra helm args
   local tier="$1"; shift
+  # Blank lines are stripped so the output is byte-identical across Helm
+  # versions (Helm 4 emits a blank line before each `---`, Helm 3 does not) —
+  # otherwise the --check drift gate fails purely on whitespace.
   { echo "$HEADER"
     "$HELM" template "$REL" "$CHART" -n "$NS" \
       --set secrets.masterKey=REPLACE_ME_BASE64_32_BYTES \
       --set secrets.dbPassword=REPLACE_ME \
       --set initialAdmin.password=REPLACE_ME \
       "$@"
-  }
+  } | sed '/^[[:space:]]*$/d'
 }
 
 write_or_check() {

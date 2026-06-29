@@ -17,7 +17,6 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/part-of: marauder
 automountServiceAccountToken: false
-
 ---
 # Source: marauder/templates/secret.yaml
 apiVersion: v1
@@ -38,7 +37,6 @@ stringData:
   MARAUDER_MASTER_KEY: "REPLACE_ME_BASE64_32_BYTES"
   MARAUDER_DB_PASSWORD: "REPLACE_ME"
   MARAUDER_ADMIN_INITIAL_PASSWORD: "REPLACE_ME"
-
 ---
 # Source: marauder/templates/configmap.yaml
 apiVersion: v1
@@ -59,7 +57,6 @@ data:
   MARAUDER_ADMIN_INITIAL_USERNAME: "admin"
   MARAUDER_LOG_LEVEL: "info"
   MARAUDER_SCHEDULER_WORKERS: "8"
-
 ---
 # Source: marauder/templates/gateway.yaml
 apiVersion: v1
@@ -86,12 +83,10 @@ data:
         listen 6688;
         server_name _;
         client_max_body_size 16m;
-    
         add_header X-Content-Type-Options "nosniff" always;
         add_header X-Frame-Options "DENY" always;
         add_header Referrer-Policy "strict-origin-when-cross-origin" always;
         add_header Permissions-Policy "camera=(), microphone=(), geolocation=(), interest-cohort=()" always;
-    
         location /api/v1/events {
             proxy_pass         http://marauder_backend;
             proxy_http_version 1.1;
@@ -103,7 +98,6 @@ data:
             proxy_cache        off;
             proxy_read_timeout 3600s;
         }
-    
         location /api/ {
             proxy_pass         http://marauder_backend;
             proxy_http_version 1.1;
@@ -113,10 +107,8 @@ data:
             proxy_set_header   X-Forwarded-Proto $scheme;
             proxy_read_timeout 60s;
         }
-    
         location = /health { proxy_pass http://marauder_backend/health; }
         location = /ready  { proxy_pass http://marauder_backend/ready;  }
-    
         location / {
             proxy_pass         http://marauder_frontend;
             proxy_http_version 1.1;
@@ -145,7 +137,6 @@ spec:
   resources:
     requests:
       storage: 100Gi
-
 ---
 # Source: marauder/templates/backend.yaml
 apiVersion: v1
@@ -170,7 +161,6 @@ spec:
     - name: http
       port: 8679
       targetPort: http
-
 ---
 # Source: marauder/templates/cfsolver.yaml
 apiVersion: v1
@@ -195,7 +185,6 @@ spec:
     - name: http
       port: 9244
       targetPort: http
-
 ---
 # Source: marauder/templates/db-simple.yaml
 apiVersion: v1
@@ -244,7 +233,6 @@ spec:
     - name: http
       port: 8081
       targetPort: http
-
 ---
 # Source: marauder/templates/gateway.yaml
 apiVersion: v1
@@ -269,7 +257,6 @@ spec:
     - name: http
       port: 80
       targetPort: http
-
 ---
 # Source: marauder/templates/backend.yaml
 apiVersion: apps/v1
