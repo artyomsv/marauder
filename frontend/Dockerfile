@@ -17,6 +17,11 @@ RUN npm run build
 # --- Runtime stage: nginx ----------------------------------------------
 FROM nginx:1.31-alpine AS runtime
 
+# Pull Alpine security fixes for base-image packages (e.g. libexpat
+# integer-overflow/UAF CVEs flagged by Trivy; nginx serving static assets
+# never reaches expat, but keep the OS layer patched).
+RUN apk upgrade --no-cache libexpat
+
 # Drop nginx default config and supply our own
 COPY nginx/default.conf /etc/nginx/conf.d/default.conf
 
