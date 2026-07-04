@@ -108,6 +108,19 @@ type WithSeasonCatalog interface {
     SeasonCatalog(ctx context.Context, url string) ([]Season, error) // Season{Number int; Episodes []int}
 }
 
+// The tracker can fetch the release author's latest comment from the
+// topic's discussion thread (issue #110). Called by the scheduler once per
+// detected update, fail-open with its own timeout; the excerpt is rendered
+// as an "Author update:" block in update notifications. Return plain text
+// (tags stripped) and ("", nil) when the author never commented past the
+// release post. Shared HTML scanning helpers (pagination, block stripping,
+// tag flattening) live in forumcommon/posts.go; see the RuTracker and
+// NNM-Club implementations.
+type WithAuthorComment interface {
+    Tracker
+    AuthorComment(ctx context.Context, rawURL string, creds *domain.TrackerCredential) (string, error)
+}
+
 // The tracker gates login behind a captcha the user solves in-app.
 type WithInteractiveLogin interface {
     Tracker

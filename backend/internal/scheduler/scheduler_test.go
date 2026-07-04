@@ -610,6 +610,142 @@ func TestRunCheck_NewRelease_EventsCarrySourceURL(t *testing.T) {
 	}
 }
 
+// fakeTrackerWithComment is a fakeTracker that also implements the
+// author-comment capability (issue #110).
+type fakeTrackerWithComment struct {
+	fakeTracker
+	comment      string
+	commentErr   error
+	commentCalls int
+	commentURL   string
+}
+
+func (f *fakeTrackerWithComment) AuthorComment(_ context.Context, rawURL string, _ *domain.TrackerCredential) (string, error) {
+	f.commentCalls++
+	f.commentURL = rawURL
+	return f.comment, f.commentErr
+}
+
+// newCommentFixture wires a fixture whose tracker also serves author comments.
+func newCommentFixture(t *testing.T, comment string, commentErr error) (*fixture, *fakeTrackerWithComment) {
+	t.Helper()
+	const hash = "c12fe1c06bba254a9dc9f519b335aa7c1367a88a"
+	tr := &fakeTrackerWithComment{
+		fakeTracker: fakeTracker{
+			name:   "faketracker",
+			checks: []checkResult{{check: &domain.Check{Hash: "new-hash"}}},
+			downloads: []downloadResult{
+				{payload: &domain.Payload{MagnetURI: "magnet:?xt=urn:btih:" + hash}},
+				{err: registry.ErrNoPendingEpisodes},
+			},
+		},
+		comment:    comment,
+		commentErr: commentErr,
+	}
+	f := newFixture(t, &tr.fakeTracker, false)
+	f.s.lookupTracker = func(string) registry.Tracker { return tr }
+	return f, tr
+}
+
+// TestRunCheck_NewRelease_EventsCarryAuthorComment asserts the author's
+// latest tracker comment is fetched once per detected update and stamped
+// onto both notifiable update events (issue #110).
+func TestRunCheck_NewRelease_EventsCarryAuthorComment(t *testing.T) {
+	f, tr := newCommentFixture(t, "Added episode 8.", nil)
+
+	f.s.runCheck(context.Background(), f.s.log, f.topic)
+
+	if tr.commentCalls != 1 {
+		t.Errorf("AuthorComment calls = %d, want exactly 1 per update", tr.commentCalls)
+	}
+	if tr.commentURL != f.topic.URL {
+		t.Errorf("AuthorComment URL = %q, want the topic URL %q", tr.commentURL, f.topic.URL)
+	}
+	for _, typ := range []events.Type{events.ReleaseFound, events.DownloadSubmitted} {
+		evs := f.emitter.ofType(typ)
+		if len(evs) != 1 {
+			t.Fatalf("expected 1 %s event, got %d", typ, len(evs))
+		}
+		if evs[0].AuthorComment != "Added episode 8." {
+			t.Errorf("%s AuthorComment = %q, want the author's comment", typ, evs[0].AuthorComment)
+		}
+	}
+}
+
+// TestRunCheck_AuthorCommentError_FailOpen asserts a comment-fetch failure
+// never fails the check and never blocks the base notification.
+func TestRunCheck_AuthorCommentError_FailOpen(t *testing.T) {
+	f, _ := newCommentFixture(t, "", errors.New("forum page boom"))
+
+	f.s.runCheck(context.Background(), f.s.log, f.topic)
+
+	rec := f.lastRecord(t)
+	if rec.errMsg != "" {
+		t.Errorf("check errMsg = %q, want success despite comment-fetch failure", rec.errMsg)
+	}
+	evs := f.emitter.ofType(events.DownloadSubmitted)
+	if len(evs) != 1 {
+		t.Fatalf("expected the base download.submitted event, got %d", len(evs))
+	}
+	if evs[0].AuthorComment != "" {
+		t.Errorf("AuthorComment = %q, want empty on fetch failure", evs[0].AuthorComment)
+	}
+}
+
+// TestRunCheck_AuthorComment_CappedAtMaxRunes asserts overlong comments are
+// rune-truncated with an ellipsis before entering notification events.
+func TestRunCheck_AuthorComment_CappedAtMaxRunes(t *testing.T) {
+	long := strings.Repeat("я", 400) // multibyte on purpose: cap must count runes
+	f, _ := newCommentFixture(t, long, nil)
+
+	f.s.runCheck(context.Background(), f.s.log, f.topic)
+
+	evs := f.emitter.ofType(events.ReleaseFound)
+	if len(evs) != 1 {
+		t.Fatalf("expected 1 release.found event, got %d", len(evs))
+	}
+	want := strings.Repeat("я", 299) + "…"
+	if evs[0].AuthorComment != want {
+		t.Errorf("AuthorComment length = %d runes, want 300 (299 + ellipsis)", len([]rune(evs[0].AuthorComment)))
+	}
+}
+
+// TestCapExcerpt_Boundary pins the exact truncation contract: at most max
+// runes INCLUDING the ellipsis, whitespace trimmed first, multibyte-safe.
+func TestCapExcerpt_Boundary(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		max  int
+		want string
+	}{
+		{"under the cap passes through", strings.Repeat("я", 299), 300, strings.Repeat("я", 299)},
+		{"exactly at the cap passes through", strings.Repeat("я", 300), 300, strings.Repeat("я", 300)},
+		{"one over truncates to cap with ellipsis", strings.Repeat("я", 301), 300, strings.Repeat("я", 299) + "…"},
+		{"surrounding whitespace trimmed before measuring", "  hi  ", 300, "hi"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := capExcerpt(tt.in, tt.max); got != tt.want {
+				t.Errorf("capExcerpt() = %d runes, want %d (%q)", len([]rune(got)), len([]rune(tt.want)), tt.want[:min(20, len(tt.want))])
+			}
+		})
+	}
+}
+
+// TestRunCheck_HashUnchanged_AuthorCommentNotFetched asserts no extra forum
+// round-trip happens on a no-update tick.
+func TestRunCheck_HashUnchanged_AuthorCommentNotFetched(t *testing.T) {
+	f, tr := newCommentFixture(t, "Added episode 8.", nil)
+	tr.checks = []checkResult{{check: &domain.Check{Hash: "old-hash"}}}
+
+	f.s.runCheck(context.Background(), f.s.log, f.topic)
+
+	if tr.commentCalls != 0 {
+		t.Errorf("AuthorComment calls = %d, want 0 when the hash is unchanged", tr.commentCalls)
+	}
+}
+
 func TestRunCheck_CheckError_AlreadyErrored_NoNotify(t *testing.T) {
 	tr := &fakeTracker{
 		name:   "faketracker",
@@ -1473,7 +1609,7 @@ func TestNotifyUpdated_RoutesToTopicNotifier(t *testing.T) {
 	notifierID := uuid.New()
 	topic := &domain.Topic{ID: topicID, UserID: uuid.New(), DisplayName: "My Show", NotifierID: &notifierID}
 
-	s.notifyUpdated(context.Background(), topic, []string{"s01e01"})
+	s.notifyUpdated(context.Background(), topic, []string{"s01e01"}, "")
 
 	evs := emit.ofType(events.DownloadSubmitted)
 	if len(evs) != 1 {
@@ -1494,7 +1630,7 @@ func TestNotifyUpdated_NilNotifierID_GlobalFanOut(t *testing.T) {
 
 	topic := &domain.Topic{ID: topicID, UserID: uuid.New(), DisplayName: "My Show", NotifierID: nil}
 
-	s.notifyUpdated(context.Background(), topic, []string{"s01e01"})
+	s.notifyUpdated(context.Background(), topic, []string{"s01e01"}, "")
 
 	evs := emit.ofType(events.DownloadSubmitted)
 	if len(evs) != 1 {

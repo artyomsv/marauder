@@ -135,6 +135,18 @@ type WithMetadata interface {
 	ResolveMetadata(ctx context.Context, rawURL string, creds *domain.TrackerCredential) (*Metadata, error)
 }
 
+// WithAuthorComment is implemented by trackers that can fetch the release
+// author's latest comment from the topic's discussion thread (issue #110).
+// The scheduler calls it best-effort after an update is detected and renders
+// the excerpt in update notifications. Implementations return plain text
+// (tags stripped, whitespace collapsed) — the caller length-caps it — and
+// ("", nil) when the author has posted no comment beyond the release post
+// itself. creds may be nil for trackers whose topic pages are public.
+type WithAuthorComment interface {
+	Tracker
+	AuthorComment(ctx context.Context, rawURL string, creds *domain.TrackerCredential) (string, error)
+}
+
 // --- Client & Notifier interfaces ---------------------------------------
 
 // Client is a torrent client plugin.

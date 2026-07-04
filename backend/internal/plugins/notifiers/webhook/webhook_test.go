@@ -69,6 +69,52 @@ func TestSendPostsJSON_NoSourceURL_OmitsField(t *testing.T) {
 	}
 }
 
+func TestSendPostsJSON_AuthorComment_IncludedAsField(t *testing.T) {
+	var got map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &got)
+		w.WriteHeader(204)
+	}))
+	defer srv.Close()
+
+	p := &plugin{http: srv.Client()}
+	cfg, _ := json.Marshal(Config{URL: srv.URL})
+	err := p.Send(context.Background(), cfg, domain.Message{
+		Title: "Topic updated", Body: "ep 12",
+		AuthorComment: "Added episode 8.",
+	})
+	if err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if got["author_comment"] != "Added episode 8." {
+		t.Errorf("author_comment: %v", got["author_comment"])
+	}
+}
+
+func TestSendPostsJSON_NoAuthorComment_OmitsField(t *testing.T) {
+	var got map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &got)
+		w.WriteHeader(204)
+	}))
+	defer srv.Close()
+
+	p := &plugin{http: srv.Client()}
+	cfg, _ := json.Marshal(Config{URL: srv.URL})
+	err := p.Send(context.Background(), cfg, domain.Message{
+		Title: "Topic updated", Body: "ep 12",
+	})
+	if err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	// Same shape-stability contract as source_url: absent, not empty.
+	if _, present := got["author_comment"]; present {
+		t.Errorf("author_comment must be omitted when empty, got payload: %v", got)
+	}
+}
+
 func TestSendNon2xx(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "nope", http.StatusBadRequest)

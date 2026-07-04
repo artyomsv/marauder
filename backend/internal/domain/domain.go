@@ -231,12 +231,16 @@ type AddOptions struct {
 
 // Message is a structured notification body. Link points at the Marauder
 // UI; SourceURL is the topic's original tracker page (empty when the event
-// has no topic source, e.g. a credential session expiry).
+// has no topic source, e.g. a credential session expiry). AuthorComment is
+// the release author's latest tracker comment (issue #110), already
+// plain-text and length-capped by the scheduler; empty when the tracker
+// can't provide one.
 type Message struct {
-	Title     string
-	Body      string
-	Link      string
-	SourceURL string
+	Title         string
+	Body          string
+	Link          string
+	SourceURL     string
+	AuthorComment string
 }
 
 // SonarrInstance is the runtime configuration for one Sonarr instance,

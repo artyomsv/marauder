@@ -97,6 +97,9 @@ func (p *plugin) Send(ctx context.Context, rawConfig []byte, msg domain.Message)
 // HTML entity set, so any title/body/URL renders verbatim.
 func formatMessage(m domain.Message) string {
 	s := "<b>" + html.EscapeString(m.Title) + "</b>\n" + html.EscapeString(m.Body)
+	if m.AuthorComment != "" {
+		s += "\nAuthor update:\n<i>" + html.EscapeString(m.AuthorComment) + "</i>"
+	}
 	if m.SourceURL != "" {
 		s += "\nSource: " + html.EscapeString(m.SourceURL)
 	}

@@ -122,6 +122,48 @@ func TestFormatMessage_SourceURL(t *testing.T) {
 	}
 }
 
+func TestFormatMessage_AuthorComment(t *testing.T) {
+	tests := []struct {
+		name string
+		msg  domain.Message
+		want string
+	}{
+		{
+			name: "comment renders as an italic labeled block between body and links",
+			msg: domain.Message{
+				Title: "T", Body: "B",
+				AuthorComment: "Added episode 8.",
+				SourceURL:     "https://tracker.example/viewtopic.php?t=1",
+				Link:          "http://marauder/topics",
+			},
+			want: "<b>T</b>\nB\nAuthor update:\n<i>Added episode 8.</i>\nSource: https://tracker.example/viewtopic.php?t=1\nMarauder: http://marauder/topics",
+		},
+		{
+			name: "no comment renders no Author update block",
+			msg: domain.Message{
+				Title: "T", Body: "B",
+				SourceURL: "https://tracker.example/viewtopic.php?t=1",
+			},
+			want: "<b>T</b>\nB\nSource: https://tracker.example/viewtopic.php?t=1",
+		},
+		{
+			name: "HTML specials in the comment are escaped",
+			msg: domain.Message{
+				Title: "T", Body: "B",
+				AuthorComment: "5 > 4 & <b>done</b>",
+			},
+			want: "<b>T</b>\nB\nAuthor update:\n<i>5 &gt; 4 &amp; &lt;b&gt;done&lt;/b&gt;</i>",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := formatMessage(tt.msg); got != tt.want {
+				t.Errorf("formatMessage() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestSendValidationErrors(t *testing.T) {
 	p := &plugin{http: &http.Client{Timeout: 5 * time.Second}}
 	bad := []Config{
