@@ -38,15 +38,6 @@ func PaginationStarts(page []byte, topicID string) []int {
 	return starts
 }
 
-// MaxPaginationStart returns the largest `&start=N` offset among viewtopic
-// pagination links for the given topic id, or 0 when the topic fits on one
-// page.
-func MaxPaginationStart(page []byte, topicID string) int {
-	if starts := PaginationStarts(page, topicID); len(starts) > 0 {
-		return starts[0]
-	}
-	return 0
-}
 
 // StripTagBlocks removes every `<tag ... class="...classSubstr..." ...>`
 // element block from s, including nested same-tag children (depth-balanced).

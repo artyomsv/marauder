@@ -5,16 +5,19 @@ import (
 	"testing"
 )
 
-func TestMaxPaginationStart(t *testing.T) {
+// TestPaginationStarts_Matching pins the link-matching rules: the newest
+// (largest) offset comes first, both &amp; and raw & forms match, other
+// topics' links and same-digit non-t params are ignored.
+func TestPaginationStarts_Matching(t *testing.T) {
 	tests := []struct {
-		name    string
-		page    string
-		topicID string
-		want    int
+		name     string
+		page     string
+		topicID  string
+		wantHead int // largest expected offset; 0 = expect no matches
 	}{
 		{"no pagination links", `<html><a href="viewtopic.php?t=1">x</a></html>`, "1", 0},
 		{
-			"picks the largest start offset",
+			"largest start offset first",
 			`<a class="pg" href="viewtopic.php?t=6511657&amp;start=30">2</a>
 			 <a class="pg" href="viewtopic.php?t=6511657&amp;start=420">15</a>
 			 <a class="pg" href="viewtopic.php?t=6511657&amp;start=60">3</a>`,
@@ -38,8 +41,15 @@ func TestMaxPaginationStart(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := MaxPaginationStart([]byte(tt.page), tt.topicID); got != tt.want {
-				t.Errorf("MaxPaginationStart() = %d, want %d", got, tt.want)
+			starts := PaginationStarts([]byte(tt.page), tt.topicID)
+			if tt.wantHead == 0 {
+				if len(starts) != 0 {
+					t.Errorf("PaginationStarts() = %v, want no matches", starts)
+				}
+				return
+			}
+			if len(starts) == 0 || starts[0] != tt.wantHead {
+				t.Errorf("PaginationStarts() = %v, want head %d", starts, tt.wantHead)
 			}
 		})
 	}

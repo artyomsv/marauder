@@ -173,6 +173,40 @@ func TestAuthorComment_AuthorOnMiddlePage_WalksPaginationBackward(t *testing.T) 
 	}
 }
 
+// TestAuthorComment_WalkCappedAtMaxPages asserts the backward walk stops
+// after maxCommentPageFetches extra fetches: on a 5-page thread whose only
+// author comment sits beyond the cap, the comment is missed (page-1
+// fallback yields "") and pages past the cap are never requested.
+func TestAuthorComment_WalkCappedAtMaxPages(t *testing.T) {
+	pg := `<a class="pg" href="viewtopic.php?t=10&amp;start=30">2</a>` +
+		`<a class="pg" href="viewtopic.php?t=10&amp;start=60">3</a>` +
+		`<a class="pg" href="viewtopic.php?t=10&amp;start=90">4</a>` +
+		`<a class="pg" href="viewtopic.php?t=10&amp;start=120">5</a>`
+	replies := topicPage(rtPost("300", "nick ", "commenter", `ok`)) + pg
+	pages := map[string]string{
+		"":    topicPage(rtPost("100", "nick nick-author", "uploader", `Release description`)) + pg,
+		"30":  topicPage(rtPost("200", "nick nick-author", "uploader", `Beyond the cap.`)) + pg,
+		"60":  replies,
+		"90":  replies,
+		"120": replies,
+	}
+	p, seen := newAuthorCommentServer(t, pages)
+
+	got, err := p.AuthorComment(context.Background(), "https://rutracker.org/forum/viewtopic.php?t=10", nil)
+	if err != nil {
+		t.Fatalf("AuthorComment: %v", err)
+	}
+	if got != "" {
+		t.Errorf("AuthorComment = %q, want empty — the only author comment is beyond the walk cap", got)
+	}
+	if len(*seen) != 4 {
+		t.Errorf("fetches = %d (%v), want 4: page 1 + exactly maxCommentPageFetches walked pages", len(*seen), *seen)
+	}
+	if joined := strings.Join(*seen, " | "); strings.Contains(joined, "start=30") {
+		t.Errorf("page start=30 is beyond the 3-page cap and must not be fetched: %s", joined)
+	}
+}
+
 // TestAuthorComment_LastPageFetchFails_FallsBackToPageOne asserts a failed
 // last-page fetch degrades to scanning the already-fetched first page — an
 // older author comment beats a transient-network error, and the ("", nil)
