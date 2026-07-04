@@ -72,12 +72,14 @@ func (p *plugin) AuthorComment(ctx context.Context, rawURL string, creds *domain
 	// Post #1 on the first page is the release description, not a comment.
 	skipFirst := true
 	if maxStart := forumcommon.MaxPaginationStart([]byte(page), m[1]); maxStart > 0 {
-		raw, err = p.fetch(ctx, fmt.Sprintf("%s&start=%d", canonical, maxStart), creds)
-		if err != nil {
-			return "", fmt.Errorf("author comment: last page: %w", err)
+		lastRaw, lerr := p.fetch(ctx, fmt.Sprintf("%s&start=%d", canonical, maxStart), creds)
+		if lerr == nil {
+			posts = parsePosts(forumcommon.DecodeWindows1251(string(lastRaw)))
+			skipFirst = false
 		}
-		posts = parsePosts(forumcommon.DecodeWindows1251(string(raw)))
-		skipFirst = false
+		// On a last-page fetch failure fall back to scanning the already-
+		// fetched first page: an older author comment beats a transient
+		// error, and "nothing found" stays uniformly ("", nil).
 	}
 
 	first := 0

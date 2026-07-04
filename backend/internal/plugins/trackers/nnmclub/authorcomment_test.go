@@ -118,6 +118,26 @@ func TestAuthorComment_MultiPage_MatchesAuthorByNameOnLastPage(t *testing.T) {
 	}
 }
 
+// TestAuthorComment_LastPageFetchFails_FallsBackToPageOne asserts a failed
+// last-page fetch degrades to scanning the already-fetched first page
+// instead of surfacing a transient error.
+func TestAuthorComment_LastPageFetchFails_FallsBackToPageOne(t *testing.T) {
+	page1 := nnmTopicPage(
+		nnmPost("100", `uploader`, `Release description`),
+		nnmPost("101", `uploader`, `Добавлена 5 серия.`),
+	) + `<a href="viewtopic.php?t=830137&amp;start=15">2</a>`
+	// start=15 is NOT served → the last-page fetch 404s.
+	p, topicURL, _ := newAuthorCommentServer(t, map[string]string{"": page1})
+
+	got, err := p.AuthorComment(context.Background(), topicURL, nil)
+	if err != nil {
+		t.Fatalf("AuthorComment must fall back, not error: %v", err)
+	}
+	if got != "Добавлена 5 серия." {
+		t.Errorf("AuthorComment = %q, want the page-1 author comment as fallback", got)
+	}
+}
+
 // TestAuthorComment_DeepLinkURL_CanonicalizedToPageOne guards author
 // attribution against stored topic URLs that already carry pagination or
 // fragments (e.g. a user pasted a page-4 deep link). The first fetch must be

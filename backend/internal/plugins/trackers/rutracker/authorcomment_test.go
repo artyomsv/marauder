@@ -122,6 +122,27 @@ func TestAuthorComment_MultiPage_ScansLastPage(t *testing.T) {
 	}
 }
 
+// TestAuthorComment_LastPageFetchFails_FallsBackToPageOne asserts a failed
+// last-page fetch degrades to scanning the already-fetched first page — an
+// older author comment beats a transient-network error, and the ("", nil)
+// "nothing found" contract stays uniform.
+func TestAuthorComment_LastPageFetchFails_FallsBackToPageOne(t *testing.T) {
+	page1 := topicPage(
+		rtPost("100", "nick nick-author", "uploader", `Release description`),
+		rtPost("101", "nick nick-author", "uploader", `Added episode 5.`),
+	) + `<a class="pg" href="viewtopic.php?t=7&amp;start=30">2</a>`
+	// start=30 is NOT served → the last-page fetch 404s.
+	p, _ := newAuthorCommentServer(t, map[string]string{"": page1})
+
+	got, err := p.AuthorComment(context.Background(), "https://rutracker.org/forum/viewtopic.php?t=7", nil)
+	if err != nil {
+		t.Fatalf("AuthorComment must fall back, not error: %v", err)
+	}
+	if got != "Added episode 5." {
+		t.Errorf("AuthorComment = %q, want the page-1 author comment as fallback", got)
+	}
+}
+
 func TestAuthorComment_Cp1251Body_DecodedToUTF8(t *testing.T) {
 	comment, err := charmap.Windows1251.NewEncoder().String("Добавлена 8 серия.")
 	if err != nil {

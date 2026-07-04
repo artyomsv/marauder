@@ -116,6 +116,11 @@ func TestTagBlockInner(t *testing.T) {
 			`<div class="postbody"><div>a<div>b</div>c</div>d</div><div>next</div>`,
 			"<div>a<div>b</div>c</div>d", true,
 		},
+		{
+			"a tag merely prefixed with the name does not inflate depth",
+			`<div class="postbody">x<divider>y</divider>z</div>tail`,
+			"x<divider>y</divider>z", true,
+		},
 		{"not found", `<span>nothing here</span>`, "", false},
 		{"unbalanced returns not-ok", `<div class="postbody">never closed`, "", false},
 	}

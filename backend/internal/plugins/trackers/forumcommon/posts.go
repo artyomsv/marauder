@@ -90,18 +90,32 @@ func matchingClose(s string, from int, tag string) (int, bool) {
 		if nextClose == -1 {
 			return 0, false
 		}
-		// An opening token only counts when it is a real tag start
-		// (followed by a space, '>' or attribute), which `<div` prefix
-		// matching approximates well enough for forum markup.
 		if nextOpen != -1 && nextOpen < nextClose {
-			i += nextOpen + len(openTok)
-			depth++
+			after := i + nextOpen + len(openTok)
+			i = after
+			// Count only a real tag start: "<div" must be followed by a
+			// delimiter — "<divider>" is not a <div> and must not
+			// inflate depth (it would make the scanner overshoot the
+			// real close and drop the block).
+			if after < len(s) && isTagDelim(s[after]) {
+				depth++
+			}
 			continue
 		}
 		i += nextClose + len(closeTok)
 		depth--
 	}
 	return i, true
+}
+
+// isTagDelim reports whether c can legally follow a tag name inside an
+// opening tag: whitespace, an attribute list, self-close, or the tag end.
+func isTagDelim(c byte) bool {
+	switch c {
+	case ' ', '\t', '\n', '\r', '>', '/':
+		return true
+	}
+	return false
 }
 
 var (
