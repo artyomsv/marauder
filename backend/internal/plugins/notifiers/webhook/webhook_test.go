@@ -45,6 +45,30 @@ func TestSendPostsJSON(t *testing.T) {
 	}
 }
 
+func TestSendPostsJSON_NoSourceURL_OmitsField(t *testing.T) {
+	var got map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &got)
+		w.WriteHeader(204)
+	}))
+	defer srv.Close()
+
+	p := &plugin{http: srv.Client()}
+	cfg, _ := json.Marshal(Config{URL: srv.URL})
+	err := p.Send(context.Background(), cfg, domain.Message{
+		Title: "Session expired", Body: "x", Link: "https://example.com/credentials",
+	})
+	if err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	// Non-topic events (e.g. session.expired) must not grow an empty
+	// source_url field — strict-schema consumers would see a phantom key.
+	if _, present := got["source_url"]; present {
+		t.Errorf("source_url must be omitted when empty, got payload: %v", got)
+	}
+}
+
 func TestSendNon2xx(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "nope", http.StatusBadRequest)

@@ -87,7 +87,7 @@ func buildMessage(from, to string, m domain.Message) []byte {
 		body += "\r\n\r\nSource: " + m.SourceURL
 	}
 	if m.Link != "" {
-		body += "\r\n\r\n" + m.Link
+		body += "\r\n\r\nMarauder: " + m.Link
 	}
 	return []byte(
 		"From: " + from + "\r\n" +

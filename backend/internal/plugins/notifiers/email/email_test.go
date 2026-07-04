@@ -57,8 +57,8 @@ func TestSendCallsSMTP(t *testing.T) {
 	if !bytes.Contains(got.msg, []byte("Episode 12 dropped")) {
 		t.Errorf("missing body in message: %s", got.msg)
 	}
-	if !bytes.Contains(got.msg, []byte("https://example.com/topic/1")) {
-		t.Errorf("missing link in message: %s", got.msg)
+	if !bytes.Contains(got.msg, []byte("Marauder: https://example.com/topic/1")) {
+		t.Errorf("missing labeled Marauder link in message: %s", got.msg)
 	}
 	if !bytes.Contains(got.msg, []byte("Source: https://tracker.example/viewtopic.php?t=1")) {
 		t.Errorf("missing source URL in message: %s", got.msg)
