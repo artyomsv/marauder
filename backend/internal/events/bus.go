@@ -19,6 +19,7 @@ type Event struct {
 	Title      string
 	Body       string
 	Link       string
+	SourceURL  string // original tracker/topic page; empty for non-topic events
 	Data       map[string]any
 }
 
@@ -82,7 +83,7 @@ func (b *Bus) Emit(ctx context.Context, ev Event) {
 
 	if p.Notifiable && b.notif != nil {
 		b.notif.SendVia(ctx, ev.UserID, ev.NotifierID, string(ev.Type), domain.Message{
-			Title: ev.Title, Body: ev.Body, Link: ev.Link,
+			Title: ev.Title, Body: ev.Body, Link: ev.Link, SourceURL: ev.SourceURL,
 		})
 	}
 

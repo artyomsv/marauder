@@ -23,9 +23,10 @@ func TestSendPostsJSON(t *testing.T) {
 	p := &plugin{http: srv.Client()}
 	cfg, _ := json.Marshal(Config{URL: srv.URL})
 	err := p.Send(context.Background(), cfg, domain.Message{
-		Title: "Topic updated",
-		Body:  "ep 12",
-		Link:  "https://example.com/topic/1",
+		Title:     "Topic updated",
+		Body:      "ep 12",
+		Link:      "https://example.com/topic/1",
+		SourceURL: "https://tracker.example/viewtopic.php?t=1",
 	})
 	if err != nil {
 		t.Fatalf("Send: %v", err)
@@ -38,6 +39,9 @@ func TestSendPostsJSON(t *testing.T) {
 	}
 	if got["source"] != "marauder" {
 		t.Errorf("source: %v", got["source"])
+	}
+	if got["source_url"] != "https://tracker.example/viewtopic.php?t=1" {
+		t.Errorf("source_url: %v", got["source_url"])
 	}
 }
 

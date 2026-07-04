@@ -308,6 +308,9 @@ func TestTopics_Create_EmitsTopicAdded(t *testing.T) {
 	if len(got) != 1 || got[0].Type != events.TopicAdded {
 		t.Fatalf("want one topic.added event, got %+v", got)
 	}
+	if got[0].SourceURL != body.URL {
+		t.Errorf("SourceURL = %q, want the topic's tracker URL %q", got[0].SourceURL, body.URL)
+	}
 }
 
 // ---------------------------------------------------------------------------

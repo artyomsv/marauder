@@ -25,13 +25,15 @@ func (f *fakeRecorder) Record(_ context.Context, e *domain.TopicEvent) (int64, e
 type fakeNotifier struct {
 	event      string
 	notifierID *uuid.UUID
+	msg        domain.Message
 	called     int
 }
 
-func (f *fakeNotifier) SendVia(_ context.Context, _ uuid.UUID, nid *uuid.UUID, event string, _ domain.Message) int {
+func (f *fakeNotifier) SendVia(_ context.Context, _ uuid.UUID, nid *uuid.UUID, event string, msg domain.Message) int {
 	f.called++
 	f.event = event
 	f.notifierID = nid
+	f.msg = msg
 	return 1
 }
 
@@ -68,6 +70,23 @@ func TestEmit_ReleaseFound_PersistsNotifiesAndPublishes(t *testing.T) {
 	}
 	if pub.called != 1 || pub.id != 42 {
 		t.Errorf("publisher called %d id %d, want 1/42", pub.called, pub.id)
+	}
+}
+
+func TestEmit_SourceURLSet_PassedToNotifierMessage(t *testing.T) {
+	bus, _, notif, _ := newBus(t)
+	tid := uuid.New()
+	bus.Emit(context.Background(), Event{
+		UserID: uuid.New(), TopicID: &tid, Type: ReleaseFound,
+		Title: "X", Body: "Y",
+		Link:      "http://marauder/topics",
+		SourceURL: "https://tracker.example/viewtopic.php?t=1",
+	})
+	if notif.msg.SourceURL != "https://tracker.example/viewtopic.php?t=1" {
+		t.Errorf("msg.SourceURL = %q, want the event's source URL", notif.msg.SourceURL)
+	}
+	if notif.msg.Link != "http://marauder/topics" {
+		t.Errorf("msg.Link = %q, want the Marauder link preserved", notif.msg.Link)
 	}
 }
 

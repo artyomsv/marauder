@@ -34,9 +34,10 @@ func TestSendCallsSMTP(t *testing.T) {
 		To:       "to@example.com",
 	})
 	err := p.Send(context.Background(), cfg, domain.Message{
-		Title: "Topic updated",
-		Body:  "Episode 12 dropped",
-		Link:  "https://example.com/topic/1",
+		Title:     "Topic updated",
+		Body:      "Episode 12 dropped",
+		Link:      "https://example.com/topic/1",
+		SourceURL: "https://tracker.example/viewtopic.php?t=1",
 	})
 	if err != nil {
 		t.Fatalf("Send: %v", err)
@@ -58,6 +59,18 @@ func TestSendCallsSMTP(t *testing.T) {
 	}
 	if !bytes.Contains(got.msg, []byte("https://example.com/topic/1")) {
 		t.Errorf("missing link in message: %s", got.msg)
+	}
+	if !bytes.Contains(got.msg, []byte("Source: https://tracker.example/viewtopic.php?t=1")) {
+		t.Errorf("missing source URL in message: %s", got.msg)
+	}
+}
+
+func TestBuildMessage_NoSourceURL_OmitsSourceLine(t *testing.T) {
+	msg := buildMessage("f@example.com", "t@example.com", domain.Message{
+		Title: "T", Body: "B", Link: "https://example.com/topic/1",
+	})
+	if bytes.Contains(msg, []byte("Source:")) {
+		t.Errorf("message must not contain a Source line when SourceURL is empty: %s", msg)
 	}
 }
 

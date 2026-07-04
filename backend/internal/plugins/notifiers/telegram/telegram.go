@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"io"
 	"net/http"
 	"time"
@@ -67,7 +68,7 @@ func (p *plugin) Send(ctx context.Context, rawConfig []byte, msg domain.Message)
 	body := map[string]any{
 		"chat_id":    c.ChatID,
 		"text":       formatMessage(msg),
-		"parse_mode": "Markdown",
+		"parse_mode": "HTML",
 	}
 	buf, _ := json.Marshal(body)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
@@ -88,10 +89,19 @@ func (p *plugin) Send(ctx context.Context, rawConfig []byte, msg domain.Message)
 	return nil
 }
 
+// formatMessage renders for Telegram's HTML parse mode. HTML is used instead
+// of (legacy) Markdown because tracker URLs and release titles routinely
+// contain _/*/[ — in Markdown mode an unbalanced metacharacter makes the Bot
+// API reject the whole message with 400 "can't parse entities", silently
+// dropping the notification. html.EscapeString is a complete escape for the
+// HTML entity set, so any title/body/URL renders verbatim.
 func formatMessage(m domain.Message) string {
-	s := "*" + m.Title + "*\n" + m.Body
+	s := "<b>" + html.EscapeString(m.Title) + "</b>\n" + html.EscapeString(m.Body)
+	if m.SourceURL != "" {
+		s += "\nSource: " + html.EscapeString(m.SourceURL)
+	}
 	if m.Link != "" {
-		s += "\n" + m.Link
+		s += "\nMarauder: " + html.EscapeString(m.Link)
 	}
 	return s
 }

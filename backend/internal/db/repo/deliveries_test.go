@@ -177,9 +177,9 @@ func TestDeliveries_ListInFlight_ReturnsIncompleteDeliveries(t *testing.T) {
 	notifierID := uuid.New()
 	clientID := uuid.New()
 
-	rows := pgxmock.NewRows([]string{"d.id", "d.topic_id", "t.user_id", "t.notifier_id", "d.client_id", "d.infohash", "d.label", "t.display_name"}).
-		AddRow(deliveryID, topicID, userID, &notifierID, &clientID, "abc123", "s01e01", "Test Topic")
-	mock.ExpectQuery(`SELECT d\.id, d\.topic_id, t\.user_id, t\.notifier_id, d\.client_id, d\.infohash, d\.label, t\.display_name`).
+	rows := pgxmock.NewRows([]string{"d.id", "d.topic_id", "t.user_id", "t.notifier_id", "d.client_id", "d.infohash", "d.label", "t.display_name", "t.url"}).
+		AddRow(deliveryID, topicID, userID, &notifierID, &clientID, "abc123", "s01e01", "Test Topic", "https://tracker.example/viewtopic.php?t=1")
+	mock.ExpectQuery(`SELECT d\.id, d\.topic_id, t\.user_id, t\.notifier_id, d\.client_id, d\.infohash, d\.label, t\.display_name, t\.url`).
 		WillReturnRows(rows)
 
 	got, err := repo.ListInFlight(context.Background())
@@ -194,6 +194,9 @@ func TestDeliveries_ListInFlight_ReturnsIncompleteDeliveries(t *testing.T) {
 	}
 	if got[0].Infohash != "abc123" || got[0].Label != "s01e01" || got[0].DisplayName != "Test Topic" {
 		t.Errorf("unexpected values: %+v", got[0])
+	}
+	if got[0].URL != "https://tracker.example/viewtopic.php?t=1" {
+		t.Errorf("url not scanned correctly: %+v", got[0].URL)
 	}
 	if got[0].NotifierID == nil || *got[0].NotifierID != notifierID {
 		t.Errorf("notifier_id not scanned correctly: %+v", got[0].NotifierID)

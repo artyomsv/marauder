@@ -62,10 +62,11 @@ func (p *plugin) Send(ctx context.Context, raw []byte, msg domain.Message) error
 		return errors.New("url is required")
 	}
 	body, _ := json.Marshal(map[string]any{
-		"source": "marauder",
-		"title":  msg.Title,
-		"body":   msg.Body,
-		"link":   msg.Link,
+		"source":     "marauder",
+		"title":      msg.Title,
+		"body":       msg.Body,
+		"link":       msg.Link,
+		"source_url": msg.SourceURL,
 	})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.URL, bytes.NewReader(body))
 	if err != nil {

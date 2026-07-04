@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- feat(notify): notifications now include the topic's original tracker URL
+  (issue #109). Release-detected, sent-to-client, download-completed,
+  check-failed and topic-added notifications carry a `Source:` link to the
+  original tracker page alongside the existing Marauder UI link, across all
+  notifiers: Telegram and email render a labeled `Source:` line, webhooks gain
+  a `source_url` JSON field, and Pushover appends the source to the message
+  text (its single supplementary-url slot stays on the Marauder link). Topics
+  without a source URL render unchanged — no empty `Source:` line.
+
+### Fixed
+
+- fix(notify): Telegram messages are now sent with HTML parse mode and proper
+  escaping instead of legacy Markdown. Previously a title or URL containing an
+  unbalanced `_`, `*`, `` ` `` or `[` made the Telegram Bot API reject the
+  whole message with 400 "can't parse entities", silently dropping the
+  notification.
+
 ## [1.9.0] - 2026-06-28
 
 ### Added

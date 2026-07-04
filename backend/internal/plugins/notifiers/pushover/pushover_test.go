@@ -30,17 +30,42 @@ func TestSend(t *testing.T) {
 	cfg, _ := json.Marshal(Config{UserKey: "u", AppToken: "t"})
 	if err := p.Send(context.Background(), cfg, domain.Message{
 		Title: "Topic updated", Body: "ep 12", Link: "https://example.com/x",
+		SourceURL: "https://tracker.example/viewtopic.php?t=1",
 	}); err != nil {
 		t.Fatal(err)
 	}
 	if got["token"] != "t" || got["user"] != "u" {
 		t.Errorf("creds not sent: %+v", got)
 	}
-	if got["title"] != "Topic updated" || got["message"] != "ep 12" {
+	// The single supplementary-url slot stays the Marauder link; the source
+	// URL goes into the message text instead.
+	if got["title"] != "Topic updated" || got["message"] != "ep 12\n\nSource: https://tracker.example/viewtopic.php?t=1" {
 		t.Errorf("body not sent: %+v", got)
 	}
 	if got["url"] != "https://example.com/x" {
 		t.Errorf("link not sent: %+v", got)
+	}
+}
+
+func TestSend_NoSourceURL_MessageStaysBare(t *testing.T) {
+	var gotMessage string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		gotMessage = r.Form.Get("message")
+		w.WriteHeader(200)
+		w.Write([]byte(`{"status":1,"request":"abc"}`))
+	}))
+	defer srv.Close()
+
+	p := &plugin{http: srv.Client(), apiBase: srv.URL}
+	cfg, _ := json.Marshal(Config{UserKey: "u", AppToken: "t"})
+	if err := p.Send(context.Background(), cfg, domain.Message{
+		Title: "Topic updated", Body: "ep 12", Link: "https://example.com/x",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if gotMessage != "ep 12" {
+		t.Errorf("message = %q, want the bare body with no Source suffix", gotMessage)
 	}
 }
 

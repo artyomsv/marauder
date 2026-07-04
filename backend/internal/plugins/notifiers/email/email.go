@@ -83,6 +83,9 @@ func buildMessage(from, to string, m domain.Message) []byte {
 		subject = "Marauder"
 	}
 	body := m.Body
+	if m.SourceURL != "" {
+		body += "\r\n\r\nSource: " + m.SourceURL
+	}
 	if m.Link != "" {
 		body += "\r\n\r\n" + m.Link
 	}
