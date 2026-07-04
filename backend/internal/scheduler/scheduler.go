@@ -491,9 +491,16 @@ func (s *Scheduler) notifyUpdated(ctx context.Context, t *domain.Topic, labels [
 		overflow = len(shown) - maxList
 		shown = shown[:maxList]
 	}
-	body := "Sent to client: " + strings.Join(shown, ", ")
-	if overflow > 0 {
-		body += fmt.Sprintf(" (+%d more)", overflow)
+	var body string
+	if len(labels) == 1 && labels[0] == t.DisplayName {
+		// Single-release topics label the delivery with the display name;
+		// repeating it right under the title reads as a wall of text.
+		body = "Sent to client"
+	} else {
+		body = "Sent to client: " + strings.Join(shown, ", ")
+		if overflow > 0 {
+			body += fmt.Sprintf(" (+%d more)", overflow)
+		}
 	}
 	s.emit.Emit(ctx, events.Event{
 		UserID: t.UserID, TopicID: &t.ID, NotifierID: t.NotifierID,

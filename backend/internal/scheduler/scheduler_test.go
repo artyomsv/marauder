@@ -524,9 +524,14 @@ func TestRunCheck_SinglePayload_NotifiesUpdated(t *testing.T) {
 	if ev.UserID != f.topic.UserID {
 		t.Errorf("event UserID mismatch")
 	}
-	// Single-payload topics summarise with the topic display name.
-	if !strings.Contains(ev.Body, "Fake Topic") {
-		t.Errorf("body = %q, want it to mention the topic name", ev.Body)
+	// The topic name lives in the event Title; the body must NOT repeat it
+	// (single-release labels equal the display name, and the repetition
+	// made notifications a wall of text).
+	if ev.Title != "Fake Topic" {
+		t.Errorf("title = %q, want the topic display name", ev.Title)
+	}
+	if strings.Contains(ev.Body, "Fake Topic") {
+		t.Errorf("body = %q, must not repeat the topic name", ev.Body)
 	}
 	// The notification fires when the torrent is handed to the client (download
 	// START), not when it finishes. The body must not claim completion.
@@ -1618,6 +1623,26 @@ func TestNotifyUpdated_RoutesToTopicNotifier(t *testing.T) {
 	ev := evs[0]
 	if ev.NotifierID == nil || *ev.NotifierID != notifierID {
 		t.Errorf("NotifierID = %v, want %s", ev.NotifierID, notifierID)
+	}
+}
+
+// TestNotifyUpdated_SingleLabelEqualsDisplayName_NoTitleDuplication: for a
+// single-release topic the delivery label IS the display name, and
+// repeating it after the bold title made the notification a wall of text.
+// The body must collapse to a plain "Sent to client".
+func TestNotifyUpdated_SingleLabelEqualsDisplayName_NoTitleDuplication(t *testing.T) {
+	emit := &fakeEmitter{}
+	s := &Scheduler{cfg: &config.Config{PublicBaseURL: "http://x"}, emit: emit}
+	topic := &domain.Topic{ID: uuid.New(), UserID: uuid.New(), DisplayName: "My Show"}
+
+	s.notifyUpdated(context.Background(), topic, []string{"My Show"}, "")
+
+	evs := emit.ofType(events.DownloadSubmitted)
+	if len(evs) != 1 {
+		t.Fatalf("want 1 download.submitted event, got %d", len(evs))
+	}
+	if evs[0].Body != "Sent to client" {
+		t.Errorf("Body = %q, want %q (no title repetition)", evs[0].Body, "Sent to client")
 	}
 }
 

@@ -22,6 +22,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it behave exactly as before, and any fetch/parse failure falls back to the
   plain notification — it can never fail or slow down a check.
 
+### Changed
+
+- feat(notify): Telegram notifications are easier to scan — blank lines
+  separate the title, body, author comment and links; Source/Marauder render
+  as short link anchors instead of long raw URLs (falling back to plain text
+  for hosts Telegram can't anchor, e.g. `localhost`); and the sent-to-client
+  notification no longer repeats the full topic title in its body.
+
 ## [1.10.0] - 2026-07-04
 
 ### Added
