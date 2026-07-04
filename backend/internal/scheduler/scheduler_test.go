@@ -575,6 +575,39 @@ func TestRunCheck_CheckError_NotifiesError(t *testing.T) {
 	if !strings.Contains(ev.Body, "tracker boom") {
 		t.Errorf("body = %q, want it to include the underlying error", ev.Body)
 	}
+	if ev.SourceURL != f.topic.URL {
+		t.Errorf("SourceURL = %q, want the topic's tracker URL %q", ev.SourceURL, f.topic.URL)
+	}
+}
+
+// TestRunCheck_NewRelease_EventsCarrySourceURL asserts that release.found and
+// download.submitted carry the topic's original tracker URL so notifiers can
+// render a "Source:" link next to the Marauder one (issue #109).
+func TestRunCheck_NewRelease_EventsCarrySourceURL(t *testing.T) {
+	const hash = "c12fe1c06bba254a9dc9f519b335aa7c1367a88a"
+	tr := &fakeTracker{
+		name: "faketracker",
+		checks: []checkResult{
+			{check: &domain.Check{Hash: "new-hash"}, err: nil},
+		},
+		downloads: []downloadResult{
+			{payload: &domain.Payload{MagnetURI: "magnet:?xt=urn:btih:" + hash}, err: nil},
+			{err: registry.ErrNoPendingEpisodes},
+		},
+	}
+	f := newFixture(t, tr, false)
+
+	f.s.runCheck(context.Background(), f.s.log, f.topic)
+
+	for _, typ := range []events.Type{events.ReleaseFound, events.DownloadSubmitted} {
+		evs := f.emitter.ofType(typ)
+		if len(evs) != 1 {
+			t.Fatalf("expected 1 %s event, got %d", typ, len(evs))
+		}
+		if evs[0].SourceURL != f.topic.URL {
+			t.Errorf("%s SourceURL = %q, want the topic's tracker URL %q", typ, evs[0].SourceURL, f.topic.URL)
+		}
+	}
 }
 
 func TestRunCheck_CheckError_AlreadyErrored_NoNotify(t *testing.T) {

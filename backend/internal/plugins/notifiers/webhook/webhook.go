@@ -61,12 +61,18 @@ func (p *plugin) Send(ctx context.Context, raw []byte, msg domain.Message) error
 	if c.URL == "" {
 		return errors.New("url is required")
 	}
-	body, _ := json.Marshal(map[string]any{
+	payload := map[string]any{
 		"source": "marauder",
 		"title":  msg.Title,
 		"body":   msg.Body,
 		"link":   msg.Link,
-	})
+	}
+	// Omitted when empty so non-topic events (e.g. session.expired) keep
+	// their pre-existing payload shape for strict-schema consumers.
+	if msg.SourceURL != "" {
+		payload["source_url"] = msg.SourceURL
+	}
+	body, _ := json.Marshal(payload)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.URL, bytes.NewReader(body))
 	if err != nil {
 		return err

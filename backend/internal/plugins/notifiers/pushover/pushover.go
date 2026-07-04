@@ -67,11 +67,17 @@ func (p *plugin) Send(ctx context.Context, raw []byte, msg domain.Message) error
 	if c.UserKey == "" || c.AppToken == "" {
 		return errors.New("user_key and app_token are required")
 	}
+	// Pushover has a single supplementary-url slot, kept for the Marauder
+	// link; the source URL rides in the message text instead.
+	message := msg.Body
+	if msg.SourceURL != "" {
+		message += "\n\nSource: " + msg.SourceURL
+	}
 	form := url.Values{
 		"token":   {c.AppToken},
 		"user":    {c.UserKey},
 		"title":   {msg.Title},
-		"message": {msg.Body},
+		"message": {message},
 	}
 	if msg.Link != "" {
 		form.Set("url", msg.Link)

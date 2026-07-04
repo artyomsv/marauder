@@ -23,9 +23,10 @@ func TestSendPostsJSON(t *testing.T) {
 	p := &plugin{http: srv.Client()}
 	cfg, _ := json.Marshal(Config{URL: srv.URL})
 	err := p.Send(context.Background(), cfg, domain.Message{
-		Title: "Topic updated",
-		Body:  "ep 12",
-		Link:  "https://example.com/topic/1",
+		Title:     "Topic updated",
+		Body:      "ep 12",
+		Link:      "https://example.com/topic/1",
+		SourceURL: "https://tracker.example/viewtopic.php?t=1",
 	})
 	if err != nil {
 		t.Fatalf("Send: %v", err)
@@ -38,6 +39,33 @@ func TestSendPostsJSON(t *testing.T) {
 	}
 	if got["source"] != "marauder" {
 		t.Errorf("source: %v", got["source"])
+	}
+	if got["source_url"] != "https://tracker.example/viewtopic.php?t=1" {
+		t.Errorf("source_url: %v", got["source_url"])
+	}
+}
+
+func TestSendPostsJSON_NoSourceURL_OmitsField(t *testing.T) {
+	var got map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &got)
+		w.WriteHeader(204)
+	}))
+	defer srv.Close()
+
+	p := &plugin{http: srv.Client()}
+	cfg, _ := json.Marshal(Config{URL: srv.URL})
+	err := p.Send(context.Background(), cfg, domain.Message{
+		Title: "Session expired", Body: "x", Link: "https://example.com/credentials",
+	})
+	if err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	// Non-topic events (e.g. session.expired) must not grow an empty
+	// source_url field — strict-schema consumers would see a phantom key.
+	if _, present := got["source_url"]; present {
+		t.Errorf("source_url must be omitted when empty, got payload: %v", got)
 	}
 }
 

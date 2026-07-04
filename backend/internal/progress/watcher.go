@@ -240,6 +240,6 @@ func (w *Watcher) complete(ctx context.Context, d *domain.InFlightDelivery) {
 		UserID: d.UserID, TopicID: &d.TopicID, NotifierID: d.NotifierID,
 		Type: events.DownloadCompleted, Severity: "info",
 		Title: d.DisplayName, Body: "Finished downloading: " + d.Label,
-		Link: w.cfg.PublicBaseURL + "/topics",
+		Link: w.cfg.PublicBaseURL + "/topics", SourceURL: d.URL,
 	})
 }

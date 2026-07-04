@@ -174,6 +174,7 @@ func (h *Topics) Create(w http.ResponseWriter, r *http.Request) {
 			Title:      created.DisplayName,
 			Body:       "Topic added",
 			Link:       h.BaseURL + "/topics",
+			SourceURL:  created.URL,
 		})
 	}
 	writeJSON(w, http.StatusCreated, created)

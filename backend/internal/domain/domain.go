@@ -141,8 +141,9 @@ type TopicDelivery struct {
 }
 
 // InFlightDelivery is a not-yet-completed delivery joined with its topic's
-// owner, notifier override, and display name — the read model the progress
-// watcher needs to poll the client and route a download.completed event.
+// owner, notifier override, display name and tracker URL — the read model the
+// progress watcher needs to poll the client and route a download.completed
+// event (URL becomes the notification's SourceURL, issue #109).
 type InFlightDelivery struct {
 	DeliveryID  uuid.UUID
 	TopicID     uuid.UUID
@@ -152,6 +153,7 @@ type InFlightDelivery struct {
 	Infohash    string
 	Label       string
 	DisplayName string
+	URL         string
 }
 
 // TopicEvent is a single entry in a topic's history.
@@ -227,11 +229,14 @@ type AddOptions struct {
 	Paused      bool
 }
 
-// Message is a structured notification body.
+// Message is a structured notification body. Link points at the Marauder
+// UI; SourceURL is the topic's original tracker page (empty when the event
+// has no topic source, e.g. a credential session expiry).
 type Message struct {
-	Title string
-	Body  string
-	Link  string
+	Title     string
+	Body      string
+	Link      string
+	SourceURL string
 }
 
 // SonarrInstance is the runtime configuration for one Sonarr instance,

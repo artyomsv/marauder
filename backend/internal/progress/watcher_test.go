@@ -67,6 +67,7 @@ func inflight(clientID uuid.UUID) *domain.InFlightDelivery {
 	return &domain.InFlightDelivery{
 		DeliveryID: did, TopicID: tid, UserID: uid, ClientID: &clientID,
 		Infohash: "abc123", Label: "s01e01", DisplayName: "Show",
+		URL: "https://tracker.example/viewtopic.php?t=1",
 	}
 }
 
@@ -86,6 +87,9 @@ func TestPoll_Seeding_MarksCompletedAndEmits(t *testing.T) {
 	}
 	if emit.events[0].TopicID == nil || *emit.events[0].TopicID != d.TopicID {
 		t.Error("event should carry the delivery's topic id")
+	}
+	if emit.events[0].SourceURL != d.URL {
+		t.Errorf("SourceURL = %q, want the topic's tracker URL %q (issue #109 parity with the scheduler events)", emit.events[0].SourceURL, d.URL)
 	}
 }
 

@@ -105,13 +105,13 @@ func (r *Deliveries) DeleteByInfohashes(ctx context.Context, topicID uuid.UUID, 
 }
 
 // ListInFlight returns deliveries not yet marked complete, joined with their
-// topic's owner, notifier override, and display name. Bounded to the last 30
-// days and to deliveries with a known client, so rows that can never complete
-// (client without WithStatus, removed torrents) age out of the working set
-// instead of being polled forever.
+// topic's owner, notifier override, display name and tracker URL. Bounded to
+// the last 30 days and to deliveries with a known client, so rows that can
+// never complete (client without WithStatus, removed torrents) age out of the
+// working set instead of being polled forever.
 func (r *Deliveries) ListInFlight(ctx context.Context) ([]*domain.InFlightDelivery, error) {
 	const q = `
-SELECT d.id, d.topic_id, t.user_id, t.notifier_id, d.client_id, d.infohash, d.label, t.display_name
+SELECT d.id, d.topic_id, t.user_id, t.notifier_id, d.client_id, d.infohash, d.label, t.display_name, t.url
 FROM topic_deliveries d
 JOIN topics t ON t.id = d.topic_id
 WHERE d.completed_at IS NULL
@@ -125,7 +125,7 @@ WHERE d.completed_at IS NULL
 	var out []*domain.InFlightDelivery
 	for rows.Next() {
 		var d domain.InFlightDelivery
-		if err := rows.Scan(&d.DeliveryID, &d.TopicID, &d.UserID, &d.NotifierID, &d.ClientID, &d.Infohash, &d.Label, &d.DisplayName); err != nil {
+		if err := rows.Scan(&d.DeliveryID, &d.TopicID, &d.UserID, &d.NotifierID, &d.ClientID, &d.Infohash, &d.Label, &d.DisplayName, &d.URL); err != nil {
 			return nil, fmt.Errorf("deliveries: scan in-flight: %w", err)
 		}
 		out = append(out, &d)

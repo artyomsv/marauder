@@ -389,7 +389,7 @@ func (s *Scheduler) runCheck(ctx context.Context, log zerolog.Logger, t *domain.
 				UserID: t.UserID, TopicID: &t.ID, NotifierID: t.NotifierID,
 				Type: events.ReleaseFound, Severity: "info",
 				Title: t.DisplayName, Body: "New release detected",
-				Link: s.cfg.PublicBaseURL + "/topics",
+				Link: s.cfg.PublicBaseURL + "/topics", SourceURL: t.URL,
 			})
 		}
 
@@ -490,7 +490,8 @@ func (s *Scheduler) notifyUpdated(ctx context.Context, t *domain.Topic, labels [
 	s.emit.Emit(ctx, events.Event{
 		UserID: t.UserID, TopicID: &t.ID, NotifierID: t.NotifierID,
 		Type: events.DownloadSubmitted, Severity: "info",
-		Title: t.DisplayName, Body: body, Link: s.cfg.PublicBaseURL + "/topics",
+		Title: t.DisplayName, Body: body,
+		Link: s.cfg.PublicBaseURL + "/topics", SourceURL: t.URL,
 	})
 }
 
@@ -507,7 +508,7 @@ func (s *Scheduler) notifyError(ctx context.Context, t *domain.Topic, errMsg str
 		UserID: t.UserID, TopicID: &t.ID, NotifierID: t.NotifierID,
 		Type: events.CheckFailed, Severity: "error",
 		Title: "Topic check failed: " + t.DisplayName, Body: errMsg,
-		Link: s.cfg.PublicBaseURL + "/topics",
+		Link: s.cfg.PublicBaseURL + "/topics", SourceURL: t.URL,
 	})
 }
 

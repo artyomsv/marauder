@@ -56,6 +56,11 @@ func TestSendHappyPath(t *testing.T) {
 	if seenBody["chat_id"] != "777" {
 		t.Errorf("chat_id: %v", seenBody["chat_id"])
 	}
+	// HTML parse mode: unlike legacy Markdown, an underscore-laden tracker URL
+	// can't make Telegram reject the whole message with "can't parse entities".
+	if seenBody["parse_mode"] != "HTML" {
+		t.Errorf("parse_mode = %v, want HTML", seenBody["parse_mode"])
+	}
 	text, _ := seenBody["text"].(string)
 	if !strings.Contains(text, "Topic updated") {
 		t.Errorf("missing title in text: %q", text)
@@ -65,6 +70,55 @@ func TestSendHappyPath(t *testing.T) {
 	}
 	if !strings.Contains(text, "https://example.com/topic/1") {
 		t.Errorf("missing link in text: %q", text)
+	}
+}
+
+func TestFormatMessage_SourceURL(t *testing.T) {
+	tests := []struct {
+		name string
+		msg  domain.Message
+		want string
+	}{
+		{
+			name: "source and link render as labeled lines",
+			msg: domain.Message{
+				Title: "T", Body: "B",
+				Link:      "http://marauder/topics",
+				SourceURL: "https://tracker.example/viewtopic.php?t=1",
+			},
+			want: "<b>T</b>\nB\nSource: https://tracker.example/viewtopic.php?t=1\nMarauder: http://marauder/topics",
+		},
+		{
+			name: "no source renders no Source line",
+			msg: domain.Message{
+				Title: "T", Body: "B",
+				Link: "http://marauder/topics",
+			},
+			want: "<b>T</b>\nB\nMarauder: http://marauder/topics",
+		},
+		{
+			name: "source without link still renders",
+			msg: domain.Message{
+				Title: "T", Body: "B",
+				SourceURL: "https://tracker.example/viewtopic.php?t=1",
+			},
+			want: "<b>T</b>\nB\nSource: https://tracker.example/viewtopic.php?t=1",
+		},
+		{
+			name: "markdown metacharacters pass through, HTML specials escaped",
+			msg: domain.Message{
+				Title: "Release <1> & _final_", Body: "B",
+				SourceURL: "https://tracker.example/series/The_Show/seasons?a=1&b=2",
+			},
+			want: "<b>Release &lt;1&gt; &amp; _final_</b>\nB\nSource: https://tracker.example/series/The_Show/seasons?a=1&amp;b=2",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := formatMessage(tt.msg); got != tt.want {
+				t.Errorf("formatMessage() = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 
