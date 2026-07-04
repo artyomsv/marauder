@@ -38,7 +38,6 @@ func PaginationStarts(page []byte, topicID string) []int {
 	return starts
 }
 
-
 // StripTagBlocks removes every `<tag ... class="...classSubstr..." ...>`
 // element block from s, including nested same-tag children (depth-balanced).
 // Used to drop quote/spoiler/signature blocks before excerpting a post body.
