@@ -23,24 +23,27 @@ import (
 //     <div class="q-wrap"> blocks and spoilers <div class="sp-wrap">,
 //     both stripped before excerpting;
 //   - pagination links are <a class="pg" href="viewtopic.php?t=N&start=M">;
-//     on multi-page threads only the page with the largest start is
-//     scanned. Best-effort tradeoff: if the author's newest comment sits on
-//     an earlier page (the final page holds only other users' replies), it
-//     is missed and "" is returned — the cost of capping the feature at two
-//     round-trips instead of walking the whole thread.
+//     multi-page threads are walked backward (newest page first, capped at
+//     maxCommentPageFetches extra fetches) with the already-fetched first
+//     page as the final fallback. Best-effort tradeoff: on a thread so
+//     long that the author's newest comment sits on an unwalked middle
+//     page, "" is returned rather than crawling the whole thread.
 var (
 	postBlockRe    = regexp.MustCompile(`<tbody id="post_\d+"`)
 	nickAuthorRe   = regexp.MustCompile(`class="nick nick-author"`)
 	postBodyOpenRe = regexp.MustCompile(`<div class="post_body"[^>]*>`)
 )
 
+// maxCommentPageFetches caps how many paginated pages (beyond the first,
+// already-fetched one) the backward walk may request per update. Bounds the
+// HTTP cost on huge threads; on the rare miss the excerpt is simply absent.
+const maxCommentPageFetches = 3
+
 var _ registry.WithAuthorComment = (*plugin)(nil)
 
-// AuthorComment returns the topic author's newest comment on the scanned
-// page as plain text, or "" when none is found there. At most two
-// round-trips: the canonical topic page, plus the last pagination page when
-// the thread spans several (see the package comment for the earlier-page
-// limitation).
+// AuthorComment returns the topic author's newest comment as plain text,
+// or "" when none is found. Fetches the canonical topic page, then walks
+// the pagination backward (see the file comment for the walk bounds).
 func (p *plugin) AuthorComment(ctx context.Context, rawURL string, creds *domain.TrackerCredential) (string, error) {
 	m := urlPattern.FindStringSubmatch(strings.TrimSpace(rawURL))
 	if m == nil {
@@ -56,19 +59,25 @@ func (p *plugin) AuthorComment(ctx context.Context, rawURL string, creds *domain
 	}
 	page := forumcommon.DecodeWindows1251(string(raw))
 
-	// Post #1 on the first page is the release description, not a comment.
-	skipFirst := true
-	if maxStart := forumcommon.MaxPaginationStart([]byte(page), id); maxStart > 0 {
-		lastRaw, lerr := p.fetchBytes(ctx, nil, creds, fmt.Sprintf("%s&start=%d", canonical, maxStart))
-		if lerr == nil {
-			page = forumcommon.DecodeWindows1251(string(lastRaw))
-			skipFirst = false
-		}
-		// On a last-page fetch failure fall back to scanning the already-
-		// fetched first page: an older author comment beats a transient
-		// error, and "nothing found" stays uniformly ("", nil).
+	// Walk the pagination backward (newest page first), capped at
+	// maxCommentPageFetches extra round-trips; the already-fetched first
+	// page is the final fallback (post #1 there is the release
+	// description, never a comment). A page fetch failure just moves the
+	// walk along — "nothing found" stays uniformly ("", nil).
+	starts := forumcommon.PaginationStarts([]byte(page), id)
+	if len(starts) > maxCommentPageFetches {
+		starts = starts[:maxCommentPageFetches]
 	}
-	return latestAuthorComment(page, skipFirst), nil
+	for _, start := range starts {
+		raw, ferr := p.fetchBytes(ctx, nil, creds, fmt.Sprintf("%s&start=%d", canonical, start))
+		if ferr != nil {
+			continue
+		}
+		if c := latestAuthorComment(forumcommon.DecodeWindows1251(string(raw)), false); c != "" {
+			return c, nil
+		}
+	}
+	return latestAuthorComment(page, true), nil
 }
 
 // latestAuthorComment scans a topic page's posts bottom-up for the newest

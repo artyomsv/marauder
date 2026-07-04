@@ -3,6 +3,7 @@ package forumcommon
 import (
 	"html"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -12,21 +13,39 @@ import (
 // attribution stay in each plugin (their markups differ); only the genuinely
 // tracker-agnostic pieces live here.
 
-// MaxPaginationStart returns the largest `&start=N` offset among viewtopic
-// pagination links for the given topic id, or 0 when the topic fits on one
-// page. Both the HTML-escaped (&amp;start=) and raw (&start=) forms match.
-func MaxPaginationStart(page []byte, topicID string) int {
+// PaginationStarts returns the distinct `&start=N` offsets among viewtopic
+// pagination links for the given topic id, descending (newest page first).
+// Empty when the topic fits on one page. Both the HTML-escaped
+// (&amp;start=) and raw (&start=) forms match. On long threads phpBB elides
+// middle page links (1 … 13 14 15) — the returned list is what's linked,
+// which always includes the final pages.
+func PaginationStarts(page []byte, topicID string) []int {
 	// [?&;] anchors t= to a query-param boundary (`;` is the tail of a
 	// HTML-escaped &amp;) so an unrelated param merely ending in "t" (e.g.
 	// list=<id>&start=) can't false-positive.
 	re := regexp.MustCompile(`[?&;]t=` + regexp.QuoteMeta(topicID) + `&(?:amp;)?start=(\d+)`)
-	maxStart := 0
+	seen := map[int]bool{}
 	for _, m := range re.FindAllSubmatch(page, -1) {
-		if n, err := strconv.Atoi(string(m[1])); err == nil && n > maxStart {
-			maxStart = n
+		if n, err := strconv.Atoi(string(m[1])); err == nil && n > 0 {
+			seen[n] = true
 		}
 	}
-	return maxStart
+	starts := make([]int, 0, len(seen))
+	for n := range seen {
+		starts = append(starts, n)
+	}
+	sort.Sort(sort.Reverse(sort.IntSlice(starts)))
+	return starts
+}
+
+// MaxPaginationStart returns the largest `&start=N` offset among viewtopic
+// pagination links for the given topic id, or 0 when the topic fits on one
+// page.
+func MaxPaginationStart(page []byte, topicID string) int {
+	if starts := PaginationStarts(page, topicID); len(starts) > 0 {
+		return starts[0]
+	}
+	return 0
 }
 
 // StripTagBlocks removes every `<tag ... class="...classSubstr..." ...>`

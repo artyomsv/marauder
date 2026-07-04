@@ -122,6 +122,57 @@ func TestAuthorComment_MultiPage_ScansLastPage(t *testing.T) {
 	}
 }
 
+// TestAuthorComment_AuthorOnlyOnPageOne_FallsBackToCachedFirstPage
+// reproduces the real two-page thread that first shipped this feature's
+// blind spot (rutracker t=6602350): every author comment sits on page 1
+// and the last page holds only other users' replies. The scan must fall
+// back to the already-fetched page 1 — with no third fetch.
+func TestAuthorComment_AuthorOnlyOnPageOne_FallsBackToCachedFirstPage(t *testing.T) {
+	page1 := topicPage(
+		rtPost("100", "nick nick-author", "uploader", `Release description`),
+		rtPost("101", "nick nick-author", "uploader", `Раздача обновлена, серия 6 добавлена.`),
+	) + `<a class="pg" href="viewtopic.php?t=8&amp;start=30">2</a>`
+	lastPage := topicPage(
+		rtPost("200", "nick ", "commenter", `nice`),
+		rtPost("201", "nick ", "othercommenter", `thanks`),
+	)
+	p, seen := newAuthorCommentServer(t, map[string]string{"": page1, "30": lastPage})
+
+	got, err := p.AuthorComment(context.Background(), "https://rutracker.org/forum/viewtopic.php?t=8", nil)
+	if err != nil {
+		t.Fatalf("AuthorComment: %v", err)
+	}
+	if got != "Раздача обновлена, серия 6 добавлена." {
+		t.Errorf("AuthorComment = %q, want the page-1 author comment via fallback", got)
+	}
+	if len(*seen) != 2 {
+		t.Errorf("fetches = %d (%v), want exactly 2 — page 1 must be reused, not refetched", len(*seen), *seen)
+	}
+}
+
+// TestAuthorComment_AuthorOnMiddlePage_WalksPaginationBackward asserts the
+// backward page walk: last page empty of author posts, the middle page has
+// the newest author comment.
+func TestAuthorComment_AuthorOnMiddlePage_WalksPaginationBackward(t *testing.T) {
+	pg := `<a class="pg" href="viewtopic.php?t=9&amp;start=30">2</a><a class="pg" href="viewtopic.php?t=9&amp;start=60">3</a>`
+	page1 := topicPage(rtPost("100", "nick nick-author", "uploader", `Release description`)) + pg
+	middle := topicPage(rtPost("200", "nick nick-author", "uploader", `Fixed audio track.`)) + pg
+	lastPage := topicPage(rtPost("300", "nick ", "commenter", `ok`)) + pg
+	p, seen := newAuthorCommentServer(t, map[string]string{"": page1, "30": middle, "60": lastPage})
+
+	got, err := p.AuthorComment(context.Background(), "https://rutracker.org/forum/viewtopic.php?t=9", nil)
+	if err != nil {
+		t.Fatalf("AuthorComment: %v", err)
+	}
+	if got != "Fixed audio track." {
+		t.Errorf("AuthorComment = %q, want the middle-page author comment", got)
+	}
+	joined := strings.Join(*seen, " | ")
+	if !strings.Contains(joined, "start=60") || !strings.Contains(joined, "start=30") {
+		t.Errorf("expected a backward walk over start=60 then start=30, saw: %s", joined)
+	}
+}
+
 // TestAuthorComment_LastPageFetchFails_FallsBackToPageOne asserts a failed
 // last-page fetch degrades to scanning the already-fetched first page — an
 // older author comment beats a transient-network error, and the ("", nil)

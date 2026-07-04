@@ -458,9 +458,11 @@ comment from the topic's discussion thread (issue #110). The scheduler calls it
 once per detected update (fail-open, own `TrackerHTTPTimeout` budget, excerpt
 capped at 300 runes) and stamps the text onto the `release.found` and
 `download.submitted` events, where notifiers render it as an `Author update:`
-block. At most two page fetches: the topic page, plus the last pagination page
-for multi-page threads — a deliberate cap, so an author comment older than
-the final page of replies is missed (fail-open to ""). RuTracker attributes posts via its `nick nick-author`
+block. Multi-page threads are walked backward from the newest page (capped at 3
+extra fetches per update) with the already-fetched page 1 as the final
+fallback — so a comment on the last few pages or page 1 is found, and only
+a comment stranded on an unwalked middle page of a very long thread is
+missed (fail-open to ""). RuTracker attributes posts via its `nick nick-author`
 class; NNM-Club (no author class) matches later posts against post #1's poster
 name. Shared depth-balanced HTML scanning helpers (pagination max-`start=`,
 block stripping for quotes/spoilers/signatures, tag flattening) live in

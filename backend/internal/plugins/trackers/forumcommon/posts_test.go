@@ -45,6 +45,27 @@ func TestMaxPaginationStart(t *testing.T) {
 	}
 }
 
+func TestPaginationStarts_DistinctDescending(t *testing.T) {
+	page := `<a class="pg" href="viewtopic.php?t=42&amp;start=30">2</a>
+	 <a class="pg" href="viewtopic.php?t=42&amp;start=90">4</a>
+	 <a class="pg" href="viewtopic.php?t=42&amp;start=60">3</a>
+	 <a class="pg" href="viewtopic.php?t=42&amp;start=90">4 again</a>
+	 <a href="viewtopic.php?t=777&amp;start=900">other topic</a>`
+	got := PaginationStarts([]byte(page), "42")
+	want := []int{90, 60, 30}
+	if len(got) != len(want) {
+		t.Fatalf("PaginationStarts() = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("PaginationStarts() = %v, want %v (distinct, descending)", got, want)
+		}
+	}
+	if empty := PaginationStarts([]byte(`<html>no links</html>`), "42"); len(empty) != 0 {
+		t.Errorf("PaginationStarts(no links) = %v, want empty", empty)
+	}
+}
+
 func TestStripTagBlocks(t *testing.T) {
 	tests := []struct {
 		name  string

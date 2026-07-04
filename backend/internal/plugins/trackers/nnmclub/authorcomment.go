@@ -35,15 +35,19 @@ var (
 	postbodyOpenRe = regexp.MustCompile(`<div class="postbody"[^>]*>`)
 )
 
+// maxCommentPageFetches caps how many paginated pages (beyond the first,
+// already-fetched one) the backward walk may request per update.
+const maxCommentPageFetches = 3
+
 var _ registry.WithAuthorComment = (*plugin)(nil)
 
-// AuthorComment returns the topic author's newest comment on the scanned
-// page as plain text, or "" when none is found there. At most two
-// round-trips: the canonical topic page (which names the author in post #1),
-// plus the last pagination page when the thread spans several — an author
-// comment older than the final page of replies is missed by design (the
-// two-fetch cap). Anonymous like the rest of the plugin; p.fetch enforces
-// the NNM-Club host allowlist.
+// AuthorComment returns the topic author's newest comment as plain text, or
+// "" when none is found. Fetches the canonical topic page (which names the
+// author in post #1), then walks the pagination backward — newest page
+// first, capped at maxCommentPageFetches extra fetches — falling back to
+// the cached first page, so a comment on any of the last few pages or page
+// 1 is found. Anonymous like the rest of the plugin; p.fetch enforces the
+// NNM-Club host allowlist.
 func (p *plugin) AuthorComment(ctx context.Context, rawURL string, creds *domain.TrackerCredential) (string, error) {
 	m := urlPattern.FindStringSubmatch(strings.TrimSpace(rawURL))
 	if m == nil {
@@ -69,32 +73,40 @@ func (p *plugin) AuthorComment(ctx context.Context, rawURL string, creds *domain
 		return "", nil
 	}
 
-	// Post #1 on the first page is the release description, not a comment.
-	skipFirst := true
-	if maxStart := forumcommon.MaxPaginationStart([]byte(page), m[1]); maxStart > 0 {
-		lastRaw, lerr := p.fetch(ctx, fmt.Sprintf("%s&start=%d", canonical, maxStart), creds)
-		if lerr == nil {
-			posts = parsePosts(forumcommon.DecodeWindows1251(string(lastRaw)))
-			skipFirst = false
+	// Walk the pagination backward (newest page first), capped at
+	// maxCommentPageFetches extra round-trips; the already-fetched first
+	// page is the final fallback (post #1 there is the release
+	// description, never a comment). A page fetch failure just moves the
+	// walk along — "nothing found" stays uniformly ("", nil).
+	starts := forumcommon.PaginationStarts([]byte(page), m[1])
+	if len(starts) > maxCommentPageFetches {
+		starts = starts[:maxCommentPageFetches]
+	}
+	for _, start := range starts {
+		raw, ferr := p.fetch(ctx, fmt.Sprintf("%s&start=%d", canonical, start), creds)
+		if ferr != nil {
+			continue
 		}
-		// On a last-page fetch failure fall back to scanning the already-
-		// fetched first page: an older author comment beats a transient
-		// error, and "nothing found" stays uniformly ("", nil).
+		pagePosts := parsePosts(forumcommon.DecodeWindows1251(string(raw)))
+		if c := latestBy(pagePosts, author, 0); c != "" {
+			return c, nil
+		}
 	}
+	return latestBy(posts, author, 1), nil
+}
 
-	first := 0
-	if skipFirst {
-		first = 1
-	}
+// latestBy returns the newest non-empty post by author at index >= first,
+// scanning bottom-up. first=1 skips the release post on page 1.
+func latestBy(posts []post, author string, first int) string {
 	for i := len(posts) - 1; i >= first; i-- {
 		if posts[i].author != author {
 			continue
 		}
 		if text := posts[i].text(); text != "" {
-			return text, nil
+			return text
 		}
 	}
-	return "", nil
+	return ""
 }
 
 // post is one parsed forum post: the poster's name and the raw body HTML.

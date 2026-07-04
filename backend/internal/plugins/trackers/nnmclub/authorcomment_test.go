@@ -118,6 +118,32 @@ func TestAuthorComment_MultiPage_MatchesAuthorByNameOnLastPage(t *testing.T) {
 	}
 }
 
+// TestAuthorComment_AuthorOnlyOnPageOne_FallsBackToCachedFirstPage mirrors
+// the rutracker two-page blind-spot case: author comments only on page 1,
+// last page all other users — must fall back to the cached page 1 without
+// a third fetch.
+func TestAuthorComment_AuthorOnlyOnPageOne_FallsBackToCachedFirstPage(t *testing.T) {
+	page1 := nnmTopicPage(
+		nnmPost("100", `uploader`, `Release description`),
+		nnmPost("101", `uploader`, `Обновлено: серия 6.`),
+	) + `<a href="viewtopic.php?t=830137&amp;start=15">2</a>`
+	lastPage := nnmTopicPage(
+		nnmPost("200", `commenter`, `nice`),
+	)
+	p, topicURL, seen := newAuthorCommentServer(t, map[string]string{"": page1, "15": lastPage})
+
+	got, err := p.AuthorComment(context.Background(), topicURL, nil)
+	if err != nil {
+		t.Fatalf("AuthorComment: %v", err)
+	}
+	if got != "Обновлено: серия 6." {
+		t.Errorf("AuthorComment = %q, want the page-1 author comment via fallback", got)
+	}
+	if len(*seen) != 2 {
+		t.Errorf("fetches = %d (%v), want exactly 2 — page 1 must be reused", len(*seen), *seen)
+	}
+}
+
 // TestAuthorComment_LastPageFetchFails_FallsBackToPageOne asserts a failed
 // last-page fetch degrades to scanning the already-fetched first page
 // instead of surfacing a transient error.

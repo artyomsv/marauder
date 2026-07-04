@@ -11,8 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - feat(notify): update notifications now include the release author's latest
   tracker comment (issue #110). When a new release is detected, Marauder
-  fetches the topic thread's last page and extracts the newest comment made
-  by the topic author — on many trackers the uploader posts a short note
+  walks the topic thread backward from its newest page (bounded) and extracts
+  the newest comment made by the topic author — on many trackers the uploader
+  posts a short note
   explaining what changed (added episodes, fixed quality, repack details).
   The excerpt (length-capped, tags stripped) renders as an `Author update:`
   block in Telegram (italic), email and Pushover, and as an `author_comment`
