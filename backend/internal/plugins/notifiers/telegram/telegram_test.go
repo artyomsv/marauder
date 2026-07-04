@@ -80,21 +80,24 @@ func TestFormatMessage_SourceURL(t *testing.T) {
 		want string
 	}{
 		{
-			name: "source and link render as labeled lines",
+			name: "anchorable source becomes a short anchor; dotless-host link stays plain",
 			msg: domain.Message{
 				Title: "T", Body: "B",
 				Link:      "http://marauder/topics",
 				SourceURL: "https://tracker.example/viewtopic.php?t=1",
 			},
-			want: "<b>T</b>\nB\nSource: https://tracker.example/viewtopic.php?t=1\nMarauder: http://marauder/topics",
+			// Telegram rejects <a href> to hosts without a dot (localhost,
+			// bare service names) with a 400, so those fall back to a
+			// labeled plain URL.
+			want: "<b>T</b>\n\nB\n\n<a href=\"https://tracker.example/viewtopic.php?t=1\">Source</a> · Marauder: http://marauder/topics",
 		},
 		{
-			name: "no source renders no Source line",
+			name: "no source renders no Source entry",
 			msg: domain.Message{
 				Title: "T", Body: "B",
-				Link: "http://marauder/topics",
+				Link: "https://marauder.example/topics",
 			},
-			want: "<b>T</b>\nB\nMarauder: http://marauder/topics",
+			want: "<b>T</b>\n\nB\n\n<a href=\"https://marauder.example/topics\">Marauder</a>",
 		},
 		{
 			name: "source without link still renders",
@@ -102,15 +105,62 @@ func TestFormatMessage_SourceURL(t *testing.T) {
 				Title: "T", Body: "B",
 				SourceURL: "https://tracker.example/viewtopic.php?t=1",
 			},
-			want: "<b>T</b>\nB\nSource: https://tracker.example/viewtopic.php?t=1",
+			want: "<b>T</b>\n\nB\n\n<a href=\"https://tracker.example/viewtopic.php?t=1\">Source</a>",
 		},
 		{
-			name: "markdown metacharacters pass through, HTML specials escaped",
+			name: "no links at all renders just title and body",
+			msg:  domain.Message{Title: "T", Body: "B"},
+			want: "<b>T</b>\n\nB",
+		},
+		{
+			name: "markdown metacharacters pass through, HTML specials escaped in text and href",
 			msg: domain.Message{
 				Title: "Release <1> & _final_", Body: "B",
 				SourceURL: "https://tracker.example/series/The_Show/seasons?a=1&b=2",
 			},
-			want: "<b>Release &lt;1&gt; &amp; _final_</b>\nB\nSource: https://tracker.example/series/The_Show/seasons?a=1&amp;b=2",
+			want: "<b>Release &lt;1&gt; &amp; _final_</b>\n\nB\n\n<a href=\"https://tracker.example/series/The_Show/seasons?a=1&amp;b=2\">Source</a>",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := formatMessage(tt.msg); got != tt.want {
+				t.Errorf("formatMessage() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestFormatMessage_AuthorComment(t *testing.T) {
+	tests := []struct {
+		name string
+		msg  domain.Message
+		want string
+	}{
+		{
+			name: "comment renders as a spaced italic block between body and links",
+			msg: domain.Message{
+				Title: "T", Body: "B",
+				AuthorComment: "Added episode 8.",
+				SourceURL:     "https://tracker.example/viewtopic.php?t=1",
+				Link:          "http://marauder/topics",
+			},
+			want: "<b>T</b>\n\nB\n\nAuthor update:\n<i>Added episode 8.</i>\n\n<a href=\"https://tracker.example/viewtopic.php?t=1\">Source</a> · Marauder: http://marauder/topics",
+		},
+		{
+			name: "no comment renders no Author update block",
+			msg: domain.Message{
+				Title: "T", Body: "B",
+				SourceURL: "https://tracker.example/viewtopic.php?t=1",
+			},
+			want: "<b>T</b>\n\nB\n\n<a href=\"https://tracker.example/viewtopic.php?t=1\">Source</a>",
+		},
+		{
+			name: "HTML specials in the comment are escaped",
+			msg: domain.Message{
+				Title: "T", Body: "B",
+				AuthorComment: "5 > 4 & <b>done</b>",
+			},
+			want: "<b>T</b>\n\nB\n\nAuthor update:\n<i>5 &gt; 4 &amp; &lt;b&gt;done&lt;/b&gt;</i>",
 		},
 	}
 	for _, tt := range tests {

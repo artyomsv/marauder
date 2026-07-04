@@ -70,6 +70,9 @@ func (p *plugin) Send(ctx context.Context, raw []byte, msg domain.Message) error
 	// Pushover has a single supplementary-url slot, kept for the Marauder
 	// link; the source URL rides in the message text instead.
 	message := msg.Body
+	if msg.AuthorComment != "" {
+		message += "\n\nAuthor update:\n" + msg.AuthorComment
+	}
 	if msg.SourceURL != "" {
 		message += "\n\nSource: " + msg.SourceURL
 	}

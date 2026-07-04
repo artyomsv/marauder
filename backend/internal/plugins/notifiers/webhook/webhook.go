@@ -72,6 +72,9 @@ func (p *plugin) Send(ctx context.Context, raw []byte, msg domain.Message) error
 	if msg.SourceURL != "" {
 		payload["source_url"] = msg.SourceURL
 	}
+	if msg.AuthorComment != "" {
+		payload["author_comment"] = msg.AuthorComment
+	}
 	body, _ := json.Marshal(payload)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.URL, bytes.NewReader(body))
 	if err != nil {

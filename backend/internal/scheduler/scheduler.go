@@ -379,9 +379,15 @@ func (s *Scheduler) runCheck(ctx context.Context, log zerolog.Logger, t *domain.
 	updated := check.Hash != "" && check.Hash != t.LastHash
 	var anySubmitted bool
 	var delivered []string
+	var authorComment string
 	if updated {
 		log.Info().Str("old_hash", t.LastHash).Str("new_hash", check.Hash).Msg("topic updated")
 		metrics.TrackerUpdatesTotal.WithLabelValues(t.TrackerName).Inc()
+
+		// The release author's latest comment often explains what changed
+		// (issue #110). Fetched once per detected update, best-effort, and
+		// stamped onto both notifiable update events below.
+		authorComment = s.fetchAuthorComment(ctx, log, t, tr, creds)
 
 		// Emit release.found once per new hash, before draining episodes.
 		if s.emit != nil {
@@ -390,6 +396,7 @@ func (s *Scheduler) runCheck(ctx context.Context, log zerolog.Logger, t *domain.
 				Type: events.ReleaseFound, Severity: "info",
 				Title: t.DisplayName, Body: "New release detected",
 				Link: s.cfg.PublicBaseURL + "/topics", SourceURL: t.URL,
+				AuthorComment: authorComment,
 			})
 		}
 
@@ -454,7 +461,7 @@ func (s *Scheduler) runCheck(ctx context.Context, log zerolog.Logger, t *domain.
 	// New releases were pushed to a client this tick — notify the user's
 	// notifiers subscribed to the "updated" event (best-effort).
 	if anySubmitted {
-		s.notifyUpdated(ctx, t, delivered)
+		s.notifyUpdated(ctx, t, delivered, authorComment)
 	}
 
 	metrics.SchedulerTopicChecksTotal.WithLabelValues(t.TrackerName, "ok").Inc()
@@ -471,8 +478,9 @@ func (s *Scheduler) runCheck(ctx context.Context, log zerolog.Logger, t *domain.
 
 // notifyUpdated emits a download.submitted event summarising what was
 // delivered this tick. Best-effort: a nil emitter or zero deliveries is a
-// no-op.
-func (s *Scheduler) notifyUpdated(ctx context.Context, t *domain.Topic, labels []string) {
+// no-op. authorComment (may be empty) is the release author's latest tracker
+// comment, fetched once by runCheck for the whole update.
+func (s *Scheduler) notifyUpdated(ctx context.Context, t *domain.Topic, labels []string, authorComment string) {
 	if s.emit == nil || len(labels) == 0 {
 		return
 	}
@@ -483,16 +491,58 @@ func (s *Scheduler) notifyUpdated(ctx context.Context, t *domain.Topic, labels [
 		overflow = len(shown) - maxList
 		shown = shown[:maxList]
 	}
-	body := "Sent to client: " + strings.Join(shown, ", ")
-	if overflow > 0 {
-		body += fmt.Sprintf(" (+%d more)", overflow)
+	var body string
+	if len(labels) == 1 && labels[0] == t.DisplayName {
+		// Single-release topics label the delivery with the display name;
+		// repeating it right under the title reads as a wall of text.
+		body = "Sent to client"
+	} else {
+		body = "Sent to client: " + strings.Join(shown, ", ")
+		if overflow > 0 {
+			body += fmt.Sprintf(" (+%d more)", overflow)
+		}
 	}
 	s.emit.Emit(ctx, events.Event{
 		UserID: t.UserID, TopicID: &t.ID, NotifierID: t.NotifierID,
 		Type: events.DownloadSubmitted, Severity: "info",
 		Title: t.DisplayName, Body: body,
 		Link: s.cfg.PublicBaseURL + "/topics", SourceURL: t.URL,
+		AuthorComment: authorComment,
 	})
+}
+
+// authorCommentMaxRunes caps the excerpt stamped into notification events;
+// longer comments are rune-truncated with a trailing ellipsis.
+const authorCommentMaxRunes = 300
+
+// fetchAuthorComment asks a WithAuthorComment tracker for the release
+// author's latest comment on the topic's thread (issue #110). Fail-open by
+// design: a missing capability, an error, or a slow forum page yields ""
+// and never affects the check outcome. Bounded by its own timeout so the
+// extra round-trip can't stall the tick.
+func (s *Scheduler) fetchAuthorComment(ctx context.Context, log zerolog.Logger, t *domain.Topic, tr registry.Tracker, creds *domain.TrackerCredential) string {
+	wac, ok := tr.(registry.WithAuthorComment)
+	if !ok {
+		return ""
+	}
+	cctx, cancel := context.WithTimeout(ctx, s.cfg.TrackerHTTPTimeout)
+	defer cancel()
+	comment, err := wac.AuthorComment(cctx, t.URL, creds)
+	if err != nil {
+		log.Debug().Err(err).Msg("author comment fetch failed (fail-open)")
+		return ""
+	}
+	return capExcerpt(comment, authorCommentMaxRunes)
+}
+
+// capExcerpt trims and rune-truncates s to at most max runes, ellipsis
+// included, so multibyte text is never cut mid-character.
+func capExcerpt(s string, max int) string {
+	r := []rune(strings.TrimSpace(s))
+	if len(r) <= max {
+		return string(r)
+	}
+	return string(r[:max-1]) + "…"
 }
 
 // notifyError emits a check.failed event when a topic first enters the error

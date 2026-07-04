@@ -90,6 +90,19 @@ func TestEmit_SourceURLSet_PassedToNotifierMessage(t *testing.T) {
 	}
 }
 
+func TestEmit_AuthorCommentSet_PassedToNotifierMessage(t *testing.T) {
+	bus, _, notif, _ := newBus(t)
+	tid := uuid.New()
+	bus.Emit(context.Background(), Event{
+		UserID: uuid.New(), TopicID: &tid, Type: ReleaseFound,
+		Title: "X", Body: "Y",
+		AuthorComment: "Added episode 8.",
+	})
+	if notif.msg.AuthorComment != "Added episode 8." {
+		t.Errorf("msg.AuthorComment = %q, want the event's author comment", notif.msg.AuthorComment)
+	}
+}
+
 func TestEmit_CheckStarted_PublishesOnly(t *testing.T) {
 	bus, rec, notif, pub := newBus(t)
 	tid := uuid.New()

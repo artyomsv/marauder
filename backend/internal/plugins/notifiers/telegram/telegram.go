@@ -15,6 +15,8 @@ import (
 	"html"
 	"io"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/artyomsv/marauder/backend/internal/domain"
@@ -95,13 +97,37 @@ func (p *plugin) Send(ctx context.Context, rawConfig []byte, msg domain.Message)
 // API reject the whole message with 400 "can't parse entities", silently
 // dropping the notification. html.EscapeString is a complete escape for the
 // HTML entity set, so any title/body/URL renders verbatim.
+//
+// Layout: blank lines separate the title, body, author-update block, and a
+// single footer line of links, so long release titles don't read as one
+// wall of text.
 func formatMessage(m domain.Message) string {
-	s := "<b>" + html.EscapeString(m.Title) + "</b>\n" + html.EscapeString(m.Body)
+	s := "<b>" + html.EscapeString(m.Title) + "</b>\n\n" + html.EscapeString(m.Body)
+	if m.AuthorComment != "" {
+		s += "\n\nAuthor update:\n<i>" + html.EscapeString(m.AuthorComment) + "</i>"
+	}
+	var links []string
 	if m.SourceURL != "" {
-		s += "\nSource: " + html.EscapeString(m.SourceURL)
+		links = append(links, linkOrLabel("Source", m.SourceURL))
 	}
 	if m.Link != "" {
-		s += "\nMarauder: " + html.EscapeString(m.Link)
+		links = append(links, linkOrLabel("Marauder", m.Link))
+	}
+	if len(links) > 0 {
+		s += "\n\n" + strings.Join(links, " · ")
 	}
 	return s
+}
+
+// linkOrLabel renders a URL as a short <a> anchor when Telegram will accept
+// it, else as a labeled plain URL. Telegram rejects href targets whose host
+// has no dot (localhost, bare docker service names) with a 400 that drops
+// the whole message — those must stay plain text (and Telegram won't
+// auto-link them either, but the notification survives).
+func linkOrLabel(label, raw string) string {
+	if u, err := url.Parse(raw); err == nil &&
+		(u.Scheme == "http" || u.Scheme == "https") && strings.Contains(u.Host, ".") {
+		return `<a href="` + html.EscapeString(raw) + `">` + label + `</a>`
+	}
+	return label + ": " + html.EscapeString(raw)
 }

@@ -20,7 +20,11 @@ type Event struct {
 	Body       string
 	Link       string
 	SourceURL  string // original tracker/topic page; empty for non-topic events
-	Data       map[string]any
+	// AuthorComment is the release author's latest tracker comment excerpt
+	// (issue #110); set only on update-driven events when the tracker can
+	// provide one.
+	AuthorComment string
+	Data          map[string]any
 }
 
 // Recorder persists an event to the topic_events history table.
@@ -84,6 +88,7 @@ func (b *Bus) Emit(ctx context.Context, ev Event) {
 	if p.Notifiable && b.notif != nil {
 		b.notif.SendVia(ctx, ev.UserID, ev.NotifierID, string(ev.Type), domain.Message{
 			Title: ev.Title, Body: ev.Body, Link: ev.Link, SourceURL: ev.SourceURL,
+			AuthorComment: ev.AuthorComment,
 		})
 	}
 

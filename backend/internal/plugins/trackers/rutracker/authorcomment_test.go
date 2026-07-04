@@ -1,0 +1,268 @@
+package rutracker
+
+import (
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"golang.org/x/text/encoding/charmap"
+
+	"github.com/artyomsv/marauder/backend/internal/plugins/trackers/forumcommon"
+)
+
+// rtPost builds one post block in the shape RuTracker's live viewtopic.php
+// emits (verified against the real page 2026-07-04): a <tbody id="post_N">
+// row with the poster's nick in the left column — class "nick nick-author"
+// marks every post by the topic starter — and the content in a
+// <div class="post_body">…</div><!--/post_body--> cell.
+func rtPost(id, nickClass, nick, bodyHTML string) string {
+	return `<tbody id="post_` + id + `" class="row1">
+<tr>
+	<td class="poster_info td1 hide-for-print"><a id="` + id + `"></a>
+		<p class="` + nickClass + `">` + nick + `</p>
+	</td>
+	<td class="message td2" rowspan="2">
+		<div class="post_wrap" id="p-w-` + id + `">
+			<div class="post_body" id="p-` + id + `">` + bodyHTML + `</div><!--/post_body-->
+		</div><!--/post_wrap-->
+	</td>
+</tr>
+</tbody>`
+}
+
+func topicPage(posts ...string) string {
+	return `<html><head><title>Some Show :: RuTracker.org</title></head><body><table>` +
+		strings.Join(posts, "\n") + `</table></body></html>`
+}
+
+// newAuthorCommentServer serves per-query topic pages: pages[""] is the bare
+// viewtopic page, pages["30"] the &start=30 page, etc.
+func newAuthorCommentServer(t *testing.T, pages map[string]string) (*plugin, *[]string) {
+	t.Helper()
+	var seen []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(r.URL.Path, "/forum/viewtopic.php") {
+			w.WriteHeader(404)
+			return
+		}
+		seen = append(seen, r.URL.RawQuery)
+		page, ok := pages[r.URL.Query().Get("start")]
+		if !ok {
+			w.WriteHeader(404)
+			return
+		}
+		w.WriteHeader(200)
+		w.Write([]byte(page))
+	}))
+	t.Cleanup(srv.Close)
+	hostNoScheme := strings.TrimPrefix(srv.URL, "http://")
+	p := &plugin{
+		sessions:  forumcommon.New(),
+		domain:    hostNoScheme,
+		transport: &schemeRewrite{target: hostNoScheme},
+	}
+	return p, &seen
+}
+
+func TestAuthorComment_SinglePage_ReturnsLatestAuthorPost(t *testing.T) {
+	page := topicPage(
+		rtPost("100", "nick nick-author", "uploader", `Release description with <var class="postImg" title="x.jpg"></var>`),
+		rtPost("101", "nick ", "commenter", `Thanks!`),
+		rtPost("102", "nick nick-author", "uploader",
+			`<div class="q-wrap"><div class="q">will there be more?</div></div>Added episode <b>8</b>.`),
+	)
+	p, _ := newAuthorCommentServer(t, map[string]string{"": page})
+
+	got, err := p.AuthorComment(context.Background(), "https://rutracker.org/forum/viewtopic.php?t=6511657", nil)
+	if err != nil {
+		t.Fatalf("AuthorComment: %v", err)
+	}
+	if got != "Added episode 8." {
+		t.Errorf("AuthorComment = %q, want the author's latest comment with the quote stripped", got)
+	}
+}
+
+func TestAuthorComment_AuthorOnlyPostedRelease_ReturnsEmpty(t *testing.T) {
+	page := topicPage(
+		rtPost("100", "nick nick-author", "uploader", `Release description`),
+		rtPost("101", "nick ", "commenter", `Thanks!`),
+	)
+	p, _ := newAuthorCommentServer(t, map[string]string{"": page})
+
+	got, err := p.AuthorComment(context.Background(), "https://rutracker.org/forum/viewtopic.php?t=1", nil)
+	if err != nil {
+		t.Fatalf("AuthorComment: %v", err)
+	}
+	if got != "" {
+		t.Errorf("AuthorComment = %q, want empty when the author never commented past the release post", got)
+	}
+}
+
+func TestAuthorComment_MultiPage_ScansLastPage(t *testing.T) {
+	page1 := topicPage(rtPost("100", "nick nick-author", "uploader", `Release description`)) +
+		`<a class="pg" href="viewtopic.php?t=42&amp;start=30">2</a>`
+	lastPage := topicPage(
+		rtPost("200", "nick nick-author", "uploader", `Final cut uploaded.`),
+		rtPost("201", "nick ", "commenter", `great, thanks`),
+	)
+	p, seen := newAuthorCommentServer(t, map[string]string{"": page1, "30": lastPage})
+
+	got, err := p.AuthorComment(context.Background(), "https://rutracker.org/forum/viewtopic.php?t=42", nil)
+	if err != nil {
+		t.Fatalf("AuthorComment: %v", err)
+	}
+	if got != "Final cut uploaded." {
+		t.Errorf("AuthorComment = %q, want the author's post from the last page", got)
+	}
+	joined := strings.Join(*seen, " | ")
+	if !strings.Contains(joined, "start=30") {
+		t.Errorf("expected a fetch of the last page (start=30), saw requests: %s", joined)
+	}
+}
+
+// TestAuthorComment_AuthorOnlyOnPageOne_FallsBackToCachedFirstPage
+// reproduces the real two-page thread that first shipped this feature's
+// blind spot (rutracker t=6602350): every author comment sits on page 1
+// and the last page holds only other users' replies. The scan must fall
+// back to the already-fetched page 1 — with no third fetch.
+func TestAuthorComment_AuthorOnlyOnPageOne_FallsBackToCachedFirstPage(t *testing.T) {
+	page1 := topicPage(
+		rtPost("100", "nick nick-author", "uploader", `Release description`),
+		rtPost("101", "nick nick-author", "uploader", `Раздача обновлена, серия 6 добавлена.`),
+	) + `<a class="pg" href="viewtopic.php?t=8&amp;start=30">2</a>`
+	lastPage := topicPage(
+		rtPost("200", "nick ", "commenter", `nice`),
+		rtPost("201", "nick ", "othercommenter", `thanks`),
+	)
+	p, seen := newAuthorCommentServer(t, map[string]string{"": page1, "30": lastPage})
+
+	got, err := p.AuthorComment(context.Background(), "https://rutracker.org/forum/viewtopic.php?t=8", nil)
+	if err != nil {
+		t.Fatalf("AuthorComment: %v", err)
+	}
+	if got != "Раздача обновлена, серия 6 добавлена." {
+		t.Errorf("AuthorComment = %q, want the page-1 author comment via fallback", got)
+	}
+	if len(*seen) != 2 {
+		t.Errorf("fetches = %d (%v), want exactly 2 — page 1 must be reused, not refetched", len(*seen), *seen)
+	}
+}
+
+// TestAuthorComment_AuthorOnMiddlePage_WalksPaginationBackward asserts the
+// backward page walk: last page empty of author posts, the middle page has
+// the newest author comment.
+func TestAuthorComment_AuthorOnMiddlePage_WalksPaginationBackward(t *testing.T) {
+	pg := `<a class="pg" href="viewtopic.php?t=9&amp;start=30">2</a><a class="pg" href="viewtopic.php?t=9&amp;start=60">3</a>`
+	page1 := topicPage(rtPost("100", "nick nick-author", "uploader", `Release description`)) + pg
+	middle := topicPage(rtPost("200", "nick nick-author", "uploader", `Fixed audio track.`)) + pg
+	lastPage := topicPage(rtPost("300", "nick ", "commenter", `ok`)) + pg
+	p, seen := newAuthorCommentServer(t, map[string]string{"": page1, "30": middle, "60": lastPage})
+
+	got, err := p.AuthorComment(context.Background(), "https://rutracker.org/forum/viewtopic.php?t=9", nil)
+	if err != nil {
+		t.Fatalf("AuthorComment: %v", err)
+	}
+	if got != "Fixed audio track." {
+		t.Errorf("AuthorComment = %q, want the middle-page author comment", got)
+	}
+	joined := strings.Join(*seen, " | ")
+	if !strings.Contains(joined, "start=60") || !strings.Contains(joined, "start=30") {
+		t.Errorf("expected a backward walk over start=60 then start=30, saw: %s", joined)
+	}
+}
+
+// TestAuthorComment_WalkCappedAtMaxPages asserts the backward walk stops
+// after maxCommentPageFetches extra fetches: on a 5-page thread whose only
+// author comment sits beyond the cap, the comment is missed (page-1
+// fallback yields "") and pages past the cap are never requested.
+func TestAuthorComment_WalkCappedAtMaxPages(t *testing.T) {
+	pg := `<a class="pg" href="viewtopic.php?t=10&amp;start=30">2</a>` +
+		`<a class="pg" href="viewtopic.php?t=10&amp;start=60">3</a>` +
+		`<a class="pg" href="viewtopic.php?t=10&amp;start=90">4</a>` +
+		`<a class="pg" href="viewtopic.php?t=10&amp;start=120">5</a>`
+	replies := topicPage(rtPost("300", "nick ", "commenter", `ok`)) + pg
+	pages := map[string]string{
+		"":    topicPage(rtPost("100", "nick nick-author", "uploader", `Release description`)) + pg,
+		"30":  topicPage(rtPost("200", "nick nick-author", "uploader", `Beyond the cap.`)) + pg,
+		"60":  replies,
+		"90":  replies,
+		"120": replies,
+	}
+	p, seen := newAuthorCommentServer(t, pages)
+
+	got, err := p.AuthorComment(context.Background(), "https://rutracker.org/forum/viewtopic.php?t=10", nil)
+	if err != nil {
+		t.Fatalf("AuthorComment: %v", err)
+	}
+	if got != "" {
+		t.Errorf("AuthorComment = %q, want empty — the only author comment is beyond the walk cap", got)
+	}
+	if len(*seen) != 4 {
+		t.Errorf("fetches = %d (%v), want 4: page 1 + exactly maxCommentPageFetches walked pages", len(*seen), *seen)
+	}
+	if joined := strings.Join(*seen, " | "); strings.Contains(joined, "start=30") {
+		t.Errorf("page start=30 is beyond the 3-page cap and must not be fetched: %s", joined)
+	}
+}
+
+// TestAuthorComment_LastPageFetchFails_FallsBackToPageOne asserts a failed
+// last-page fetch degrades to scanning the already-fetched first page — an
+// older author comment beats a transient-network error, and the ("", nil)
+// "nothing found" contract stays uniform.
+func TestAuthorComment_LastPageFetchFails_FallsBackToPageOne(t *testing.T) {
+	page1 := topicPage(
+		rtPost("100", "nick nick-author", "uploader", `Release description`),
+		rtPost("101", "nick nick-author", "uploader", `Added episode 5.`),
+	) + `<a class="pg" href="viewtopic.php?t=7&amp;start=30">2</a>`
+	// start=30 is NOT served → the last-page fetch 404s.
+	p, _ := newAuthorCommentServer(t, map[string]string{"": page1})
+
+	got, err := p.AuthorComment(context.Background(), "https://rutracker.org/forum/viewtopic.php?t=7", nil)
+	if err != nil {
+		t.Fatalf("AuthorComment must fall back, not error: %v", err)
+	}
+	if got != "Added episode 5." {
+		t.Errorf("AuthorComment = %q, want the page-1 author comment as fallback", got)
+	}
+}
+
+func TestAuthorComment_Cp1251Body_DecodedToUTF8(t *testing.T) {
+	comment, err := charmap.Windows1251.NewEncoder().String("Добавлена 8 серия.")
+	if err != nil {
+		t.Fatalf("encode cp1251: %v", err)
+	}
+	page := topicPage(
+		rtPost("100", "nick nick-author", "uploader", `Release description`),
+		rtPost("101", "nick nick-author", "uploader", comment),
+	)
+	p, _ := newAuthorCommentServer(t, map[string]string{"": page})
+
+	got, err := p.AuthorComment(context.Background(), "https://rutracker.org/forum/viewtopic.php?t=1", nil)
+	if err != nil {
+		t.Fatalf("AuthorComment: %v", err)
+	}
+	if got != "Добавлена 8 серия." {
+		t.Errorf("AuthorComment = %q, want decoded UTF-8 Cyrillic", got)
+	}
+}
+
+func TestAuthorComment_PageWithoutPosts_ReturnsEmpty(t *testing.T) {
+	p, _ := newAuthorCommentServer(t, map[string]string{"": `<html><body>maintenance page, no posts</body></html>`})
+
+	got, err := p.AuthorComment(context.Background(), "https://rutracker.org/forum/viewtopic.php?t=1", nil)
+	if err != nil {
+		t.Fatalf("AuthorComment: %v", err)
+	}
+	if got != "" {
+		t.Errorf("AuthorComment = %q, want empty (fail-open) on a page with no post blocks", got)
+	}
+}
+
+func TestAuthorComment_NonViewtopicURL_Error(t *testing.T) {
+	p := &plugin{sessions: forumcommon.New()}
+	if _, err := p.AuthorComment(context.Background(), "https://example.com/x", nil); err == nil {
+		t.Fatal("expected an error for a non-rutracker URL")
+	}
+}

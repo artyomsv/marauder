@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/artyomsv/marauder/backend/internal/domain"
@@ -66,6 +67,53 @@ func TestSend_NoSourceURL_MessageStaysBare(t *testing.T) {
 	}
 	if gotMessage != "ep 12" {
 		t.Errorf("message = %q, want the bare body with no Source suffix", gotMessage)
+	}
+}
+
+func TestSend_AuthorComment_AppendedBeforeSource(t *testing.T) {
+	var gotMessage string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		gotMessage = r.Form.Get("message")
+		w.WriteHeader(200)
+		w.Write([]byte(`{"status":1,"request":"abc"}`))
+	}))
+	defer srv.Close()
+
+	p := &plugin{http: srv.Client(), apiBase: srv.URL}
+	cfg, _ := json.Marshal(Config{UserKey: "u", AppToken: "t"})
+	if err := p.Send(context.Background(), cfg, domain.Message{
+		Title: "Topic updated", Body: "ep 12", Link: "https://example.com/x",
+		AuthorComment: "Added episode 8.",
+		SourceURL:     "https://tracker.example/viewtopic.php?t=1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	want := "ep 12\n\nAuthor update:\nAdded episode 8.\n\nSource: https://tracker.example/viewtopic.php?t=1"
+	if gotMessage != want {
+		t.Errorf("message = %q, want %q", gotMessage, want)
+	}
+}
+
+func TestSend_NoAuthorComment_MessageOmitsBlock(t *testing.T) {
+	var gotMessage string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		gotMessage = r.Form.Get("message")
+		w.WriteHeader(200)
+		w.Write([]byte(`{"status":1,"request":"abc"}`))
+	}))
+	defer srv.Close()
+
+	p := &plugin{http: srv.Client(), apiBase: srv.URL}
+	cfg, _ := json.Marshal(Config{UserKey: "u", AppToken: "t"})
+	if err := p.Send(context.Background(), cfg, domain.Message{
+		Title: "Topic updated", Body: "ep 12", Link: "https://example.com/x",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(gotMessage, "Author update:") {
+		t.Errorf("message = %q, must not contain an Author update block when AuthorComment is empty", gotMessage)
 	}
 }
 
