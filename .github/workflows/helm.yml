@@ -22,8 +22,8 @@ jobs:
   lint-validate:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: azure/setup-helm@v4
+      - uses: actions/checkout@v7
+      - uses: azure/setup-helm@v5
         with:
           version: v3.16.4
       - name: helm lint (both presets)
@@ -49,11 +49,11 @@ jobs:
   kustomize-build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: azure/setup-helm@v4
+      - uses: actions/checkout@v7
+      - uses: azure/setup-helm@v5
         with:
           version: v3.16.4
-      - uses: azure/setup-kubectl@v4
+      - uses: azure/setup-kubectl@v5
       - name: kustomize build (base + overlays)
         run: |
           for o in base overlays/simple-db overlays/cnpg; do
@@ -65,8 +65,8 @@ jobs:
   install-smoke:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: azure/setup-helm@v4
+      - uses: actions/checkout@v7
+      - uses: azure/setup-helm@v5
         with:
           version: v3.16.4
       - name: Create kind cluster
