@@ -19,6 +19,10 @@ concurrency:
 permissions:
   contents: read
 
+env:
+  DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+  DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+
 jobs:
   pinned:
     name: pinned / ${{ matrix.client }}
@@ -31,13 +35,24 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+      # Authenticated pulls get a per-account quota instead of the anonymous
+      # per-IP pool shared by all GitHub-hosted runners, which rate-limited an
+      # entire nightly run (issues #119-#121). No-op until the secrets exist.
+      - name: Docker Hub login (higher pull quota)
+        if: env.DOCKERHUB_TOKEN != ''
+        run: echo "$DOCKERHUB_TOKEN" | docker login -u "$DOCKERHUB_USERNAME" --password-stdin
       - name: Acceptance (pinned baseline)
         run: bash deploy/acceptance/acceptance.sh ${{ matrix.client }} pinned
 
   latest:
     name: latest-canary / ${{ matrix.client }}
-    # Canary only — never gate releases, so skip on tag pushes.
-    if: github.event_name != 'push'
+    # Canary only — never gate releases, so skip on tag pushes. Requiring a
+    # green pinned baseline keeps the canary honest: pinned tags are immutable,
+    # so a red baseline means broken infrastructure (registry rate limits,
+    # runner trouble), not an upstream release — filing issues would be noise.
+    # Sequencing after pinned also halves the concurrent pull burst.
+    needs: pinned
+    if: github.event_name != 'push' && needs.pinned.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -50,6 +65,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+      - name: Docker Hub login (higher pull quota)
+        if: env.DOCKERHUB_TOKEN != ''
+        run: echo "$DOCKERHUB_TOKEN" | docker login -u "$DOCKERHUB_USERNAME" --password-stdin
       - name: Acceptance (latest image)
         id: acc
         continue-on-error: true

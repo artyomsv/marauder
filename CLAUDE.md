@@ -293,7 +293,11 @@ isolated `marauder-acceptance` Compose project (so it never touches a running
 `deploy` dev stack or `deploy/.env`) and asserts `POST /api/v1/clients`
 succeeds — i.e. the plugin `Test()` passed. The `latest` channel overrides the
 client image tag via `MARAUDER_TEST_*_TAG=latest`; on failure the workflow files
-a deduped `client-canary` GitHub issue.
+a deduped `client-canary` GitHub issue. The `latest` job runs only after a green
+`pinned` baseline (immutable tags — a red baseline means infra, not upstream; see
+issues #119-#121, a Docker Hub rate-limit false alarm), and both jobs
+`docker login` when `DOCKERHUB_USERNAME`/`DOCKERHUB_TOKEN` secrets exist to use
+an authenticated pull quota instead of the runners' shared anonymous pool.
 
 ### Release automation (no manual version/tag)
 
