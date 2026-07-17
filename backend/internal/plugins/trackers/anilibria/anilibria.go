@@ -1,4 +1,5 @@
-// Package anilibria implements a tracker plugin for anilibria.tv.
+// Package anilibria implements a tracker plugin for the current AniLiberty
+// service and the legacy anilibria.tv API.
 //
 // Anilibria.tv is an open anime-tracker that publishes its release index
 // over a JSON API at api.anilibria.tv/v3. We don't need to log in for
@@ -29,12 +30,13 @@ import (
 	"time"
 
 	"github.com/artyomsv/marauder/backend/internal/domain"
+	"github.com/artyomsv/marauder/backend/internal/extra"
 	"github.com/artyomsv/marauder/backend/internal/plugins/registry"
 )
 
 const (
 	pluginName  = "anilibria"
-	displayName = "Anilibria.tv"
+	displayName = "AniLiberty.top"
 	apiBase     = "https://api.anilibria.tv/v3"
 	userAgent   = "Marauder/0.4 (+https://marauder.cc)"
 )
@@ -42,14 +44,16 @@ const (
 var urlPattern = regexp.MustCompile(`^https?://(?:www\.)?anilibria\.tv/release/([^/]+?)\.html`)
 
 type plugin struct {
-	httpClient *http.Client
-	apiBase    string
+	httpClient        *http.Client
+	apiBase           string
+	aniLibertyAPIBase string
 }
 
 func init() {
 	registry.RegisterTracker(&plugin{
-		httpClient: &http.Client{Timeout: 30 * time.Second},
-		apiBase:    apiBase,
+		httpClient:        &http.Client{Timeout: 30 * time.Second},
+		apiBase:           apiBase,
+		aniLibertyAPIBase: defaultAniLibertyAPIBase,
 	})
 }
 
@@ -57,10 +61,25 @@ func (p *plugin) Name() string        { return pluginName }
 func (p *plugin) DisplayName() string { return displayName }
 
 func (p *plugin) CanParse(rawURL string) bool {
-	return urlPattern.MatchString(strings.TrimSpace(rawURL))
+	if urlPattern.MatchString(strings.TrimSpace(rawURL)) {
+		return true
+	}
+	_, ok := aniLibertyAlias(rawURL)
+	return ok
 }
 
 func (p *plugin) Parse(_ context.Context, rawURL string) (*domain.Topic, error) {
+	if alias, ok := aniLibertyAlias(rawURL); ok {
+		return &domain.Topic{
+			TrackerName: pluginName,
+			URL:         rawURL,
+			DisplayName: "AniLiberty: " + alias,
+			Extra: map[string]any{
+				"provider": aniLibertyProvider,
+				"alias":    alias,
+			},
+		}, nil
+	}
 	m := urlPattern.FindStringSubmatch(strings.TrimSpace(rawURL))
 	if m == nil {
 		return nil, errors.New("not an anilibria release URL")
@@ -90,6 +109,9 @@ type titleResponse struct {
 }
 
 func (p *plugin) Check(ctx context.Context, topic *domain.Topic, _ *domain.TrackerCredential) (*domain.Check, error) {
+	if extra.String(topic.Extra, "provider", "") == aniLibertyProvider {
+		return p.checkAniLiberty(ctx, topic)
+	}
 	slug, _ := topic.Extra["slug"].(string)
 	if slug == "" {
 		return nil, errors.New("anilibria: missing slug")
@@ -122,6 +144,9 @@ func (p *plugin) Check(ctx context.Context, topic *domain.Topic, _ *domain.Track
 }
 
 func (p *plugin) Download(ctx context.Context, topic *domain.Topic, check *domain.Check, _ *domain.TrackerCredential) (*domain.Payload, error) {
+	if extra.String(topic.Extra, "provider", "") == aniLibertyProvider {
+		return p.downloadAniLiberty(check)
+	}
 	// Refetch to get the URL of the latest torrent
 	slug, _ := topic.Extra["slug"].(string)
 	endpoint := p.apiBase + "/title?code=" + slug + "&include=torrents"

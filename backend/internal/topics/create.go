@@ -68,6 +68,10 @@ type CreateInput struct {
 	// extra["source"] so the UI can badge auto-imported topics. Empty for
 	// manually-added topics.
 	Source string
+	// Extra carries trusted creator-specific tracker metadata. Values are
+	// merged over the tracker's Parse defaults before the shared capability
+	// fields below are applied.
+	Extra map[string]any
 }
 
 // Result reports what happened. Created is false (with a nil Topic) when an
@@ -112,6 +116,9 @@ func BuildAndCreate(ctx context.Context, store Store, in CreateInput) (*Result, 
 	extra := parsed.Extra
 	if extra == nil {
 		extra = map[string]any{}
+	}
+	for key, value := range in.Extra {
+		extra[key] = value
 	}
 	if in.Quality != "" {
 		if wq, ok := tracker.(registry.WithQuality); ok && !slices.Contains(wq.Qualities(), in.Quality) {

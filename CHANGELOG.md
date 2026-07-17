@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- fix(anilibria): recognize current `aniliberty.top/anime/releases/release/*`
+  URLs and monitor them through the official AniLiberty v1 API. Sonarr-created
+  topics preserve the grabbed torrent's codec/quality variant as its infohash
+  changes, while legacy `anilibria.tv/release/*.html` topics keep working.
+
 ## [1.11.0] - 2026-07-04
 
 ### Added

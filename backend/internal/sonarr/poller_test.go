@@ -140,7 +140,10 @@ func newTestPoller(s instancesStore, a adminResolver, ts topicsStore) *Poller {
 
 func TestPoller_CreatesTopic(t *testing.T) {
 	srv := historyServer([]HistoryRecord{
-		{ID: 1, Date: time.Now().UTC(), Data: HistoryData{NzbInfoURL: fakeURL}},
+		{
+			ID: 1, Date: time.Now().UTC(), SourceTitle: "Example S01E01 / Example [AVC][1]",
+			Data: HistoryData{NzbInfoURL: fakeURL, TorrentInfoHash: "initial-hash"},
+		},
 	})
 	defer srv.Close()
 
@@ -162,6 +165,12 @@ func TestPoller_CreatesTopic(t *testing.T) {
 	if ts.created[0].Extra["source"] != "sonarr" {
 		t.Errorf("topic should be tagged source=sonarr, got %v", ts.created[0].Extra["source"])
 	}
+	if ts.created[0].Extra["sonarr_infohash"] != "initial-hash" {
+		t.Errorf("Sonarr infohash not preserved: %v", ts.created[0].Extra["sonarr_infohash"])
+	}
+	if ts.created[0].Extra["sonarr_source_title"] != "Example S01E01 / Example [AVC][1]" {
+		t.Errorf("Sonarr source title not preserved: %v", ts.created[0].Extra["sonarr_source_title"])
+	}
 	if c := fi.cursors[inst.ID]; c == nil || !c.After(past) {
 		t.Errorf("cursor not advanced")
 	}
@@ -170,9 +179,18 @@ func TestPoller_CreatesTopic(t *testing.T) {
 func TestPoller_SeasonPackDedup(t *testing.T) {
 	now := time.Now().UTC()
 	srv := historyServer([]HistoryRecord{
-		{ID: 3, Date: now, Data: HistoryData{NzbInfoURL: fakeURL}},
-		{ID: 2, Date: now.Add(-time.Minute), Data: HistoryData{NzbInfoURL: fakeURL}},
-		{ID: 1, Date: now.Add(-2 * time.Minute), Data: HistoryData{NzbInfoURL: fakeURL}},
+		{
+			ID: 3, Date: now, SourceTitle: "newest AVC grab",
+			Data: HistoryData{NzbInfoURL: fakeURL, TorrentInfoHash: "newest-hash"},
+		},
+		{
+			ID: 2, Date: now.Add(-time.Minute), SourceTitle: "older HEVC grab",
+			Data: HistoryData{NzbInfoURL: fakeURL, TorrentInfoHash: "older-hash"},
+		},
+		{
+			ID: 1, Date: now.Add(-2 * time.Minute), SourceTitle: "oldest HEVC grab",
+			Data: HistoryData{NzbInfoURL: fakeURL, TorrentInfoHash: "oldest-hash"},
+		},
 	})
 	defer srv.Close()
 
@@ -186,6 +204,10 @@ func TestPoller_SeasonPackDedup(t *testing.T) {
 
 	if len(ts.created) != 1 {
 		t.Fatalf("season pack (3 records, 1 url) should create 1 topic, got %d", len(ts.created))
+	}
+	if ts.created[0].Extra["sonarr_infohash"] != "newest-hash" ||
+		ts.created[0].Extra["sonarr_source_title"] != "newest AVC grab" {
+		t.Errorf("dedup should retain newest grab metadata, got %#v", ts.created[0].Extra)
 	}
 }
 

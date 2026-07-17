@@ -107,7 +107,8 @@ touching config files.
 
 - [x] `lostfilm` tracker plugin (with quality selection via WithQuality
       capability) — alpha, structurally complete
-- [x] `anilibria` tracker plugin — uses the public Anilibria v3 JSON API
+- [x] `anilibria` tracker plugin — uses the current AniLiberty v1 API and
+      retains compatibility with legacy Anilibria v3 topic URLs
 - [x] `anidub` tracker plugin — alpha, with WithQuality
 - [x] `rutor` tracker plugin — public, no auth
 - [x] `toloka` tracker plugin — alpha

@@ -76,8 +76,8 @@ export const trackers: Tracker[] = [
   },
   {
     slug: "anilibria",
-    name: "Anilibria.tv",
-    description: "Public anime tracker. Uses the official v3 JSON API.",
+    name: "AniLiberty.top",
+    description: "Public anime tracker. Uses the official AniLiberty v1 JSON API and retains legacy Anilibria v3 URL support.",
     category: "forum-cis",
     region: "RU",
     auth: "public",

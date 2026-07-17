@@ -28,7 +28,9 @@ It is configured at **Integrations → Sonarr** in the Marauder UI (admin only).
 3. If the URL matches an installed Marauder tracker plugin (and is in the
    allowed-trackers list, if you set one), Marauder auto-creates a monitored
    **topic** owned by the admin, using the configured default client / category
-   / download directory.
+   / download directory. The grabbed release title and torrent infohash are
+   retained as tracker metadata so plugins with multiple torrent variants can
+   keep monitoring the same quality/codec Sonarr selected.
 4. From then on Marauder's scheduler monitors that topic for hash changes and
    delivers updated torrents — exactly like a manually-added topic. Auto-created
    topics carry a **Sonarr** badge in the Topics list.

@@ -55,6 +55,7 @@ func TestBuildAndCreate_Created(t *testing.T) {
 	store := &fakeStore{}
 	res, err := BuildAndCreate(context.Background(), store, CreateInput{
 		UserID: uuid.New(), URL: goodURL, Category: "tv-sonarr", DownloadDir: "/data", Source: "sonarr",
+		Extra: map[string]any{"sonarr_infohash": "abc", "source": "caller-value"},
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -64,6 +65,9 @@ func TestBuildAndCreate_Created(t *testing.T) {
 	}
 	if store.created.Extra["source"] != "sonarr" {
 		t.Errorf("source tag = %v, want sonarr", store.created.Extra["source"])
+	}
+	if store.created.Extra["sonarr_infohash"] != "abc" {
+		t.Errorf("creator extra not merged: %v", store.created.Extra["sonarr_infohash"])
 	}
 	if store.created.TrackerName != "faketopics-test" {
 		t.Errorf("tracker = %q", store.created.TrackerName)

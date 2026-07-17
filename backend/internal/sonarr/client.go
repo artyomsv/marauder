@@ -53,13 +53,15 @@ type SystemStatus struct {
 	Instance string `json:"instanceName"`
 }
 
-// HistoryRecord is one Sonarr history entry. Only Date and Data.NzbInfoURL
-// are load-bearing for the integration.
+// HistoryRecord is one Sonarr history entry. Date and Data.NzbInfoURL drive
+// polling; SourceTitle plus Data.TorrentInfoHash let tracker plugins preserve
+// the exact quality/codec variant Sonarr grabbed.
 type HistoryRecord struct {
-	ID        int         `json:"id"`
-	Date      time.Time   `json:"date"`
-	EventType string      `json:"eventType"`
-	Data      HistoryData `json:"data"`
+	ID          int         `json:"id"`
+	Date        time.Time   `json:"date"`
+	EventType   string      `json:"eventType"`
+	SourceTitle string      `json:"sourceTitle"`
+	Data        HistoryData `json:"data"`
 }
 
 // HistoryData is the nested data blob. NzbInfoURL is the tracker topic page

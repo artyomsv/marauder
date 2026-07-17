@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"sort"
 	"time"
 
 	"github.com/google/uuid"
@@ -179,7 +180,7 @@ func (p *Poller) processRecords(ctx context.Context, inst domain.SonarrInstance,
 	// past records we deliberately don't act on instead of re-fetching them on
 	// every tick.
 	var maxDate time.Time
-	seen := make(map[string]struct{}, len(records))
+	latestByURL := make(map[string]HistoryRecord, len(records))
 	for _, rec := range records {
 		if rec.Date.After(maxDate) {
 			maxDate = rec.Date
@@ -188,18 +189,35 @@ func (p *Poller) processRecords(ctx context.Context, inst domain.SonarrInstance,
 		if url == "" {
 			continue
 		}
-		if _, dup := seen[url]; dup { // season pack: N records, one topic
-			continue
+		current, exists := latestByURL[url]
+		if !exists || rec.Date.After(current.Date) || (rec.Date.Equal(current.Date) && rec.ID > current.ID) {
+			latestByURL[url] = rec
 		}
-		seen[url] = struct{}{}
-		p.processURL(ctx, inst, ownerID, url)
+	}
+
+	// A season pack fans out into one history row per episode. Keep one row per
+	// URL, but retain the newest grab so a later quality/codec grab for the same
+	// AniLiberty release becomes the monitored variant.
+	unique := make([]HistoryRecord, 0, len(latestByURL))
+	for _, rec := range latestByURL {
+		unique = append(unique, rec)
+	}
+	sort.Slice(unique, func(i, j int) bool {
+		if !unique[i].Date.Equal(unique[j].Date) {
+			return unique[i].Date.Before(unique[j].Date)
+		}
+		return unique[i].ID < unique[j].ID
+	})
+	for _, rec := range unique {
+		p.processURL(ctx, inst, ownerID, rec)
 	}
 	return maxDate
 }
 
 // processURL handles a single topic URL: match → allowed-filter → dedup →
 // create or (optionally) update.
-func (p *Poller) processURL(ctx context.Context, inst domain.SonarrInstance, ownerID uuid.UUID, url string) {
+func (p *Poller) processURL(ctx context.Context, inst domain.SonarrInstance, ownerID uuid.UUID, rec HistoryRecord) {
+	url := rec.Data.NzbInfoURL
 	tracker := registry.FindTrackerForURL(url)
 	if tracker == nil {
 		metrics.SonarrRecordsProcessedTotal.WithLabelValues("no_tracker").Inc()
@@ -228,6 +246,7 @@ func (p *Poller) processURL(ctx context.Context, inst domain.SonarrInstance, own
 		Category:    inst.DefaultCategory,
 		DownloadDir: inst.DefaultDownloadDir,
 		Source:      topicSourceSonarr,
+		Extra:       sonarrTopicExtra(rec),
 	})
 	if err != nil {
 		p.log.Warn().Err(err).Str("url", url).Msg("auto-create topic failed")
@@ -243,6 +262,17 @@ func (p *Poller) processURL(ctx context.Context, inst domain.SonarrInstance, own
 		Msg("auto-created topic from sonarr grab")
 	metrics.SonarrTopicsCreatedTotal.Inc()
 	metrics.SonarrRecordsProcessedTotal.WithLabelValues("created").Inc()
+}
+
+func sonarrTopicExtra(rec HistoryRecord) map[string]any {
+	extra := map[string]any{}
+	if value := rec.Data.TorrentInfoHash; value != "" {
+		extra["sonarr_infohash"] = value
+	}
+	if value := rec.SourceTitle; value != "" {
+		extra["sonarr_source_title"] = value
+	}
+	return extra
 }
 
 // handleExisting optionally realigns an already-monitored topic's client,
