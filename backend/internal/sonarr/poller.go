@@ -3,6 +3,7 @@ package sonarr
 import (
 	"context"
 	"errors"
+	"maps"
 	"slices"
 	"sort"
 	"time"
@@ -231,7 +232,7 @@ func (p *Poller) processURL(ctx context.Context, inst domain.SonarrInstance, own
 	existing, err := p.topics.GetByURL(ctx, ownerID, url)
 	switch {
 	case err == nil:
-		p.handleExisting(ctx, inst, ownerID, existing)
+		p.handleExisting(ctx, inst, ownerID, existing, rec)
 		return
 	case !errors.Is(err, repo.ErrNotFound):
 		p.log.Warn().Err(err).Str("url", url).Msg("topic lookup failed")
@@ -275,22 +276,57 @@ func sonarrTopicExtra(rec HistoryRecord) map[string]any {
 	return extra
 }
 
-// handleExisting optionally realigns an already-monitored topic's client,
-// category, and download dir with the instance's configured defaults.
-func (p *Poller) handleExisting(ctx context.Context, inst domain.SonarrInstance, ownerID uuid.UUID, existing *domain.Topic) {
-	if !inst.UpdateExisting || !needsRealign(existing, inst) {
+// handleExisting refreshes Sonarr's variant identity and optionally realigns
+// the topic's client, category, and download dir with the instance defaults.
+func (p *Poller) handleExisting(ctx context.Context, inst domain.SonarrInstance, ownerID uuid.UUID, existing *domain.Topic, rec HistoryRecord) {
+	mergedExtra, variantChanged := mergeSonarrTopicExtra(existing.Extra, rec)
+	realign := inst.UpdateExisting && needsRealign(existing, inst)
+	if !variantChanged && !realign {
 		metrics.SonarrRecordsProcessedTotal.WithLabelValues("duplicate").Inc()
 		return
 	}
+
+	clientID := existing.ClientID
+	downloadDir := existing.DownloadDir
+	category := existing.Category
+	if inst.UpdateExisting {
+		clientID = inst.DefaultClientID
+		downloadDir = inst.DefaultDownloadDir
+		category = inst.DefaultCategory
+	}
 	if _, err := p.topics.Update(ctx, existing.ID, ownerID, existing.DisplayName,
-		inst.DefaultClientID, existing.NotifierID, inst.DefaultDownloadDir, inst.DefaultCategory,
-		existing.ReplaceOnUpdate, existing.ReplaceDeleteData, existing.Extra); err != nil {
-		p.log.Warn().Err(err).Str("url", existing.URL).Msg("realign existing topic failed")
+		clientID, existing.NotifierID, downloadDir, category,
+		existing.ReplaceOnUpdate, existing.ReplaceDeleteData, mergedExtra); err != nil {
+		p.log.Warn().Err(err).Str("url", existing.URL).Msg("update existing topic from sonarr grab failed")
 		metrics.SonarrRecordsProcessedTotal.WithLabelValues("error").Inc()
 		return
 	}
-	p.log.Info().Str("url", existing.URL).Str("instance", inst.Name).Msg("realigned existing topic to sonarr defaults")
+	p.log.Info().Str("url", existing.URL).Str("instance", inst.Name).
+		Bool("variant_metadata_updated", variantChanged).Bool("defaults_realigned", realign).
+		Msg("updated existing topic from sonarr grab")
 	metrics.SonarrRecordsProcessedTotal.WithLabelValues("updated").Inc()
+}
+
+func mergeSonarrTopicExtra(existing map[string]any, rec HistoryRecord) (map[string]any, bool) {
+	incoming := sonarrTopicExtra(rec)
+	if len(incoming) == 0 {
+		return existing, false
+	}
+
+	merged := maps.Clone(existing)
+	if merged == nil {
+		merged = map[string]any{}
+	}
+	changed := false
+	for key, value := range incoming {
+		incomingString := value.(string)
+		if current, ok := merged[key].(string); ok && current == incomingString {
+			continue
+		}
+		merged[key] = incomingString
+		changed = true
+	}
+	return merged, changed
 }
 
 // resolveOwner returns the instance's configured owner, falling back to the

@@ -18,7 +18,9 @@ import (
 )
 
 const (
-	aniLibertyProvider       = "aniliberty"
+	aniLibertyProvider = "aniliberty"
+	// AniLiberty intentionally separates its public site (aniliberty.top)
+	// from the official API host (anilibria.top).
 	defaultAniLibertyAPIBase = "https://anilibria.top/api/v1"
 	sonarrInfoHashKey        = "sonarr_infohash"
 	sonarrSourceTitleKey     = "sonarr_source_title"

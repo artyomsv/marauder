@@ -81,7 +81,7 @@ func (f fakeAdmin) GetInitialAdmin(context.Context) (*domain.User, error) {
 type fakeTopics struct {
 	byURL   map[string]*domain.Topic
 	created []*domain.Topic
-	updated []uuid.UUID
+	updated []*domain.Topic
 }
 
 func (f *fakeTopics) Create(_ context.Context, t *domain.Topic) (*domain.Topic, error) {
@@ -99,9 +99,23 @@ func (f *fakeTopics) GetByURL(_ context.Context, _ uuid.UUID, url string) (*doma
 	}
 	return nil, repo.ErrNotFound
 }
-func (f *fakeTopics) Update(_ context.Context, id, _ uuid.UUID, _ string, _, _ *uuid.UUID, _, _ string, _, _ bool, _ map[string]any) (*domain.Topic, error) {
-	f.updated = append(f.updated, id)
-	return &domain.Topic{ID: id}, nil
+func (f *fakeTopics) Update(_ context.Context, id, _ uuid.UUID, displayName string,
+	clientID, notifierID *uuid.UUID, downloadDir, category string,
+	replaceOnUpdate, replaceDeleteData bool, extra map[string]any,
+) (*domain.Topic, error) {
+	updated := &domain.Topic{
+		ID:                id,
+		DisplayName:       displayName,
+		ClientID:          clientID,
+		NotifierID:        notifierID,
+		DownloadDir:       downloadDir,
+		Category:          category,
+		ReplaceOnUpdate:   replaceOnUpdate,
+		ReplaceDeleteData: replaceDeleteData,
+		Extra:             extra,
+	}
+	f.updated = append(f.updated, updated)
+	return updated, nil
 }
 
 // --- helpers -------------------------------------------------------------
@@ -229,6 +243,51 @@ func TestPoller_DuplicateSkipped(t *testing.T) {
 
 	if len(ts.created) != 0 || len(ts.updated) != 0 {
 		t.Errorf("existing topic must be left alone: created=%d updated=%d", len(ts.created), len(ts.updated))
+	}
+}
+
+func TestPoller_ExistingTopicRefreshesVariantMetadata(t *testing.T) {
+	srv := historyServer([]HistoryRecord{
+		{
+			ID: 1, Date: time.Now().UTC(), SourceTitle: "new AVC grab",
+			Data: HistoryData{NzbInfoURL: fakeURL, TorrentInfoHash: "new-hash"},
+		},
+	})
+	defer srv.Close()
+
+	owner := uuid.New()
+	past := time.Now().Add(-time.Hour).UTC()
+	inst := baseInstance(srv.URL, owner)
+	inst.LastSeenAt = &past
+	ts := &fakeTopics{byURL: map[string]*domain.Topic{
+		fakeURL: {
+			ID: uuid.New(), URL: fakeURL, DisplayName: "Existing",
+			Category: "manual-category", DownloadDir: "/manual",
+			Extra: map[string]any{
+				"provider":            "aniliberty",
+				"alias":               "example",
+				"sonarr_infohash":     "old-hash",
+				"sonarr_source_title": "old HEVC grab",
+			},
+		},
+	}}
+
+	newTestPoller(&fakeInstances{}, fakeAdmin{}, ts).pollOnce(context.Background(), inst)
+
+	if len(ts.updated) != 1 {
+		t.Fatalf("want 1 metadata update, got %d", len(ts.updated))
+	}
+	updated := ts.updated[0]
+	if updated.Extra["sonarr_infohash"] != "new-hash" ||
+		updated.Extra["sonarr_source_title"] != "new AVC grab" {
+		t.Errorf("variant metadata not refreshed: %#v", updated.Extra)
+	}
+	if updated.Extra["provider"] != "aniliberty" || updated.Extra["alias"] != "example" {
+		t.Errorf("tracker metadata not preserved: %#v", updated.Extra)
+	}
+	if updated.Category != "manual-category" || updated.DownloadDir != "/manual" {
+		t.Errorf("UpdateExisting=false must preserve routing, got category=%q dir=%q",
+			updated.Category, updated.DownloadDir)
 	}
 }
 
