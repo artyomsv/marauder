@@ -219,6 +219,13 @@ AniLiberty is the public-API exception in this group. Current
 AniLiberty v1 API; legacy `https://anilibria.tv/release/<slug>.html` URLs
 remain supported through the v3 API.
 
+**Validation status:** verified read-only against the live AniLiberty v1 API
+as of 2026-07 (release search and torrent listing endpoints; all torrent
+records carry 40-hex infohashes, matching magnet `btih` values, and populated
+`updated_at`). The full URL → API → magnet → qBittorrent pipeline is covered
+by fixture-based e2e tests; Sonarr-created topics keep the grabbed
+codec/quality variant across infohash changes.
+
 ---
 
 ## Adding a tracker account

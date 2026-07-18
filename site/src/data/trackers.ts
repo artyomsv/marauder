@@ -77,11 +77,11 @@ export const trackers: Tracker[] = [
   {
     slug: "anilibria",
     name: "AniLiberty.top",
-    description: "Public anime tracker. Uses the official AniLiberty v1 JSON API and retains legacy Anilibria v3 URL support.",
+    description: "Public anime tracker. Uses the official AniLiberty v1 JSON API and retains legacy Anilibria v3 URL support. Validated read-only against the live v1 API.",
     category: "forum-cis",
     region: "RU",
     auth: "public",
-    status: "alpha",
+    status: "validated",
   },
   {
     slug: "anidub",
