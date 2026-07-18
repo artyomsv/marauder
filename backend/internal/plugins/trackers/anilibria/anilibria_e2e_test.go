@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/artyomsv/marauder/backend/internal/domain"
 	"github.com/artyomsv/marauder/backend/internal/plugins/e2etest"
 	"github.com/artyomsv/marauder/backend/internal/plugins/registry"
 )
@@ -81,8 +82,8 @@ func TestAniLibertyKeepsSonarrVariantWhenOriginalHashChanges(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
-	topic.Extra[sonarrInfoHashKey] = "cccccccccccccccccccccccccccccccccccccccc"
-	topic.Extra[sonarrSourceTitleKey] = "Grand Blue Season 3 S03E01-E02 RUS / Необъятный океан 3 / Grand Blue Season 3 - AniLiberty.TOP [WEB-DL 1080p][AVC][1-2]"
+	topic.Extra[domain.TopicExtraSonarrInfoHash] = "cccccccccccccccccccccccccccccccccccccccc"
+	topic.Extra[domain.TopicExtraSonarrSourceTitle] = "Grand Blue Season 3 S03E01-E02 RUS / Необъятный океан 3 / Grand Blue Season 3 - AniLiberty.TOP [WEB-DL 1080p][AVC][1-2]"
 
 	check, err := p.Check(context.Background(), topic, nil)
 	if err != nil {

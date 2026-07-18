@@ -70,7 +70,8 @@ type CreateInput struct {
 	Source string
 	// Extra carries trusted creator-specific tracker metadata. Values are
 	// merged over the tracker's Parse defaults before the shared capability
-	// fields below are applied.
+	// fields below are applied. Callers must not supply tracker routing keys
+	// such as "provider", "alias", or "slug"; those remain owned by Parse.
 	Extra map[string]any
 }
 

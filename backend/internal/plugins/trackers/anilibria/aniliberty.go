@@ -3,18 +3,20 @@ package anilibria
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
 	"regexp"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/artyomsv/marauder/backend/internal/domain"
 	"github.com/artyomsv/marauder/backend/internal/extra"
+	"github.com/artyomsv/marauder/backend/internal/infohash"
 )
 
 const (
@@ -22,8 +24,6 @@ const (
 	// AniLiberty intentionally separates its public site (aniliberty.top)
 	// from the official API host (anilibria.top).
 	defaultAniLibertyAPIBase = "https://anilibria.top/api/v1"
-	sonarrInfoHashKey        = "sonarr_infohash"
-	sonarrSourceTitleKey     = "sonarr_source_title"
 )
 
 var trailingEpisodeRange = regexp.MustCompile(
@@ -84,8 +84,8 @@ func (p *plugin) checkAniLiberty(ctx context.Context, topic *domain.Topic) (*dom
 		return nil, err
 	}
 	selected, err := selectAniLibertyTorrent(torrents,
-		extra.String(topic.Extra, sonarrInfoHashKey, ""),
-		extra.String(topic.Extra, sonarrSourceTitleKey, ""),
+		extra.String(topic.Extra, domain.TopicExtraSonarrInfoHash, ""),
+		extra.String(topic.Extra, domain.TopicExtraSonarrSourceTitle, ""),
 	)
 	if err != nil {
 		return nil, err
@@ -125,9 +125,9 @@ func (p *plugin) findAniLibertyRelease(ctx context.Context, alias string) (*aniL
 	if err != nil {
 		return nil, fmt.Errorf("search aniliberty releases: %w", err)
 	}
-	var releases []aniLibertyRelease
-	if err := json.Unmarshal(body, &releases); err != nil {
-		return nil, fmt.Errorf("decode aniliberty release search: %w", err)
+	releases, err := decodeAniLibertyReleases(body)
+	if err != nil {
+		return nil, err
 	}
 	for i := range releases {
 		if releases[i].ID > 0 && releases[i].Alias == alias {
@@ -172,26 +172,34 @@ func (p *plugin) fetchAniLibertyTorrents(ctx context.Context, releaseID int64, a
 }
 
 func decodeAniLibertyTorrents(body []byte) ([]aniLibertyTorrent, error) {
+	return decodeAniLibertyItems[aniLibertyTorrent](body, "torrents")
+}
+
+func decodeAniLibertyReleases(body []byte) ([]aniLibertyRelease, error) {
+	return decodeAniLibertyItems[aniLibertyRelease](body, "release search")
+}
+
+func decodeAniLibertyItems[T any](body []byte, resource string) ([]T, error) {
 	trimmed := bytes.TrimSpace(body)
 	if len(trimmed) == 0 {
-		return nil, errors.New("decode aniliberty torrents: empty response")
+		return nil, fmt.Errorf("decode aniliberty %s: empty response", resource)
 	}
-	var torrents []aniLibertyTorrent
+	var items []T
 	switch trimmed[0] {
 	case '[':
-		if err := json.Unmarshal(trimmed, &torrents); err != nil {
-			return nil, fmt.Errorf("decode aniliberty torrents: %w", err)
+		if err := json.Unmarshal(trimmed, &items); err != nil {
+			return nil, fmt.Errorf("decode aniliberty %s: %w", resource, err)
 		}
 	case '{':
-		var torrent aniLibertyTorrent
-		if err := json.Unmarshal(trimmed, &torrent); err != nil {
-			return nil, fmt.Errorf("decode aniliberty torrent: %w", err)
+		var item T
+		if err := json.Unmarshal(trimmed, &item); err != nil {
+			return nil, fmt.Errorf("decode aniliberty %s: %w", resource, err)
 		}
-		torrents = []aniLibertyTorrent{torrent}
+		items = []T{item}
 	default:
-		return nil, errors.New("decode aniliberty torrents: unsupported response")
+		return nil, fmt.Errorf("decode aniliberty %s: unsupported response", resource)
 	}
-	return torrents, nil
+	return items, nil
 }
 
 func selectAniLibertyTorrent(torrents []aniLibertyTorrent, initialHash, sourceTitle string) (*aniLibertyTorrent, error) {
@@ -213,6 +221,10 @@ func selectAniLibertyTorrent(torrents []aniLibertyTorrent, initialHash, sourceTi
 			}
 		}
 		if len(matches) == 0 {
+			// Fail closed rather than silently switching codec/quality. The
+			// scheduler keeps retrying this topic on backoff, so it recovers if
+			// the grabbed variant is published again without downloading a
+			// different variant in the meantime.
 			return nil, fmt.Errorf("aniliberty: no torrent variant matches Sonarr release %q", wanted)
 		}
 		torrents = matches
@@ -221,13 +233,17 @@ func selectAniLibertyTorrent(torrents []aniLibertyTorrent, initialHash, sourceTi
 	if len(torrents) == 0 {
 		return nil, errors.New("aniliberty: no torrent variants")
 	}
-	sort.SliceStable(torrents, func(i, j int) bool {
-		if !torrents[i].UpdatedAt.Equal(torrents[j].UpdatedAt) {
-			return torrents[i].UpdatedAt.After(torrents[j].UpdatedAt)
+	sorted := slices.Clone(torrents)
+	slices.SortStableFunc(sorted, func(a, b aniLibertyTorrent) int {
+		if !a.UpdatedAt.Equal(b.UpdatedAt) {
+			if a.UpdatedAt.After(b.UpdatedAt) {
+				return -1
+			}
+			return 1
 		}
-		return torrents[i].Hash < torrents[j].Hash
+		return strings.Compare(a.Hash, b.Hash)
 	})
-	return &torrents[0], nil
+	return &sorted[0], nil
 }
 
 func sourceTitleLabel(sourceTitle string) string {
@@ -245,12 +261,8 @@ func validInfoHash(hash string) bool {
 	if len(hash) != 40 {
 		return false
 	}
-	for _, char := range hash {
-		if !((char >= '0' && char <= '9') || (char >= 'a' && char <= 'f') || (char >= 'A' && char <= 'F')) {
-			return false
-		}
-	}
-	return true
+	_, err := hex.DecodeString(hash)
+	return err == nil
 }
 
 func magnetMatchesInfoHash(raw, hash string) bool {
@@ -258,12 +270,8 @@ func magnetMatchesInfoHash(raw, hash string) bool {
 	if err != nil || !strings.EqualFold(magnet.Scheme, "magnet") {
 		return false
 	}
-	for _, exactTopic := range magnet.Query()["xt"] {
-		if strings.EqualFold(exactTopic, "urn:btih:"+hash) {
-			return true
-		}
-	}
-	return false
+	magnetHash, err := infohash.FromMagnet(magnet.String())
+	return err == nil && strings.EqualFold(magnetHash, hash)
 }
 
 func (p *plugin) aniLibertyBase() string {

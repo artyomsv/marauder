@@ -179,11 +179,11 @@ func TestPoller_CreatesTopic(t *testing.T) {
 	if ts.created[0].Extra["source"] != "sonarr" {
 		t.Errorf("topic should be tagged source=sonarr, got %v", ts.created[0].Extra["source"])
 	}
-	if ts.created[0].Extra["sonarr_infohash"] != "initial-hash" {
-		t.Errorf("Sonarr infohash not preserved: %v", ts.created[0].Extra["sonarr_infohash"])
+	if ts.created[0].Extra[domain.TopicExtraSonarrInfoHash] != "initial-hash" {
+		t.Errorf("Sonarr infohash not preserved: %v", ts.created[0].Extra[domain.TopicExtraSonarrInfoHash])
 	}
-	if ts.created[0].Extra["sonarr_source_title"] != "Example S01E01 / Example [AVC][1]" {
-		t.Errorf("Sonarr source title not preserved: %v", ts.created[0].Extra["sonarr_source_title"])
+	if ts.created[0].Extra[domain.TopicExtraSonarrSourceTitle] != "Example S01E01 / Example [AVC][1]" {
+		t.Errorf("Sonarr source title not preserved: %v", ts.created[0].Extra[domain.TopicExtraSonarrSourceTitle])
 	}
 	if c := fi.cursors[inst.ID]; c == nil || !c.After(past) {
 		t.Errorf("cursor not advanced")
@@ -219,8 +219,8 @@ func TestPoller_SeasonPackDedup(t *testing.T) {
 	if len(ts.created) != 1 {
 		t.Fatalf("season pack (3 records, 1 url) should create 1 topic, got %d", len(ts.created))
 	}
-	if ts.created[0].Extra["sonarr_infohash"] != "newest-hash" ||
-		ts.created[0].Extra["sonarr_source_title"] != "newest AVC grab" {
+	if ts.created[0].Extra[domain.TopicExtraSonarrInfoHash] != "newest-hash" ||
+		ts.created[0].Extra[domain.TopicExtraSonarrSourceTitle] != "newest AVC grab" {
 		t.Errorf("dedup should retain newest grab metadata, got %#v", ts.created[0].Extra)
 	}
 }
@@ -264,10 +264,11 @@ func TestPoller_ExistingTopicRefreshesVariantMetadata(t *testing.T) {
 			ID: uuid.New(), URL: fakeURL, DisplayName: "Existing",
 			Category: "manual-category", DownloadDir: "/manual",
 			Extra: map[string]any{
-				"provider":            "aniliberty",
-				"alias":               "example",
-				"sonarr_infohash":     "old-hash",
-				"sonarr_source_title": "old HEVC grab",
+				"source":                           topicSourceSonarr,
+				"provider":                         "aniliberty",
+				"alias":                            "example",
+				domain.TopicExtraSonarrInfoHash:    "old-hash",
+				domain.TopicExtraSonarrSourceTitle: "old HEVC grab",
 			},
 		},
 	}}
@@ -278,8 +279,8 @@ func TestPoller_ExistingTopicRefreshesVariantMetadata(t *testing.T) {
 		t.Fatalf("want 1 metadata update, got %d", len(ts.updated))
 	}
 	updated := ts.updated[0]
-	if updated.Extra["sonarr_infohash"] != "new-hash" ||
-		updated.Extra["sonarr_source_title"] != "new AVC grab" {
+	if updated.Extra[domain.TopicExtraSonarrInfoHash] != "new-hash" ||
+		updated.Extra[domain.TopicExtraSonarrSourceTitle] != "new AVC grab" {
 		t.Errorf("variant metadata not refreshed: %#v", updated.Extra)
 	}
 	if updated.Extra["provider"] != "aniliberty" || updated.Extra["alias"] != "example" {
@@ -288,6 +289,52 @@ func TestPoller_ExistingTopicRefreshesVariantMetadata(t *testing.T) {
 	if updated.Category != "manual-category" || updated.DownloadDir != "/manual" {
 		t.Errorf("UpdateExisting=false must preserve routing, got category=%q dir=%q",
 			updated.Category, updated.DownloadDir)
+	}
+}
+
+func TestPoller_ManualTopicDoesNotRefreshVariantMetadata(t *testing.T) {
+	srv := historyServer([]HistoryRecord{
+		{
+			ID: 1, Date: time.Now().UTC(), SourceTitle: "new AVC grab",
+			Data: HistoryData{NzbInfoURL: fakeURL, TorrentInfoHash: "new-hash"},
+		},
+	})
+	defer srv.Close()
+
+	owner := uuid.New()
+	past := time.Now().Add(-time.Hour).UTC()
+	inst := baseInstance(srv.URL, owner)
+	inst.LastSeenAt = &past
+	ts := &fakeTopics{byURL: map[string]*domain.Topic{
+		fakeURL: {
+			ID: uuid.New(), URL: fakeURL, DisplayName: "Manual",
+			Extra: map[string]any{"provider": "aniliberty", "alias": "example"},
+		},
+	}}
+
+	newTestPoller(&fakeInstances{}, fakeAdmin{}, ts).pollOnce(context.Background(), inst)
+
+	if len(ts.updated) != 0 {
+		t.Fatalf("manual topic must not be pinned to Sonarr's variant, got %d updates", len(ts.updated))
+	}
+}
+
+func TestMergeSonarrTopicExtraNoOp(t *testing.T) {
+	existing := map[string]any{
+		"provider":                         "aniliberty",
+		domain.TopicExtraSonarrInfoHash:    "same-hash",
+		domain.TopicExtraSonarrSourceTitle: "same title",
+	}
+	merged, changed := mergeSonarrTopicExtra(existing, HistoryRecord{
+		SourceTitle: "same title",
+		Data:        HistoryData{TorrentInfoHash: "same-hash"},
+	})
+
+	if changed {
+		t.Fatal("matching Sonarr metadata must be a no-op")
+	}
+	if merged["provider"] != "aniliberty" {
+		t.Fatalf("existing tracker metadata was not preserved: %#v", merged)
 	}
 }
 

@@ -1,11 +1,11 @@
 package sonarr
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"maps"
 	"slices"
-	"sort"
 	"time"
 
 	"github.com/google/uuid"
@@ -203,11 +203,11 @@ func (p *Poller) processRecords(ctx context.Context, inst domain.SonarrInstance,
 	for _, rec := range latestByURL {
 		unique = append(unique, rec)
 	}
-	sort.Slice(unique, func(i, j int) bool {
-		if !unique[i].Date.Equal(unique[j].Date) {
-			return unique[i].Date.Before(unique[j].Date)
+	slices.SortFunc(unique, func(a, b HistoryRecord) int {
+		if dateOrder := a.Date.Compare(b.Date); dateOrder != 0 {
+			return dateOrder
 		}
-		return unique[i].ID < unique[j].ID
+		return cmp.Compare(a.ID, b.ID)
 	})
 	for _, rec := range unique {
 		p.processURL(ctx, inst, ownerID, rec)
@@ -268,18 +268,23 @@ func (p *Poller) processURL(ctx context.Context, inst domain.SonarrInstance, own
 func sonarrTopicExtra(rec HistoryRecord) map[string]any {
 	extra := map[string]any{}
 	if value := rec.Data.TorrentInfoHash; value != "" {
-		extra["sonarr_infohash"] = value
+		extra[domain.TopicExtraSonarrInfoHash] = value
 	}
 	if value := rec.SourceTitle; value != "" {
-		extra["sonarr_source_title"] = value
+		extra[domain.TopicExtraSonarrSourceTitle] = value
 	}
 	return extra
 }
 
-// handleExisting refreshes Sonarr's variant identity and optionally realigns
-// the topic's client, category, and download dir with the instance defaults.
+// handleExisting refreshes Sonarr's variant identity only for Sonarr-owned
+// topics and optionally realigns any existing topic's client, category, and
+// download dir with the instance defaults.
 func (p *Poller) handleExisting(ctx context.Context, inst domain.SonarrInstance, ownerID uuid.UUID, existing *domain.Topic, rec HistoryRecord) {
-	mergedExtra, variantChanged := mergeSonarrTopicExtra(existing.Extra, rec)
+	mergedExtra := existing.Extra
+	var variantChanged bool
+	if source, ok := existing.Extra["source"].(string); ok && source == topicSourceSonarr {
+		mergedExtra, variantChanged = mergeSonarrTopicExtra(existing.Extra, rec)
+	}
 	realign := inst.UpdateExisting && needsRealign(existing, inst)
 	if !variantChanged && !realign {
 		metrics.SonarrRecordsProcessedTotal.WithLabelValues("duplicate").Inc()
@@ -319,7 +324,10 @@ func mergeSonarrTopicExtra(existing map[string]any, rec HistoryRecord) (map[stri
 	}
 	changed := false
 	for key, value := range incoming {
-		incomingString := value.(string)
+		incomingString, ok := value.(string)
+		if !ok {
+			continue
+		}
 		if current, ok := merged[key].(string); ok && current == incomingString {
 			continue
 		}
