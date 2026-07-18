@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- fix(anilibria): Sonarr variant matching falls back to locating the
+  torrent's variant key anywhere in the grabbed release title, so indexers
+  that don't place the AniLiberty label at the end of the title keep the
+  codec/quality pin working after infohash changes.
+
+### Changed
+
+- The AniLiberty tracker is now marked **validated** on marauder.cc and in
+  `docs/trackers.md`, after read-only verification of the live v1 API
+  contract (hex infohashes, matching magnet `btih`, populated `updated_at`).
+
 ## [1.11.1] - 2026-07-18
 
 ### Fixed

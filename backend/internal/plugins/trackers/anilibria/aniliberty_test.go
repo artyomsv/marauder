@@ -172,6 +172,41 @@ func TestSelectAniLibertyTorrentFailsClosedOnMissingVariant(t *testing.T) {
 	}
 }
 
+func TestSelectAniLibertyTorrentMatchesVariantKeyAnywhereInSourceTitle(t *testing.T) {
+	avc := validAniLibertyTestTorrent()
+	hevc := validAniLibertyTestTorrent()
+	hevc.Hash = "89abcdef0123456789abcdef0123456789abcdef"
+	hevc.Label = "Example - AniLiberty.TOP [WEB-DL 1080p][HEVC][1-2]"
+	hevc.Magnet = "magnet:?xt=urn:btih:" + hevc.Hash
+
+	// An indexer that appends its own decoration after the AniLiberty label:
+	// the last-" / "-segment heuristic yields no exact variant-key match, but
+	// the HEVC torrent's variant key still appears inside the source title.
+	sourceTitle := "Example - AniLiberty.TOP [WEB-DL 1080p][HEVC][1-2] (batch repack)"
+
+	selected, err := selectAniLibertyTorrent([]aniLibertyTorrent{avc, hevc}, "", sourceTitle)
+	if err != nil {
+		t.Fatalf("selectAniLibertyTorrent: %v", err)
+	}
+	if selected.Hash != hevc.Hash {
+		t.Fatalf("selected hash = %q, want HEVC variant %q", selected.Hash, hevc.Hash)
+	}
+}
+
+func TestSelectAniLibertyTorrentFallbackIgnoresEmptyVariantKeys(t *testing.T) {
+	rangeOnly := validAniLibertyTestTorrent()
+	rangeOnly.Label = "[1-2]" // variant key strips to "" — must never match everything
+
+	_, err := selectAniLibertyTorrent(
+		[]aniLibertyTorrent{rangeOnly},
+		"",
+		"Example / Different [HEVC][1-2]",
+	)
+	if err == nil || !strings.Contains(err.Error(), "no torrent variant matches") {
+		t.Fatalf("error = %v, want missing-variant error", err)
+	}
+}
+
 func TestSourceTitleLabel(t *testing.T) {
 	tests := map[string]string{
 		"Series S01E01 / Example [AVC][1]": "Example [AVC][1]",

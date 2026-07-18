@@ -221,6 +221,17 @@ func selectAniLibertyTorrent(torrents []aniLibertyTorrent, initialHash, sourceTi
 			}
 		}
 		if len(matches) == 0 {
+			// Indexer-format-agnostic fallback: the last-" / "-segment
+			// heuristic assumes the AniLiberty label ends the source title.
+			// If it matched nothing, accept any torrent whose variant key
+			// appears somewhere in the full source title instead.
+			for _, torrent := range torrents {
+				if key := aniLibertyVariantKey(torrent.Label); key != "" && strings.Contains(sourceTitle, key) {
+					matches = append(matches, torrent)
+				}
+			}
+		}
+		if len(matches) == 0 {
 			// Fail closed rather than silently switching codec/quality. The
 			// scheduler keeps retrying this topic on backoff, so it recovers if
 			// the grabbed variant is published again without downloading a
