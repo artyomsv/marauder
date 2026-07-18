@@ -25,8 +25,14 @@ name: Auto release on merge
 #   tag (using GITHUB_TOKEN), but release.yml must then be started manually via
 #   its workflow_dispatch. A startup step warns when the secret is absent.
 
+# pull_request_target (not pull_request): a plain pull_request run triggered
+# by a FORK PR receives no repo secrets, so RELEASE_PAT was empty and the tag
+# push failed 403 as github-actions[bot] (first hit: PR #122). The _target
+# variant runs in base-repo context with secrets. Safe here because the job
+# only ever checks out `main` (never the PR head, so no untrusted code runs)
+# and the attacker-controllable PR title/body are passed via env, not inline.
 on:
-  pull_request:
+  pull_request_target:
     types: [closed]
     branches: [main]
 
