@@ -200,7 +200,7 @@ NNM-Club account entry on `/accounts`.
 | Plugin name | Display name | Account | Quality | Episode filter | Cloudflare |
 |---|---|---|---|---|---|
 | `anidub` | AniDub | Yes | Yes | No | No |
-| `anilibria` | Anilibria | No (public API) | No | No | No |
+| `anilibria` | AniLiberty | No (public API) | No | No | No |
 | `rutor` | Rutor | No | No | No | No |
 | `toloka` | Toloka | Yes | No | No | No |
 | `unionpeer` | Unionpeer | Yes | No | No | No |
@@ -213,6 +213,11 @@ the same session-cookie pattern as LostFilm. Selectors are in
 each plugin's package — see
 [`docs/plugin-development.md`](plugin-development.md) for the
 guide on adding new ones or fixing selector drift.
+
+AniLiberty is the public-API exception in this group. Current
+`https://aniliberty.top/anime/releases/release/<alias>` URLs use the official
+AniLiberty v1 API; legacy `https://anilibria.tv/release/<slug>.html` URLs
+remain supported through the v3 API.
 
 ---
 

@@ -1,8 +1,10 @@
 package sonarr
 
 import (
+	"cmp"
 	"context"
 	"errors"
+	"maps"
 	"slices"
 	"time"
 
@@ -179,7 +181,7 @@ func (p *Poller) processRecords(ctx context.Context, inst domain.SonarrInstance,
 	// past records we deliberately don't act on instead of re-fetching them on
 	// every tick.
 	var maxDate time.Time
-	seen := make(map[string]struct{}, len(records))
+	latestByURL := make(map[string]HistoryRecord, len(records))
 	for _, rec := range records {
 		if rec.Date.After(maxDate) {
 			maxDate = rec.Date
@@ -188,18 +190,35 @@ func (p *Poller) processRecords(ctx context.Context, inst domain.SonarrInstance,
 		if url == "" {
 			continue
 		}
-		if _, dup := seen[url]; dup { // season pack: N records, one topic
-			continue
+		current, exists := latestByURL[url]
+		if !exists || rec.Date.After(current.Date) || (rec.Date.Equal(current.Date) && rec.ID > current.ID) {
+			latestByURL[url] = rec
 		}
-		seen[url] = struct{}{}
-		p.processURL(ctx, inst, ownerID, url)
+	}
+
+	// A season pack fans out into one history row per episode. Keep one row per
+	// URL, but retain the newest grab so a later quality/codec grab for the same
+	// AniLiberty release becomes the monitored variant.
+	unique := make([]HistoryRecord, 0, len(latestByURL))
+	for _, rec := range latestByURL {
+		unique = append(unique, rec)
+	}
+	slices.SortFunc(unique, func(a, b HistoryRecord) int {
+		if dateOrder := a.Date.Compare(b.Date); dateOrder != 0 {
+			return dateOrder
+		}
+		return cmp.Compare(a.ID, b.ID)
+	})
+	for _, rec := range unique {
+		p.processURL(ctx, inst, ownerID, rec)
 	}
 	return maxDate
 }
 
 // processURL handles a single topic URL: match → allowed-filter → dedup →
 // create or (optionally) update.
-func (p *Poller) processURL(ctx context.Context, inst domain.SonarrInstance, ownerID uuid.UUID, url string) {
+func (p *Poller) processURL(ctx context.Context, inst domain.SonarrInstance, ownerID uuid.UUID, rec HistoryRecord) {
+	url := rec.Data.NzbInfoURL
 	tracker := registry.FindTrackerForURL(url)
 	if tracker == nil {
 		metrics.SonarrRecordsProcessedTotal.WithLabelValues("no_tracker").Inc()
@@ -213,7 +232,7 @@ func (p *Poller) processURL(ctx context.Context, inst domain.SonarrInstance, own
 	existing, err := p.topics.GetByURL(ctx, ownerID, url)
 	switch {
 	case err == nil:
-		p.handleExisting(ctx, inst, ownerID, existing)
+		p.handleExisting(ctx, inst, ownerID, existing, rec)
 		return
 	case !errors.Is(err, repo.ErrNotFound):
 		p.log.Warn().Err(err).Str("url", url).Msg("topic lookup failed")
@@ -228,6 +247,7 @@ func (p *Poller) processURL(ctx context.Context, inst domain.SonarrInstance, own
 		Category:    inst.DefaultCategory,
 		DownloadDir: inst.DefaultDownloadDir,
 		Source:      topicSourceSonarr,
+		Extra:       sonarrTopicExtra(rec),
 	})
 	if err != nil {
 		p.log.Warn().Err(err).Str("url", url).Msg("auto-create topic failed")
@@ -245,22 +265,76 @@ func (p *Poller) processURL(ctx context.Context, inst domain.SonarrInstance, own
 	metrics.SonarrRecordsProcessedTotal.WithLabelValues("created").Inc()
 }
 
-// handleExisting optionally realigns an already-monitored topic's client,
-// category, and download dir with the instance's configured defaults.
-func (p *Poller) handleExisting(ctx context.Context, inst domain.SonarrInstance, ownerID uuid.UUID, existing *domain.Topic) {
-	if !inst.UpdateExisting || !needsRealign(existing, inst) {
+func sonarrTopicExtra(rec HistoryRecord) map[string]any {
+	extra := map[string]any{}
+	if value := rec.Data.TorrentInfoHash; value != "" {
+		extra[domain.TopicExtraSonarrInfoHash] = value
+	}
+	if value := rec.SourceTitle; value != "" {
+		extra[domain.TopicExtraSonarrSourceTitle] = value
+	}
+	return extra
+}
+
+// handleExisting refreshes Sonarr's variant identity only for Sonarr-owned
+// topics and optionally realigns any existing topic's client, category, and
+// download dir with the instance defaults.
+func (p *Poller) handleExisting(ctx context.Context, inst domain.SonarrInstance, ownerID uuid.UUID, existing *domain.Topic, rec HistoryRecord) {
+	mergedExtra := existing.Extra
+	var variantChanged bool
+	if source, ok := existing.Extra["source"].(string); ok && source == topicSourceSonarr {
+		mergedExtra, variantChanged = mergeSonarrTopicExtra(existing.Extra, rec)
+	}
+	realign := inst.UpdateExisting && needsRealign(existing, inst)
+	if !variantChanged && !realign {
 		metrics.SonarrRecordsProcessedTotal.WithLabelValues("duplicate").Inc()
 		return
 	}
+
+	clientID := existing.ClientID
+	downloadDir := existing.DownloadDir
+	category := existing.Category
+	if inst.UpdateExisting {
+		clientID = inst.DefaultClientID
+		downloadDir = inst.DefaultDownloadDir
+		category = inst.DefaultCategory
+	}
 	if _, err := p.topics.Update(ctx, existing.ID, ownerID, existing.DisplayName,
-		inst.DefaultClientID, existing.NotifierID, inst.DefaultDownloadDir, inst.DefaultCategory,
-		existing.ReplaceOnUpdate, existing.ReplaceDeleteData, existing.Extra); err != nil {
-		p.log.Warn().Err(err).Str("url", existing.URL).Msg("realign existing topic failed")
+		clientID, existing.NotifierID, downloadDir, category,
+		existing.ReplaceOnUpdate, existing.ReplaceDeleteData, mergedExtra); err != nil {
+		p.log.Warn().Err(err).Str("url", existing.URL).Msg("update existing topic from sonarr grab failed")
 		metrics.SonarrRecordsProcessedTotal.WithLabelValues("error").Inc()
 		return
 	}
-	p.log.Info().Str("url", existing.URL).Str("instance", inst.Name).Msg("realigned existing topic to sonarr defaults")
+	p.log.Info().Str("url", existing.URL).Str("instance", inst.Name).
+		Bool("variant_metadata_updated", variantChanged).Bool("defaults_realigned", realign).
+		Msg("updated existing topic from sonarr grab")
 	metrics.SonarrRecordsProcessedTotal.WithLabelValues("updated").Inc()
+}
+
+func mergeSonarrTopicExtra(existing map[string]any, rec HistoryRecord) (map[string]any, bool) {
+	incoming := sonarrTopicExtra(rec)
+	if len(incoming) == 0 {
+		return existing, false
+	}
+
+	merged := maps.Clone(existing)
+	if merged == nil {
+		merged = map[string]any{}
+	}
+	changed := false
+	for key, value := range incoming {
+		incomingString, ok := value.(string)
+		if !ok {
+			continue
+		}
+		if current, ok := merged[key].(string); ok && current == incomingString {
+			continue
+		}
+		merged[key] = incomingString
+		changed = true
+	}
+	return merged, changed
 }
 
 // resolveOwner returns the instance's configured owner, falling back to the

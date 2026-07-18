@@ -51,7 +51,7 @@ func TestClient_GrabHistorySince(t *testing.T) {
 		recs := []HistoryRecord{
 			{ID: 1, Date: t1, EventType: "grabbed", Data: HistoryData{NzbInfoURL: "u1"}},
 			{ID: 3, Date: t3, EventType: "grabbed", Data: HistoryData{NzbInfoURL: "u3"}},
-			{ID: 2, Date: t2, EventType: "grabbed", Data: HistoryData{NzbInfoURL: "u2"}},
+			{ID: 2, Date: t2, EventType: "grabbed", SourceTitle: "release title", Data: HistoryData{NzbInfoURL: "u2"}},
 		}
 		_ = json.NewEncoder(w).Encode(recs)
 	}))
@@ -67,6 +67,9 @@ func TestClient_GrabHistorySince(t *testing.T) {
 	}
 	if recs[0].ID != 2 || recs[1].ID != 3 {
 		t.Errorf("want chronological [2,3], got [%d,%d]", recs[0].ID, recs[1].ID)
+	}
+	if recs[0].SourceTitle != "release title" {
+		t.Errorf("sourceTitle = %q, want release title", recs[0].SourceTitle)
 	}
 	if gotPath != "/api/v3/history/since" {
 		t.Errorf("path = %q, want /api/v3/history/since", gotPath)
