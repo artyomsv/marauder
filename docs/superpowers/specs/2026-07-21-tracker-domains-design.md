@@ -25,7 +25,11 @@ hardening). So existing topics need **no migration** — the moment
   behind Cloudflare/geo-blocks; error-driven rotation covers the need).
 - **Custom domains:** known plugin-declared mirrors in a dropdown **plus**
   admin-only validated free-text custom domains.
-- **Coverage:** all 16 tracker plugins adopt the seam in Phase 1.
+- **Coverage:** every tracker plugin with a fixed domain adopts the seam in
+  Phase 1 — 12 of the 16 (anidub, anilibria, freetorrents, hdclub, kinozal,
+  lostfilm, nnmclub, rutor, rutracker, tapochek, toloka, unionpeer). The
+  4 generic adapters (genericmagnet, generictorrentfile, torznab, newznab)
+  take fully user-supplied URLs and have no fixed domain to configure.
 - **UI home:** admin-only section on the existing Settings page.
 
 ## Phase 1 — configurable domains
