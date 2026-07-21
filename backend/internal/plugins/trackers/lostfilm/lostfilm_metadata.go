@@ -62,9 +62,9 @@ func (p *plugin) absoluteImageURL(raw string) string {
 	case strings.HasPrefix(u, "//"):
 		return "https:" + u
 	case strings.HasPrefix(u, "/"):
-		return "https://" + p.domain + u
+		return "https://" + p.effectiveDomain() + u
 	default:
-		return "https://" + p.domain + "/" + u
+		return "https://" + p.effectiveDomain() + "/" + u
 	}
 }
 
@@ -78,11 +78,11 @@ func (p *plugin) ResolveMetadata(ctx context.Context, rawURL string, creds *doma
 	if m == nil {
 		return nil, fmt.Errorf("resolve metadata: not a lostfilm series URL")
 	}
-	// Rebuild the series URL from the trusted host (p.domain) + the parsed
-	// slug rather than fetching the raw user-supplied URL, so a crafted URL
-	// cannot redirect the request to an arbitrary host (CodeQL
+	// Rebuild the series URL from the trusted host (p.effectiveDomain()) +
+	// the parsed slug rather than fetching the raw user-supplied URL, so a
+	// crafted URL cannot redirect the request to an arbitrary host (CodeQL
 	// go/request-forgery). Mirrors SeasonCatalog.
-	seriesURL := "https://" + p.domain + "/series/" + m[1] + "/"
+	seriesURL := "https://" + p.effectiveDomain() + "/series/" + m[2] + "/"
 	body, err := p.fetch(ctx, seriesURL, creds)
 	if err != nil {
 		return nil, fmt.Errorf("resolve metadata: %w", err)

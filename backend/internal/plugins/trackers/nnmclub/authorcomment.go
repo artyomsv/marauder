@@ -78,7 +78,7 @@ func (p *plugin) AuthorComment(ctx context.Context, rawURL string, creds *domain
 	// page is the final fallback (post #1 there is the release
 	// description, never a comment). A page fetch failure just moves the
 	// walk along — "nothing found" stays uniformly ("", nil).
-	starts := forumcommon.PaginationStarts([]byte(page), m[1])
+	starts := forumcommon.PaginationStarts([]byte(page), m[2])
 	if len(starts) > maxCommentPageFetches {
 		starts = starts[:maxCommentPageFetches]
 	}

@@ -33,7 +33,12 @@ const (
 	userAgent   = "Marauder/0.3 (+https://marauder.cc)"
 )
 
-var urlPattern = regexp.MustCompile(`^https?://(?:www\.)?nnmclub\.(?:to|me)/forum/viewtopic\.php\?t=(\d+)`)
+// urlPattern is host-agnostic; CanParse gates the captured host against the
+// known + admin-configured domain allowlist (the SSRF barrier — see
+// registry.DomainAllowed).
+var urlPattern = regexp.MustCompile(`^https?://(?:www\.)?([^/]+)/forum/viewtopic\.php\?t=(\d+)`)
+
+var knownDomains = []string{"nnmclub.to", "nnmclub.me"}
 
 type plugin struct {
 	sessions  *forumcommon.SessionStore
@@ -52,8 +57,14 @@ func (p *plugin) DisplayName() string { return displayName }
 // UsesCloudflare implements registry.WithCloudflare.
 func (p *plugin) UsesCloudflare() bool { return true }
 
+var _ registry.WithDomains = (*plugin)(nil)
+
+// Domains implements registry.WithDomains; first entry is canonical.
+func (p *plugin) Domains() []string { return knownDomains }
+
 func (p *plugin) CanParse(rawURL string) bool {
-	return urlPattern.MatchString(strings.TrimSpace(rawURL))
+	m := urlPattern.FindStringSubmatch(strings.TrimSpace(rawURL))
+	return m != nil && registry.DomainAllowed(pluginName, m[1], knownDomains)
 }
 
 func (p *plugin) Parse(_ context.Context, rawURL string) (*domain.Topic, error) {
@@ -61,7 +72,7 @@ func (p *plugin) Parse(_ context.Context, rawURL string) (*domain.Topic, error) 
 	if m == nil {
 		return nil, errors.New("not a nnm-club viewtopic URL")
 	}
-	id, err := strconv.Atoi(m[1])
+	id, err := strconv.Atoi(m[2])
 	if err != nil {
 		return nil, fmt.Errorf("topic id: %w", err)
 	}
@@ -88,8 +99,29 @@ var (
 	ogImageRe = regexp.MustCompile(`(?i)<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']`)
 )
 
+// canonicalURL rewrites rawURL's host to the admin-configured active domain
+// (registry.ActiveDomain) when one is set and differs from the URL's own
+// host. NNM-Club has no persisted domain field — every fetch dials the
+// stored topic URL directly — so this is the only place an active-domain
+// override actually takes effect: without it, a mirror switch would leave
+// existing topics fetching the old (possibly dead) host forever.
+func canonicalURL(rawURL string) (string, error) {
+	u, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil {
+		return "", fmt.Errorf("nnm-club: invalid URL: %w", err)
+	}
+	if active := registry.ActiveDomain(pluginName); active != "" && active != u.Hostname() {
+		u.Host = active
+	}
+	return u.String(), nil
+}
+
 func (p *plugin) Check(ctx context.Context, topic *domain.Topic, creds *domain.TrackerCredential) (*domain.Check, error) {
-	body, err := p.fetch(ctx, topic.URL, creds)
+	target, err := canonicalURL(topic.URL)
+	if err != nil {
+		return nil, err
+	}
+	body, err := p.fetch(ctx, target, creds)
 	if err != nil {
 		return nil, err
 	}
@@ -164,14 +196,13 @@ func (p *plugin) fetch(ctx context.Context, target string, creds *domain.Tracker
 	if u.Scheme != "https" && u.Scheme != "http" {
 		return nil, fmt.Errorf("nnm-club: refusing URL scheme %q", u.Scheme)
 	}
-	// Allowlist the host against compile-time constants only (url.Parse has
-	// already lower-cased it). Checking u.Hostname() against literal hosts is
-	// the form CodeQL recognises as a request-forgery barrier, so the
-	// u.String() dialed below is treated as sanitised.
-	switch u.Hostname() {
-	case "nnmclub.to", "www.nnmclub.to", "nnmclub.me", "www.nnmclub.me":
-		// a permitted NNM-Club host — fall through and fetch
-	default:
+	// Allowlist the host against known NNM-Club domains plus any
+	// admin-configured custom mirrors (registry.DomainAllowed). This is
+	// still a strict allowlist — the CodeQL go/request-forgery alert on
+	// this fetch is already dismissed won't-fix (CodeQL can't model the
+	// runtime resolver), so the barrier stays the same shape, just backed
+	// by a runtime-configurable set instead of compile-time literals.
+	if !registry.DomainAllowed(pluginName, u.Hostname(), knownDomains) {
 		return nil, fmt.Errorf("nnm-club: refusing to fetch off-site host %q", u.Hostname())
 	}
 

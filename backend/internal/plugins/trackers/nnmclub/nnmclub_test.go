@@ -4,10 +4,12 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/artyomsv/marauder/backend/internal/domain"
+	"github.com/artyomsv/marauder/backend/internal/plugins/registry"
 	"github.com/artyomsv/marauder/backend/internal/plugins/trackers/forumcommon"
 )
 
@@ -157,5 +159,79 @@ func TestResolveMetadata(t *testing.T) {
 	}
 	if meta.ImageURL != "https://a.radikal.ru/a11/2008/6f/f91ffdbf65b2.jpg" {
 		t.Errorf("image url: %q", meta.ImageURL)
+	}
+}
+
+func TestCanParse_CustomDomain_AllowedViaResolver(t *testing.T) {
+	registry.SetDomainResolver(func(name string) registry.DomainConfig {
+		if name == "nnmclub" {
+			return registry.DomainConfig{Custom: []string{"nnmclub.example"}}
+		}
+		return registry.DomainConfig{}
+	})
+	t.Cleanup(func() { registry.SetDomainResolver(nil) })
+	p := &plugin{}
+	if !p.CanParse("https://nnmclub.example/forum/viewtopic.php?t=123") {
+		t.Error("custom domain should parse")
+	}
+	if p.CanParse("https://evil.example/forum/viewtopic.php?t=123") {
+		t.Error("unlisted domain must not parse")
+	}
+}
+
+func TestDomains_CanonicalFirst(t *testing.T) {
+	p := &plugin{}
+	want := []string{"nnmclub.to", "nnmclub.me"}
+	if !reflect.DeepEqual(p.Domains(), want) {
+		t.Errorf("Domains() = %v, want %v", p.Domains(), want)
+	}
+}
+
+// hostRecordingRewrite records the Host of every outgoing request, then
+// redirects it to the test server (target) over http so no real network is
+// hit. Mirrors the kinozal test helper of the same purpose.
+type hostRecordingRewrite struct {
+	target string
+	hosts  []string
+}
+
+func (h *hostRecordingRewrite) RoundTrip(req *http.Request) (*http.Response, error) {
+	h.hosts = append(h.hosts, req.URL.Host)
+	req.URL.Scheme = "http"
+	req.URL.Host = h.target
+	return http.DefaultTransport.RoundTrip(req)
+}
+
+// TestCheck_RewritesToActiveDomain asserts that when the admin has
+// configured an active domain override, Check fetches that host instead of
+// the mirror recorded in the stored topic URL — NNM-Club has no domain
+// field, so canonicalURL is the only place this override can take effect.
+func TestCheck_RewritesToActiveDomain(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(fixtureViewtopicHTML))
+	}))
+	t.Cleanup(srv.Close)
+
+	registry.SetDomainResolver(func(name string) registry.DomainConfig {
+		if name == "nnmclub" {
+			return registry.DomainConfig{Active: "nnmclub.me"}
+		}
+		return registry.DomainConfig{}
+	})
+	t.Cleanup(func() { registry.SetDomainResolver(nil) })
+
+	rec := &hostRecordingRewrite{target: strings.TrimPrefix(srv.URL, "http://")}
+	p := &plugin{sessions: forumcommon.New(), transport: rec}
+
+	topic := &domain.Topic{URL: "https://nnmclub.to/forum/viewtopic.php?t=42"}
+	if _, err := p.Check(context.Background(), topic, nil); err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	if len(rec.hosts) == 0 {
+		t.Fatal("no requests recorded")
+	}
+	if rec.hosts[0] != "nnmclub.me" {
+		t.Errorf("fetch host = %q, want active domain nnmclub.me", rec.hosts[0])
 	}
 }

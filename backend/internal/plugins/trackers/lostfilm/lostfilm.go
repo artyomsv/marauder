@@ -133,6 +133,7 @@ var (
 	_ registry.WithCredentials      = (*plugin)(nil)
 	_ registry.WithInteractiveLogin = (*plugin)(nil)
 	_ registry.WithSeasonCatalog    = (*plugin)(nil)
+	_ registry.WithDomains          = (*plugin)(nil)
 )
 
 func init() {
@@ -144,6 +145,9 @@ func init() {
 
 func (p *plugin) Name() string        { return pluginName }
 func (p *plugin) DisplayName() string { return displayName }
+
+// Domains implements registry.WithDomains; first entry is canonical.
+func (p *plugin) Domains() []string { return knownDomains }
 
 // Quality is one of LostFilm's quality tiers. The string value is the
 // substring we look for in the destination page's quality button label.
@@ -169,7 +173,8 @@ func (p *plugin) DefaultQuality() string { return string(Quality1080p) }
 func (p *plugin) SupportsEpisodeFilter() bool { return true }
 
 func (p *plugin) CanParse(rawURL string) bool {
-	return urlPattern.MatchString(strings.TrimSpace(rawURL))
+	m := urlPattern.FindStringSubmatch(strings.TrimSpace(rawURL))
+	return m != nil && registry.DomainAllowed(pluginName, m[1], knownDomains)
 }
 
 func (p *plugin) Parse(_ context.Context, rawURL string) (*domain.Topic, error) {
@@ -180,9 +185,9 @@ func (p *plugin) Parse(_ context.Context, rawURL string) (*domain.Topic, error) 
 	return &domain.Topic{
 		TrackerName: pluginName,
 		URL:         rawURL,
-		DisplayName: "LostFilm: " + m[1],
+		DisplayName: "LostFilm: " + m[2],
 		Extra: map[string]any{
-			"slug":                m[1],
+			"slug":                m[2],
 			"quality":             string(Quality1080p),
 			"downloaded_episodes": []string{},
 		},

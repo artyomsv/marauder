@@ -35,17 +35,35 @@ const (
 	userAgent = "Marauder/1.1 (+https://marauder.cc)"
 )
 
-// urlPattern is the canonical lostfilm series URL shape. CanParse and
-// Parse both rely on it; keeping it here next to the other constants
-// makes the next domain rotation a one-line change.
-var urlPattern = regexp.MustCompile(`^https?://(?:www\.)?lostfilm\.(?:tv|win|run)/series/([^/]+)/?`)
+// urlPattern is host-agnostic; CanParse gates the captured host against the
+// known + admin-configured domain allowlist (the SSRF barrier — see
+// registry.DomainAllowed). Group 1 is the host, group 2 is the slug.
+var urlPattern = regexp.MustCompile(`^https?://(?:www\.)?([^/]+)/series/([^/]+)/?`)
+
+// knownDomains is the compiled-in set of LostFilm mirrors. Combined with
+// admin-configured custom domains (via the resolver) it forms the runtime
+// host allowlist for the plugin.
+var knownDomains = []string{"www.lostfilm.tv", "lostfilm.tv", "lostfilm.win", "lostfilm.run"}
+
+// effectiveDomain resolves the domain every request is built against:
+// a test-injected p.domain wins (httptest servers), then the admin-
+// configured active domain, then the compiled default.
+func (p *plugin) effectiveDomain() string {
+	if p.domain != defaultDomain {
+		return p.domain
+	}
+	if d := registry.ActiveDomain(pluginName); d != "" {
+		return d
+	}
+	return p.domain
+}
 
 // captchaConfig is the LostFilm-specific configuration for the shared
 // interactive captcha-login engine. LostFilm's login endpoint is the
 // ajaxik users handler, and its captcha image is served by
 // simple_captcha.php on the same host.
 func (p *plugin) captchaConfig() captchalogin.Config {
-	base := "https://" + p.domain
+	base := "https://" + p.effectiveDomain()
 	return captchalogin.Config{
 		LoginURL:    base + "/ajaxik.users.php",
 		CaptchaURL:  base + "/simple_captcha.php",
@@ -142,8 +160,9 @@ func (p *plugin) Login(ctx context.Context, creds *domain.TrackerCredential) err
 	if p.transport != nil {
 		sess.Client.Transport = p.transport
 	}
-	// p.domain is a trusted constant; parse cannot fail.
-	u, _ := url.Parse("https://" + p.domain + "/")
+	// effectiveDomain is a trusted host (test override, admin-configured
+	// active domain, or the compiled default); parse cannot fail.
+	u, _ := url.Parse("https://" + p.effectiveDomain() + "/")
 	jarCookies := make([]*http.Cookie, 0, len(cookies))
 	for name, val := range cookies {
 		jarCookies = append(jarCookies, &http.Cookie{Name: name, Value: val})
@@ -181,7 +200,7 @@ func (p *plugin) Verify(ctx context.Context, creds *domain.TrackerCredential) (b
 	if p.transport != nil {
 		sess.Client.Transport = p.transport
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://"+p.domain+"/my", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://"+p.effectiveDomain()+"/my", nil)
 	if err != nil {
 		return false, fmt.Errorf("lostfilm verify: build request: %w", err)
 	}
@@ -270,7 +289,7 @@ func (p *plugin) SeasonCatalog(ctx context.Context, rawURL string) ([]registry.S
 	if m == nil {
 		return nil, fmt.Errorf("lostfilm: not a series URL: %s", rawURL)
 	}
-	body, err := p.fetch(ctx, "https://"+p.domain+"/series/"+m[1]+"/seasons", nil)
+	body, err := p.fetch(ctx, "https://"+p.effectiveDomain()+"/series/"+m[2]+"/seasons", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -303,7 +322,7 @@ func (p *plugin) seasonsURL(rawURL string) string {
 	if m == nil {
 		return rawURL
 	}
-	return "https://" + p.domain + "/series/" + m[1] + "/seasons"
+	return "https://" + p.effectiveDomain() + "/series/" + m[2] + "/seasons"
 }
 
 // fetch is the simpler GET used by Check to retrieve the series page.
