@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
-	"strings"
 
 	"github.com/artyomsv/marauder/backend/internal/domain"
 	"github.com/artyomsv/marauder/backend/internal/plugins/registry"
@@ -49,7 +48,15 @@ var _ registry.WithAuthorComment = (*plugin)(nil)
 // 1 is found. Anonymous like the rest of the plugin; p.fetch enforces the
 // NNM-Club host allowlist.
 func (p *plugin) AuthorComment(ctx context.Context, rawURL string, creds *domain.TrackerCredential) (string, error) {
-	m := urlPattern.FindStringSubmatch(strings.TrimSpace(rawURL))
+	// Canonicalize the host (active-domain override) before matching, so
+	// m[0] below — and every pagination URL derived from it — dials the
+	// admin-configured mirror instead of the (possibly dead) host recorded
+	// in the stored topic URL.
+	target, err := canonicalURL(rawURL)
+	if err != nil {
+		return "", fmt.Errorf("author comment: %w", err)
+	}
+	m := urlPattern.FindStringSubmatch(target)
 	if m == nil {
 		return "", errors.New("author comment: not a nnm-club viewtopic URL")
 	}

@@ -235,3 +235,69 @@ func TestCheck_RewritesToActiveDomain(t *testing.T) {
 		t.Errorf("fetch host = %q, want active domain nnmclub.me", rec.hosts[0])
 	}
 }
+
+// TestDownload_RewritesToActiveDomain mirrors TestCheck_RewritesToActiveDomain
+// for Download: during a primary-domain outage with an admin-configured
+// active mirror, Download must fetch the mirror host too — otherwise Check
+// detects releases via the mirror while Download keeps dialing the dead
+// host, an endless release.found/download-fail loop.
+func TestDownload_RewritesToActiveDomain(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(fixtureViewtopicHTML))
+	}))
+	t.Cleanup(srv.Close)
+
+	registry.SetDomainResolver(func(name string) registry.DomainConfig {
+		if name == "nnmclub" {
+			return registry.DomainConfig{Active: "nnmclub.me"}
+		}
+		return registry.DomainConfig{}
+	})
+	t.Cleanup(func() { registry.SetDomainResolver(nil) })
+
+	rec := &hostRecordingRewrite{target: strings.TrimPrefix(srv.URL, "http://")}
+	p := &plugin{sessions: forumcommon.New(), transport: rec}
+
+	topic := &domain.Topic{URL: "https://nnmclub.to/forum/viewtopic.php?t=42"}
+	if _, err := p.Download(context.Background(), topic, nil, nil); err != nil {
+		t.Fatalf("Download: %v", err)
+	}
+	if len(rec.hosts) == 0 {
+		t.Fatal("no requests recorded")
+	}
+	if rec.hosts[0] != "nnmclub.me" {
+		t.Errorf("fetch host = %q, want active domain nnmclub.me", rec.hosts[0])
+	}
+}
+
+// TestResolveMetadata_RewritesToActiveDomain mirrors
+// TestCheck_RewritesToActiveDomain for ResolveMetadata.
+func TestResolveMetadata_RewritesToActiveDomain(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(fixtureViewtopicHTML))
+	}))
+	t.Cleanup(srv.Close)
+
+	registry.SetDomainResolver(func(name string) registry.DomainConfig {
+		if name == "nnmclub" {
+			return registry.DomainConfig{Active: "nnmclub.me"}
+		}
+		return registry.DomainConfig{}
+	})
+	t.Cleanup(func() { registry.SetDomainResolver(nil) })
+
+	rec := &hostRecordingRewrite{target: strings.TrimPrefix(srv.URL, "http://")}
+	p := &plugin{sessions: forumcommon.New(), transport: rec}
+
+	if _, err := p.ResolveMetadata(context.Background(), "https://nnmclub.to/forum/viewtopic.php?t=42", nil); err != nil {
+		t.Fatalf("ResolveMetadata: %v", err)
+	}
+	if len(rec.hosts) == 0 {
+		t.Fatal("no requests recorded")
+	}
+	if rec.hosts[0] != "nnmclub.me" {
+		t.Errorf("fetch host = %q, want active domain nnmclub.me", rec.hosts[0])
+	}
+}

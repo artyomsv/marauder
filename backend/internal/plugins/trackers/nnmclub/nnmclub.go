@@ -146,7 +146,11 @@ func (p *plugin) Check(ctx context.Context, topic *domain.Topic, creds *domain.T
 // poorly-seeded torrents — the reliable fix is the credentialed .torrent (with
 // the user's passkey'd announce, also crediting ratio), Phase 2.
 func (p *plugin) Download(ctx context.Context, topic *domain.Topic, _ *domain.Check, creds *domain.TrackerCredential) (*domain.Payload, error) {
-	body, err := p.fetch(ctx, topic.URL, creds)
+	target, err := canonicalURL(topic.URL)
+	if err != nil {
+		return nil, err
+	}
+	body, err := p.fetch(ctx, target, creds)
 	if err != nil {
 		return nil, err
 	}
@@ -169,7 +173,11 @@ func (p *plugin) Download(ctx context.Context, topic *domain.Topic, _ *domain.Ch
 var _ registry.WithMetadata = (*plugin)(nil)
 
 func (p *plugin) ResolveMetadata(ctx context.Context, rawURL string, creds *domain.TrackerCredential) (*registry.Metadata, error) {
-	body, err := p.fetch(ctx, rawURL, creds)
+	target, err := canonicalURL(rawURL)
+	if err != nil {
+		return nil, fmt.Errorf("nnm-club resolve metadata: %w", err)
+	}
+	body, err := p.fetch(ctx, target, creds)
 	if err != nil {
 		return nil, fmt.Errorf("nnm-club resolve metadata: %w", err)
 	}
