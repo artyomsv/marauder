@@ -30,7 +30,12 @@ const (
 	userAgent     = "Marauder/0.4 (+https://marauder.cc)"
 )
 
-var urlPattern = regexp.MustCompile(`^https?://tr\.anidub\.com/(?:[a-z0-9_-]+/)+([a-z0-9_-]+)\.html`)
+// urlPattern is host-agnostic; CanParse gates the captured host against the
+// known + admin-configured domain allowlist (the SSRF barrier — see
+// registry.DomainAllowed).
+var urlPattern = regexp.MustCompile(`^https?://([^/]+)/(?:[a-z0-9_-]+/)+([a-z0-9_-]+)\.html`)
+
+var knownDomains = []string{"tr.anidub.com"}
 
 type plugin struct {
 	sessions  *forumcommon.SessionStore
@@ -52,8 +57,27 @@ func (p *plugin) DisplayName() string { return displayName }
 func (p *plugin) Qualities() []string    { return []string{"HDTVRip", "HDTVRip-AVC", "BDRip"} }
 func (p *plugin) DefaultQuality() string { return "HDTVRip" }
 
+var _ registry.WithDomains = (*plugin)(nil)
+
+// Domains implements registry.WithDomains; first entry is canonical.
+func (p *plugin) Domains() []string { return knownDomains }
+
+// effectiveDomain resolves the domain every request is built against:
+// a test-injected p.domain wins (httptest servers), then the admin-
+// configured active domain, then the compiled default.
+func (p *plugin) effectiveDomain() string {
+	if p.domain != defaultDomain {
+		return p.domain
+	}
+	if d := registry.ActiveDomain(pluginName); d != "" {
+		return d
+	}
+	return p.domain
+}
+
 func (p *plugin) CanParse(rawURL string) bool {
-	return urlPattern.MatchString(strings.TrimSpace(rawURL))
+	m := urlPattern.FindStringSubmatch(strings.TrimSpace(rawURL))
+	return m != nil && registry.DomainAllowed(pluginName, m[1], knownDomains)
 }
 
 func (p *plugin) Parse(_ context.Context, rawURL string) (*domain.Topic, error) {
@@ -63,8 +87,8 @@ func (p *plugin) Parse(_ context.Context, rawURL string) (*domain.Topic, error) 
 	}
 	return &domain.Topic{
 		TrackerName: pluginName, URL: rawURL,
-		DisplayName: "Anidub: " + m[1],
-		Extra:       map[string]any{"slug": m[1], "quality": "HDTVRip"},
+		DisplayName: "Anidub: " + m[2],
+		Extra:       map[string]any{"slug": m[2], "quality": "HDTVRip"},
 	}, nil
 }
 
@@ -81,7 +105,7 @@ func (p *plugin) Login(ctx context.Context, creds *domain.TrackerCredential) err
 		"login_password": {string(creds.SecretEnc)},
 		"login":          {"submit"},
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://"+p.domain+"/index.php", strings.NewReader(form.Encode()))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://"+p.effectiveDomain()+"/index.php", strings.NewReader(form.Encode()))
 	if err != nil {
 		return err
 	}
@@ -138,7 +162,7 @@ func (p *plugin) Download(ctx context.Context, topic *domain.Topic, _ *domain.Ch
 	if m == nil {
 		return nil, errors.New("anidub: no download link")
 	}
-	dlURL := "https://" + p.domain + string(m[1])
+	dlURL := "https://" + p.effectiveDomain() + string(m[1])
 	torrent, err := p.fetch(ctx, dlURL, creds)
 	if err != nil {
 		return nil, err

@@ -41,7 +41,14 @@ const (
 	userAgent   = "Marauder/0.4 (+https://marauder.cc)"
 )
 
-var urlPattern = regexp.MustCompile(`^https?://(?:www\.)?anilibria\.tv/release/([^/]+?)\.html`)
+// urlPattern is host-agnostic; CanParse gates the captured host against the
+// known + admin-configured domain allowlist (the SSRF barrier — see
+// registry.DomainAllowed). It only governs the legacy anilibria.tv page
+// URLs — the newer AniLiberty host (aniliberty.top) is matched separately
+// by aniLibertyAlias and is out of scope for this domain override.
+var urlPattern = regexp.MustCompile(`^https?://(?:www\.)?([^/]+)/release/([^/]+?)\.html`)
+
+var knownDomains = []string{"anilibria.tv"}
 
 type plugin struct {
 	httpClient        *http.Client
@@ -60,9 +67,25 @@ func init() {
 func (p *plugin) Name() string        { return pluginName }
 func (p *plugin) DisplayName() string { return displayName }
 
+var _ registry.WithDomains = (*plugin)(nil)
+
+// Domains implements registry.WithDomains; first entry is canonical.
+func (p *plugin) Domains() []string { return knownDomains }
+
+// effectiveAPIBase resolves the legacy anilibria.tv API host every
+// title/torrent request is built against: a test-injected p.apiBase (i.e.
+// one that no longer equals the compiled apiBase const) wins, otherwise an
+// admin-configured active domain is applied, otherwise the compiled default.
+func (p *plugin) effectiveAPIBase() string {
+	if d := registry.ActiveDomain(pluginName); d != "" && p.apiBase == apiBase {
+		return "https://api." + d + "/v3"
+	}
+	return p.apiBase
+}
+
 func (p *plugin) CanParse(rawURL string) bool {
-	if urlPattern.MatchString(strings.TrimSpace(rawURL)) {
-		return true
+	if m := urlPattern.FindStringSubmatch(strings.TrimSpace(rawURL)); m != nil {
+		return registry.DomainAllowed(pluginName, m[1], knownDomains)
 	}
 	_, ok := aniLibertyAlias(rawURL)
 	return ok
@@ -87,8 +110,8 @@ func (p *plugin) Parse(_ context.Context, rawURL string) (*domain.Topic, error) 
 	return &domain.Topic{
 		TrackerName: pluginName,
 		URL:         rawURL,
-		DisplayName: "Anilibria: " + m[1],
-		Extra:       map[string]any{"slug": m[1]},
+		DisplayName: "Anilibria: " + m[2],
+		Extra:       map[string]any{"slug": m[2]},
 	}, nil
 }
 
@@ -116,7 +139,7 @@ func (p *plugin) Check(ctx context.Context, topic *domain.Topic, _ *domain.Track
 	if slug == "" {
 		return nil, errors.New("anilibria: missing slug")
 	}
-	endpoint := p.apiBase + "/title?code=" + slug + "&include=torrents"
+	endpoint := p.effectiveAPIBase() + "/title?code=" + slug + "&include=torrents"
 	body, err := p.fetch(ctx, endpoint)
 	if err != nil {
 		return nil, err
@@ -149,7 +172,7 @@ func (p *plugin) Download(ctx context.Context, topic *domain.Topic, check *domai
 	}
 	// Refetch to get the URL of the latest torrent
 	slug, _ := topic.Extra["slug"].(string)
-	endpoint := p.apiBase + "/title?code=" + slug + "&include=torrents"
+	endpoint := p.effectiveAPIBase() + "/title?code=" + slug + "&include=torrents"
 	body, err := p.fetch(ctx, endpoint)
 	if err != nil {
 		return nil, err

@@ -30,7 +30,12 @@ const (
 	userAgent     = "Marauder/0.4 (+https://marauder.cc)"
 )
 
-var urlPattern = regexp.MustCompile(`^https?://(?:www\.)?tapochek\.net/viewtopic\.php\?t=(\d+)`)
+// urlPattern is host-agnostic; CanParse gates the captured host against the
+// known + admin-configured domain allowlist (the SSRF barrier — see
+// registry.DomainAllowed).
+var urlPattern = regexp.MustCompile(`^https?://(?:www\.)?([^/]+)/viewtopic\.php\?t=(\d+)`)
+
+var knownDomains = []string{"tapochek.net"}
 
 type plugin struct {
 	sessions  *forumcommon.SessionStore
@@ -45,8 +50,27 @@ func init() {
 func (p *plugin) Name() string        { return pluginName }
 func (p *plugin) DisplayName() string { return displayName }
 
+var _ registry.WithDomains = (*plugin)(nil)
+
+// Domains implements registry.WithDomains; first entry is canonical.
+func (p *plugin) Domains() []string { return knownDomains }
+
+// effectiveDomain resolves the domain every request is built against:
+// a test-injected p.domain wins (httptest servers), then the admin-
+// configured active domain, then the compiled default.
+func (p *plugin) effectiveDomain() string {
+	if p.domain != defaultDomain {
+		return p.domain
+	}
+	if d := registry.ActiveDomain(pluginName); d != "" {
+		return d
+	}
+	return p.domain
+}
+
 func (p *plugin) CanParse(rawURL string) bool {
-	return urlPattern.MatchString(strings.TrimSpace(rawURL))
+	m := urlPattern.FindStringSubmatch(strings.TrimSpace(rawURL))
+	return m != nil && registry.DomainAllowed(pluginName, m[1], knownDomains)
 }
 
 func (p *plugin) Parse(_ context.Context, rawURL string) (*domain.Topic, error) {
@@ -54,7 +78,7 @@ func (p *plugin) Parse(_ context.Context, rawURL string) (*domain.Topic, error) 
 	if m == nil {
 		return nil, errors.New("not a tapochek topic URL")
 	}
-	id, _ := strconv.Atoi(m[1])
+	id, _ := strconv.Atoi(m[2])
 	return &domain.Topic{
 		TrackerName: pluginName, URL: rawURL,
 		DisplayName: fmt.Sprintf("Tapochek topic %d", id),
@@ -76,7 +100,7 @@ func (p *plugin) Login(ctx context.Context, creds *domain.TrackerCredential) err
 		"autologin":      {"on"},
 		"login":          {"Login"},
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://"+p.domain+"/login.php", strings.NewReader(form.Encode()))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://"+p.effectiveDomain()+"/login.php", strings.NewReader(form.Encode()))
 	if err != nil {
 		return err
 	}
@@ -107,7 +131,7 @@ func (p *plugin) Verify(ctx context.Context, creds *domain.TrackerCredential) (b
 	if p.transport != nil {
 		sess.Client.Transport = p.transport
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://"+p.domain+"/index.php", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://"+p.effectiveDomain()+"/index.php", nil)
 	if err != nil {
 		return false, fmt.Errorf("tapochek verify: build request: %w", err)
 	}
@@ -157,7 +181,7 @@ func (p *plugin) Download(ctx context.Context, topic *domain.Topic, _ *domain.Ch
 	if m == nil {
 		return nil, errors.New("tapochek: no download link")
 	}
-	dlURL := "https://" + p.domain + "/" + string(m[1])
+	dlURL := "https://" + p.effectiveDomain() + "/" + string(m[1])
 	torrent, err := p.fetch(ctx, dlURL, creds)
 	if err != nil {
 		return nil, err
