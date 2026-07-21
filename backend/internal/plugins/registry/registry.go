@@ -355,4 +355,5 @@ func Reset() {
 	trackers = map[string]Tracker{}
 	clients = map[string]Client{}
 	notifiers = map[string]Notifier{}
+	SetDomainResolver(nil)
 }
