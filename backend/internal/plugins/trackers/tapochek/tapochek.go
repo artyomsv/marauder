@@ -68,6 +68,22 @@ func (p *plugin) effectiveDomain() string {
 	return p.domain
 }
 
+// canonicalURL rewrites rawURL's host to p.effectiveDomain() when that
+// differs from the URL's own host — the nnmclub/rutor canonicalURL
+// approach adapted to tapochek. Check/Download re-fetch the stored topic
+// URL directly, so this is the only place an active-domain override or
+// mirror switch actually takes effect for those fetches.
+func (p *plugin) canonicalURL(rawURL string) (string, error) {
+	u, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil {
+		return "", fmt.Errorf("tapochek: invalid URL: %w", err)
+	}
+	if eff := p.effectiveDomain(); eff != "" && eff != u.Hostname() {
+		u.Host = eff
+	}
+	return u.String(), nil
+}
+
 func (p *plugin) CanParse(rawURL string) bool {
 	m := urlPattern.FindStringSubmatch(strings.TrimSpace(rawURL))
 	return m != nil && registry.DomainAllowed(pluginName, m[1], knownDomains)
@@ -157,7 +173,11 @@ var (
 )
 
 func (p *plugin) Check(ctx context.Context, topic *domain.Topic, creds *domain.TrackerCredential) (*domain.Check, error) {
-	body, err := p.fetch(ctx, topic.URL, creds)
+	target, err := p.canonicalURL(topic.URL)
+	if err != nil {
+		return nil, err
+	}
+	body, err := p.fetch(ctx, target, creds)
 	if err != nil {
 		return nil, err
 	}
@@ -173,7 +193,11 @@ func (p *plugin) Check(ctx context.Context, topic *domain.Topic, creds *domain.T
 }
 
 func (p *plugin) Download(ctx context.Context, topic *domain.Topic, _ *domain.Check, creds *domain.TrackerCredential) (*domain.Payload, error) {
-	body, err := p.fetch(ctx, topic.URL, creds)
+	target, err := p.canonicalURL(topic.URL)
+	if err != nil {
+		return nil, err
+	}
+	body, err := p.fetch(ctx, target, creds)
 	if err != nil {
 		return nil, err
 	}

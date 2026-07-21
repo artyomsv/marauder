@@ -2,9 +2,13 @@ package hdclub
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
+	"strings"
 	"testing"
 
+	"github.com/artyomsv/marauder/backend/internal/domain"
 	"github.com/artyomsv/marauder/backend/internal/plugins/registry"
 )
 
@@ -73,5 +77,60 @@ func TestDomains_CanonicalFirst(t *testing.T) {
 	want := []string{"hdclub.org"}
 	if !reflect.DeepEqual(p.Domains(), want) {
 		t.Errorf("Domains() = %v, want %v", p.Domains(), want)
+	}
+}
+
+// hostRecordingRewrite records the Host of every outgoing request, then
+// redirects it to the test server (target) over http so no real network is
+// hit. Mirrors the nnmclub/rutor test helper of the same purpose.
+type hostRecordingRewrite struct {
+	target string
+	hosts  []string
+}
+
+func (h *hostRecordingRewrite) RoundTrip(req *http.Request) (*http.Response, error) {
+	h.hosts = append(h.hosts, req.URL.Host)
+	req.URL.Scheme = "http"
+	req.URL.Host = h.target
+	return http.DefaultTransport.RoundTrip(req)
+}
+
+const fixtureHDClubHTML = `<html><head><title>HD Movie 4K :: HD-Club</title></head>
+<body>
+<div>Info hash: 0123456789ABCDEF0123456789ABCDEF01234567</div>
+</body></html>`
+
+// TestCheck_RewritesToActiveDomain asserts that when the admin has
+// configured an active domain override, Check fetches that host instead of
+// the mirror recorded in the stored topic URL — hdclub's Check re-fetches
+// the stored topic URL directly, so canonicalURL is the only place this
+// override actually takes effect there.
+func TestCheck_RewritesToActiveDomain(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(fixtureHDClubHTML))
+	}))
+	t.Cleanup(srv.Close)
+
+	registry.SetDomainResolver(func(name string) registry.DomainConfig {
+		if name == "hdclub" {
+			return registry.DomainConfig{Active: "hdclub.mirror"}
+		}
+		return registry.DomainConfig{}
+	})
+	t.Cleanup(func() { registry.SetDomainResolver(nil) })
+
+	rec := &hostRecordingRewrite{target: strings.TrimPrefix(srv.URL, "http://")}
+	p := New(defaultDomain, rec)
+
+	topic := &domain.Topic{URL: "https://hdclub.org/details.php?id=12345"}
+	if _, err := p.Check(context.Background(), topic, nil); err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	if len(rec.hosts) == 0 {
+		t.Fatal("no requests recorded")
+	}
+	if rec.hosts[0] != "hdclub.mirror" {
+		t.Errorf("fetch host = %q, want active domain hdclub.mirror", rec.hosts[0])
 	}
 }

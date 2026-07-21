@@ -2,10 +2,15 @@ package unionpeer
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
+	"strings"
 	"testing"
 
+	"github.com/artyomsv/marauder/backend/internal/domain"
 	"github.com/artyomsv/marauder/backend/internal/plugins/registry"
+	"github.com/artyomsv/marauder/backend/internal/plugins/trackers/forumcommon"
 )
 
 func TestCanParse_KnownURLs_MatchExpected(t *testing.T) {
@@ -75,5 +80,60 @@ func TestDomains_CanonicalFirst(t *testing.T) {
 	want := []string{"unionpeer.org", "unionpeer.net", "unionpeer.com"}
 	if !reflect.DeepEqual(p.Domains(), want) {
 		t.Errorf("Domains() = %v, want %v", p.Domains(), want)
+	}
+}
+
+// hostRecordingRewrite records the Host of every outgoing request, then
+// redirects it to the test server (target) over http so no real network is
+// hit. Mirrors the nnmclub/rutor test helper of the same purpose.
+type hostRecordingRewrite struct {
+	target string
+	hosts  []string
+}
+
+func (h *hostRecordingRewrite) RoundTrip(req *http.Request) (*http.Response, error) {
+	h.hosts = append(h.hosts, req.URL.Host)
+	req.URL.Scheme = "http"
+	req.URL.Host = h.target
+	return http.DefaultTransport.RoundTrip(req)
+}
+
+const fixtureUnionpeerHTML = `<html><head><title>Сборник :: Unionpeer.org</title></head>
+<body>
+<div>Info hash: 0123456789ABCDEF0123456789ABCDEF01234567</div>
+</body></html>`
+
+// TestCheck_RewritesToActiveDomain asserts that when the admin has
+// configured an active domain override, Check fetches that host instead of
+// the mirror recorded in the stored topic URL — unionpeer has no id-based
+// rebuild, so canonicalURL is the only place this override actually takes
+// effect.
+func TestCheck_RewritesToActiveDomain(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(fixtureUnionpeerHTML))
+	}))
+	t.Cleanup(srv.Close)
+
+	registry.SetDomainResolver(func(name string) registry.DomainConfig {
+		if name == "unionpeer" {
+			return registry.DomainConfig{Active: "unionpeer.net"}
+		}
+		return registry.DomainConfig{}
+	})
+	t.Cleanup(func() { registry.SetDomainResolver(nil) })
+
+	rec := &hostRecordingRewrite{target: strings.TrimPrefix(srv.URL, "http://")}
+	p := &plugin{sessions: forumcommon.New(), domain: defaultDomain, transport: rec}
+
+	topic := &domain.Topic{URL: "https://unionpeer.org/forum/viewtopic.php?t=12345"}
+	if _, err := p.Check(context.Background(), topic, nil); err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	if len(rec.hosts) == 0 {
+		t.Fatal("no requests recorded")
+	}
+	if rec.hosts[0] != "unionpeer.net" {
+		t.Errorf("fetch host = %q, want active domain unionpeer.net", rec.hosts[0])
 	}
 }

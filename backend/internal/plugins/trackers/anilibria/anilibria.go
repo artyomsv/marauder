@@ -83,6 +83,18 @@ func (p *plugin) effectiveAPIBase() string {
 	return p.apiBase
 }
 
+// effectivePageHost resolves the host used to build a torrent URL that the
+// legacy API returns as a path-relative reference (no scheme/host) — an
+// admin-configured active domain when one is set, else the compiled
+// default page host. Kept separate from effectiveAPIBase, which governs
+// the api.<domain> subdomain the JSON API itself is fetched from.
+func (p *plugin) effectivePageHost() string {
+	if d := registry.ActiveDomain(pluginName); d != "" {
+		return d
+	}
+	return "anilibria.tv"
+}
+
 func (p *plugin) CanParse(rawURL string) bool {
 	if m := urlPattern.FindStringSubmatch(strings.TrimSpace(rawURL)); m != nil {
 		return registry.DomainAllowed(pluginName, m[1], knownDomains)
@@ -193,7 +205,7 @@ func (p *plugin) Download(ctx context.Context, topic *domain.Topic, check *domai
 		return nil, errors.New("anilibria: no torrent URL")
 	}
 	if !strings.HasPrefix(highestURL, "http") {
-		highestURL = "https://anilibria.tv" + highestURL
+		highestURL = "https://" + p.effectivePageHost() + highestURL
 	}
 	torrent, err := p.fetch(ctx, highestURL)
 	if err != nil {

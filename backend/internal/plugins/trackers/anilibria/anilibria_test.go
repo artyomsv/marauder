@@ -2,9 +2,13 @@ package anilibria
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
+	"strings"
 	"testing"
 
+	"github.com/artyomsv/marauder/backend/internal/domain"
 	"github.com/artyomsv/marauder/backend/internal/plugins/registry"
 )
 
@@ -73,5 +77,94 @@ func TestDomains_CanonicalFirst(t *testing.T) {
 	want := []string{"anilibria.tv"}
 	if !reflect.DeepEqual(p.Domains(), want) {
 		t.Errorf("Domains() = %v, want %v", p.Domains(), want)
+	}
+}
+
+func TestEffectivePageHost_ResolverOverride(t *testing.T) {
+	registry.SetDomainResolver(func(string) registry.DomainConfig {
+		return registry.DomainConfig{Active: "anilibria.mirror"}
+	})
+	t.Cleanup(func() { registry.SetDomainResolver(nil) })
+	p := &plugin{}
+	if got := p.effectivePageHost(); got != "anilibria.mirror" {
+		t.Errorf("effectivePageHost = %q, want anilibria.mirror", got)
+	}
+}
+
+func TestEffectivePageHost_NoResolver_FallsBackToDefault(t *testing.T) {
+	p := &plugin{}
+	if got := p.effectivePageHost(); got != "anilibria.tv" {
+		t.Errorf("effectivePageHost = %q, want anilibria.tv", got)
+	}
+}
+
+// hostRecordingRewrite records the Host of every outgoing request, then
+// redirects it to the test server (target) over http so no real network is
+// hit. Mirrors the nnmclub/rutor test helper of the same purpose.
+type hostRecordingRewrite struct {
+	target string
+	hosts  []string
+}
+
+func (h *hostRecordingRewrite) RoundTrip(req *http.Request) (*http.Response, error) {
+	h.hosts = append(h.hosts, req.URL.Host)
+	req.URL.Scheme = "http"
+	req.URL.Host = h.target
+	return http.DefaultTransport.RoundTrip(req)
+}
+
+// TestDownload_RelativeURLFallback_UsesActiveDomain covers the Download
+// relative-URL fallback (issue #126 finding 2): when the legacy API
+// returns a torrent URL with no scheme/host, Download used to hardcode
+// "https://anilibria.tv" as the base — which would keep dialing a dead
+// primary domain even after the admin configured a working mirror. It
+// must now derive the page host from the active domain instead.
+func TestDownload_RelativeURLFallback_UsesActiveDomain(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/v3/title"):
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(200)
+			_, _ = w.Write([]byte(`{
+				"names": {"ru": "Аниме Сериал"},
+				"torrents": {"list": [{"torrent_id": 101, "quality": {"string": "BDRip"}, "url": "/upload/torrents/101.torrent"}]}
+			}`))
+		case strings.HasPrefix(r.URL.Path, "/upload/torrents/"):
+			w.Header().Set("Content-Type", "application/x-bittorrent")
+			w.WriteHeader(200)
+			_, _ = w.Write([]byte("d8:announce15:http://x/announcee"))
+		default:
+			w.WriteHeader(404)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	registry.SetDomainResolver(func(name string) registry.DomainConfig {
+		if name == "anilibria" {
+			return registry.DomainConfig{Active: "anilibria.mirror"}
+		}
+		return registry.DomainConfig{}
+	})
+	t.Cleanup(func() { registry.SetDomainResolver(nil) })
+
+	// apiBase is left at the compiled default so effectiveAPIBase() applies
+	// the resolver override too; hostRecordingRewrite redirects every
+	// outgoing request to the test server unconditionally regardless of
+	// the host in the URL, while still recording what that host was.
+	rec := &hostRecordingRewrite{target: strings.TrimPrefix(srv.URL, "http://")}
+	p := &plugin{httpClient: &http.Client{Transport: rec}, apiBase: apiBase}
+
+	topic := &domain.Topic{
+		URL:   "https://anilibria.tv/release/anime-series.html",
+		Extra: map[string]any{"slug": "anime-series"},
+	}
+	if _, err := p.Download(context.Background(), topic, nil, nil); err != nil {
+		t.Fatalf("Download: %v", err)
+	}
+	if len(rec.hosts) < 2 {
+		t.Fatalf("expected at least 2 requests (title fetch + relative torrent fetch), got %d: %v", len(rec.hosts), rec.hosts)
+	}
+	if rec.hosts[1] != "anilibria.mirror" {
+		t.Errorf("relative-URL fallback host = %q, want active domain anilibria.mirror", rec.hosts[1])
 	}
 }

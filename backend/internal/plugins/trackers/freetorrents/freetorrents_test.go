@@ -2,9 +2,13 @@ package freetorrents
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
+	"strings"
 	"testing"
 
+	"github.com/artyomsv/marauder/backend/internal/domain"
 	"github.com/artyomsv/marauder/backend/internal/plugins/registry"
 )
 
@@ -73,5 +77,60 @@ func TestDomains_CanonicalFirst(t *testing.T) {
 	want := []string{"free-torrents.org"}
 	if !reflect.DeepEqual(p.Domains(), want) {
 		t.Errorf("Domains() = %v, want %v", p.Domains(), want)
+	}
+}
+
+// hostRecordingRewrite records the Host of every outgoing request, then
+// redirects it to the test server (target) over http so no real network is
+// hit. Mirrors the nnmclub/rutor test helper of the same purpose.
+type hostRecordingRewrite struct {
+	target string
+	hosts  []string
+}
+
+func (h *hostRecordingRewrite) RoundTrip(req *http.Request) (*http.Response, error) {
+	h.hosts = append(h.hosts, req.URL.Host)
+	req.URL.Scheme = "http"
+	req.URL.Host = h.target
+	return http.DefaultTransport.RoundTrip(req)
+}
+
+const fixtureFreetorrentsHTML = `<html><head><title>Big Release :: Free-Torrents.org</title></head>
+<body>
+<a href="magnet:?xt=urn:btih:0123456789ABCDEF0123456789ABCDEF01234567&amp;dn=Big.Release">magnet</a>
+</body></html>`
+
+// TestCheck_RewritesToActiveDomain asserts that when the admin has
+// configured an active domain override, Check fetches that host instead of
+// the mirror recorded in the stored topic URL — free-torrents has no
+// id-based rebuild, so canonicalURL is the only place this override
+// actually takes effect.
+func TestCheck_RewritesToActiveDomain(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(fixtureFreetorrentsHTML))
+	}))
+	t.Cleanup(srv.Close)
+
+	registry.SetDomainResolver(func(name string) registry.DomainConfig {
+		if name == "freetorrents" {
+			return registry.DomainConfig{Active: "free-torrents.mirror"}
+		}
+		return registry.DomainConfig{}
+	})
+	t.Cleanup(func() { registry.SetDomainResolver(nil) })
+
+	rec := &hostRecordingRewrite{target: strings.TrimPrefix(srv.URL, "http://")}
+	p := New(defaultDomain, rec)
+
+	topic := &domain.Topic{URL: "https://free-torrents.org/forum/viewtopic.php?t=12345"}
+	if _, err := p.Check(context.Background(), topic, nil); err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	if len(rec.hosts) == 0 {
+		t.Fatal("no requests recorded")
+	}
+	if rec.hosts[0] != "free-torrents.mirror" {
+		t.Errorf("fetch host = %q, want active domain free-torrents.mirror", rec.hosts[0])
 	}
 }
