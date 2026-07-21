@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -12,6 +13,7 @@ import (
 
 	"github.com/artyomsv/marauder/backend/internal/domain"
 	"github.com/artyomsv/marauder/backend/internal/infohash"
+	"github.com/artyomsv/marauder/backend/internal/plugins/registry"
 	"github.com/artyomsv/marauder/backend/internal/plugins/trackers/forumcommon"
 )
 
@@ -392,5 +394,47 @@ func TestLogin_ValidCredentials_SetsLoggedIn(t *testing.T) {
 	}
 	if !ok {
 		t.Error("expected logged in")
+	}
+}
+
+func TestCanParse_CustomDomain_AllowedViaResolver(t *testing.T) {
+	registry.SetDomainResolver(func(name string) registry.DomainConfig {
+		if name == "rutracker" {
+			return registry.DomainConfig{Custom: []string{"rutracker.example"}}
+		}
+		return registry.DomainConfig{}
+	})
+	t.Cleanup(func() { registry.SetDomainResolver(nil) })
+	p := &plugin{sessions: forumcommon.New(), domain: defaultDomain}
+	if !p.CanParse("https://rutracker.example/forum/viewtopic.php?t=123") {
+		t.Error("custom domain should parse")
+	}
+	if p.CanParse("https://evil.example/forum/viewtopic.php?t=123") {
+		t.Error("unlisted domain must not parse")
+	}
+}
+
+func TestEffectiveDomain_ResolverOverride(t *testing.T) {
+	registry.SetDomainResolver(func(string) registry.DomainConfig {
+		return registry.DomainConfig{Active: "rutracker.net"}
+	})
+	t.Cleanup(func() { registry.SetDomainResolver(nil) })
+	p := &plugin{sessions: forumcommon.New(), domain: defaultDomain}
+	if got := p.effectiveDomain(); got != "rutracker.net" {
+		t.Errorf("effectiveDomain = %q, want rutracker.net", got)
+	}
+	// A test-injected p.domain (≠ defaultDomain) must win over the resolver —
+	// this is what keeps every httptest-based e2e test working.
+	p.domain = "127.0.0.1:9999"
+	if got := p.effectiveDomain(); got != "127.0.0.1:9999" {
+		t.Errorf("effectiveDomain with test override = %q, want 127.0.0.1:9999", got)
+	}
+}
+
+func TestDomains_CanonicalFirst(t *testing.T) {
+	p := &plugin{}
+	want := []string{"rutracker.org", "rutracker.net", "rutracker.nl", "rutracker.cr"}
+	if !reflect.DeepEqual(p.Domains(), want) {
+		t.Errorf("Domains() = %v, want %v", p.Domains(), want)
 	}
 }

@@ -44,8 +44,12 @@ const (
 	userAgent     = "Marauder/0.3 (+https://marauder.cc)"
 )
 
-// urlPattern matches https://rutracker.org/forum/viewtopic.php?t=12345
-var urlPattern = regexp.MustCompile(`^https?://(?:www\.)?rutracker\.(?:org|net|nl|cr)/forum/viewtopic\.php\?t=(\d+)`)
+var knownDomains = []string{"rutracker.org", "rutracker.net", "rutracker.nl", "rutracker.cr"}
+
+// urlPattern is host-agnostic; CanParse gates the captured host against the
+// known + admin-configured domain allowlist (the SSRF barrier — see
+// registry.DomainAllowed).
+var urlPattern = regexp.MustCompile(`^https?://(?:www\.)?([^/]+)/forum/viewtopic\.php\?t=(\d+)`)
 
 type plugin struct {
 	sessions  *forumcommon.SessionStore
@@ -71,9 +75,29 @@ var _ registry.WithAnonymousDownload = (*plugin)(nil)
 
 func (p *plugin) SupportsAnonymousDownload() bool { return true }
 
-// CanParse — true for any rutracker viewtopic URL.
+var _ registry.WithDomains = (*plugin)(nil)
+
+// Domains implements registry.WithDomains; first entry is canonical.
+func (p *plugin) Domains() []string { return knownDomains }
+
+// effectiveDomain resolves the domain every request is built against:
+// a test-injected p.domain wins (httptest servers), then the admin-
+// configured active domain, then the compiled default.
+func (p *plugin) effectiveDomain() string {
+	if p.domain != defaultDomain {
+		return p.domain
+	}
+	if d := registry.ActiveDomain(pluginName); d != "" {
+		return d
+	}
+	return p.domain
+}
+
+// CanParse — true for any rutracker viewtopic URL whose host is known or
+// admin-allowlisted.
 func (p *plugin) CanParse(rawURL string) bool {
-	return urlPattern.MatchString(strings.TrimSpace(rawURL))
+	m := urlPattern.FindStringSubmatch(strings.TrimSpace(rawURL))
+	return m != nil && registry.DomainAllowed(pluginName, m[1], knownDomains)
 }
 
 // Parse extracts the topic ID and produces a placeholder Topic with the
@@ -83,7 +107,7 @@ func (p *plugin) Parse(_ context.Context, rawURL string) (*domain.Topic, error) 
 	if m == nil {
 		return nil, errors.New("not a rutracker viewtopic URL")
 	}
-	topicID, err := strconv.Atoi(m[1])
+	topicID, err := strconv.Atoi(m[2])
 	if err != nil {
 		return nil, fmt.Errorf("topic id: %w", err)
 	}
@@ -112,7 +136,7 @@ func (p *plugin) Login(ctx context.Context, creds *domain.TrackerCredential) err
 		"login_password": {string(creds.SecretEnc)}, // secret already decrypted by caller in v0.4
 		"login":          {"Вход"},
 	}
-	endpoint := "https://" + p.domain + "/forum/login.php"
+	endpoint := "https://" + p.effectiveDomain() + "/forum/login.php"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(form.Encode()))
 	if err != nil {
 		return err
@@ -143,7 +167,7 @@ func (p *plugin) Login(ctx context.Context, creds *domain.TrackerCredential) err
 // hitting a known authenticated page.
 func (p *plugin) Verify(ctx context.Context, creds *domain.TrackerCredential) (bool, error) {
 	sess := p.sessions.GetOrCreate(forumcommon.SessionKey(pluginName, creds.UserID.String()), userAgent)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://"+p.domain+"/forum/index.php", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://"+p.effectiveDomain()+"/forum/index.php", nil)
 	if err != nil {
 		return false, err
 	}
@@ -237,15 +261,15 @@ func (p *plugin) ResolveMetadata(ctx context.Context, rawURL string, creds *doma
 	if m == nil {
 		return nil, errors.New("resolve metadata: not a rutracker viewtopic URL")
 	}
-	id, err := strconv.Atoi(m[1])
+	id, err := strconv.Atoi(m[2])
 	if err != nil {
 		return nil, fmt.Errorf("resolve metadata: topic id: %w", err)
 	}
-	// Fetch a URL rebuilt from the trusted host (p.domain) + the numeric topic
-	// id, never the raw user-supplied URL, so a crafted URL cannot redirect the
-	// request to an arbitrary host (CodeQL go/request-forgery). Mirrors how
-	// Download constructs its dl.php URL.
-	canonical := fmt.Sprintf("https://%s/forum/viewtopic.php?t=%d", p.domain, id)
+	// Fetch a URL rebuilt from the trusted host (p.effectiveDomain()) + the
+	// numeric topic id, never the raw user-supplied URL, so a crafted URL
+	// cannot redirect the request to an arbitrary host (CodeQL
+	// go/request-forgery). Mirrors how Download constructs its dl.php URL.
+	canonical := fmt.Sprintf("https://%s/forum/viewtopic.php?t=%d", p.effectiveDomain(), id)
 	body, err := p.fetchBytes(ctx, nil, creds, canonical)
 	if err != nil {
 		return nil, fmt.Errorf("resolve metadata: %w", err)
@@ -284,7 +308,7 @@ func (p *plugin) Download(ctx context.Context, topic *domain.Topic, _ *domain.Ch
 
 	if creds != nil {
 		if m := dlHrefRe.FindSubmatch(body); m != nil {
-			dlURL := "https://" + p.domain + "/forum/" + string(m[1])
+			dlURL := "https://" + p.effectiveDomain() + "/forum/" + string(m[1])
 			// Validate the payload is a real bencoded torrent before
 			// submitting it — guards against handing the client an HTML
 			// login/error page that dl.php returns on a dead session.

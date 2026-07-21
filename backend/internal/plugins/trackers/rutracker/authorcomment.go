@@ -49,10 +49,10 @@ func (p *plugin) AuthorComment(ctx context.Context, rawURL string, creds *domain
 	if m == nil {
 		return "", errors.New("author comment: not a rutracker viewtopic URL")
 	}
-	id := m[1]
+	id := m[2]
 	// Rebuild from the trusted host + numeric id (same SSRF stance as
 	// ResolveMetadata): never fetch the raw user-supplied URL.
-	canonical := fmt.Sprintf("https://%s/forum/viewtopic.php?t=%s", p.domain, id)
+	canonical := fmt.Sprintf("https://%s/forum/viewtopic.php?t=%s", p.effectiveDomain(), id)
 	raw, err := p.fetchBytes(ctx, nil, creds, canonical)
 	if err != nil {
 		return "", fmt.Errorf("author comment: %w", err)
