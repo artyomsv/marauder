@@ -229,6 +229,13 @@ func (p *Poller) processURL(ctx context.Context, inst domain.SonarrInstance, own
 		return
 	}
 
+	// Canonicalize onto the tracker's default domain before the dedup
+	// pre-check: if Sonarr's indexer reported a mirror host, a raw lookup
+	// would miss the topic stored under its canonical URL (BuildAndCreate
+	// canonicalizes at persist time) and silently skip the variant-metadata
+	// refresh / realign path in handleExisting below.
+	url = topics.CanonicalTopicURL(tracker, url)
+
 	existing, err := p.topics.GetByURL(ctx, ownerID, url)
 	switch {
 	case err == nil:

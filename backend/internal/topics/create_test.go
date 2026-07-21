@@ -181,7 +181,7 @@ func TestBuildAndCreate_CallerSuppliedName_FlagsResolved(t *testing.T) {
 	}
 }
 
-// stubDomainsTracker implements registry.WithDomains for canonicalTopicURL
+// stubDomainsTracker implements registry.WithDomains for CanonicalTopicURL
 // tests; the rest of the Tracker interface is unused stubbing.
 type stubDomainsTracker struct {
 	domains []string
@@ -219,16 +219,16 @@ func (stubPlainTracker) Download(context.Context, *domain.Topic, *domain.Check, 
 
 func TestCanonicalTopicURL_RewritesMirrorHost(t *testing.T) {
 	tr := &stubDomainsTracker{domains: []string{"kinozal.tv", "kinozal.me"}}
-	got := canonicalTopicURL(tr, "https://kinozal.me/details.php?id=42")
+	got := CanonicalTopicURL(tr, "https://kinozal.me/details.php?id=42")
 	if got != "https://kinozal.tv/details.php?id=42" {
-		t.Errorf("canonicalTopicURL = %q", got)
+		t.Errorf("CanonicalTopicURL = %q", got)
 	}
 	// Same host (modulo www.) → unchanged input returned verbatim.
-	if got := canonicalTopicURL(tr, "https://www.kinozal.tv/details.php?id=42"); got != "https://www.kinozal.tv/details.php?id=42" {
+	if got := CanonicalTopicURL(tr, "https://www.kinozal.tv/details.php?id=42"); got != "https://www.kinozal.tv/details.php?id=42" {
 		t.Errorf("same-host URL rewritten: %q", got)
 	}
 	// Non-WithDomains tracker → unchanged.
-	if got := canonicalTopicURL(&stubPlainTracker{}, "https://x/y"); got != "https://x/y" {
+	if got := CanonicalTopicURL(&stubPlainTracker{}, "https://x/y"); got != "https://x/y" {
 		t.Errorf("plain tracker URL rewritten: %q", got)
 	}
 }

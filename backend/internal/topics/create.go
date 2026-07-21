@@ -94,7 +94,7 @@ func BuildAndCreate(ctx context.Context, store Store, in CreateInput) (*Result, 
 	if tracker == nil {
 		return nil, ErrNoTracker
 	}
-	in.URL = canonicalTopicURL(tracker, in.URL)
+	in.URL = CanonicalTopicURL(tracker, in.URL)
 
 	parsed, err := tracker.Parse(ctx, in.URL)
 	if err != nil {
@@ -197,11 +197,16 @@ func resolveMetadata(ctx context.Context, tracker registry.Tracker, in CreateInp
 	return meta.ImageURL
 }
 
-// canonicalTopicURL rewrites a mirror-host topic URL onto the tracker's
+// CanonicalTopicURL rewrites a mirror-host topic URL onto the tracker's
 // canonical (default) domain so the same topic added via different mirrors
 // dedups to one row. The active mirror is a fetch-time concern
 // (effectiveDomain) — stored identity stays stable across rotations.
-func canonicalTopicURL(tr registry.Tracker, rawURL string) string {
+//
+// Exported so headless creators (e.g. the Sonarr poller) can canonicalize a
+// raw URL themselves before a store lookup, not only at persist time inside
+// BuildAndCreate — otherwise a mirror-host URL would miss a dedup pre-check
+// against a row already stored under the canonical host.
+func CanonicalTopicURL(tr registry.Tracker, rawURL string) string {
 	wd, ok := tr.(registry.WithDomains)
 	if !ok || len(wd.Domains()) == 0 {
 		return rawURL
