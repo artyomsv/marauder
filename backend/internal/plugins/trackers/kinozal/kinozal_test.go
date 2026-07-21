@@ -4,12 +4,14 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
 	"golang.org/x/text/encoding/charmap"
 
 	"github.com/artyomsv/marauder/backend/internal/domain"
+	"github.com/artyomsv/marauder/backend/internal/plugins/registry"
 	"github.com/artyomsv/marauder/backend/internal/plugins/trackers/forumcommon"
 )
 
@@ -367,5 +369,47 @@ func TestCheck_CanonicalizesMirrorHost(t *testing.T) {
 	// not the raw kinozal.guru mirror.
 	if rec.hosts[0] != p.domain {
 		t.Errorf("title fetch host = %q, want canonical %q", rec.hosts[0], p.domain)
+	}
+}
+
+func TestCanParse_CustomDomain_AllowedViaResolver(t *testing.T) {
+	registry.SetDomainResolver(func(name string) registry.DomainConfig {
+		if name == "kinozal" {
+			return registry.DomainConfig{Custom: []string{"kinozal.example"}}
+		}
+		return registry.DomainConfig{}
+	})
+	t.Cleanup(func() { registry.SetDomainResolver(nil) })
+	p := &plugin{sessions: forumcommon.New(), domain: defaultDomain}
+	if !p.CanParse("https://kinozal.example/details.php?id=123") {
+		t.Error("custom domain should parse")
+	}
+	if p.CanParse("https://evil.example/details.php?id=123") {
+		t.Error("unlisted domain must not parse")
+	}
+}
+
+func TestEffectiveDomain_ResolverOverride(t *testing.T) {
+	registry.SetDomainResolver(func(string) registry.DomainConfig {
+		return registry.DomainConfig{Active: "kinozal.me"}
+	})
+	t.Cleanup(func() { registry.SetDomainResolver(nil) })
+	p := &plugin{sessions: forumcommon.New(), domain: defaultDomain}
+	if got := p.effectiveDomain(); got != "kinozal.me" {
+		t.Errorf("effectiveDomain = %q, want kinozal.me", got)
+	}
+	// A test-injected p.domain (≠ defaultDomain) must win over the resolver —
+	// this is what keeps every httptest-based e2e test working.
+	p.domain = "127.0.0.1:9999"
+	if got := p.effectiveDomain(); got != "127.0.0.1:9999" {
+		t.Errorf("effectiveDomain with test override = %q, want 127.0.0.1:9999", got)
+	}
+}
+
+func TestDomains_CanonicalFirst(t *testing.T) {
+	p := &plugin{}
+	want := []string{"kinozal.tv", "kinozal.me", "kinozal.guru"}
+	if !reflect.DeepEqual(p.Domains(), want) {
+		t.Errorf("Domains() = %v, want %v", p.Domains(), want)
 	}
 }

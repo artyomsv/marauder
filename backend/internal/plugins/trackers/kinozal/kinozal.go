@@ -35,7 +35,12 @@ const (
 	userAgent     = "Marauder/0.3 (+https://marauder.cc)"
 )
 
-var urlPattern = regexp.MustCompile(`^https?://(?:www\.)?kinozal\.(?:tv|me|guru)/details\.php\?id=(\d+)`)
+var knownDomains = []string{"kinozal.tv", "kinozal.me", "kinozal.guru"}
+
+// urlPattern is host-agnostic; CanParse gates the captured host against the
+// known + admin-configured domain allowlist (the SSRF barrier — see
+// registry.DomainAllowed).
+var urlPattern = regexp.MustCompile(`^https?://(?:www\.)?([^/]+)/details\.php\?id=(\d+)`)
 
 type plugin struct {
 	sessions  *forumcommon.SessionStore
@@ -53,8 +58,27 @@ func init() {
 func (p *plugin) Name() string        { return pluginName }
 func (p *plugin) DisplayName() string { return displayName }
 
+var _ registry.WithDomains = (*plugin)(nil)
+
+// Domains implements registry.WithDomains; first entry is canonical.
+func (p *plugin) Domains() []string { return knownDomains }
+
+// effectiveDomain resolves the domain every request is built against:
+// a test-injected p.domain wins (httptest servers), then the admin-
+// configured active domain, then the compiled default.
+func (p *plugin) effectiveDomain() string {
+	if p.domain != defaultDomain {
+		return p.domain
+	}
+	if d := registry.ActiveDomain(pluginName); d != "" {
+		return d
+	}
+	return p.domain
+}
+
 func (p *plugin) CanParse(rawURL string) bool {
-	return urlPattern.MatchString(strings.TrimSpace(rawURL))
+	m := urlPattern.FindStringSubmatch(strings.TrimSpace(rawURL))
+	return m != nil && registry.DomainAllowed(pluginName, m[1], knownDomains)
 }
 
 func (p *plugin) Parse(_ context.Context, rawURL string) (*domain.Topic, error) {
@@ -62,7 +86,7 @@ func (p *plugin) Parse(_ context.Context, rawURL string) (*domain.Topic, error) 
 	if m == nil {
 		return nil, errors.New("not a kinozal details URL")
 	}
-	id, err := strconv.Atoi(m[1])
+	id, err := strconv.Atoi(m[2])
 	if err != nil {
 		return nil, fmt.Errorf("topic id: %w", err)
 	}
@@ -88,7 +112,7 @@ func (p *plugin) Login(ctx context.Context, creds *domain.TrackerCredential) err
 		"username": {creds.Username},
 		"password": {string(creds.SecretEnc)},
 	}
-	endpoint := "https://" + p.domain + "/takelogin.php"
+	endpoint := "https://" + p.effectiveDomain() + "/takelogin.php"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(form.Encode()))
 	if err != nil {
 		return err
@@ -115,7 +139,7 @@ func (p *plugin) Login(ctx context.Context, creds *domain.TrackerCredential) err
 
 func (p *plugin) Verify(ctx context.Context, creds *domain.TrackerCredential) (bool, error) {
 	sess := p.sessions.GetOrCreate(forumcommon.SessionKey(pluginName, creds.UserID.String()), userAgent)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://"+p.domain+"/", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://"+p.effectiveDomain()+"/", nil)
 	if err != nil {
 		return false, err
 	}
@@ -193,16 +217,17 @@ func parseTopicID(rawURL string) (int, error) {
 	return id, nil
 }
 
-// canonicalDetailsURL rebuilds the details URL from the trusted host (p.domain)
-// + the numeric id parsed from rawURL — never the raw user URL. Avoids request
-// forgery (CodeQL go/request-forgery) and pins the request to p.domain so
-// Check's title matches ResolveMetadata's (issue #90).
+// canonicalDetailsURL rebuilds the details URL from the trusted host
+// (p.effectiveDomain()) + the numeric id parsed from rawURL — never the raw
+// user URL. Avoids request forgery (CodeQL go/request-forgery) and pins the
+// request to the trusted host so Check's title matches ResolveMetadata's
+// (issue #90).
 func (p *plugin) canonicalDetailsURL(rawURL string) (string, error) {
 	id, err := parseTopicID(rawURL)
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("https://%s/details.php?id=%d", p.domain, id), nil
+	return fmt.Sprintf("https://%s/details.php?id=%d", p.effectiveDomain(), id), nil
 }
 
 // Check makes TWO requests per tick: the details page for the display title,
@@ -243,7 +268,7 @@ func (p *plugin) fetchInfohash(ctx context.Context, rawURL string, creds *domain
 	if err != nil {
 		return "", err
 	}
-	srvURL := fmt.Sprintf("https://%s/get_srv_details.php?id=%d&action=2", p.domain, id)
+	srvURL := fmt.Sprintf("https://%s/get_srv_details.php?id=%d&action=2", p.effectiveDomain(), id)
 	body, err := p.fetch(ctx, srvURL, creds)
 	if err != nil {
 		return "", fmt.Errorf("kinozal: get_srv_details: %w", err)
@@ -279,7 +304,7 @@ func (p *plugin) ResolveMetadata(ctx context.Context, rawURL string, creds *doma
 	if mt := titleRe.FindSubmatch(body); mt != nil {
 		meta.Title = cleanTitle(string(mt[1]))
 	}
-	meta.ImageURL = extractImageURL(body, p.domain)
+	meta.ImageURL = extractImageURL(body, p.effectiveDomain())
 	return meta, nil
 }
 
@@ -294,11 +319,11 @@ func (p *plugin) Download(ctx context.Context, topic *domain.Topic, _ *domain.Ch
 	if id == 0 {
 		return nil, errors.New("kinozal: no topic_id in extras")
 	}
-	dlURL := "https://dl." + p.domain + "/download.php?id=" + strconv.Itoa(id)
+	dlURL := "https://dl." + p.effectiveDomain() + "/download.php?id=" + strconv.Itoa(id)
 	body, err := p.fetch(ctx, dlURL, creds)
 	if err != nil {
 		// Some Kinozal mirrors host downloads on the main domain.
-		dlURL = "https://" + p.domain + "/download.php?id=" + strconv.Itoa(id)
+		dlURL = "https://" + p.effectiveDomain() + "/download.php?id=" + strconv.Itoa(id)
 		body, err = p.fetch(ctx, dlURL, creds)
 		if err != nil {
 			return nil, err
