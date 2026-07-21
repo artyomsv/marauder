@@ -159,35 +159,121 @@ func (h *TrackerDomains) Test(w http.ResponseWriter, r *http.Request) {
 		probe = DefaultDomainProbe
 	}
 	if err := probe(r.Context(), hn); err != nil {
-		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "detail": err.Error()})
+		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "detail": classifyProbeError(err)})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "detail": ""})
 }
 
-// DefaultDomainProbe is the production Probe: it pre-checks DNS (rejecting
-// a host whose resolved IPs are ALL loopback/private/link-local — the
-// same non-routable-IP shape as lostfilm's validateRedirectURL, copied
-// rather than imported so this handler has no dependency on a tracker
-// plugin package) and then performs a bounded GET to confirm the host
-// actually answers over HTTPS.
-func DefaultDomainProbe(ctx context.Context, host string) error {
-	ips, err := net.LookupIP(host)
-	if err != nil {
-		return fmt.Errorf("DNS lookup for %q failed: %w", host, err)
-	}
-	routable := false
+// domainProbeTimeout bounds the whole probe round-trip (DNS + connect +
+// TLS + response headers) via http.Client.Timeout.
+const domainProbeTimeout = 10 * time.Second
+
+// errBlockedAddress is returned when every IP a probe host resolves to at
+// DIAL TIME is loopback/private/link-local/unspecified. It is a sentinel
+// (rather than a formatted string) so the handler can classify it into a
+// generic "blocked address" detail without echoing the rejected IP.
+var errBlockedAddress = errors.New("blocked address")
+
+// isRoutableIP reports whether ip is eligible to be dialed by the domain
+// probe — the same non-routable-IP shape as lostfilm's
+// validateRedirectURL, copied rather than imported so this handler has no
+// dependency on a tracker plugin package.
+func isRoutableIP(ip net.IP) bool {
+	return !(ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsUnspecified())
+}
+
+// firstRoutableIP returns the first routable candidate in ips (preserving
+// resolver order), or errBlockedAddress if none qualify — including the
+// empty-slice case (a host that resolved to nothing).
+func firstRoutableIP(ips []net.IP) (net.IP, error) {
 	for _, ip := range ips {
-		if !(ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsUnspecified()) {
-			routable = true
-			break
+		if isRoutableIP(ip) {
+			return ip, nil
 		}
 	}
-	if !routable {
-		return fmt.Errorf("host %q resolves only to non-routable IPs", host)
-	}
+	return nil, errBlockedAddress
+}
 
-	client := &http.Client{Timeout: 10 * time.Second}
+// vettedDialContext is DefaultDomainProbe's transport DialContext. It is
+// the load-bearing SSRF guard: rather than checking DNS once up front and
+// trusting the client's own re-resolution at connect time (a TOCTOU gap —
+// a public-looking host can answer differently a second later, or the
+// probe and the real request can simply be resolved by different,
+// racing lookups), every dial re-resolves host here and vets EVERY
+// candidate the resolver returns before any of them is dialed. Only a
+// vetted IP is ever connected to; the request's Host/SNI stays the
+// original hostname since this func returns a plain TCP conn and the
+// transport performs the TLS handshake on top of it itself.
+func vettedDialContext(ctx context.Context, network, addr string) (net.Conn, error) {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return nil, fmt.Errorf("parsing dial address %q: %w", addr, err)
+	}
+	resolved, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+	if err != nil {
+		return nil, fmt.Errorf("dns lookup for %q failed: %w", host, err)
+	}
+	ips := make([]net.IP, len(resolved))
+	for i, a := range resolved {
+		ips[i] = a.IP
+	}
+	ip, err := firstRoutableIP(ips)
+	if err != nil {
+		return nil, fmt.Errorf("host %q: %w", host, err)
+	}
+	dialer := &net.Dialer{}
+	return dialer.DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
+}
+
+// denyRedirects is the probe client's CheckRedirect. A 3xx response
+// already counts as "reachable" — the probe must never follow it, because
+// a public host that redirects to http://169.254.169.254/ or an RFC1918
+// address would otherwise have that second hop dialed with no re-check
+// (Go's default client follows redirects transparently).
+func denyRedirects(*http.Request, []*http.Request) error {
+	return http.ErrUseLastResponse
+}
+
+// classifyProbeError maps a probe failure to a generic, non-identifying
+// detail string for the JSON response — the raw error text can contain
+// internal reconnaissance-useful details (resolved IPs, dial addresses),
+// so it must never reach the client verbatim.
+func classifyProbeError(err error) string {
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) {
+		return "dns lookup failed"
+	}
+	if errors.Is(err, errBlockedAddress) {
+		return "blocked address"
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "timeout"
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return "timeout"
+	}
+	var opErr *net.OpError
+	if errors.As(err, &opErr) {
+		return "connection failed"
+	}
+	return "unreachable"
+}
+
+// DefaultDomainProbe is the production Probe: a bounded GET to confirm
+// the host actually answers over HTTPS. IP-policy enforcement happens at
+// dial time (see vettedDialContext) and redirects are never followed (see
+// denyRedirects) — both are load-bearing SSRF guards, not defense in
+// depth around a separate check.
+func DefaultDomainProbe(ctx context.Context, host string) error {
+	client := &http.Client{
+		Timeout:       domainProbeTimeout,
+		CheckRedirect: denyRedirects,
+		Transport: &http.Transport{
+			DialContext: vettedDialContext,
+		},
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://"+host+"/", nil)
 	if err != nil {
 		return fmt.Errorf("building request for %q: %w", host, err)
