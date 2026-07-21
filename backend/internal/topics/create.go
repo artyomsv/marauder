@@ -8,7 +8,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -92,6 +94,7 @@ func BuildAndCreate(ctx context.Context, store Store, in CreateInput) (*Result, 
 	if tracker == nil {
 		return nil, ErrNoTracker
 	}
+	in.URL = canonicalTopicURL(tracker, in.URL)
 
 	parsed, err := tracker.Parse(ctx, in.URL)
 	if err != nil {
@@ -192,6 +195,29 @@ func resolveMetadata(ctx context.Context, tracker registry.Tracker, in CreateInp
 		*resolved = true
 	}
 	return meta.ImageURL
+}
+
+// canonicalTopicURL rewrites a mirror-host topic URL onto the tracker's
+// canonical (default) domain so the same topic added via different mirrors
+// dedups to one row. The active mirror is a fetch-time concern
+// (effectiveDomain) — stored identity stays stable across rotations.
+func canonicalTopicURL(tr registry.Tracker, rawURL string) string {
+	wd, ok := tr.(registry.WithDomains)
+	if !ok || len(wd.Domains()) == 0 {
+		return rawURL
+	}
+	u, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil {
+		return rawURL
+	}
+	canonical := wd.Domains()[0]
+	if strings.TrimPrefix(strings.ToLower(u.Hostname()), "www.") ==
+		strings.TrimPrefix(strings.ToLower(canonical), "www.") {
+		return rawURL
+	}
+	u.Scheme = "https"
+	u.Host = canonical
+	return u.String()
 }
 
 func isUniqueViolation(err error) bool {

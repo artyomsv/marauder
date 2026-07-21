@@ -180,3 +180,55 @@ func TestBuildAndCreate_CallerSuppliedName_FlagsResolved(t *testing.T) {
 		t.Errorf("want DisplayNameIsPlaceholder=false for caller-supplied name")
 	}
 }
+
+// stubDomainsTracker implements registry.WithDomains for canonicalTopicURL
+// tests; the rest of the Tracker interface is unused stubbing.
+type stubDomainsTracker struct {
+	domains []string
+}
+
+func (stubDomainsTracker) Name() string         { return "stub-domains" }
+func (stubDomainsTracker) DisplayName() string  { return "Stub Domains Tracker" }
+func (stubDomainsTracker) CanParse(string) bool { return true }
+func (stubDomainsTracker) Parse(context.Context, string) (*domain.Topic, error) {
+	return &domain.Topic{}, nil
+}
+func (stubDomainsTracker) Check(context.Context, *domain.Topic, *domain.TrackerCredential) (*domain.Check, error) {
+	return nil, nil
+}
+func (stubDomainsTracker) Download(context.Context, *domain.Topic, *domain.Check, *domain.TrackerCredential) (*domain.Payload, error) {
+	return nil, nil
+}
+func (s stubDomainsTracker) Domains() []string { return s.domains }
+
+// stubPlainTracker implements only registry.Tracker (no WithDomains).
+type stubPlainTracker struct{}
+
+func (stubPlainTracker) Name() string         { return "stub-plain" }
+func (stubPlainTracker) DisplayName() string  { return "Stub Plain Tracker" }
+func (stubPlainTracker) CanParse(string) bool { return true }
+func (stubPlainTracker) Parse(context.Context, string) (*domain.Topic, error) {
+	return &domain.Topic{}, nil
+}
+func (stubPlainTracker) Check(context.Context, *domain.Topic, *domain.TrackerCredential) (*domain.Check, error) {
+	return nil, nil
+}
+func (stubPlainTracker) Download(context.Context, *domain.Topic, *domain.Check, *domain.TrackerCredential) (*domain.Payload, error) {
+	return nil, nil
+}
+
+func TestCanonicalTopicURL_RewritesMirrorHost(t *testing.T) {
+	tr := &stubDomainsTracker{domains: []string{"kinozal.tv", "kinozal.me"}}
+	got := canonicalTopicURL(tr, "https://kinozal.me/details.php?id=42")
+	if got != "https://kinozal.tv/details.php?id=42" {
+		t.Errorf("canonicalTopicURL = %q", got)
+	}
+	// Same host (modulo www.) → unchanged input returned verbatim.
+	if got := canonicalTopicURL(tr, "https://www.kinozal.tv/details.php?id=42"); got != "https://www.kinozal.tv/details.php?id=42" {
+		t.Errorf("same-host URL rewritten: %q", got)
+	}
+	// Non-WithDomains tracker → unchanged.
+	if got := canonicalTopicURL(&stubPlainTracker{}, "https://x/y"); got != "https://x/y" {
+		t.Errorf("plain tracker URL rewritten: %q", got)
+	}
+}
