@@ -20,6 +20,7 @@ import (
 	"github.com/artyomsv/marauder/backend/internal/config"
 	"github.com/artyomsv/marauder/backend/internal/crypto"
 	"github.com/artyomsv/marauder/backend/internal/db/repo"
+	"github.com/artyomsv/marauder/backend/internal/domains"
 	"github.com/artyomsv/marauder/backend/internal/events"
 	"github.com/artyomsv/marauder/backend/internal/scheduler"
 	"github.com/artyomsv/marauder/backend/internal/sse"
@@ -40,6 +41,7 @@ type Deps struct {
 	Deliveries      *repo.Deliveries
 	TopicEvents     *repo.TopicEvents
 	SonarrInstances *repo.SonarrInstances
+	TrackerSettings *domains.Store
 	Audit           *repo.Audit
 	AuditLog        *audit.Logger
 	OIDC            *auth.OIDCProvider
@@ -128,6 +130,12 @@ func NewRouter(d Deps) http.Handler {
 		BaseURL:   d.Cfg.PublicBaseURL,
 	}
 	trackersH := &handlers.Trackers{BaseURL: d.Cfg.PublicBaseURL}
+	trackerDomainsH := &handlers.TrackerDomains{
+		Store:   d.TrackerSettings,
+		Probe:   handlers.DefaultDomainProbe,
+		BaseURL: d.Cfg.PublicBaseURL,
+		Audit:   d.AuditLog,
+	}
 	credsH := handlers.NewCredentials(d.Creds, d.Master, d.AuditLog, d.Cfg.PublicBaseURL)
 	sseH := &handlers.SSE{
 		Hub:               d.Hub,
@@ -210,6 +218,10 @@ func NewRouter(d Deps) http.Handler {
 				r.Delete("/system/sonarr/instances/{id}", sonarrH.Delete)
 				r.Post("/system/sonarr/instances/{id}/test", sonarrH.TestExisting)
 				r.Post("/system/sonarr/test", sonarrH.Test)
+
+				r.Get("/system/trackers/domains", trackerDomainsH.List)
+				r.Put("/system/trackers/{name}/domains", trackerDomainsH.Update)
+				r.Post("/system/trackers/{name}/domains/test", trackerDomainsH.Test)
 			})
 		})
 	})
