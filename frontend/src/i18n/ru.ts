@@ -181,6 +181,18 @@ const ru: Record<string, string> = {
   "settings.sonarr.actions.delete": "Удалить экземпляр",
   "settings.sonarr.actions.enable": "Включить",
   "settings.sonarr.actions.disable": "Выключить",
+  "settings.domains.title": "Домены трекеров",
+  "settings.domains.blurb":
+    "Переопределите домен, который использует каждый трекер, и добавьте дополнительные зеркала на случай, если основной домен заблокирован.",
+  "settings.domains.instanceWideNote": "Действует для всего экземпляра. Только для администратора.",
+  "settings.domains.defaultSuffix": "(по умолчанию)",
+  "settings.domains.addPlaceholder": "mirror.example.com",
+  "settings.domains.addButton": "Добавить",
+  "settings.domains.invalidHostname": "Некорректное имя хоста",
+  "settings.domains.test": "Проверить",
+  "settings.domains.testOk": "Доступен",
+  "settings.domains.testFail": "Недоступен",
+  "settings.domains.remove": "Удалить {domain}",
 
   // Topic live check status (fed by SSE check.* events)
   "topics.check.checking": "Проверка…",

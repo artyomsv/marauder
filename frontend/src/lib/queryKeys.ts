@@ -61,4 +61,8 @@ export const QK = {
   // /clients/{id}/categories — existing client categories (qBittorrent) used
   // to suggest values in the AddTopic form's category combobox.
   clientCategories: (id: string) => ["clientCategories", id] as const,
+
+  // /system/trackers/domains — per-tracker mirror/domain configuration
+  // (admin only, issue #126).
+  trackerDomains: ["tracker-domains"] as const,
 } as const;

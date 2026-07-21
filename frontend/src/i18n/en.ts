@@ -179,6 +179,18 @@ const en: Record<string, string> = {
   "settings.sonarr.actions.delete": "Delete instance",
   "settings.sonarr.actions.enable": "Enable",
   "settings.sonarr.actions.disable": "Disable",
+  "settings.domains.title": "Tracker domains",
+  "settings.domains.blurb":
+    "Override which domain each tracker plugin uses, and register extra mirrors it can fall back to.",
+  "settings.domains.instanceWideNote": "Applies instance-wide and is admin only.",
+  "settings.domains.defaultSuffix": "(default)",
+  "settings.domains.addPlaceholder": "mirror.example.com",
+  "settings.domains.addButton": "Add",
+  "settings.domains.invalidHostname": "Invalid hostname",
+  "settings.domains.test": "Test",
+  "settings.domains.testOk": "Reachable",
+  "settings.domains.testFail": "Unreachable",
+  "settings.domains.remove": "Remove {domain}",
 
   // Topic live check status (fed by SSE check.* events)
   "topics.check.checking": "Checking…",
