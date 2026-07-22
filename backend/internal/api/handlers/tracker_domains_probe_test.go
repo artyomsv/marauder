@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 )
@@ -182,6 +184,21 @@ func TestClassifyProbeError(t *testing.T) {
 			"connection failed",
 		},
 		{
+			"empty response",
+			fmt.Errorf("probe: %w", errEmptyResponse),
+			"empty page",
+		},
+		{
+			"redirect",
+			errRedirect,
+			"redirects elsewhere",
+		},
+		{
+			"http status",
+			&httpStatusError{code: 403},
+			"HTTP 403",
+		},
+		{
 			"unclassified generic error",
 			errors.New("unreachable"),
 			"unreachable",
@@ -191,6 +208,41 @@ func TestClassifyProbeError(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := classifyProbeError(tt.err); got != tt.want {
 				t.Errorf("classifyProbeError() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestEvaluateProbeResponse covers the content check that distinguishes a
+// working mirror from one that merely answers — the lostfilm.win case (200 OK
+// with an empty body reads as a blank page, not "reachable").
+func TestEvaluateProbeResponse(t *testing.T) {
+	mk := func(code int, body string) *http.Response {
+		return &http.Response{StatusCode: code, Body: io.NopCloser(strings.NewReader(body))}
+	}
+	tests := []struct {
+		name string
+		resp *http.Response
+		want string // "" means the response is reachable (nil error)
+	}{
+		{"2xx with content", mk(200, "<html>a real homepage</html>"), ""},
+		{"2xx empty body", mk(200, ""), "empty page"},
+		{"2xx whitespace only", mk(200, "   \n\t "), "empty page"},
+		{"redirect", mk(302, ""), "redirects elsewhere"},
+		{"forbidden", mk(403, "denied"), "HTTP 403"},
+		{"server error", mk(500, "boom"), "HTTP 500"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := evaluateProbeResponse(tt.resp)
+			if tt.want == "" {
+				if err != nil {
+					t.Errorf("want reachable (nil), got %v", err)
+				}
+				return
+			}
+			if got := classifyProbeError(err); got != tt.want {
+				t.Errorf("classify(evaluate()) = %q, want %q", got, tt.want)
 			}
 		})
 	}

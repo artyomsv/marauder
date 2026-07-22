@@ -148,3 +148,44 @@ after a tracker's transient rate-limiting or maintenance window.
   race), low probability, self-healing. Fix alongside (e) if revisited:
   re-read the whole `DomainConfig` under the same RLock the persist
   phase already takes.
+
+## Addendum (code-review round 1, 2026-07-22)
+
+Deferred findings from the `/code-review` pass on this branch. Fixed in the
+same session: rutracker Check/Download now route through `effectiveDomain()`
+(feature bug — the override/rotation was inert on rutracker's check loop);
+rotation notify moved off the scheduler worker goroutine; rotation now gated
+by `RotateFailureThreshold` consecutive failures; `CanonicalTopicURL`
+scheme-less guard; `validateHostname` rejects numeric-TLD IP-likes; frontend
+duplicate-domain guard + clear-on-success + disable-while-pending. Deferred:
+
+- (g) **Plugin fetch paths trust `effectiveDomain()`/custom domains without
+  dial-time IP vetting** (SEC-L1). An admin-added custom domain resolving to
+  an internal/loopback/link-local IP would be dialed by the plugin's session
+  (unlike the `/domains/test` probe, which vets IPs at dial time). Admin-only,
+  self-hosted, and admins already configure arbitrary client/Sonarr URLs the
+  backend connects to — low priority. Fix: run the probe's `vettedDialContext`
+  shape inside the shared plugin HTTP transport, or vet custom domains on
+  `Update` before persisting.
+- (h) **Two SSRF-guard depths across plugins** — `rutor`/`nnmclub` re-validate
+  the host inside `fetch` via `DomainAllowed`; `kinozal`/`rutracker`/`anilibria`/
+  `lostfilm` trust `effectiveDomain()`'s (trusted) output directly. Both safe
+  today; standardize on the defense-in-depth `fetch`-level check to keep it that
+  way under future edits. Pairs naturally with (g).
+- (i) **Rotation alert reuses `events.CheckFailed`** (CQ-L1). A domain rotation
+  isn't a check failure; an admin subscribed only to `session.expired` won't get
+  rotation alerts, and one subscribed to `check.failed` gets them mixed into
+  per-check noise. Add a dedicated `domain.rotated` event (ripples through the
+  events taxonomy/policy, i18n, and the frontend timeline — hence deferred).
+- (j) **`validateHostname` internal error text** (SEC-L3) and the `Update`
+  `problem.ErrInternal(err.Error())` path echo raw store/DB errors to the admin
+  client. Matches the existing handler-package convention (`clients.go`,
+  `credentials.go`), admin-only — accepted as-is, noted for a future
+  package-wide error-sanitization pass.
+- (k) **`/domains/test` probe has no retry** (R-M1) — intentional: it's a
+  single-shot manual diagnostic; an automatic retry would mask a real transient
+  failure the admin asked to see. Documented as won't-fix, not a gap.
+
+Note: (e) above (rotation inherits `classifyError`'s broad 429/5xx→unreachable
+bucket) is now partially mitigated by the `RotateFailureThreshold` gate — a
+single 429/5xx no longer rotates — but narrowing the bucket itself remains open.

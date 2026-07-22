@@ -23,6 +23,16 @@ import (
 // past the working mirror before it gets a chance to serve a check.
 const RotateCooldown = 10 * time.Minute
 
+// RotateFailureThreshold is the number of network-classified failures (within
+// RotateFailureWindow) a tracker must accumulate before its active domain is
+// rotated. A gate of >1 stops a single transient blip (one 5xx/timeout on one
+// topic) from switching the whole tracker onto a mirror; a genuine outage
+// trips it quickly because many topics fail in close succession (issue #126).
+const (
+	RotateFailureThreshold = 2
+	RotateFailureWindow    = 5 * time.Minute
+)
+
 // SettingsRepo is the persistence seam (implemented by repo.TrackerSettings).
 type SettingsRepo interface {
 	List(ctx context.Context) ([]repo.TrackerSetting, error)
@@ -31,14 +41,17 @@ type SettingsRepo interface {
 
 // Store caches tracker domain configuration in memory.
 type Store struct {
-	mu         sync.RWMutex
-	persistMu  sync.Mutex // serializes Upsert calls from Set and ReportFailure
-	cfg        map[string]registry.DomainConfig
-	lastRotate map[string]time.Time
-	settings   SettingsRepo
-	log        zerolog.Logger
-	onRotate   func(tracker, from, to string)
-	now        func() time.Time
+	mu            sync.RWMutex
+	persistMu     sync.Mutex // serializes Upsert calls from Set and ReportFailure
+	cfg           map[string]registry.DomainConfig
+	lastRotate    map[string]time.Time
+	failCount     map[string]int       // network failures in the current window, per tracker
+	failWindow    map[string]time.Time // start of the current failure window, per tracker
+	settings      SettingsRepo
+	log           zerolog.Logger
+	onRotate      func(tracker, from, to string)
+	now           func() time.Time
+	beforePersist func() // test seam: invoked after a rotation is cached, before it persists
 }
 
 // New constructs a Store backed by settings for persistence. Call Load once
@@ -47,6 +60,8 @@ func New(settings SettingsRepo, log zerolog.Logger) *Store {
 	return &Store{
 		cfg:        map[string]registry.DomainConfig{},
 		lastRotate: map[string]time.Time{},
+		failCount:  map[string]int{},
+		failWindow: map[string]time.Time{},
 		settings:   settings,
 		log:        log,
 		now:        time.Now,
@@ -104,12 +119,15 @@ func (s *Store) Set(ctx context.Context, trackerName, active string, custom []st
 	return nil
 }
 
-// ReportFailure rotates the tracker's active domain to the next candidate
-// in the ring (known domains + custom domains), at most once per
-// RotateCooldown. Persistence failure is logged, the in-memory rotation
-// still applies (fail-open: next boot reloads the old value, worst case
-// one extra rotation). No-op for unknown trackers, trackers without the
-// WithDomains capability, and rings of length < 2.
+// ReportFailure records a network-classified check failure for the tracker and,
+// once RotateFailureThreshold failures accumulate within RotateFailureWindow,
+// rotates the active domain to the next candidate in the ring (known domains +
+// custom domains) — at most once per RotateCooldown. The threshold stops a
+// single transient blip from switching the whole tracker onto a mirror.
+// Persistence failure is logged, the in-memory rotation still applies (fail-open:
+// next boot reloads the old value, worst case one extra rotation). No-op for
+// unknown trackers, trackers without the WithDomains capability, and rings of
+// length < 2.
 func (s *Store) ReportFailure(ctx context.Context, trackerName string) {
 	tr := registry.GetTracker(trackerName)
 	wd, ok := tr.(registry.WithDomains)
@@ -123,7 +141,21 @@ func (s *Store) ReportFailure(ctx context.Context, trackerName string) {
 		s.mu.Unlock()
 		return
 	}
-	if last, ok := s.lastRotate[trackerName]; ok && s.now().Sub(last) < RotateCooldown {
+	now := s.now()
+	// Cooldown: after a rotation, ignore failures for RotateCooldown so a burst
+	// of failing topics doesn't spin the ring past a working mirror.
+	if last, ok := s.lastRotate[trackerName]; ok && now.Sub(last) < RotateCooldown {
+		s.mu.Unlock()
+		return
+	}
+	// Accumulate failures within a sliding window; only rotate once the
+	// threshold is reached so a single transient failure can't strand the tracker.
+	if start, ok := s.failWindow[trackerName]; !ok || now.Sub(start) > RotateFailureWindow {
+		s.failWindow[trackerName] = now
+		s.failCount[trackerName] = 0
+	}
+	s.failCount[trackerName]++
+	if s.failCount[trackerName] < RotateFailureThreshold {
 		s.mu.Unlock()
 		return
 	}
@@ -141,13 +173,22 @@ func (s *Store) ReportFailure(ctx context.Context, trackerName string) {
 	to := ring[(idx+1)%len(ring)]
 	cur.Active = to
 	s.cfg[trackerName] = cur
-	s.lastRotate[trackerName] = s.now()
+	s.lastRotate[trackerName] = now
+	// Reset the failure window: the next rotation needs a fresh threshold.
+	s.failCount[trackerName] = 0
+	delete(s.failWindow, trackerName)
 	hook := s.onRotate
 	s.mu.Unlock()
 
 	metrics.TrackerDomainRotations.WithLabelValues(trackerName).Inc()
 	s.log.Warn().Str("tracker", trackerName).Str("from", from).Str("to", to).
 		Msg("tracker domain rotated after network failures")
+
+	// Test seam: park here (rotation cached, not yet persisted) so a
+	// concurrency test can interleave a Store.Set before the persist phase.
+	if s.beforePersist != nil {
+		s.beforePersist()
+	}
 
 	// Persist under persistMu, serialized against Set, and re-read the
 	// custom-domain list right before writing so a concurrent admin edit

@@ -1,10 +1,12 @@
 package handlers
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"regexp"
@@ -73,6 +75,13 @@ func validateHostname(h string) (string, error) {
 	if !hostnameRe.MatchString(h) {
 		return "", fmt.Errorf("hostname %q is not a valid domain name (no scheme, port or path)", h)
 	}
+	// Reject IP-like inputs that net.ParseIP misses (e.g. octal/decimal forms
+	// such as "0177.0.0.1") by requiring an alphabetic TLD — a real domain's
+	// rightmost label is never all-numeric.
+	labels := strings.Split(h, ".")
+	if tld := labels[len(labels)-1]; strings.IndexFunc(tld, func(r rune) bool { return r < '0' || r > '9' }) == -1 {
+		return "", fmt.Errorf("hostname %q has a numeric top-level label (not a domain)", h)
+	}
 	return h, nil
 }
 
@@ -131,6 +140,8 @@ func (h *TrackerDomains) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// best-effort: the route is already RequireAuth-gated, so a missing/bad
+	// actor id is non-fatal — the audit entry is still written with a nil actor.
 	uid, _ := currentUserID(r)
 	h.audit(nilIfNil(uid), "tracker.domains.update", name,
 		map[string]any{"active_domain": active, "custom_domains": custom})
@@ -174,6 +185,27 @@ const domainProbeTimeout = 10 * time.Second
 // (rather than a formatted string) so the handler can classify it into a
 // generic "blocked address" detail without echoing the rejected IP.
 var errBlockedAddress = errors.New("blocked address")
+
+// A completed HTTP response is not proof a mirror actually serves the tracker:
+// a dead/stub mirror commonly answers "200 OK" with an empty body (a blank
+// page), and error/redirect statuses aren't failures to the HTTP client. These
+// sentinels let the probe report *why* a syntactically-reachable host is still
+// not a working mirror (issue #126).
+var (
+	errEmptyResponse = errors.New("empty response")
+	errRedirect      = errors.New("redirect")
+)
+
+// httpStatusError carries a non-success HTTP status so the handler can surface
+// it (e.g. "HTTP 403") without leaking anything host-identifying.
+type httpStatusError struct{ code int }
+
+func (e *httpStatusError) Error() string { return fmt.Sprintf("http status %d", e.code) }
+
+// probeBodyReadLimit caps how much of a probe response body is read to decide
+// whether the page has real content — a few KB is plenty to tell an empty
+// stub page from a real homepage.
+const probeBodyReadLimit = 64 << 10
 
 // isRoutableIP reports whether ip is eligible to be dialed by the domain
 // probe — the same non-routable-IP shape as lostfilm's
@@ -258,11 +290,45 @@ func classifyProbeError(err error) string {
 	if errors.As(err, &opErr) {
 		return "connection failed"
 	}
+	if errors.Is(err, errEmptyResponse) {
+		return "empty page"
+	}
+	if errors.Is(err, errRedirect) {
+		return "redirects elsewhere"
+	}
+	var statusErr *httpStatusError
+	if errors.As(err, &statusErr) {
+		return fmt.Sprintf("HTTP %d", statusErr.code)
+	}
 	return "unreachable"
 }
 
-// DefaultDomainProbe is the production Probe: a bounded GET to confirm
-// the host actually answers over HTTPS. IP-policy enforcement happens at
+// evaluateProbeResponse decides whether a probe response indicates the mirror
+// actually serves content. A 2xx with a non-empty body is reachable; an empty
+// 2xx (nginx answering with a blank page — the classic dead-mirror symptom), a
+// redirect we don't follow, or a 4xx/5xx are not. Kept separate from
+// DefaultDomainProbe so it can be unit-tested with synthetic responses (the
+// dial-time IP gate makes an httptest server unreachable to the real probe).
+func evaluateProbeResponse(resp *http.Response) error {
+	switch {
+	case resp.StatusCode >= 300 && resp.StatusCode < 400:
+		return errRedirect
+	case resp.StatusCode >= 400:
+		return &httpStatusError{code: resp.StatusCode}
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, probeBodyReadLimit))
+	if err != nil {
+		return fmt.Errorf("reading probe response: %w", err)
+	}
+	if len(bytes.TrimSpace(body)) == 0 {
+		return errEmptyResponse
+	}
+	return nil
+}
+
+// DefaultDomainProbe is the production Probe: a bounded GET that confirms the
+// host serves a real page over HTTPS (2xx with a non-empty body), not merely
+// that it answers (see evaluateProbeResponse). IP-policy enforcement happens at
 // dial time (see vettedDialContext) and redirects are never followed (see
 // denyRedirects) — both are load-bearing SSRF guards, not defense in
 // depth around a separate check.
@@ -283,7 +349,7 @@ func DefaultDomainProbe(ctx context.Context, host string) error {
 		return fmt.Errorf("GET https://%s/ failed: %w", host, err)
 	}
 	defer resp.Body.Close()
-	return nil
+	return evaluateProbeResponse(resp)
 }
 
 // lookupTracker resolves a WithDomains-capable tracker by name, returning

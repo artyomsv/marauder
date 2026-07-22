@@ -73,6 +73,28 @@ func TestStore_Set_PersistsAndUpdatesCache(t *testing.T) {
 	}
 }
 
+// rotateOnce reports RotateFailureThreshold failures for a tracker so it
+// crosses the gate and rotates exactly once (the caller controls the clock so
+// all failures land inside one RotateFailureWindow).
+func rotateOnce(s *Store, tracker string) {
+	for i := 0; i < RotateFailureThreshold; i++ {
+		s.ReportFailure(context.Background(), tracker)
+	}
+}
+
+func TestStore_ReportFailure_SingleFailureBelowThreshold_NoRotation(t *testing.T) {
+	registry.RegisterTracker(&stubTracker{name: "threshtest", domains: []string{"a.example", "b.example"}})
+	f := &fakeRepo{}
+	s := New(f, zerolog.Nop())
+	s.ReportFailure(context.Background(), "threshtest") // 1 < threshold
+	if got := s.Resolve("threshtest").Active; got != "" {
+		t.Errorf("rotated on a single failure: active=%q", got)
+	}
+	if len(f.upserts) != 0 {
+		t.Errorf("persisted on a single failure: %+v", f.upserts)
+	}
+}
+
 func TestStore_ReportFailure_RotatesOncePerCooldown(t *testing.T) {
 	registry.RegisterTracker(&stubTracker{name: "rotatest", domains: []string{"a.example", "b.example", "c.example"}})
 	f := &fakeRepo{}
@@ -82,7 +104,7 @@ func TestStore_ReportFailure_RotatesOncePerCooldown(t *testing.T) {
 	var rotations [][2]string
 	s.SetOnRotate(func(_, from, to string) { rotations = append(rotations, [2]string{from, to}) })
 
-	s.ReportFailure(context.Background(), "rotatest") // a -> b
+	rotateOnce(s, "rotatest")                         // a -> b (2 failures trip the gate)
 	s.ReportFailure(context.Background(), "rotatest") // within cooldown: no-op
 	if got := s.Resolve("rotatest").Active; got != "b.example" {
 		t.Errorf("active = %q, want b.example", got)
@@ -91,7 +113,7 @@ func TestStore_ReportFailure_RotatesOncePerCooldown(t *testing.T) {
 		t.Errorf("rotations=%d upserts=%d, want 1/1", len(rotations), len(f.upserts))
 	}
 	now = now.Add(RotateCooldown + time.Second)
-	s.ReportFailure(context.Background(), "rotatest") // b -> c
+	rotateOnce(s, "rotatest") // b -> c
 	if got := s.Resolve("rotatest").Active; got != "c.example" {
 		t.Errorf("active after 2nd rotation = %q, want c.example", got)
 	}
@@ -101,7 +123,7 @@ func TestStore_ReportFailure_SingleDomain_NoRotation(t *testing.T) {
 	registry.RegisterTracker(&stubTracker{name: "singletest", domains: []string{"only.example"}})
 	f := &fakeRepo{}
 	s := New(f, zerolog.Nop())
-	s.ReportFailure(context.Background(), "singletest")
+	rotateOnce(s, "singletest")
 	if len(f.upserts) != 0 {
 		t.Errorf("single-domain tracker rotated: %+v", f.upserts)
 	}
@@ -114,12 +136,12 @@ func TestStore_ReportFailure_RingWrapsPastEnd(t *testing.T) {
 	now := time.Unix(2000, 0)
 	s.now = func() time.Time { return now }
 
-	s.ReportFailure(context.Background(), "wraptest") // a -> b
+	rotateOnce(s, "wraptest") // a -> b
 	if got := s.Resolve("wraptest").Active; got != "b.example" {
 		t.Fatalf("active after 1st rotation = %q, want b.example", got)
 	}
 	now = now.Add(RotateCooldown + time.Second)
-	s.ReportFailure(context.Background(), "wraptest") // b -> a (wraps)
+	rotateOnce(s, "wraptest") // b -> a (wraps)
 	if got := s.Resolve("wraptest").Active; got != "a.example" {
 		t.Errorf("active after wrap = %q, want a.example", got)
 	}
@@ -136,7 +158,7 @@ func TestStore_ReportFailure_CustomDomainsPartOfRing(t *testing.T) {
 		t.Fatalf("Set: %v", err)
 	}
 
-	s.ReportFailure(context.Background(), "customringtest") // b -> custom (known + custom order)
+	rotateOnce(s, "customringtest") // b -> custom (known + custom order)
 	if got := s.Resolve("customringtest").Active; got != "custom.example" {
 		t.Errorf("active = %q, want custom.example", got)
 	}
@@ -168,9 +190,9 @@ func (r *syncRepo) Upsert(_ context.Context, name, active string, custom []strin
 // stale-snapshot race: a rotation in progress must not persist a
 // custom-domain list that predates a concurrent admin Store.Set. It parks
 // ReportFailure right after it has computed (and cached) the rotation but
-// before it persists, by blocking the existing s.now() test seam — this is
-// exactly the window where the pre-fix code captured a stale local copy of
-// the custom list instead of re-reading it. A concurrent Set (adding a
+// before it persists, via the beforePersist test seam — this is exactly the
+// window where the pre-fix code captured a stale local copy of the custom
+// list instead of re-reading it. A concurrent Set (adding a
 // custom domain) is then run to completion before ReportFailure is allowed
 // to persist, and the test asserts the LAST Upsert the fake repo received
 // carries the newly-added custom domain.
@@ -183,13 +205,21 @@ func TestStore_ReportFailure_ConcurrentSetKeepsFreshCustomDomain(t *testing.T) {
 	f := &syncRepo{calls: make(chan struct{}, 2)}
 	s := New(f, zerolog.Nop())
 
+	now := time.Unix(9000, 0)
+	s.now = func() time.Time { return now }
+	// Pre-arm the failure counter (within a fresh window) so a single
+	// ReportFailure trips the threshold and rotates immediately.
+	s.failWindow["concurrenttest"] = now
+	s.failCount["concurrenttest"] = RotateFailureThreshold - 1
+
 	reached := make(chan struct{})
 	proceed := make(chan struct{})
 	var once sync.Once
-	s.now = func() time.Time {
+	// Park via the beforePersist seam: it fires after the rotation is cached
+	// but before the persist phase — exactly the stale-snapshot window.
+	s.beforePersist = func() {
 		once.Do(func() { close(reached) })
 		<-proceed
-		return time.Unix(9000, 0)
 	}
 
 	rfDone := make(chan struct{})

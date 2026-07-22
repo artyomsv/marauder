@@ -232,3 +232,46 @@ func TestCanonicalTopicURL_RewritesMirrorHost(t *testing.T) {
 		t.Errorf("plain tracker URL rewritten: %q", got)
 	}
 }
+
+// canonTracker matches both canon.test and its mirror mirror.test and stores
+// whatever URL it is handed, so an integration test can prove BuildAndCreate
+// canonicalizes a mirror-host URL to the tracker's default domain before
+// persisting (issue #126 dedup identity).
+type canonTracker struct{}
+
+func (canonTracker) Name() string        { return "canon-test" }
+func (canonTracker) DisplayName() string { return "Canon Tracker" }
+func (canonTracker) CanParse(u string) bool {
+	return strings.HasPrefix(u, "https://canon.test/") || strings.HasPrefix(u, "https://mirror.test/")
+}
+func (canonTracker) Parse(_ context.Context, u string) (*domain.Topic, error) {
+	return &domain.Topic{DisplayName: "Canon", URL: u, Extra: map[string]any{}}, nil
+}
+func (canonTracker) Check(context.Context, *domain.Topic, *domain.TrackerCredential) (*domain.Check, error) {
+	return nil, nil
+}
+func (canonTracker) Download(context.Context, *domain.Topic, *domain.Check, *domain.TrackerCredential) (*domain.Payload, error) {
+	return nil, nil
+}
+func (canonTracker) Domains() []string { return []string{"canon.test", "mirror.test"} }
+
+func init() { registry.RegisterTracker(canonTracker{}) }
+
+// TestBuildAndCreate_MirrorURL_CanonicalizesStoredURL proves that adding a
+// topic via a mirror host stores it under the canonical (default) domain, so a
+// later add of the same topic via the canonical host dedups to one row.
+func TestBuildAndCreate_MirrorURL_CanonicalizesStoredURL(t *testing.T) {
+	store := &fakeStore{}
+	res, err := BuildAndCreate(context.Background(), store, CreateInput{
+		UserID: uuid.New(), URL: "https://mirror.test/topic/7",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !res.Created {
+		t.Fatalf("want Created")
+	}
+	if store.created.URL != "https://canon.test/topic/7" {
+		t.Errorf("stored URL = %q, want canonical host canon.test", store.created.URL)
+	}
+}

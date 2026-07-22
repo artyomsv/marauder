@@ -215,6 +215,12 @@ func CanonicalTopicURL(tr registry.Tracker, rawURL string) string {
 	if err != nil {
 		return rawURL
 	}
+	// A scheme-less input (e.g. "kinozal.me/details?id=1") parses with an empty
+	// Host and the text in Path; rewriting Host would produce a garbage URL, so
+	// leave such input untouched (topic URLs are scheme-validated upstream).
+	if u.Hostname() == "" {
+		return rawURL
+	}
 	canonical := wd.Domains()[0]
 	if strings.TrimPrefix(strings.ToLower(u.Hostname()), "www.") ==
 		strings.TrimPrefix(strings.ToLower(canonical), "www.") {

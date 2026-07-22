@@ -354,8 +354,30 @@ func torrentFileName(dlPath string) string {
 	return "rutracker.torrent"
 }
 
+// canonicalTopicPageURL rebuilds the viewtopic URL from the trusted host
+// (p.effectiveDomain()) + the numeric topic id parsed from rawURL — never the
+// raw stored host. This makes the check/download loop follow an admin-selected
+// active domain or an auto-rotated mirror (issue #126), and pins the request
+// to a trusted host (CodeQL go/request-forgery), mirroring ResolveMetadata and
+// the Download dl.php URL.
+func (p *plugin) canonicalTopicPageURL(rawURL string) (string, error) {
+	m := urlPattern.FindStringSubmatch(strings.TrimSpace(rawURL))
+	if m == nil {
+		return "", errors.New("not a rutracker viewtopic URL")
+	}
+	id, err := strconv.Atoi(m[2])
+	if err != nil {
+		return "", fmt.Errorf("topic id: %w", err)
+	}
+	return fmt.Sprintf("https://%s/forum/viewtopic.php?t=%d", p.effectiveDomain(), id), nil
+}
+
 func (p *plugin) fetchTopicPage(ctx context.Context, topic *domain.Topic, creds *domain.TrackerCredential) ([]byte, error) {
-	return p.fetchBytes(ctx, topic, creds, topic.URL)
+	canonical, err := p.canonicalTopicPageURL(topic.URL)
+	if err != nil {
+		return nil, err
+	}
+	return p.fetchBytes(ctx, topic, creds, canonical)
 }
 
 func (p *plugin) fetchBytes(ctx context.Context, _ *domain.Topic, creds *domain.TrackerCredential, target string) ([]byte, error) {
