@@ -147,6 +147,32 @@ type WithAuthorComment interface {
 	AuthorComment(ctx context.Context, rawURL string, creds *domain.TrackerCredential) (string, error)
 }
 
+// SearchResult is one release found by a tracker search (issue #129). URL is
+// the topic page in the tracker's canonical form — exactly what a user would
+// paste into the AddTopic form, so every result feeds the existing
+// match → parse → create pipeline unchanged. Size and Category are
+// display-only strings exactly as scraped (no byte parsing — a mis-parsed
+// size would render as a confident wrong number). Seeders is -1 when the
+// tracker doesn't expose a count.
+type SearchResult struct {
+	Title    string `json:"title"`
+	URL      string `json:"url"`
+	Size     string `json:"size,omitempty"`
+	Seeders  int    `json:"seeders"`
+	Category string `json:"category,omitempty"`
+}
+
+// WithSearch is an optional tracker capability: search the tracker by free-
+// text query and return candidate topics to monitor. creds may be nil; a
+// tracker whose search page is login-gated returns
+// ErrSearchRequiresCredentials so callers can distinguish "needs an
+// account" from "found nothing". Implementations cap results at the first
+// page (≤50) and never treat an empty result set as an error.
+type WithSearch interface {
+	Tracker
+	Search(ctx context.Context, query string, creds *domain.TrackerCredential) ([]SearchResult, error)
+}
+
 // --- Client & Notifier interfaces ---------------------------------------
 
 // Client is a torrent client plugin.
