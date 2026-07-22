@@ -1,14 +1,14 @@
 import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { CheckCircle2, Loader2, Plus, X } from "lucide-react";
+import { CheckCircle2, ChevronRight, Globe, Loader2, Plus, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { SELECT_CLASS } from "@/components/topics/SeasonEpisodePicker";
 import { api, type TrackerDomains } from "@/lib/api";
 import { QK } from "@/lib/queryKeys";
 import { useT } from "@/i18n";
+import { cn } from "@/lib/utils";
 
 // Lowercased-trim hostname validation: RFC-1123-ish labels, at least two of
 // them, no scheme/port/path. Mirrors the backend's validateHostname so a
@@ -24,12 +24,14 @@ interface InlineMsg {
   text: string;
 }
 
-// One tracker's domain row: a select of default + known + custom domains,
-// an inline "add mirror" input, per-custom-domain removal, and a Test
-// button that probes a candidate domain without saving it.
+// One tracker's collapsible row: collapsed it shows the live domain as a pill;
+// expanded it reveals the active-domain select, mirror management, and a Test
+// button. Keeping most trackers collapsed turns a wall of controls into a
+// scannable list (issue #126).
 export function TrackerDomainRow({ tracker }: Props) {
   const t = useT();
   const qc = useQueryClient();
+  const [open, setOpen] = useState(false);
   const [newDomain, setNewDomain] = useState("");
   const [addError, setAddError] = useState<string | null>(null);
   const [testMsg, setTestMsg] = useState<InlineMsg | null>(null);
@@ -51,7 +53,10 @@ export function TrackerDomainRow({ tracker }: Props) {
       setTestMsg(
         r.ok
           ? { kind: "ok", text: t("settings.domains.testOk") }
-          : { kind: "err", text: t("settings.domains.testFail") },
+          : // Surface the backend's reason (e.g. "empty page", "HTTP 403") so a
+            // stub mirror that answers but serves nothing is no longer reported
+            // as merely "unreachable".
+            { kind: "err", text: r.detail || t("settings.domains.testFail") },
       ),
     onError: () => setTestMsg({ kind: "err", text: t("settings.domains.testFail") }),
   });
@@ -67,11 +72,19 @@ export function TrackerDomainRow({ tracker }: Props) {
       setAddError(t("settings.domains.invalidHostname"));
       return;
     }
-    updateMut.mutate({
-      active_domain: tracker.active_domain,
-      custom_domains: [...tracker.custom_domains, normalized],
-    });
-    setNewDomain("");
+    if (tracker.custom_domains.includes(normalized) || tracker.known_domains.includes(normalized)) {
+      setAddError(t("settings.domains.duplicateHostname"));
+      return;
+    }
+    // Clear the input only once the save succeeds, so a failed save keeps the
+    // user's typed value.
+    updateMut.mutate(
+      {
+        active_domain: tracker.active_domain,
+        custom_domains: [...tracker.custom_domains, normalized],
+      },
+      { onSuccess: () => setNewDomain("") },
+    );
   };
 
   const handleRemove = (domain: string) => {
@@ -82,9 +95,8 @@ export function TrackerDomainRow({ tracker }: Props) {
     });
   };
 
-  // Tests the mirror the user is about to add (if they've typed one) so it
-  // can be verified before saving; otherwise falls back to the currently
-  // selected/saved domain.
+  // Tests the mirror the user is about to add (if they've typed one) so it can
+  // be verified before saving; otherwise falls back to the selected/saved domain.
   const handleTest = () => {
     setTestMsg(null);
     const candidate = newDomain.trim().toLowerCase();
@@ -99,101 +111,177 @@ export function TrackerDomainRow({ tracker }: Props) {
     testMut.mutate(tracker.active_domain || tracker.default_domain);
   };
 
-  // known_domains includes the default domain itself — drop it here so it
-  // isn't offered twice (once via the "(default)" option, once bare).
+  const currentDomain = tracker.active_domain || tracker.default_domain;
+  const overridden = tracker.active_domain !== "" && tracker.active_domain !== tracker.default_domain;
+  // known_domains includes the default domain itself — drop it here so it isn't
+  // offered twice (once via the "(default)" option, once bare).
   const alternatives = tracker.known_domains.filter((d) => d !== tracker.default_domain);
+  const singleDomain = tracker.known_domains.length === 1 && tracker.custom_domains.length === 0;
   const selectId = `tracker-domain-select-${tracker.name}`;
   const addInputId = `tracker-domain-add-${tracker.name}`;
 
   return (
     <div
       data-testid={`domain-row-${tracker.name}`}
-      className="space-y-2 border-b border-border/50 py-4 last:border-b-0 last:pb-0"
+      className="border-b border-border/50 last:border-b-0"
     >
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <Label htmlFor={selectId}>{tracker.display_name}</Label>
-        <Button variant="outline" size="sm" onClick={handleTest} disabled={testMut.isPending}>
-          {testMut.isPending ? (
-            <Loader2 className="mr-1.5 size-3.5 animate-spin" />
-          ) : (
-            <CheckCircle2 className="mr-1.5 size-3.5" />
-          )}
-          {t("settings.domains.test")}
-        </Button>
-      </div>
-
-      <select
-        id={selectId}
-        value={tracker.active_domain}
-        onChange={handleSelect}
-        className={SELECT_CLASS}
-        disabled={updateMut.isPending}
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+        className="flex w-full items-center gap-3 rounded-md px-2 py-3 text-left transition-colors hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
-        <option value="">
-          {tracker.default_domain} {t("settings.domains.defaultSuffix")}
-        </option>
-        {alternatives.map((d) => (
-          <option key={d} value={d}>
-            {d}
-          </option>
-        ))}
-        {tracker.custom_domains.map((d) => (
-          <option key={d} value={d}>
-            {d}
-          </option>
-        ))}
-      </select>
-
-      {testMsg && (
-        <p className={testMsg.kind === "ok" ? "text-xs text-success" : "text-xs text-destructive"}>
-          {testMsg.text}
-        </p>
-      )}
-
-      {saveMsg && (
-        <p className={saveMsg.kind === "ok" ? "text-xs text-success" : "text-xs text-destructive"}>
-          {saveMsg.text}
-        </p>
-      )}
-
-      {tracker.custom_domains.length > 0 && (
-        <ul className="flex flex-wrap gap-2">
-          {tracker.custom_domains.map((d) => (
-            <li
-              key={d}
-              className="flex items-center gap-1 rounded-full border border-border/60 bg-muted/30 px-2 py-0.5 text-xs"
-            >
-              {d}
-              <button
-                type="button"
-                onClick={() => handleRemove(d)}
-                aria-label={t("settings.domains.remove", { domain: d })}
-                className="text-muted-foreground hover:text-destructive"
-              >
-                <X className="size-3" />
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-
-      <div className="space-y-1.5">
-        <Label htmlFor={addInputId}>{t("settings.domains.addLabel")}</Label>
-        <div className="flex items-center gap-2">
-          <Input
-            id={addInputId}
-            value={newDomain}
-            onChange={(e) => setNewDomain(e.target.value)}
-            placeholder={t("settings.domains.addPlaceholder")}
-            className="h-9"
+        <span
+          className={cn(
+            "size-2 shrink-0 rounded-full ring-4",
+            overridden
+              ? "bg-primary ring-primary/20"
+              : "bg-muted-foreground/50 ring-muted-foreground/10",
+          )}
+        />
+        <span className="min-w-0">
+          <span className="block text-sm font-medium">{tracker.display_name}</span>
+          <span className="block text-xs text-muted-foreground">
+            {overridden ? t("settings.domains.overridden") : t("settings.domains.usingDefault")}
+          </span>
+        </span>
+        <span className="ml-auto flex items-center gap-2">
+          <span
+            className={cn(
+              "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 font-mono text-xs",
+              overridden
+                ? "border-primary/40 bg-primary/10 text-primary"
+                : "border-border bg-muted/40 text-foreground",
+            )}
+          >
+            <Globe className="size-3" />
+            {currentDomain}
+          </span>
+          <ChevronRight
+            className={cn("size-4 text-muted-foreground transition-transform", open && "rotate-90")}
           />
-          <Button type="button" variant="outline" size="sm" onClick={handleAdd}>
-            <Plus className="mr-1 size-3.5" />
-            {t("settings.domains.addButton")}
-          </Button>
+        </span>
+      </button>
+
+      {open && (
+        <div className="grid gap-5 px-2 pb-5 pl-7 sm:grid-cols-[minmax(0,15rem)_1fr]">
+          <div>
+            <label
+              htmlFor={selectId}
+              className="mb-1.5 block font-mono text-[10px] uppercase tracking-wider text-muted-foreground"
+            >
+              {t("settings.domains.activeLabel")}
+            </label>
+            <select
+              id={selectId}
+              value={tracker.active_domain}
+              onChange={handleSelect}
+              className={cn(SELECT_CLASS, "font-mono disabled:cursor-not-allowed disabled:opacity-50")}
+              disabled={updateMut.isPending}
+            >
+              <option value="">
+                {tracker.default_domain} {t("settings.domains.defaultSuffix")}
+              </option>
+              {alternatives.map((d) => (
+                <option key={d} value={d}>
+                  {d}
+                </option>
+              ))}
+              {tracker.custom_domains.map((d) => (
+                <option key={d} value={d}>
+                  {d}
+                </option>
+              ))}
+            </select>
+            {singleDomain && (
+              <p className="mt-2 text-xs text-muted-foreground">
+                {t("settings.domains.singleDomainHint")}
+              </p>
+            )}
+            {saveMsg && <p className="mt-2 text-xs text-destructive">{saveMsg.text}</p>}
+          </div>
+
+          <div>
+            <p className="mb-1.5 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+              {t("settings.domains.mirrorsLabel")}
+            </p>
+            <div className="mb-3 flex flex-wrap gap-1.5">
+              {tracker.known_domains.map((d) => (
+                <span
+                  key={d}
+                  className={cn(
+                    "rounded-md border px-2 py-0.5 font-mono text-[11px]",
+                    d === currentDomain
+                      ? "border-primary/50 bg-primary/10 text-primary"
+                      : "border-border bg-muted/30 text-foreground",
+                  )}
+                >
+                  {d}
+                </span>
+              ))}
+              {tracker.custom_domains.map((d) => (
+                <span
+                  key={d}
+                  className="inline-flex items-center gap-1 rounded-md border border-warning/40 bg-warning/10 px-2 py-0.5 font-mono text-[11px] text-warning"
+                >
+                  {d}
+                  <button
+                    type="button"
+                    onClick={() => handleRemove(d)}
+                    disabled={updateMut.isPending}
+                    aria-label={t("settings.domains.remove", { domain: d })}
+                    className="opacity-70 hover:text-destructive hover:opacity-100 disabled:opacity-40"
+                  >
+                    <X className="size-3" />
+                  </button>
+                </span>
+              ))}
+            </div>
+            <div className="flex items-center gap-2">
+              <Input
+                id={addInputId}
+                value={newDomain}
+                onChange={(e) => setNewDomain(e.target.value)}
+                placeholder={t("settings.domains.addPlaceholder")}
+                aria-label={t("settings.domains.addLabel")}
+                className="h-9 font-mono"
+              />
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={handleAdd}
+                disabled={updateMut.isPending}
+              >
+                <Plus className="mr-1 size-3.5" />
+                {t("settings.domains.addButton")}
+              </Button>
+            </div>
+            {addError && <p className="mt-1.5 text-xs text-destructive">{addError}</p>}
+          </div>
+
+          <div className="flex items-center justify-end gap-3 sm:col-span-2">
+            {testMsg && (
+              <span
+                className={cn(
+                  "text-xs",
+                  testMsg.kind === "ok" ? "text-success" : "text-destructive",
+                )}
+              >
+                {testMsg.text}
+              </span>
+            )}
+            <Button variant="outline" size="sm" onClick={handleTest} disabled={testMut.isPending}>
+              {testMut.isPending ? (
+                <Loader2 className="mr-1.5 size-3.5 animate-spin" />
+              ) : (
+                <CheckCircle2 className="mr-1.5 size-3.5" />
+              )}
+              {t("settings.domains.test")}
+            </Button>
+          </div>
         </div>
-      </div>
-      {addError && <p className="text-xs text-destructive">{addError}</p>}
+      )}
     </div>
   );
 }

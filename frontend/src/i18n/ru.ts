@@ -190,11 +190,18 @@ const ru: Record<string, string> = {
   "settings.domains.addPlaceholder": "mirror.example.com",
   "settings.domains.addButton": "Добавить",
   "settings.domains.invalidHostname": "Некорректное имя хоста",
+  "settings.domains.duplicateHostname": "Этот домен уже в списке",
   "settings.domains.test": "Проверить",
   "settings.domains.testOk": "Доступен",
   "settings.domains.testFail": "Недоступен",
   "settings.domains.saveFailed": "Не удалось сохранить",
   "settings.domains.remove": "Удалить {domain}",
+  "settings.domains.summary": "{overridden} из {total} переопределены",
+  "settings.domains.activeLabel": "Активный домен",
+  "settings.domains.mirrorsLabel": "Зеркала",
+  "settings.domains.usingDefault": "Домен по умолчанию",
+  "settings.domains.overridden": "Переопределён",
+  "settings.domains.singleDomainHint": "Известен только один домен — добавьте зеркало для переключения.",
 
   // Topic live check status (fed by SSE check.* events)
   "topics.check.checking": "Проверка…",

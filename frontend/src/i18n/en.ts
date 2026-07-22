@@ -188,11 +188,18 @@ const en: Record<string, string> = {
   "settings.domains.addPlaceholder": "mirror.example.com",
   "settings.domains.addButton": "Add",
   "settings.domains.invalidHostname": "Invalid hostname",
+  "settings.domains.duplicateHostname": "That domain is already in the list",
   "settings.domains.test": "Test",
   "settings.domains.testOk": "Reachable",
   "settings.domains.testFail": "Unreachable",
   "settings.domains.saveFailed": "Save failed",
   "settings.domains.remove": "Remove {domain}",
+  "settings.domains.summary": "{overridden} of {total} overridden",
+  "settings.domains.activeLabel": "Active domain",
+  "settings.domains.mirrorsLabel": "Mirrors",
+  "settings.domains.usingDefault": "Default domain",
+  "settings.domains.overridden": "Overridden",
+  "settings.domains.singleDomainHint": "Only one known domain — add a mirror to switch.",
 
   // Topic live check status (fed by SSE check.* events)
   "topics.check.checking": "Checking…",
