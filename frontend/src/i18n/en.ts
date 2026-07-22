@@ -184,12 +184,14 @@ const en: Record<string, string> = {
     "Override which domain each tracker plugin uses, and register extra mirrors it can fall back to.",
   "settings.domains.instanceWideNote": "Applies instance-wide and is admin only.",
   "settings.domains.defaultSuffix": "(default)",
+  "settings.domains.addLabel": "Add mirror",
   "settings.domains.addPlaceholder": "mirror.example.com",
   "settings.domains.addButton": "Add",
   "settings.domains.invalidHostname": "Invalid hostname",
   "settings.domains.test": "Test",
   "settings.domains.testOk": "Reachable",
   "settings.domains.testFail": "Unreachable",
+  "settings.domains.saveFailed": "Save failed",
   "settings.domains.remove": "Remove {domain}",
 
   // Topic live check status (fed by SSE check.* events)

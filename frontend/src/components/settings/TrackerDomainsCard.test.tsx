@@ -143,6 +143,51 @@ describe("TrackerDomainsCard", () => {
       }),
     );
   });
+
+  it("shows a save-failed message when the update mutation rejects", async () => {
+    mockApi.listTrackerDomains.mockResolvedValue([kinozal]);
+    mockApi.updateTrackerDomains.mockRejectedValue(new Error("network error"));
+    renderCard();
+
+    const row = await screen.findByTestId("domain-row-kinozal");
+    const select = within(row).getByRole("combobox");
+    await userEvent.selectOptions(select, "kinozal.me");
+
+    expect(await within(row).findByText(/save failed/i)).toBeInTheDocument();
+  });
+
+  it("tests the typed candidate mirror instead of the saved domain when the add input has a value", async () => {
+    mockApi.listTrackerDomains.mockResolvedValue([kinozal]);
+    mockApi.testTrackerDomain.mockResolvedValue({ ok: true, detail: "" });
+    renderCard();
+
+    const row = await screen.findByTestId("domain-row-kinozal");
+    const input = within(row).getByRole("textbox");
+    const testButton = within(row).getByRole("button", { name: /test/i });
+
+    await userEvent.type(input, "candidate.example");
+    await userEvent.click(testButton);
+
+    await waitFor(() =>
+      expect(mockApi.testTrackerDomain).toHaveBeenCalledWith("kinozal", "candidate.example"),
+    );
+    expect(await within(row).findByText(/reachable/i)).toBeInTheDocument();
+  });
+
+  it("rejects an invalid typed candidate on Test client-side, with no request", async () => {
+    mockApi.listTrackerDomains.mockResolvedValue([kinozal]);
+    renderCard();
+
+    const row = await screen.findByTestId("domain-row-kinozal");
+    const input = within(row).getByRole("textbox");
+    const testButton = within(row).getByRole("button", { name: /test/i });
+
+    await userEvent.type(input, "https://x.y");
+    await userEvent.click(testButton);
+
+    expect(mockApi.testTrackerDomain).not.toHaveBeenCalled();
+    expect(within(row).getByText(/invalid/i)).toBeInTheDocument();
+  });
 });
 
 describe("SettingsPage admin gating", () => {

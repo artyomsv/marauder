@@ -19,7 +19,10 @@ interface Props {
   tracker: TrackerDomains;
 }
 
-type InlineMsg = { kind: "ok" | "err"; text: string };
+interface InlineMsg {
+  kind: "ok" | "err";
+  text: string;
+}
 
 // One tracker's domain row: a select of default + known + custom domains,
 // an inline "add mirror" input, per-custom-domain removal, and a Test
@@ -30,11 +33,16 @@ export function TrackerDomainRow({ tracker }: Props) {
   const [newDomain, setNewDomain] = useState("");
   const [addError, setAddError] = useState<string | null>(null);
   const [testMsg, setTestMsg] = useState<InlineMsg | null>(null);
+  const [saveMsg, setSaveMsg] = useState<InlineMsg | null>(null);
 
   const updateMut = useMutation({
     mutationFn: (body: { active_domain: string; custom_domains: string[] }) =>
       api.updateTrackerDomains(tracker.name, body),
-    onSuccess: () => qc.invalidateQueries({ queryKey: QK.trackerDomains }),
+    onSuccess: () => {
+      setSaveMsg(null);
+      qc.invalidateQueries({ queryKey: QK.trackerDomains });
+    },
+    onError: () => setSaveMsg({ kind: "err", text: t("settings.domains.saveFailed") }),
   });
 
   const testMut = useMutation({
@@ -74,8 +82,20 @@ export function TrackerDomainRow({ tracker }: Props) {
     });
   };
 
+  // Tests the mirror the user is about to add (if they've typed one) so it
+  // can be verified before saving; otherwise falls back to the currently
+  // selected/saved domain.
   const handleTest = () => {
     setTestMsg(null);
+    const candidate = newDomain.trim().toLowerCase();
+    if (candidate) {
+      if (!HOSTNAME_RE.test(candidate)) {
+        setTestMsg({ kind: "err", text: t("settings.domains.invalidHostname") });
+        return;
+      }
+      testMut.mutate(candidate);
+      return;
+    }
     testMut.mutate(tracker.active_domain || tracker.default_domain);
   };
 
@@ -83,6 +103,7 @@ export function TrackerDomainRow({ tracker }: Props) {
   // isn't offered twice (once via the "(default)" option, once bare).
   const alternatives = tracker.known_domains.filter((d) => d !== tracker.default_domain);
   const selectId = `tracker-domain-select-${tracker.name}`;
+  const addInputId = `tracker-domain-add-${tracker.name}`;
 
   return (
     <div
@@ -129,6 +150,12 @@ export function TrackerDomainRow({ tracker }: Props) {
         </p>
       )}
 
+      {saveMsg && (
+        <p className={saveMsg.kind === "ok" ? "text-xs text-success" : "text-xs text-destructive"}>
+          {saveMsg.text}
+        </p>
+      )}
+
       {tracker.custom_domains.length > 0 && (
         <ul className="flex flex-wrap gap-2">
           {tracker.custom_domains.map((d) => (
@@ -150,17 +177,21 @@ export function TrackerDomainRow({ tracker }: Props) {
         </ul>
       )}
 
-      <div className="flex items-center gap-2">
-        <Input
-          value={newDomain}
-          onChange={(e) => setNewDomain(e.target.value)}
-          placeholder={t("settings.domains.addPlaceholder")}
-          className="h-9"
-        />
-        <Button type="button" variant="outline" size="sm" onClick={handleAdd}>
-          <Plus className="mr-1 size-3.5" />
-          {t("settings.domains.addButton")}
-        </Button>
+      <div className="space-y-1.5">
+        <Label htmlFor={addInputId}>{t("settings.domains.addLabel")}</Label>
+        <div className="flex items-center gap-2">
+          <Input
+            id={addInputId}
+            value={newDomain}
+            onChange={(e) => setNewDomain(e.target.value)}
+            placeholder={t("settings.domains.addPlaceholder")}
+            className="h-9"
+          />
+          <Button type="button" variant="outline" size="sm" onClick={handleAdd}>
+            <Plus className="mr-1 size-3.5" />
+            {t("settings.domains.addButton")}
+          </Button>
+        </div>
       </div>
       {addError && <p className="text-xs text-destructive">{addError}</p>}
     </div>

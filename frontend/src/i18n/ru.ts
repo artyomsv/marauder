@@ -186,12 +186,14 @@ const ru: Record<string, string> = {
     "Переопределите домен, который использует каждый трекер, и добавьте дополнительные зеркала на случай, если основной домен заблокирован.",
   "settings.domains.instanceWideNote": "Действует для всего экземпляра. Только для администратора.",
   "settings.domains.defaultSuffix": "(по умолчанию)",
+  "settings.domains.addLabel": "Добавить зеркало",
   "settings.domains.addPlaceholder": "mirror.example.com",
   "settings.domains.addButton": "Добавить",
   "settings.domains.invalidHostname": "Некорректное имя хоста",
   "settings.domains.test": "Проверить",
   "settings.domains.testOk": "Доступен",
   "settings.domains.testFail": "Недоступен",
+  "settings.domains.saveFailed": "Не удалось сохранить",
   "settings.domains.remove": "Удалить {domain}",
 
   // Topic live check status (fed by SSE check.* events)
