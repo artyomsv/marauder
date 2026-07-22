@@ -161,13 +161,13 @@ func run() error {
 	// Notify the initial admin when the domain store auto-rotates a tracker
 	// to a mirror after repeated failures (issue #126 Phase 2).
 	domainStore.SetOnRotate(func(tracker, from, to string) {
-		admin, aerr := users.GetInitialAdmin(context.Background())
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		admin, aerr := users.GetInitialAdmin(ctx)
 		if aerr != nil || admin == nil {
 			logger.Warn().Err(aerr).Msg("domain rotation: no admin to notify")
 			return
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
 		disp.Send(ctx, admin.ID, string(events.CheckFailed), domain.Message{
 			Title: fmt.Sprintf("Tracker %s switched to mirror %s", tracker, to),
 			Body:  fmt.Sprintf("Checks against %s were failing; Marauder now uses %s. Revert or adjust under Settings → Tracker domains.", from, to),

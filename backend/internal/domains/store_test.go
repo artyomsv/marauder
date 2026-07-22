@@ -2,6 +2,7 @@ package domains
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -138,6 +139,92 @@ func TestStore_ReportFailure_CustomDomainsPartOfRing(t *testing.T) {
 	s.ReportFailure(context.Background(), "customringtest") // b -> custom (known + custom order)
 	if got := s.Resolve("customringtest").Active; got != "custom.example" {
 		t.Errorf("active = %q, want custom.example", got)
+	}
+}
+
+// syncRepo is a SettingsRepo that signals on calls after every Upsert
+// append, giving the test a synchronization point instead of a sleep.
+type syncRepo struct {
+	mu      sync.Mutex
+	upserts []repo.TrackerSetting
+	calls   chan struct{}
+}
+
+func (r *syncRepo) List(context.Context) ([]repo.TrackerSetting, error) { return nil, nil }
+
+func (r *syncRepo) Upsert(_ context.Context, name, active string, custom []string) error {
+	r.mu.Lock()
+	r.upserts = append(r.upserts, repo.TrackerSetting{
+		TrackerName:   name,
+		ActiveDomain:  active,
+		CustomDomains: append([]string{}, custom...),
+	})
+	r.mu.Unlock()
+	r.calls <- struct{}{}
+	return nil
+}
+
+// TestStore_ReportFailure_ConcurrentSetKeepsFreshCustomDomain reproduces the
+// stale-snapshot race: a rotation in progress must not persist a
+// custom-domain list that predates a concurrent admin Store.Set. It parks
+// ReportFailure right after it has computed (and cached) the rotation but
+// before it persists, by blocking the existing s.now() test seam — this is
+// exactly the window where the pre-fix code captured a stale local copy of
+// the custom list instead of re-reading it. A concurrent Set (adding a
+// custom domain) is then run to completion before ReportFailure is allowed
+// to persist, and the test asserts the LAST Upsert the fake repo received
+// carries the newly-added custom domain.
+//
+// This fails on the pre-fix implementation (verified via `git stash`): the
+// rotation's Upsert lands last but with the custom list captured before Set
+// ran, silently discarding the admin's added mirror on the next restart.
+func TestStore_ReportFailure_ConcurrentSetKeepsFreshCustomDomain(t *testing.T) {
+	registry.RegisterTracker(&stubTracker{name: "concurrenttest", domains: []string{"a.example", "b.example"}})
+	f := &syncRepo{calls: make(chan struct{}, 2)}
+	s := New(f, zerolog.Nop())
+
+	reached := make(chan struct{})
+	proceed := make(chan struct{})
+	var once sync.Once
+	s.now = func() time.Time {
+		once.Do(func() { close(reached) })
+		<-proceed
+		return time.Unix(9000, 0)
+	}
+
+	rfDone := make(chan struct{})
+	go func() {
+		s.ReportFailure(context.Background(), "concurrenttest") // a -> b
+		close(rfDone)
+	}()
+	<-reached // rotation decided & cached; ReportFailure parked before persisting
+
+	setDone := make(chan error, 1)
+	go func() {
+		setDone <- s.Set(context.Background(), "concurrenttest", "b.example", []string{"custom.example"})
+	}()
+	<-f.calls // Set's Upsert has landed — nothing else can call Upsert yet
+
+	close(proceed) // release ReportFailure to persist
+	<-rfDone
+	if err := <-setDone; err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.upserts) != 2 {
+		t.Fatalf("upserts = %d, want 2: %+v", len(f.upserts), f.upserts)
+	}
+	last := f.upserts[len(f.upserts)-1]
+	found := false
+	for _, d := range last.CustomDomains {
+		if d == "custom.example" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("last persisted row lost the concurrently-added custom domain: %+v", last)
 	}
 }
 

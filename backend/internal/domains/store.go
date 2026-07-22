@@ -32,6 +32,7 @@ type SettingsRepo interface {
 // Store caches tracker domain configuration in memory.
 type Store struct {
 	mu         sync.RWMutex
+	persistMu  sync.Mutex // serializes Upsert calls from Set and ReportFailure
 	cfg        map[string]registry.DomainConfig
 	lastRotate map[string]time.Time
 	settings   SettingsRepo
@@ -40,6 +41,8 @@ type Store struct {
 	now        func() time.Time
 }
 
+// New constructs a Store backed by settings for persistence. Call Load once
+// at boot to populate the in-memory cache before serving Resolve/Get.
 func New(settings SettingsRepo, log zerolog.Logger) *Store {
 	return &Store{
 		cfg:        map[string]registry.DomainConfig{},
@@ -86,14 +89,18 @@ func (s *Store) Get(trackerName string) (active string, custom []string) {
 	return c.Active, append([]string{}, c.Custom...)
 }
 
-// Set persists and caches one tracker's configuration.
+// Set persists and caches one tracker's configuration. Upsert calls are
+// serialized against ReportFailure's rotation persists via persistMu so the
+// two writers can never interleave and clobber each other's DB row.
 func (s *Store) Set(ctx context.Context, trackerName, active string, custom []string) error {
+	s.persistMu.Lock()
+	defer s.persistMu.Unlock()
 	if err := s.settings.Upsert(ctx, trackerName, active, custom); err != nil {
 		return err
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.cfg[trackerName] = registry.DomainConfig{Active: active, Custom: custom}
+	s.mu.Unlock()
 	return nil
 }
 
@@ -136,15 +143,25 @@ func (s *Store) ReportFailure(ctx context.Context, trackerName string) {
 	s.cfg[trackerName] = cur
 	s.lastRotate[trackerName] = s.now()
 	hook := s.onRotate
-	custom := cur.Custom
 	s.mu.Unlock()
 
 	metrics.TrackerDomainRotations.WithLabelValues(trackerName).Inc()
 	s.log.Warn().Str("tracker", trackerName).Str("from", from).Str("to", to).
 		Msg("tracker domain rotated after network failures")
+
+	// Persist under persistMu, serialized against Set, and re-read the
+	// custom-domain list right before writing so a concurrent admin edit
+	// (Store.Set adding/removing a custom domain) can never be clobbered by
+	// a stale snapshot captured before the rotation decision (issue #126).
+	s.persistMu.Lock()
+	s.mu.RLock()
+	custom := append([]string{}, s.cfg[trackerName].Custom...)
+	s.mu.RUnlock()
 	if err := s.settings.Upsert(ctx, trackerName, to, custom); err != nil {
 		s.log.Warn().Err(err).Str("tracker", trackerName).Msg("persist rotated domain failed")
 	}
+	s.persistMu.Unlock()
+
 	if hook != nil {
 		hook(trackerName, from, to)
 	}
