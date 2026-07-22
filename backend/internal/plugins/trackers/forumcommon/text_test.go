@@ -22,3 +22,21 @@ func TestDecodeWindows1251_AlreadyUTF8_Unchanged(t *testing.T) {
 		t.Errorf("DecodeWindows1251 = %q, want %q", got, in)
 	}
 }
+
+func TestEncodeWindows1251Query(t *testing.T) {
+	tests := []struct{ name, in, want string }{
+		{"ascii passthrough", "dune", "dune"},
+		{"space escaped", "dune part", "dune%20part"},
+		// Д=0xC4 ю=0xFE н=0xED а=0xE0 in cp1251.
+		{"cyrillic cp1251 bytes", "Дюна", "%C4%FE%ED%E0"},
+		{"mixed", "Дюна 2", "%C4%FE%ED%E0%202"},
+		{"unreserved kept", "a-b_c.d~e", "a-b_c.d~e"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := EncodeWindows1251Query(tt.in); got != tt.want {
+				t.Errorf("EncodeWindows1251Query(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}
