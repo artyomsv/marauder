@@ -21,7 +21,7 @@
 #   - The GHCR packages must be public. If `docker compose pull` fails with
 #     "denied" / 403, the maintainer has not flipped package visibility yet.
 #
-# Pin the version with MARAUDER_VERSION in .env (defaults to 1.11.2 below).
+# Pin the version with MARAUDER_VERSION in .env (defaults to 1.12.0 below).
 # `latest` also exists but floats with every release — pin for reproducible
 # deployments.
 
@@ -56,7 +56,7 @@ services:
         max-file: "3"
 
   backend:
-    image: ghcr.io/artyomsv/marauder-backend:${MARAUDER_VERSION:-1.11.2}
+    image: ghcr.io/artyomsv/marauder-backend:${MARAUDER_VERSION:-1.12.0}
     restart: unless-stopped
     depends_on:
       db:
@@ -99,7 +99,7 @@ services:
         max-file: "3"
 
   frontend:
-    image: ghcr.io/artyomsv/marauder-frontend:${MARAUDER_VERSION:-1.11.2}
+    image: ghcr.io/artyomsv/marauder-frontend:${MARAUDER_VERSION:-1.12.0}
     restart: unless-stopped
     depends_on:
       - backend
@@ -118,7 +118,7 @@ services:
 
   cfsolver:
     profiles: ["cfsolver"]
-    image: ghcr.io/artyomsv/marauder-cfsolver:${MARAUDER_VERSION:-1.11.2}
+    image: ghcr.io/artyomsv/marauder-cfsolver:${MARAUDER_VERSION:-1.12.0}
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:9244/health"]
