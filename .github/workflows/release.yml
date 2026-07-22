@@ -246,15 +246,41 @@ jobs:
             } >> release-notes.md
           fi
 
+      # Create/publish the release with notes ONLY — no asset uploads in this
+      # gating step. GitHub's release-asset API intermittently 404s on
+      # upload/metadata-update (eventual consistency); when that failed the
+      # combined step, the whole `release` job failed and the version-sync +
+      # issue-notify jobs (needs: [release]) were silently SKIPPED — which froze
+      # README and the marketing site at the previous version release after
+      # release. Keeping asset attachment out of the gating step makes the
+      # release reliable and the downstream sync run every time.
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ steps.changelog.outputs.tag }}
           name: Marauder ${{ steps.changelog.outputs.tag }}
           body_path: release-notes.md
-          files: sboms/**/*.cdx.json
           draft: false
           prerelease: ${{ contains(steps.changelog.outputs.tag, '-rc') || contains(steps.changelog.outputs.tag, '-alpha') || contains(steps.changelog.outputs.tag, '-beta') }}
+
+      # Attach the SBOMs best-effort. `gh release upload --clobber` is idempotent
+      # (safe to re-run) and avoids the action's delete-then-reupload path that
+      # triggers the asset-API 404s. continue-on-error: a supply-chain-artifact
+      # hiccup must never fail the release or block the version sync below.
+      - name: Attach SBOMs (best-effort)
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.changelog.outputs.tag }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          mapfile -t sboms < <(find sboms -type f -name '*.cdx.json')
+          if [ "${#sboms[@]}" -eq 0 ]; then
+            echo "::warning::No SBOMs found to attach."
+            exit 0
+          fi
+          gh release upload "$TAG" "${sboms[@]}" --clobber --repo "$REPO"
 
   # --------------------------------------------------- notify linked issues
   # Comment on every issue the released PR was linked to (closing keywords in
