@@ -136,3 +136,15 @@ after a tracker's transient rate-limiting or maintenance window.
   `classifyError`'s bucket into `errCodeUnreachable` vs. a new
   `errCodeRateLimited`/`errCodeServerError` that `recordResult` treats
   differently) once real-world rotation telemetry shows this matters.
+
+## Addendum (final re-review, 2026-07-22)
+
+- (f) `domains.Store.ReportFailure`'s persist phase re-reads `Custom`
+  fresh under `s.mu`, but the rotation target `Active` (`to`) is a local
+  captured before the persist phase. A concurrent admin `Set` that lands
+  a different `active` inside that window leaves memory and DB briefly
+  divergent on `Active` until the next write to that tracker or a
+  restart. Pre-existing shape (narrower cousin of the fixed custom-list
+  race), low probability, self-healing. Fix alongside (e) if revisited:
+  re-read the whole `DomainConfig` under the same RLock the persist
+  phase already takes.
