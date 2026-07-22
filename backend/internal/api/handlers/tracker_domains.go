@@ -212,7 +212,7 @@ const probeBodyReadLimit = 64 << 10
 // validateRedirectURL, copied rather than imported so this handler has no
 // dependency on a tracker plugin package.
 func isRoutableIP(ip net.IP) bool {
-	return !(ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsUnspecified())
+	return !ip.IsLoopback() && !ip.IsPrivate() && !ip.IsLinkLocalUnicast() && !ip.IsUnspecified()
 }
 
 // firstRoutableIP returns the first routable candidate in ips (preserving

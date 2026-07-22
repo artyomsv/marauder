@@ -190,15 +190,17 @@ func (s *Store) ReportFailure(ctx context.Context, trackerName string) {
 		s.beforePersist()
 	}
 
-	// Persist under persistMu, serialized against Set, and re-read the
-	// custom-domain list right before writing so a concurrent admin edit
-	// (Store.Set adding/removing a custom domain) can never be clobbered by
-	// a stale snapshot captured before the rotation decision (issue #126).
+	// Persist under persistMu, serialized against Set, and re-read the FULL
+	// current config (active + custom) right before writing — never the local
+	// rotation target `to`. A concurrent admin Store.Set that landed between
+	// caching the rotation and this write has already updated the cache, so
+	// persisting the cached values keeps the DB mirroring the freshest state
+	// instead of clobbering the admin's choice with a stale target (issue #126).
 	s.persistMu.Lock()
 	s.mu.RLock()
-	custom := append([]string{}, s.cfg[trackerName].Custom...)
+	fresh := s.cfg[trackerName]
 	s.mu.RUnlock()
-	if err := s.settings.Upsert(ctx, trackerName, to, custom); err != nil {
+	if err := s.settings.Upsert(ctx, trackerName, fresh.Active, append([]string{}, fresh.Custom...)); err != nil {
 		s.log.Warn().Err(err).Str("tracker", trackerName).Msg("persist rotated domain failed")
 	}
 	s.persistMu.Unlock()

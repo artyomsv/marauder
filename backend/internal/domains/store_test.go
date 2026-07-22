@@ -186,13 +186,14 @@ func (r *syncRepo) Upsert(_ context.Context, name, active string, custom []strin
 	return nil
 }
 
-// TestStore_ReportFailure_ConcurrentSetKeepsFreshCustomDomain reproduces the
-// stale-snapshot race: a rotation in progress must not persist a
-// custom-domain list that predates a concurrent admin Store.Set. It parks
-// ReportFailure right after it has computed (and cached) the rotation but
+// TestStore_ReportFailure_ConcurrentSetKeepsFreshConfig reproduces the
+// stale-snapshot race: a rotation in progress must not persist an active
+// domain or custom-domain list that predates a concurrent admin Store.Set. It
+// parks ReportFailure right after it has computed (and cached) the rotation but
 // before it persists, via the beforePersist test seam — this is exactly the
-// window where the pre-fix code captured a stale local copy of the custom
-// list instead of re-reading it. A concurrent Set (adding a
+// window where the pre-fix code persisted its stale local rotation target
+// instead of re-reading the cache. A concurrent Set (changing the active
+// domain and adding a
 // custom domain) is then run to completion before ReportFailure is allowed
 // to persist, and the test asserts the LAST Upsert the fake repo received
 // carries the newly-added custom domain.
@@ -200,7 +201,7 @@ func (r *syncRepo) Upsert(_ context.Context, name, active string, custom []strin
 // This fails on the pre-fix implementation (verified via `git stash`): the
 // rotation's Upsert lands last but with the custom list captured before Set
 // ran, silently discarding the admin's added mirror on the next restart.
-func TestStore_ReportFailure_ConcurrentSetKeepsFreshCustomDomain(t *testing.T) {
+func TestStore_ReportFailure_ConcurrentSetKeepsFreshConfig(t *testing.T) {
 	registry.RegisterTracker(&stubTracker{name: "concurrenttest", domains: []string{"a.example", "b.example"}})
 	f := &syncRepo{calls: make(chan struct{}, 2)}
 	s := New(f, zerolog.Nop())
@@ -231,7 +232,9 @@ func TestStore_ReportFailure_ConcurrentSetKeepsFreshCustomDomain(t *testing.T) {
 
 	setDone := make(chan error, 1)
 	go func() {
-		setDone <- s.Set(context.Background(), "concurrenttest", "b.example", []string{"custom.example"})
+		// Admin picks a distinct active domain (not the rotation target
+		// "b.example") plus a custom mirror — both must survive.
+		setDone <- s.Set(context.Background(), "concurrenttest", "custom.example", []string{"custom.example"})
 	}()
 	<-f.calls // Set's Upsert has landed — nothing else can call Upsert yet
 
@@ -247,6 +250,11 @@ func TestStore_ReportFailure_ConcurrentSetKeepsFreshCustomDomain(t *testing.T) {
 		t.Fatalf("upserts = %d, want 2: %+v", len(f.upserts), f.upserts)
 	}
 	last := f.upserts[len(f.upserts)-1]
+	// The rotation's persist must reflect the admin's fresh active domain, not
+	// its own stale rotation target ("b.example").
+	if last.ActiveDomain != "custom.example" {
+		t.Errorf("last persisted row reverted the admin's active domain: got %q, want custom.example", last.ActiveDomain)
+	}
 	found := false
 	for _, d := range last.CustomDomains {
 		if d == "custom.example" {
