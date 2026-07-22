@@ -16,11 +16,13 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/artyomsv/marauder/backend/internal/domain"
 	"github.com/artyomsv/marauder/backend/internal/plugins/registry"
+	"github.com/artyomsv/marauder/backend/internal/plugins/trackers/forumcommon"
 )
 
 const (
@@ -144,6 +146,59 @@ func (p *plugin) Download(ctx context.Context, topic *domain.Topic, _ *domain.Ch
 		return &domain.Payload{MagnetURI: string(m)}, nil
 	}
 	return nil, errors.New("rutor: no magnet link")
+}
+
+// --- WithSearch ---------------------------------------------------------
+
+var _ registry.WithSearch = (*plugin)(nil)
+
+var (
+	searchRowRe   = regexp.MustCompile(`(?s)<tr[^>]*>(.*?)</tr>`)
+	searchLinkRe  = regexp.MustCompile(`(?s)<a href="/torrent/(\d+)[^"]*">(.*?)</a>`)
+	searchSizeRe  = regexp.MustCompile(`<td align="right">([^<]+)</td>`)
+	searchSeedsRe = regexp.MustCompile(`<span class="green">[^0-9]*(\d+)`)
+)
+
+// Search implements registry.WithSearch (issue #129). Rutor's search is
+// public; the query is a path segment (page 0, category 0, filter 000,
+// sort 0), so it needs url.PathEscape — QueryEscape's `+` for space is
+// wrong inside a path.
+func (p *plugin) Search(ctx context.Context, query string, _ *domain.TrackerCredential) ([]registry.SearchResult, error) {
+	q := strings.TrimSpace(query)
+	if q == "" {
+		return nil, nil
+	}
+	target := fmt.Sprintf("https://%s/search/0/0/000/0/%s", p.effectiveDomain(), url.PathEscape(q))
+	body, err := p.fetch(ctx, target)
+	if err != nil {
+		return nil, fmt.Errorf("rutor search: %w", err)
+	}
+	var out []registry.SearchResult
+	for _, row := range searchRowRe.FindAllSubmatch(body, -1) {
+		cell := row[1]
+		link := searchLinkRe.FindSubmatch(cell)
+		if link == nil {
+			continue // header/spacer row without a torrent link
+		}
+		r := registry.SearchResult{
+			Title:   forumcommon.HTMLToText(string(link[2])),
+			URL:     fmt.Sprintf("https://%s/torrent/%s", p.effectiveDomain(), link[1]),
+			Seeders: -1,
+		}
+		if m := searchSizeRe.FindSubmatch(cell); m != nil {
+			r.Size = forumcommon.HTMLToText(string(m[1]))
+		}
+		if m := searchSeedsRe.FindSubmatch(cell); m != nil {
+			if n, cerr := strconv.Atoi(string(m[1])); cerr == nil {
+				r.Seeders = n
+			}
+		}
+		out = append(out, r)
+		if len(out) == 50 {
+			break
+		}
+	}
+	return out, nil
 }
 
 func (p *plugin) fetch(ctx context.Context, target string) ([]byte, error) {
