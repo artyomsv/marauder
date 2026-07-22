@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -23,28 +24,58 @@ import (
 )
 
 const (
-	pluginName  = "rutor"
-	displayName = "Rutor.org"
-	userAgent   = "Marauder/0.4 (+https://marauder.cc)"
+	pluginName    = "rutor"
+	displayName   = "Rutor.org"
+	defaultDomain = "rutor.org"
+	userAgent     = "Marauder/0.4 (+https://marauder.cc)"
 )
 
-var urlPattern = regexp.MustCompile(`^https?://(?:www\.)?rutor\.(?:org|info)/torrent/(\d+)`)
+// urlPattern is host-agnostic; CanParse gates the captured host against the
+// known + admin-configured domain allowlist (the SSRF barrier — see
+// registry.DomainAllowed).
+var urlPattern = regexp.MustCompile(`^https?://(?:www\.)?([^/]+)/torrent/(\d+)`)
+
+var knownDomains = []string{"rutor.org", "rutor.info"}
 
 type plugin struct {
 	httpClient *http.Client
+	domain     string
 }
 
 func init() {
 	registry.RegisterTracker(&plugin{
 		httpClient: &http.Client{Timeout: 30 * time.Second},
+		domain:     defaultDomain,
 	})
 }
 
 func (p *plugin) Name() string        { return pluginName }
 func (p *plugin) DisplayName() string { return displayName }
 
+var _ registry.WithDomains = (*plugin)(nil)
+
+// Domains implements registry.WithDomains; first entry is canonical.
+func (p *plugin) Domains() []string { return knownDomains }
+
+// effectiveDomain resolves the domain every request is built against: a
+// test-injected p.domain wins (httptest servers), then the admin-configured
+// active domain, then the compiled default. Unlike kinozal, rutor's zero
+// value (unset p.domain, e.g. a plugin literal built without the field)
+// must also fall through to the compiled default rather than resolving to
+// an empty host.
+func (p *plugin) effectiveDomain() string {
+	if p.domain != "" && p.domain != defaultDomain {
+		return p.domain
+	}
+	if d := registry.ActiveDomain(pluginName); d != "" {
+		return d
+	}
+	return defaultDomain
+}
+
 func (p *plugin) CanParse(rawURL string) bool {
-	return urlPattern.MatchString(strings.TrimSpace(rawURL))
+	m := urlPattern.FindStringSubmatch(strings.TrimSpace(rawURL))
+	return m != nil && registry.DomainAllowed(pluginName, m[1], knownDomains)
 }
 
 func (p *plugin) Parse(_ context.Context, rawURL string) (*domain.Topic, error) {
@@ -54,8 +85,8 @@ func (p *plugin) Parse(_ context.Context, rawURL string) (*domain.Topic, error) 
 	}
 	return &domain.Topic{
 		TrackerName: pluginName, URL: rawURL,
-		DisplayName: "Rutor torrent " + m[1],
-		Extra:       map[string]any{"topic_id": m[1]},
+		DisplayName: "Rutor torrent " + m[2],
+		Extra:       map[string]any{"topic_id": m[2]},
 	}, nil
 }
 
@@ -64,8 +95,28 @@ var (
 	btihRe  = regexp.MustCompile(`magnet:\?xt=urn:btih:([A-Fa-f0-9]+)`)
 )
 
+// canonicalURL rewrites rawURL's host to p.effectiveDomain() when that
+// differs from the URL's own host — the nnmclub canonicalURL approach
+// adapted to rutor. Rutor has no id-based rebuild (Download/Check just
+// re-fetch the stored topic URL), so this is the only place an active-
+// domain override or mirror switch actually takes effect.
+func (p *plugin) canonicalURL(rawURL string) (string, error) {
+	u, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil {
+		return "", fmt.Errorf("rutor: invalid URL: %w", err)
+	}
+	if eff := p.effectiveDomain(); eff != "" && eff != u.Hostname() {
+		u.Host = eff
+	}
+	return u.String(), nil
+}
+
 func (p *plugin) Check(ctx context.Context, topic *domain.Topic, _ *domain.TrackerCredential) (*domain.Check, error) {
-	body, err := p.fetch(ctx, topic.URL)
+	target, err := p.canonicalURL(topic.URL)
+	if err != nil {
+		return nil, err
+	}
+	body, err := p.fetch(ctx, target)
 	if err != nil {
 		return nil, err
 	}
@@ -81,7 +132,11 @@ func (p *plugin) Check(ctx context.Context, topic *domain.Topic, _ *domain.Track
 }
 
 func (p *plugin) Download(ctx context.Context, topic *domain.Topic, _ *domain.Check, _ *domain.TrackerCredential) (*domain.Payload, error) {
-	body, err := p.fetch(ctx, topic.URL)
+	target, err := p.canonicalURL(topic.URL)
+	if err != nil {
+		return nil, err
+	}
+	body, err := p.fetch(ctx, target)
 	if err != nil {
 		return nil, err
 	}
@@ -92,7 +147,22 @@ func (p *plugin) Download(ctx context.Context, topic *domain.Topic, _ *domain.Ch
 }
 
 func (p *plugin) fetch(ctx context.Context, target string) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+	// SSRF guard: `target` has already been canonicalized above, but fetch
+	// is the last line of defense before dialing — refuse any host that
+	// isn't a known or admin-configured rutor domain (closes rutor's
+	// previously-missing host guard).
+	u, err := url.Parse(strings.TrimSpace(target))
+	if err != nil {
+		return nil, fmt.Errorf("rutor: invalid URL: %w", err)
+	}
+	if u.Scheme != "https" && u.Scheme != "http" {
+		return nil, fmt.Errorf("rutor: refusing URL scheme %q", u.Scheme)
+	}
+	if !registry.DomainAllowed(pluginName, u.Hostname(), knownDomains) {
+		return nil, fmt.Errorf("rutor: refusing to fetch off-site host %q", u.Hostname())
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
 		return nil, err
 	}

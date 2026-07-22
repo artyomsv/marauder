@@ -105,6 +105,21 @@ var (
 	)
 )
 
+// Tracker domain metrics --------------------------------------------------
+
+var (
+	// TrackerDomainRotations counts automatic domain rotations (issue #126)
+	// triggered by ReportFailure, partitioned by tracker. A rising count for
+	// a given tracker signals its current mirror is failing checks.
+	TrackerDomainRotations = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "marauder_tracker_domain_rotations_total",
+			Help: "Number of automatic tracker domain rotations after network failures, partitioned by tracker.",
+		},
+		[]string{"tracker"},
+	)
+)
+
 // Notifier metrics --------------------------------------------------------
 
 var (

@@ -21,9 +21,11 @@ import (
 	"github.com/artyomsv/marauder/backend/internal/db"
 	"github.com/artyomsv/marauder/backend/internal/db/repo"
 	"github.com/artyomsv/marauder/backend/internal/domain"
+	"github.com/artyomsv/marauder/backend/internal/domains"
 	"github.com/artyomsv/marauder/backend/internal/events"
 	"github.com/artyomsv/marauder/backend/internal/logging"
 	"github.com/artyomsv/marauder/backend/internal/notify"
+	"github.com/artyomsv/marauder/backend/internal/plugins/registry"
 	"github.com/artyomsv/marauder/backend/internal/progress"
 	"github.com/artyomsv/marauder/backend/internal/scheduler"
 	"github.com/artyomsv/marauder/backend/internal/sonarr"
@@ -112,6 +114,16 @@ func run() error {
 	auditRepo := repo.NewAudit(pool)
 	auditLogger := audit.NewLogger(rootCtx, auditRepo, logger)
 
+	// Tracker domain overrides (issue #126): admin-configured active/custom
+	// domains per tracker, loaded once at boot and installed as the
+	// process-wide registry.DomainResolver.
+	trackerSettingsRepo := repo.NewTrackerSettings(pool)
+	domainStore := domains.New(trackerSettingsRepo, logger)
+	if err := domainStore.Load(rootCtx); err != nil {
+		logger.Warn().Err(err).Msg("tracker domain settings load failed; using plugin defaults")
+	}
+	registry.SetDomainResolver(domainStore.Resolve)
+
 	// Optional OIDC provider (nil when MARAUDER_OIDC_ENABLED=false)
 	oidcProvider, err := auth.NewOIDCProvider(rootCtx, cfg)
 	if err != nil {
@@ -145,10 +157,32 @@ func run() error {
 	// Scheduler
 	topicEventsRepo := repo.NewTopicEvents(pool)
 	disp := notify.New(notifiersRepo, master, logger)
+
+	// Notify the initial admin when the domain store auto-rotates a tracker
+	// to a mirror after repeated failures (issue #126 Phase 2). The hook fires
+	// synchronously from a scheduler worker goroutine, so the notification I/O
+	// (DB lookup + third-party notifier sends) runs in its own goroutine to
+	// avoid blocking the check loop (bulkhead).
+	domainStore.SetOnRotate(func(tracker, from, to string) {
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			admin, aerr := users.GetInitialAdmin(ctx)
+			if aerr != nil || admin == nil {
+				logger.Warn().Err(aerr).Msg("domain rotation: no admin to notify")
+				return
+			}
+			disp.Send(ctx, admin.ID, string(events.CheckFailed), domain.Message{
+				Title: fmt.Sprintf("Tracker %s switched to mirror %s", tracker, to),
+				Body:  fmt.Sprintf("Checks against %s were failing; Marauder now uses %s. Revert or adjust under Settings → Tracker domains.", from, to),
+			})
+		}()
+	})
+
 	hub := sse.NewHub(logger)
 	tickets := sse.NewTicketStore()
 	bus := events.New(topicEventsRepo, disp, hub, logger) // hub is the live SSE publisher
-	sch := scheduler.New(cfg, logger, topicsRepo, clientsRepo, credsRepo, deliveriesRepo, master, bus)
+	sch := scheduler.New(cfg, logger, topicsRepo, clientsRepo, credsRepo, deliveriesRepo, master, bus, domainStore)
 	go func() {
 		if err := sch.Start(rootCtx); err != nil {
 			logger.Error().Err(err).Msg("scheduler exited with error")
@@ -193,6 +227,7 @@ func run() error {
 		Deliveries:      deliveriesRepo,
 		TopicEvents:     topicEventsRepo,
 		SonarrInstances: sonarrInstancesRepo,
+		TrackerSettings: domainStore,
 		Audit:           auditRepo,
 		AuditLog:        auditLogger,
 		OIDC:            oidcProvider,

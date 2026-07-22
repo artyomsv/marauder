@@ -49,8 +49,18 @@ It is built in 2026 with a tightly focused set of modern tools:
 - **Sonarr integration** — auto-monitor the updateable forum-tracker topics
   Sonarr grabs but can't keep watching. See
   [docs/sonarr-integration.md](docs/sonarr-integration.md).
+- **Configurable tracker domains + mirror fallback** — point a tracker at a
+  working mirror when its primary domain is blocked, and Marauder rotates to the
+  next mirror automatically on network failures — without recreating a single
+  topic. See [docs/tracker-domains.md](docs/tracker-domains.md).
 - **Observable** from day one — Prometheus metrics, structured logs,
   `/health`, `/ready`.
+
+<div align="center">
+  <img src="site/public/screenshots/mirrors.webp" width="820" alt="Settings — Tracker domains: a per-tracker list where each tracker's active domain and mirrors are configured; LostFilm is expanded showing its domain dropdown, mirror chips, and a Test button." />
+  <br />
+  <sub><em>Settings → Tracker domains — pick a working mirror per tracker, and Marauder falls back automatically.</em></sub>
+</div>
 
 ---
 

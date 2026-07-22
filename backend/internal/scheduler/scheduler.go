@@ -109,6 +109,15 @@ type deliveriesRecorder interface {
 	DeleteByInfohashes(ctx context.Context, topicID uuid.UUID, hashes []string) (int64, error)
 }
 
+// domainRotator is the subset of *domains.Store the scheduler uses to
+// report a network-class check failure so the store can rotate the
+// tracker's active mirror (cooldown-gated). Defined as a consumer-side
+// interface — like the other optional deps above — so it's nil-safe in
+// unit tests that don't exercise domain rotation (issue #126 Phase 2).
+type domainRotator interface {
+	ReportFailure(ctx context.Context, trackerName string)
+}
+
 // trackerLookupFn is a test seam: the scheduler resolves a tracker by
 // name through this function so tests can inject fakes without touching
 // the global registry.
@@ -135,7 +144,8 @@ type Scheduler struct {
 	creds      credentialsRepo
 	deliveries deliveriesRecorder // nil-safe; records what was pushed to a client
 	master     decryptor
-	emit       emitter // nil-safe; publishes typed lifecycle events
+	emit       emitter       // nil-safe; publishes typed lifecycle events
+	domains    domainRotator // nil-safe; reports network-class failures for mirror rotation
 
 	// Test seams (default to registry.GetTracker / registry.GetClient).
 	lookupTracker trackerLookupFn
@@ -156,7 +166,7 @@ type Scheduler struct {
 }
 
 // New constructs a scheduler.
-func New(cfg *config.Config, log zerolog.Logger, topics *repo.Topics, clients *repo.Clients, creds *repo.TrackerCredentials, deliveries *repo.Deliveries, master *crypto.MasterKey, emit emitter) *Scheduler {
+func New(cfg *config.Config, log zerolog.Logger, topics *repo.Topics, clients *repo.Clients, creds *repo.TrackerCredentials, deliveries *repo.Deliveries, master *crypto.MasterKey, emit emitter, domains domainRotator) *Scheduler {
 	return &Scheduler{
 		cfg:           cfg,
 		log:           log.With().Str("component", "scheduler").Logger(),
@@ -166,6 +176,7 @@ func New(cfg *config.Config, log zerolog.Logger, topics *repo.Topics, clients *r
 		deliveries:    deliveries,
 		master:        master,
 		emit:          emit,
+		domains:       domains,
 		lookupTracker: registry.GetTracker,
 		lookupClient:  registry.GetClient,
 		jobs:          make(chan *domain.Topic, cfg.SchedulerWorkers*4),
@@ -311,10 +322,18 @@ func (s *Scheduler) worker(ctx context.Context, id int) {
 // recordResult is a tiny wrapper around RecordCheckResult that logs the
 // (rare) persistence failure rather than discarding it. Persistence
 // errors are non-fatal here — the next tick re-evaluates the topic.
-func (s *Scheduler) recordResult(ctx context.Context, log zerolog.Logger, id uuid.UUID, hash string, updated bool, nextCheckAt time.Time, errMsg string) {
+//
+// It also reports network-class failures to the domain rotator (issue
+// #126 Phase 2): a timeout or unreachable classification means the
+// tracker's current domain may be dead, so the store gets a chance to
+// rotate to a configured mirror (cooldown-gated on its side).
+func (s *Scheduler) recordResult(ctx context.Context, log zerolog.Logger, id uuid.UUID, trackerName string, hash string, updated bool, nextCheckAt time.Time, errMsg string) {
 	var errCode string
 	if errMsg != "" {
 		errCode = classifyError(errMsg)
+	}
+	if s.domains != nil && (errCode == errCodeTimeout || errCode == errCodeUnreachable) {
+		s.domains.ReportFailure(ctx, trackerName)
 	}
 	if err := s.topics.RecordCheckResult(ctx, id, hash, updated, nextCheckAt, errMsg, errCode); err != nil {
 		log.Warn().Err(err).Msg("RecordCheckResult failed")
@@ -342,7 +361,7 @@ func (s *Scheduler) runCheck(ctx context.Context, log zerolog.Logger, t *domain.
 	if tr == nil {
 		log.Error().Msg("no registered tracker")
 		metrics.SchedulerTopicChecksTotal.WithLabelValues(t.TrackerName, "no_plugin").Inc()
-		s.recordResult(ctx, log, t.ID, "", false, s.backoff(t, true, nil), "tracker plugin not installed")
+		s.recordResult(ctx, log, t.ID, t.TrackerName, "", false, s.backoff(t, true, nil), "tracker plugin not installed")
 		s.notifyError(ctx, t, "tracker plugin not installed")
 		s.recordChecked(false, true)
 		return
@@ -370,7 +389,7 @@ func (s *Scheduler) runCheck(ctx context.Context, log zerolog.Logger, t *domain.
 	if err != nil {
 		log.Warn().Err(err).Msg("check failed")
 		metrics.SchedulerTopicChecksTotal.WithLabelValues(t.TrackerName, "error").Inc()
-		s.recordResult(ctx, log, t.ID, "", false, s.backoff(t, true, err), err.Error())
+		s.recordResult(ctx, log, t.ID, t.TrackerName, "", false, s.backoff(t, true, err), err.Error())
 		s.notifyError(ctx, t, err.Error())
 		s.recordChecked(false, true)
 		return
@@ -432,7 +451,7 @@ func (s *Scheduler) runCheck(ctx context.Context, log zerolog.Logger, t *domain.
 				log.Warn().Err(dlErr).Msg("download failed")
 				metrics.SchedulerTopicChecksTotal.WithLabelValues(t.TrackerName, "download_error").Inc()
 			}
-			s.recordResult(ctx, log, t.ID, t.LastHash, anySubmitted, s.backoff(t, true, dlErr), dlErr.Error())
+			s.recordResult(ctx, log, t.ID, t.TrackerName, t.LastHash, anySubmitted, s.backoff(t, true, dlErr), dlErr.Error())
 			s.notifyError(ctx, t, dlErr.Error())
 			s.recordChecked(true, true)
 			return
@@ -472,7 +491,7 @@ func (s *Scheduler) runCheck(ctx context.Context, log zerolog.Logger, t *domain.
 			Data: map[string]any{"next_check_at": nextCheckAt.UTC().Format(time.RFC3339)},
 		})
 	}
-	s.recordResult(ctx, log, t.ID, check.Hash, updated || anySubmitted, nextCheckAt, "")
+	s.recordResult(ctx, log, t.ID, t.TrackerName, check.Hash, updated || anySubmitted, nextCheckAt, "")
 	s.recordChecked(updated || anySubmitted, false)
 }
 
@@ -618,7 +637,7 @@ func (s *Scheduler) loadCredentials(ctx context.Context, checkCtx context.Contex
 		}
 		log.Warn().Err(loginErr).Msg("tracker login failed")
 		metrics.SchedulerTopicChecksTotal.WithLabelValues(t.TrackerName, "auth_error").Inc()
-		s.recordResult(ctx, log, t.ID, "", false, s.backoff(t, true, loginErr), "auth failed: "+loginErr.Error())
+		s.recordResult(ctx, log, t.ID, t.TrackerName, "", false, s.backoff(t, true, loginErr), "auth failed: "+loginErr.Error())
 		s.recordChecked(false, true)
 		return nil, false
 	}

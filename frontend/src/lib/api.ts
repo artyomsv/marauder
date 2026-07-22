@@ -213,6 +213,16 @@ export const api = {
   testSonarr: (body: { sonarr_url: string; api_key: string }) =>
     request<SonarrTestResult>("POST", "/system/sonarr/test", body),
 
+  // --- Tracker domain configuration (admin only, issue #126). Lets an
+  // admin override which domain a tracker plugin uses (e.g. when its
+  // default is blocked) and register extra custom mirrors, instance-wide.
+  listTrackerDomains: () =>
+    request<TrackerDomains[]>("GET", "/system/trackers/domains"),
+  updateTrackerDomains: (name: string, body: TrackerDomainsBody) =>
+    request<TrackerDomains>("PUT", `/system/trackers/${name}/domains`, body),
+  testTrackerDomain: (name: string, domain: string) =>
+    request<TrackerDomainTestResult>("POST", `/system/trackers/${name}/domains/test`, { domain }),
+
   // --- Server-Sent Events. POST /events/ticket exchanges the access token
   // for a single-use ticket; GET /events?ticket=… streams event-stream.
   eventsTicket: () => request<{ ticket: string }>("POST", "/events/ticket"),
@@ -256,6 +266,31 @@ export interface SonarrTestResult {
   ok: boolean;
   version: string;
   app_name: string;
+}
+
+// One tracker's domain configuration (GET /system/trackers/domains). Admin
+// only. `active_domain` "" means the plugin's built-in default; otherwise
+// it's a member of `known_domains` (which includes the default) or
+// `custom_domains`.
+export interface TrackerDomains {
+  name: string;
+  display_name: string;
+  default_domain: string;
+  known_domains: string[];
+  custom_domains: string[];
+  active_domain: string;
+}
+
+// Body of PUT /system/trackers/{name}/domains.
+export interface TrackerDomainsBody {
+  active_domain: string;
+  custom_domains: string[];
+}
+
+// Response of POST /system/trackers/{name}/domains/test.
+export interface TrackerDomainTestResult {
+  ok: boolean;
+  detail: string;
 }
 
 // One delivered torrent in GET /topics/{id}/status. state is the normalised

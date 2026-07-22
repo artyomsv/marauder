@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/artyomsv/marauder/backend/internal/plugins/registry"
 	"github.com/artyomsv/marauder/backend/internal/plugins/trackers/forumcommon"
 )
 
@@ -235,6 +236,62 @@ func TestAuthorComment_PageWithoutPosts_ReturnsEmpty(t *testing.T) {
 	}
 	if got != "" {
 		t.Errorf("AuthorComment = %q, want empty (fail-open) on a page with no post anchors", got)
+	}
+}
+
+// TestAuthorComment_RewritesToActiveDomain mirrors
+// TestCheck_RewritesToActiveDomain for AuthorComment: with an admin-configured
+// active mirror, both the initial page-1 fetch and any pagination-derived
+// fetch must dial the active domain, not the (possibly dead) host recorded
+// in the stored topic URL.
+func TestAuthorComment_RewritesToActiveDomain(t *testing.T) {
+	page1 := nnmTopicPage(nnmPost("100", `uploader`, `Release description`)) +
+		`<a href="viewtopic.php?t=830137&amp;start=15">2</a>`
+	lastPage := nnmTopicPage(
+		nnmPost("200", `uploader`, `Раздача обновлена.`),
+		nnmPost("201", `commenter`, `ok`),
+	)
+	pages := map[string]string{"": page1, "15": lastPage}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(r.URL.Path, "/forum/viewtopic.php") {
+			w.WriteHeader(404)
+			return
+		}
+		page, ok := pages[r.URL.Query().Get("start")]
+		if !ok {
+			w.WriteHeader(404)
+			return
+		}
+		w.WriteHeader(200)
+		w.Write([]byte(page))
+	}))
+	t.Cleanup(srv.Close)
+
+	registry.SetDomainResolver(func(name string) registry.DomainConfig {
+		if name == "nnmclub" {
+			return registry.DomainConfig{Active: "nnmclub.me"}
+		}
+		return registry.DomainConfig{}
+	})
+	t.Cleanup(func() { registry.SetDomainResolver(nil) })
+
+	rec := &hostRecordingRewrite{target: strings.TrimPrefix(srv.URL, "http://")}
+	p := &plugin{sessions: forumcommon.New(), transport: rec}
+
+	got, err := p.AuthorComment(context.Background(), "https://nnmclub.to/forum/viewtopic.php?t=830137", nil)
+	if err != nil {
+		t.Fatalf("AuthorComment: %v", err)
+	}
+	if got != "Раздача обновлена." {
+		t.Errorf("AuthorComment = %q, want the author's last-page comment", got)
+	}
+	if len(rec.hosts) < 2 {
+		t.Fatalf("expected at least 2 requests (page 1 + paginated), got %d: %v", len(rec.hosts), rec.hosts)
+	}
+	for i, h := range rec.hosts {
+		if h != "nnmclub.me" {
+			t.Errorf("request %d host = %q, want active domain nnmclub.me (pagination URLs must derive from the canonicalized host)", i, h)
+		}
 	}
 }
 

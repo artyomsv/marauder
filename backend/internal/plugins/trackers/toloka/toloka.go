@@ -27,7 +27,12 @@ const (
 	userAgent     = "Marauder/0.4 (+https://marauder.cc)"
 )
 
-var urlPattern = regexp.MustCompile(`^https?://(?:www\.)?toloka\.to/t(\d+)`)
+// urlPattern is host-agnostic; CanParse gates the captured host against the
+// known + admin-configured domain allowlist (the SSRF barrier — see
+// registry.DomainAllowed).
+var urlPattern = regexp.MustCompile(`^https?://(?:www\.)?([^/]+)/t(\d+)`)
+
+var knownDomains = []string{"toloka.to"}
 
 type plugin struct {
 	sessions  *forumcommon.SessionStore
@@ -42,8 +47,43 @@ func init() {
 func (p *plugin) Name() string        { return pluginName }
 func (p *plugin) DisplayName() string { return displayName }
 
+var _ registry.WithDomains = (*plugin)(nil)
+
+// Domains implements registry.WithDomains; first entry is canonical.
+func (p *plugin) Domains() []string { return knownDomains }
+
+// effectiveDomain resolves the domain every request is built against:
+// a test-injected p.domain wins (httptest servers), then the admin-
+// configured active domain, then the compiled default.
+func (p *plugin) effectiveDomain() string {
+	if p.domain != defaultDomain {
+		return p.domain
+	}
+	if d := registry.ActiveDomain(pluginName); d != "" {
+		return d
+	}
+	return p.domain
+}
+
+// canonicalURL rewrites rawURL's host to p.effectiveDomain() when that
+// differs from the URL's own host — the nnmclub/rutor canonicalURL
+// approach adapted to toloka. Check/Download re-fetch the stored topic
+// URL directly, so this is the only place an active-domain override or
+// mirror switch actually takes effect for those fetches.
+func (p *plugin) canonicalURL(rawURL string) (string, error) {
+	u, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil {
+		return "", fmt.Errorf("toloka: invalid URL: %w", err)
+	}
+	if eff := p.effectiveDomain(); eff != "" && eff != u.Hostname() {
+		u.Host = eff
+	}
+	return u.String(), nil
+}
+
 func (p *plugin) CanParse(rawURL string) bool {
-	return urlPattern.MatchString(strings.TrimSpace(rawURL))
+	m := urlPattern.FindStringSubmatch(strings.TrimSpace(rawURL))
+	return m != nil && registry.DomainAllowed(pluginName, m[1], knownDomains)
 }
 
 func (p *plugin) Parse(_ context.Context, rawURL string) (*domain.Topic, error) {
@@ -51,7 +91,7 @@ func (p *plugin) Parse(_ context.Context, rawURL string) (*domain.Topic, error) 
 	if m == nil {
 		return nil, errors.New("not a toloka topic URL")
 	}
-	id, _ := strconv.Atoi(m[1])
+	id, _ := strconv.Atoi(m[2])
 	return &domain.Topic{
 		TrackerName: pluginName, URL: rawURL,
 		DisplayName: fmt.Sprintf("Toloka topic %d", id),
@@ -72,7 +112,7 @@ func (p *plugin) Login(ctx context.Context, creds *domain.TrackerCredential) err
 		"password": {string(creds.SecretEnc)},
 		"login":    {"submit"},
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://"+p.domain+"/login.php", strings.NewReader(form.Encode()))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://"+p.effectiveDomain()+"/login.php", strings.NewReader(form.Encode()))
 	if err != nil {
 		return err
 	}
@@ -105,7 +145,11 @@ var (
 )
 
 func (p *plugin) Check(ctx context.Context, topic *domain.Topic, creds *domain.TrackerCredential) (*domain.Check, error) {
-	body, err := p.fetch(ctx, topic.URL, creds)
+	target, err := p.canonicalURL(topic.URL)
+	if err != nil {
+		return nil, err
+	}
+	body, err := p.fetch(ctx, target, creds)
 	if err != nil {
 		return nil, err
 	}
@@ -121,7 +165,11 @@ func (p *plugin) Check(ctx context.Context, topic *domain.Topic, creds *domain.T
 }
 
 func (p *plugin) Download(ctx context.Context, topic *domain.Topic, _ *domain.Check, creds *domain.TrackerCredential) (*domain.Payload, error) {
-	body, err := p.fetch(ctx, topic.URL, creds)
+	target, err := p.canonicalURL(topic.URL)
+	if err != nil {
+		return nil, err
+	}
+	body, err := p.fetch(ctx, target, creds)
 	if err != nil {
 		return nil, err
 	}
@@ -129,7 +177,7 @@ func (p *plugin) Download(ctx context.Context, topic *domain.Topic, _ *domain.Ch
 	if m == nil {
 		return nil, errors.New("toloka: no download link")
 	}
-	dlURL := "https://" + p.domain + "/" + string(m[1])
+	dlURL := "https://" + p.effectiveDomain() + "/" + string(m[1])
 	torrent, err := p.fetch(ctx, dlURL, creds)
 	if err != nil {
 		return nil, err

@@ -91,6 +91,18 @@ const sections = [
     ],
   },
   {
+    title: "Configurable tracker domains + mirror fallback",
+    intro:
+      "Trackers move. When a primary domain is blocked or down, point the tracker at a working mirror — instance-wide, without recreating a single topic — and let Marauder rotate mirrors automatically when the current one starts failing.",
+    bullets: [
+      "Admin picks the active domain per tracker under Settings → Tracker domains — the plugin default or any known mirror (Kinozal .tv/.me/.guru, RuTracker .org/.net/.nl/.cr, LostFilm .tv/.win/.run, …), plus custom hostnames",
+      "Topics are identified by tracker + topic id, not hostname, so switching the domain reroutes every existing topic's checks and downloads immediately — nothing to recreate",
+      "Automatic fallback: repeated network-class failures rotate to the next mirror (gated by a failure threshold so a single blip doesn't switch everything, plus a 10-minute cooldown), and the admin is notified on rotation",
+      "A Test button probes a candidate and reports whether it serves a real page — a dead mirror answering an empty 200 shows “empty page”, not a false “reachable”",
+      "Custom domains are hostname-validated and admin-only; the probe vets resolved IPs at dial time and never follows redirects, so it can't be turned into an SSRF into your network",
+    ],
+  },
+  {
     title: "Observability from day one",
     intro:
       "Structured logs, metrics, health checks, audit log — all of it standard, all of it opt-out, all of it documented.",

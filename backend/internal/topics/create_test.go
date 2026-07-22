@@ -180,3 +180,98 @@ func TestBuildAndCreate_CallerSuppliedName_FlagsResolved(t *testing.T) {
 		t.Errorf("want DisplayNameIsPlaceholder=false for caller-supplied name")
 	}
 }
+
+// stubDomainsTracker implements registry.WithDomains for CanonicalTopicURL
+// tests; the rest of the Tracker interface is unused stubbing.
+type stubDomainsTracker struct {
+	domains []string
+}
+
+func (stubDomainsTracker) Name() string         { return "stub-domains" }
+func (stubDomainsTracker) DisplayName() string  { return "Stub Domains Tracker" }
+func (stubDomainsTracker) CanParse(string) bool { return true }
+func (stubDomainsTracker) Parse(context.Context, string) (*domain.Topic, error) {
+	return &domain.Topic{}, nil
+}
+func (stubDomainsTracker) Check(context.Context, *domain.Topic, *domain.TrackerCredential) (*domain.Check, error) {
+	return nil, nil
+}
+func (stubDomainsTracker) Download(context.Context, *domain.Topic, *domain.Check, *domain.TrackerCredential) (*domain.Payload, error) {
+	return nil, nil
+}
+func (s stubDomainsTracker) Domains() []string { return s.domains }
+
+// stubPlainTracker implements only registry.Tracker (no WithDomains).
+type stubPlainTracker struct{}
+
+func (stubPlainTracker) Name() string         { return "stub-plain" }
+func (stubPlainTracker) DisplayName() string  { return "Stub Plain Tracker" }
+func (stubPlainTracker) CanParse(string) bool { return true }
+func (stubPlainTracker) Parse(context.Context, string) (*domain.Topic, error) {
+	return &domain.Topic{}, nil
+}
+func (stubPlainTracker) Check(context.Context, *domain.Topic, *domain.TrackerCredential) (*domain.Check, error) {
+	return nil, nil
+}
+func (stubPlainTracker) Download(context.Context, *domain.Topic, *domain.Check, *domain.TrackerCredential) (*domain.Payload, error) {
+	return nil, nil
+}
+
+func TestCanonicalTopicURL_RewritesMirrorHost(t *testing.T) {
+	tr := &stubDomainsTracker{domains: []string{"kinozal.tv", "kinozal.me"}}
+	got := CanonicalTopicURL(tr, "https://kinozal.me/details.php?id=42")
+	if got != "https://kinozal.tv/details.php?id=42" {
+		t.Errorf("CanonicalTopicURL = %q", got)
+	}
+	// Same host (modulo www.) → unchanged input returned verbatim.
+	if got := CanonicalTopicURL(tr, "https://www.kinozal.tv/details.php?id=42"); got != "https://www.kinozal.tv/details.php?id=42" {
+		t.Errorf("same-host URL rewritten: %q", got)
+	}
+	// Non-WithDomains tracker → unchanged.
+	if got := CanonicalTopicURL(&stubPlainTracker{}, "https://x/y"); got != "https://x/y" {
+		t.Errorf("plain tracker URL rewritten: %q", got)
+	}
+}
+
+// canonTracker matches both canon.test and its mirror mirror.test and stores
+// whatever URL it is handed, so an integration test can prove BuildAndCreate
+// canonicalizes a mirror-host URL to the tracker's default domain before
+// persisting (issue #126 dedup identity).
+type canonTracker struct{}
+
+func (canonTracker) Name() string        { return "canon-test" }
+func (canonTracker) DisplayName() string { return "Canon Tracker" }
+func (canonTracker) CanParse(u string) bool {
+	return strings.HasPrefix(u, "https://canon.test/") || strings.HasPrefix(u, "https://mirror.test/")
+}
+func (canonTracker) Parse(_ context.Context, u string) (*domain.Topic, error) {
+	return &domain.Topic{DisplayName: "Canon", URL: u, Extra: map[string]any{}}, nil
+}
+func (canonTracker) Check(context.Context, *domain.Topic, *domain.TrackerCredential) (*domain.Check, error) {
+	return nil, nil
+}
+func (canonTracker) Download(context.Context, *domain.Topic, *domain.Check, *domain.TrackerCredential) (*domain.Payload, error) {
+	return nil, nil
+}
+func (canonTracker) Domains() []string { return []string{"canon.test", "mirror.test"} }
+
+func init() { registry.RegisterTracker(canonTracker{}) }
+
+// TestBuildAndCreate_MirrorURL_CanonicalizesStoredURL proves that adding a
+// topic via a mirror host stores it under the canonical (default) domain, so a
+// later add of the same topic via the canonical host dedups to one row.
+func TestBuildAndCreate_MirrorURL_CanonicalizesStoredURL(t *testing.T) {
+	store := &fakeStore{}
+	res, err := BuildAndCreate(context.Background(), store, CreateInput{
+		UserID: uuid.New(), URL: "https://mirror.test/topic/7",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !res.Created {
+		t.Fatalf("want Created")
+	}
+	if store.created.URL != "https://canon.test/topic/7" {
+		t.Errorf("stored URL = %q, want canonical host canon.test", store.created.URL)
+	}
+}

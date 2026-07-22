@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -12,6 +13,7 @@ import (
 
 	"github.com/artyomsv/marauder/backend/internal/domain"
 	"github.com/artyomsv/marauder/backend/internal/infohash"
+	"github.com/artyomsv/marauder/backend/internal/plugins/registry"
 	"github.com/artyomsv/marauder/backend/internal/plugins/trackers/forumcommon"
 )
 
@@ -392,5 +394,141 @@ func TestLogin_ValidCredentials_SetsLoggedIn(t *testing.T) {
 	}
 	if !ok {
 		t.Error("expected logged in")
+	}
+}
+
+func TestCanParse_CustomDomain_AllowedViaResolver(t *testing.T) {
+	registry.SetDomainResolver(func(name string) registry.DomainConfig {
+		if name == "rutracker" {
+			return registry.DomainConfig{Custom: []string{"rutracker.example"}}
+		}
+		return registry.DomainConfig{}
+	})
+	t.Cleanup(func() { registry.SetDomainResolver(nil) })
+	p := &plugin{sessions: forumcommon.New(), domain: defaultDomain}
+	if !p.CanParse("https://rutracker.example/forum/viewtopic.php?t=123") {
+		t.Error("custom domain should parse")
+	}
+	if p.CanParse("https://evil.example/forum/viewtopic.php?t=123") {
+		t.Error("unlisted domain must not parse")
+	}
+}
+
+func TestEffectiveDomain_ResolverOverride(t *testing.T) {
+	registry.SetDomainResolver(func(string) registry.DomainConfig {
+		return registry.DomainConfig{Active: "rutracker.net"}
+	})
+	t.Cleanup(func() { registry.SetDomainResolver(nil) })
+	p := &plugin{sessions: forumcommon.New(), domain: defaultDomain}
+	if got := p.effectiveDomain(); got != "rutracker.net" {
+		t.Errorf("effectiveDomain = %q, want rutracker.net", got)
+	}
+	// A test-injected p.domain (≠ defaultDomain) must win over the resolver —
+	// this is what keeps every httptest-based e2e test working.
+	p.domain = "127.0.0.1:9999"
+	if got := p.effectiveDomain(); got != "127.0.0.1:9999" {
+		t.Errorf("effectiveDomain with test override = %q, want 127.0.0.1:9999", got)
+	}
+}
+
+func TestDomains_CanonicalFirst(t *testing.T) {
+	p := &plugin{}
+	want := []string{"rutracker.org", "rutracker.net", "rutracker.nl", "rutracker.cr"}
+	if !reflect.DeepEqual(p.Domains(), want) {
+		t.Errorf("Domains() = %v, want %v", p.Domains(), want)
+	}
+}
+
+// hostRecordingRewrite records the Host of every outgoing request, then
+// redirects it to the test server (rewriting scheme+host) so the httptest
+// handler serves it. Proves Check/Download target the admin-configured
+// active domain rather than the stored topic host (issue #126).
+type hostRecordingRewrite struct {
+	target string // test server host:port
+	hosts  []string
+}
+
+func (h *hostRecordingRewrite) RoundTrip(req *http.Request) (*http.Response, error) {
+	h.hosts = append(h.hosts, req.URL.Host)
+	req.URL.Scheme = "http"
+	req.URL.Host = h.target
+	return http.DefaultTransport.RoundTrip(req)
+}
+
+func newActiveDomainServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/forum/viewtopic.php"):
+			w.WriteHeader(200)
+			w.Write([]byte(fixtureTopicHTML))
+		case strings.HasPrefix(r.URL.Path, "/forum/dl.php"):
+			w.Header().Set("Content-Type", "application/x-bittorrent")
+			w.WriteHeader(200)
+			w.Write([]byte(validBencodedTorrent))
+		default:
+			w.WriteHeader(404)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// TestCheck_RewritesToActiveDomain proves the periodic check loop follows an
+// admin-configured active domain instead of the stored topic host — the core
+// #126 promise, which previously did NOT hold for rutracker because
+// fetchTopicPage dialed topic.URL raw.
+func TestCheck_RewritesToActiveDomain(t *testing.T) {
+	srv := newActiveDomainServer(t)
+	registry.SetDomainResolver(func(name string) registry.DomainConfig {
+		if name == pluginName {
+			return registry.DomainConfig{Active: "rutracker.net"}
+		}
+		return registry.DomainConfig{}
+	})
+	t.Cleanup(func() { registry.SetDomainResolver(nil) })
+
+	rec := &hostRecordingRewrite{target: strings.TrimPrefix(srv.URL, "http://")}
+	p := &plugin{sessions: forumcommon.New(), domain: defaultDomain, transport: rec}
+
+	topic := &domain.Topic{URL: "https://rutracker.org/forum/viewtopic.php?t=123", Extra: map[string]any{"topic_id": 123}}
+	if _, err := p.Check(context.Background(), topic, nil); err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	if len(rec.hosts) == 0 {
+		t.Fatal("no request recorded")
+	}
+	if rec.hosts[0] != "rutracker.net" {
+		t.Errorf("check fetch host = %q, want active domain rutracker.net", rec.hosts[0])
+	}
+}
+
+// TestDownload_RewritesToActiveDomain proves the download path (topic-page
+// fetch + dl.php) also follows the active domain.
+func TestDownload_RewritesToActiveDomain(t *testing.T) {
+	srv := newActiveDomainServer(t)
+	registry.SetDomainResolver(func(name string) registry.DomainConfig {
+		if name == pluginName {
+			return registry.DomainConfig{Active: "rutracker.net"}
+		}
+		return registry.DomainConfig{}
+	})
+	t.Cleanup(func() { registry.SetDomainResolver(nil) })
+
+	rec := &hostRecordingRewrite{target: strings.TrimPrefix(srv.URL, "http://")}
+	p := &plugin{sessions: forumcommon.New(), domain: defaultDomain, transport: rec}
+
+	topic := &domain.Topic{URL: "https://rutracker.org/forum/viewtopic.php?t=123", Extra: map[string]any{"topic_id": 123}}
+	creds := &domain.TrackerCredential{UserID: uuid.New(), Username: "alice"}
+	if _, err := p.Download(context.Background(), topic, nil, creds); err != nil {
+		t.Fatalf("Download: %v", err)
+	}
+	if len(rec.hosts) == 0 {
+		t.Fatal("no request recorded")
+	}
+	for i, h := range rec.hosts {
+		if h != "rutracker.net" {
+			t.Errorf("download request[%d] host = %q, want rutracker.net", i, h)
+		}
 	}
 }

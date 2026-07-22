@@ -32,7 +32,12 @@ const (
 	userAgent     = "Marauder/1.0 (+https://marauder.cc)"
 )
 
-var urlPattern = regexp.MustCompile(`^https?://(?:www\.)?free-torrents\.org/forum/viewtopic\.php\?t=(\d+)`)
+// urlPattern is host-agnostic; CanParse gates the captured host against the
+// known + admin-configured domain allowlist (the SSRF barrier — see
+// registry.DomainAllowed).
+var urlPattern = regexp.MustCompile(`^https?://(?:www\.)?([^/]+)/forum/viewtopic\.php\?t=(\d+)`)
+
+var knownDomains = []string{"free-torrents.org"}
 
 // Plugin is exported so e2e tests can construct fresh instances with a
 // custom domain and transport.
@@ -62,8 +67,43 @@ func init() {
 func (p *Plugin) Name() string        { return pluginName }
 func (p *Plugin) DisplayName() string { return displayName }
 
+var _ registry.WithDomains = (*Plugin)(nil)
+
+// Domains implements registry.WithDomains; first entry is canonical.
+func (p *Plugin) Domains() []string { return knownDomains }
+
+// effectiveDomain resolves the domain every request is built against:
+// a test-injected p.Domain wins (httptest servers), then the admin-
+// configured active domain, then the compiled default.
+func (p *Plugin) effectiveDomain() string {
+	if p.Domain != defaultDomain {
+		return p.Domain
+	}
+	if d := registry.ActiveDomain(pluginName); d != "" {
+		return d
+	}
+	return p.Domain
+}
+
+// canonicalURL rewrites rawURL's host to p.effectiveDomain() when that
+// differs from the URL's own host — the nnmclub/rutor canonicalURL
+// approach adapted to free-torrents. Check/Download re-fetch the stored
+// topic URL directly, so this is the only place an active-domain override
+// or mirror switch actually takes effect for those fetches.
+func (p *Plugin) canonicalURL(rawURL string) (string, error) {
+	u, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil {
+		return "", fmt.Errorf("free-torrents: invalid URL: %w", err)
+	}
+	if eff := p.effectiveDomain(); eff != "" && eff != u.Hostname() {
+		u.Host = eff
+	}
+	return u.String(), nil
+}
+
 func (p *Plugin) CanParse(rawURL string) bool {
-	return urlPattern.MatchString(strings.TrimSpace(rawURL))
+	m := urlPattern.FindStringSubmatch(strings.TrimSpace(rawURL))
+	return m != nil && registry.DomainAllowed(pluginName, m[1], knownDomains)
 }
 
 func (p *Plugin) Parse(_ context.Context, rawURL string) (*domain.Topic, error) {
@@ -71,7 +111,7 @@ func (p *Plugin) Parse(_ context.Context, rawURL string) (*domain.Topic, error) 
 	if m == nil {
 		return nil, errors.New("not a free-torrents viewtopic URL")
 	}
-	id, _ := strconv.Atoi(m[1])
+	id, _ := strconv.Atoi(m[2])
 	return &domain.Topic{
 		TrackerName: pluginName,
 		URL:         rawURL,
@@ -95,7 +135,7 @@ func (p *Plugin) Login(ctx context.Context, creds *domain.TrackerCredential) err
 		"login_password": {string(creds.SecretEnc)},
 		"login":          {"submit"},
 	}
-	endpoint := "https://" + p.Domain + "/forum/login.php"
+	endpoint := "https://" + p.effectiveDomain() + "/forum/login.php"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(form.Encode()))
 	if err != nil {
 		return err
@@ -120,7 +160,7 @@ func (p *Plugin) Login(ctx context.Context, creds *domain.TrackerCredential) err
 
 func (p *Plugin) Verify(ctx context.Context, creds *domain.TrackerCredential) (bool, error) {
 	sess := p.Sessions.GetOrCreate(forumcommon.SessionKey(pluginName, creds.UserID.String()), userAgent)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://"+p.Domain+"/forum/index.php", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://"+p.effectiveDomain()+"/forum/index.php", nil)
 	if err != nil {
 		return false, err
 	}
@@ -147,7 +187,11 @@ var (
 )
 
 func (p *Plugin) Check(ctx context.Context, topic *domain.Topic, creds *domain.TrackerCredential) (*domain.Check, error) {
-	body, err := p.fetch(ctx, topic.URL, creds)
+	target, err := p.canonicalURL(topic.URL)
+	if err != nil {
+		return nil, err
+	}
+	body, err := p.fetch(ctx, target, creds)
 	if err != nil {
 		return nil, err
 	}
@@ -171,7 +215,11 @@ func (p *Plugin) Check(ctx context.Context, topic *domain.Topic, creds *domain.T
 }
 
 func (p *Plugin) Download(ctx context.Context, topic *domain.Topic, _ *domain.Check, creds *domain.TrackerCredential) (*domain.Payload, error) {
-	body, err := p.fetch(ctx, topic.URL, creds)
+	target, err := p.canonicalURL(topic.URL)
+	if err != nil {
+		return nil, err
+	}
+	body, err := p.fetch(ctx, target, creds)
 	if err != nil {
 		return nil, err
 	}
@@ -179,7 +227,7 @@ func (p *Plugin) Download(ctx context.Context, topic *domain.Topic, _ *domain.Ch
 		return &domain.Payload{MagnetURI: string(m)}, nil
 	}
 	if m := dlHrefRe.FindSubmatch(body); m != nil {
-		dlURL := "https://" + p.Domain + "/forum/" + string(m[1])
+		dlURL := "https://" + p.effectiveDomain() + "/forum/" + string(m[1])
 		torrent, err := p.fetch(ctx, dlURL, creds)
 		if err != nil {
 			return nil, err

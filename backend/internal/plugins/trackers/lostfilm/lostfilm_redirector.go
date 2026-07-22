@@ -15,6 +15,7 @@ import (
 
 	"github.com/artyomsv/marauder/backend/internal/domain"
 	"github.com/artyomsv/marauder/backend/internal/extra"
+	"github.com/artyomsv/marauder/backend/internal/plugins/registry"
 	"github.com/artyomsv/marauder/backend/internal/plugins/trackers/forumcommon"
 )
 
@@ -65,10 +66,15 @@ var allowedRedirectHosts = map[string]struct{}{
 }
 
 // validateRedirectURL parses target and rejects it if (a) it doesn't
-// parse as an absolute http(s) URL, (b) its host isn't in the
-// allowlist, or (c) it resolves to a private/loopback/link-local IP.
-// The DNS check uses net.LookupIP — slow but tolerable on the
-// once-per-tick code path.
+// parse as an absolute http(s) URL, (b) its host isn't in the allowlist
+// (the static allowedRedirectHosts map, or an admin-configured custom
+// domain via registry.DomainAllowed — known hosts are already covered by
+// the map, so the resolver lookup passes a nil known list), or (c) it
+// resolves to a private/loopback/link-local IP. The DNS check uses
+// net.LookupIP — slow but tolerable on the once-per-tick code path — and
+// runs unconditionally once either allowlist check accepts the host, so a
+// custom domain gets exactly the same non-routable-IP scrutiny as a known
+// one.
 func validateRedirectURL(target string) error {
 	u, err := url.Parse(target)
 	if err != nil {
@@ -81,7 +87,7 @@ func validateRedirectURL(target string) error {
 	if host == "" {
 		return errors.New("redirect URL has no host")
 	}
-	if _, ok := allowedRedirectHosts[host]; !ok {
+	if _, ok := allowedRedirectHosts[host]; !ok && !registry.DomainAllowed(pluginName, host, nil) {
 		return fmt.Errorf("redirect host %q is not in the LostFilm allowlist", host)
 	}
 	ips, err := net.LookupIP(host)
@@ -128,7 +134,7 @@ func (p *plugin) validateRedirect(target string) error {
 func (p *plugin) fetchTorrentByPacked(ctx context.Context, topic *domain.Topic, creds *domain.TrackerCredential, packed string) (*domain.Payload, error) {
 	sess := p.session(creds)
 
-	searchURL := "https://" + p.domain + "/v_search.php?a=" + packed
+	searchURL := "https://" + p.effectiveDomain() + "/v_search.php?a=" + packed
 	next, err := p.resolveVSearchRedirect(ctx, sess, topic.URL, searchURL)
 	if err != nil {
 		return nil, err

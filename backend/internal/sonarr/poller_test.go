@@ -40,6 +40,32 @@ func (pollerFakeTracker) Download(context.Context, *domain.Topic, *domain.Check,
 
 func init() { registry.RegisterTracker(pollerFakeTracker{}) }
 
+// pollerMirrorTracker additionally implements registry.WithDomains so tests
+// can verify processURL canonicalizes a mirror-host grab URL before its
+// topics.GetByURL dedup pre-check. mirrortracker.test is the canonical
+// (first) domain; mirrortracker-alt.test is a known mirror.
+type pollerMirrorTracker struct{}
+
+func (pollerMirrorTracker) Name() string        { return "mirrortracker-test" }
+func (pollerMirrorTracker) DisplayName() string { return "Mirror Tracker" }
+func (pollerMirrorTracker) CanParse(u string) bool {
+	return strings.HasPrefix(u, "https://mirrortracker.test/") || strings.HasPrefix(u, "https://mirrortracker-alt.test/")
+}
+func (pollerMirrorTracker) Parse(context.Context, string) (*domain.Topic, error) {
+	return &domain.Topic{DisplayName: "Placeholder", Extra: map[string]any{}}, nil
+}
+func (pollerMirrorTracker) Check(context.Context, *domain.Topic, *domain.TrackerCredential) (*domain.Check, error) {
+	return nil, nil
+}
+func (pollerMirrorTracker) Download(context.Context, *domain.Topic, *domain.Check, *domain.TrackerCredential) (*domain.Payload, error) {
+	return nil, nil
+}
+func (pollerMirrorTracker) Domains() []string {
+	return []string{"mirrortracker.test", "mirrortracker-alt.test"}
+}
+
+func init() { registry.RegisterTracker(pollerMirrorTracker{}) }
+
 // --- fakes ---------------------------------------------------------------
 
 // fakeInstances mimics repo.SonarrInstances: ListEnabled filters by Enabled and
@@ -289,6 +315,50 @@ func TestPoller_ExistingTopicRefreshesVariantMetadata(t *testing.T) {
 	if updated.Category != "manual-category" || updated.DownloadDir != "/manual" {
 		t.Errorf("UpdateExisting=false must preserve routing, got category=%q dir=%q",
 			updated.Category, updated.DownloadDir)
+	}
+}
+
+func TestPoller_MirrorURLFindsExistingCanonicalTopic(t *testing.T) {
+	const canonicalURL = "https://mirrortracker.test/topic/9"
+	const mirrorURL = "https://mirrortracker-alt.test/topic/9"
+
+	srv := historyServer([]HistoryRecord{
+		{
+			ID: 1, Date: time.Now().UTC(), SourceTitle: "new AVC grab",
+			// Sonarr's indexer reports the mirror host, not the canonical one.
+			Data: HistoryData{NzbInfoURL: mirrorURL, TorrentInfoHash: "new-hash"},
+		},
+	})
+	defer srv.Close()
+
+	owner := uuid.New()
+	past := time.Now().Add(-time.Hour).UTC()
+	inst := baseInstance(srv.URL, owner)
+	inst.LastSeenAt = &past
+	ts := &fakeTopics{byURL: map[string]*domain.Topic{
+		// The topic is stored under its canonical URL (as BuildAndCreate
+		// would have persisted it), not the mirror URL Sonarr reports.
+		canonicalURL: {
+			ID: uuid.New(), URL: canonicalURL, DisplayName: "Existing",
+			Extra: map[string]any{
+				"source":                           topicSourceSonarr,
+				domain.TopicExtraSonarrInfoHash:    "old-hash",
+				domain.TopicExtraSonarrSourceTitle: "old grab",
+			},
+		},
+	}}
+
+	newTestPoller(&fakeInstances{}, fakeAdmin{}, ts).pollOnce(context.Background(), inst)
+
+	if len(ts.created) != 0 {
+		t.Fatalf("mirror-host grab must dedup against the canonical topic, not create a duplicate; got %d created", len(ts.created))
+	}
+	if len(ts.updated) != 1 {
+		t.Fatalf("want the canonical topic's variant metadata refreshed, got %d updates", len(ts.updated))
+	}
+	if ts.updated[0].Extra[domain.TopicExtraSonarrInfoHash] != "new-hash" ||
+		ts.updated[0].Extra[domain.TopicExtraSonarrSourceTitle] != "new AVC grab" {
+		t.Errorf("variant metadata not refreshed via mirror URL: %#v", ts.updated[0].Extra)
 	}
 }
 
