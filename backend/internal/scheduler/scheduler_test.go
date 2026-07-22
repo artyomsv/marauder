@@ -1824,7 +1824,7 @@ func TestRecordResult_ClassifiesAndPersistsErrorCode(t *testing.T) {
 	f := newFixture(t, &fakeTracker{}, false)
 	id := uuid.New()
 	f.s.recordResult(
-		context.Background(), zerolog.Nop(), id, "", false,
+		context.Background(), zerolog.Nop(), id, "kinozal", "", false,
 		time.Now(), `kinozal GET: Get "https://kinozal.tv/details.php?id=1": context deadline exceeded`,
 	)
 	if len(f.topics.recordCalls) != 1 {
@@ -1838,11 +1838,49 @@ func TestRecordResult_ClassifiesAndPersistsErrorCode(t *testing.T) {
 func TestRecordResult_SuccessLeavesErrorCodeEmpty(t *testing.T) {
 	f := newFixture(t, &fakeTracker{}, false)
 	id := uuid.New()
-	f.s.recordResult(context.Background(), zerolog.Nop(), id, "abc", true, time.Now(), "")
+	f.s.recordResult(context.Background(), zerolog.Nop(), id, "faketracker", "abc", true, time.Now(), "")
 	if len(f.topics.recordCalls) != 1 {
 		t.Fatalf("want 1 record call, got %d", len(f.topics.recordCalls))
 	}
 	if got := f.topics.recordCalls[0].errCode; got != "" {
 		t.Errorf("errCode = %q, want empty on success", got)
+	}
+}
+
+// --- domain rotation (issue #126 Phase 2) --------------------------------
+
+// fakeRotator is a programmable domainRotator that records every tracker
+// name it was asked to report a failure for.
+type fakeRotator struct{ calls []string }
+
+func (f *fakeRotator) ReportFailure(_ context.Context, name string) {
+	f.calls = append(f.calls, name)
+}
+
+func TestRecordResult_NetworkError_ReportsDomainFailure(t *testing.T) {
+	tests := []struct {
+		name      string
+		errMsg    string
+		wantCalls int
+	}{
+		{"unreachable rotates", "kinozal GET: dial tcp: connection refused", 1},
+		{"timeout rotates", "context deadline exceeded", 1},
+		{"auth error does not rotate", "kinozal login failed: invalid credentials", 0},
+		{"success does not rotate", "", 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rot := &fakeRotator{}
+			f := newFixture(t, &fakeTracker{}, false)
+			f.s.domains = rot
+			f.s.recordResult(context.Background(), zerolog.Nop(), uuid.New(), "kinozal",
+				"", false, time.Now(), tt.errMsg)
+			if len(rot.calls) != tt.wantCalls {
+				t.Errorf("ReportFailure calls = %d, want %d", len(rot.calls), tt.wantCalls)
+			}
+			if tt.wantCalls == 1 && rot.calls[0] != "kinozal" {
+				t.Errorf("ReportFailure tracker = %q, want kinozal", rot.calls[0])
+			}
+		})
 	}
 }

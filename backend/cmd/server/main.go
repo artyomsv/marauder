@@ -177,7 +177,7 @@ func run() error {
 	hub := sse.NewHub(logger)
 	tickets := sse.NewTicketStore()
 	bus := events.New(topicEventsRepo, disp, hub, logger) // hub is the live SSE publisher
-	sch := scheduler.New(cfg, logger, topicsRepo, clientsRepo, credsRepo, deliveriesRepo, master, bus)
+	sch := scheduler.New(cfg, logger, topicsRepo, clientsRepo, credsRepo, deliveriesRepo, master, bus, domainStore)
 	go func() {
 		if err := sch.Start(rootCtx); err != nil {
 			logger.Error().Err(err).Msg("scheduler exited with error")
