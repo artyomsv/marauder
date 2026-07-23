@@ -60,6 +60,7 @@ const en: Record<string, string> = {
   "topics.search.needsAccount": "needs a tracker account — add one under Accounts",
   "topics.search.loginFailed": "tracker login failed — check your account under Accounts",
   "topics.search.trackerFailed": "search failed on this tracker",
+  "topics.search.coverage": "Searches:",
   "topics.add.urlPlaceholder":
     "magnet:?xt=urn:btih:... or https://tracker.example.com/.../file.torrent",
   "topics.add.displayName": "Display name (optional)",

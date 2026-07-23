@@ -5,6 +5,7 @@ import { Loader2, Search as SearchIcon } from "lucide-react";
 import { api } from "@/lib/api";
 import { QK } from "@/lib/queryKeys";
 import { useT } from "@/i18n";
+import { useSystemInfo } from "@/lib/hooks/useSystemInfo";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
@@ -44,6 +45,13 @@ export function TrackerSearch({ onSelect }: TrackerSearchProps) {
   const t = useT();
   const [query, setQuery] = useState("");
   const [submitted, setSubmitted] = useState("");
+
+  // Which trackers this search actually covers — from the plugin manifest,
+  // so the list stays truthful as plugins gain WithSearch.
+  const systemInfo = useSystemInfo();
+  const searchableTrackers = (systemInfo.data?.trackers ?? []).filter(
+    (tr) => tr.supports_search,
+  );
 
   const search = useQuery({
     queryKey: QK.trackerSearch(submitted),
@@ -87,6 +95,20 @@ export function TrackerSearch({ onSelect }: TrackerSearchProps) {
           {t("topics.search.button")}
         </Button>
       </form>
+
+      {searchableTrackers.length > 0 && (
+        <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+          <span>{t("topics.search.coverage")}</span>
+          {searchableTrackers.map((tr) => (
+            <span
+              key={tr.name}
+              className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium"
+            >
+              {tr.display_name}
+            </span>
+          ))}
+        </div>
+      )}
 
       {search.isError && (
         <p className="text-xs text-destructive">{t("topics.search.failed")}</p>

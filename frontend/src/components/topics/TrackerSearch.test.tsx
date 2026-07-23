@@ -45,26 +45,79 @@ const RESULTS = {
   ],
 };
 
+const SYSTEM_INFO = {
+  version: { version: "test", commit: "", buildDate: "" },
+  trackers: [
+    {
+      name: "rutor",
+      display_name: "Rutor.org",
+      supports_interactive_login: false,
+      supports_credentials: false,
+      supports_search: true,
+    },
+    {
+      name: "rutracker",
+      display_name: "RuTracker.org",
+      supports_interactive_login: false,
+      supports_credentials: true,
+      supports_search: true,
+    },
+    {
+      name: "toloka",
+      display_name: "Toloka",
+      supports_interactive_login: false,
+      supports_credentials: true,
+      supports_search: false,
+    },
+  ],
+  clients: [],
+  notifiers: [],
+};
+
+// Dispatches by path: the component queries /system/info (coverage widget)
+// and /trackers/search. searchCalls() counts only real searches so
+// call-count assertions ignore the manifest fetch.
+function mockSearchResponse(response: unknown) {
+  mockApi.get.mockImplementation((path: string) => {
+    if (path.startsWith("/system/info")) return Promise.resolve(SYSTEM_INFO);
+    return Promise.resolve(response);
+  });
+}
+
+const searchCalls = () =>
+  mockApi.get.mock.calls.filter(([p]) => String(p).startsWith("/trackers/search"));
+
 beforeEach(() => {
   mockApi.get.mockReset();
 });
 
 describe("TrackerSearch", () => {
   it("does not search while typing; fires once on submit", async () => {
-    mockApi.get.mockResolvedValue(RESULTS);
+    mockSearchResponse(RESULTS);
     render(<TrackerSearch onSelect={() => {}} />, { wrapper: wrap() });
 
     await userEvent.type(screen.getByRole("textbox"), "test");
-    expect(mockApi.get).not.toHaveBeenCalled();
+    expect(searchCalls()).toHaveLength(0);
 
     await userEvent.click(screen.getByRole("button", { name: /search/i }));
     expect(await screen.findByText("Test release 1080p")).toBeInTheDocument();
-    expect(mockApi.get).toHaveBeenCalledTimes(1);
+    expect(searchCalls()).toHaveLength(1);
     expect(mockApi.get).toHaveBeenCalledWith("/trackers/search?q=test");
   });
 
+  it("lists the searchable trackers from the plugin manifest", async () => {
+    mockSearchResponse(RESULTS);
+    render(<TrackerSearch onSelect={() => {}} />, { wrapper: wrap() });
+
+    expect(await screen.findByText("Searches:")).toBeInTheDocument();
+    expect(screen.getByText("Rutor.org")).toBeInTheDocument();
+    expect(screen.getByText("RuTracker.org")).toBeInTheDocument();
+    // Non-searchable trackers must not appear in the coverage widget.
+    expect(screen.queryByText("Toloka")).toBeNull();
+  });
+
   it("renders result metadata and reports selection", async () => {
-    mockApi.get.mockResolvedValue(RESULTS);
+    mockSearchResponse(RESULTS);
     const onSelect = vi.fn();
     render(<TrackerSearch onSelect={onSelect} />, { wrapper: wrap() });
 
@@ -72,7 +125,8 @@ describe("TrackerSearch", () => {
     await userEvent.click(screen.getByRole("button", { name: /search/i }));
 
     const row = await screen.findByText("Test release 1080p");
-    expect(screen.getByText("Rutor.org")).toBeInTheDocument();
+    // "Rutor.org" appears in both the coverage widget and the result badge.
+    expect(screen.getAllByText("Rutor.org").length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText("1.4 GB")).toBeInTheDocument();
     expect(screen.getByText("↑17")).toBeInTheDocument();
 
@@ -81,7 +135,7 @@ describe("TrackerSearch", () => {
   });
 
   it("maps the credentials error to a friendly notice", async () => {
-    mockApi.get.mockResolvedValue(RESULTS);
+    mockSearchResponse(RESULTS);
     render(<TrackerSearch onSelect={() => {}} />, { wrapper: wrap() });
 
     await userEvent.type(screen.getByRole("textbox"), "test");
@@ -91,7 +145,7 @@ describe("TrackerSearch", () => {
   });
 
   it("shows an honest empty state after a search with no results", async () => {
-    mockApi.get.mockResolvedValue({ results: [], errors: [] });
+    mockSearchResponse({ results: [], errors: [] });
     render(<TrackerSearch onSelect={() => {}} />, { wrapper: wrap() });
 
     await userEvent.type(screen.getByRole("textbox"), "nothing");
@@ -101,8 +155,14 @@ describe("TrackerSearch", () => {
   });
 
   it("shows the failure notice and actually retries the same query", async () => {
-    mockApi.get.mockRejectedValueOnce(new Error("boom"));
-    mockApi.get.mockResolvedValueOnce(RESULTS);
+    let searchAttempts = 0;
+    mockApi.get.mockImplementation((path: string) => {
+      if (path.startsWith("/system/info")) return Promise.resolve(SYSTEM_INFO);
+      searchAttempts += 1;
+      return searchAttempts === 1
+        ? Promise.reject(new Error("boom"))
+        : Promise.resolve(RESULTS);
+    });
     render(<TrackerSearch onSelect={() => {}} />, { wrapper: wrap() });
 
     await userEvent.type(screen.getByRole("textbox"), "test");
@@ -112,11 +172,11 @@ describe("TrackerSearch", () => {
     // Same query, second click — must refetch, not silently no-op.
     await userEvent.click(screen.getByRole("button", { name: /search/i }));
     expect(await screen.findByText("Test release 1080p")).toBeInTheDocument();
-    expect(mockApi.get).toHaveBeenCalledTimes(2);
+    expect(searchCalls()).toHaveLength(2);
   });
 
   it("labels login_failed differently from a missing account", async () => {
-    mockApi.get.mockResolvedValue({
+    mockSearchResponse({
       results: [],
       errors: [
         {

@@ -463,6 +463,7 @@ export type SystemInfo = {
     display_name: string;
     supports_interactive_login: boolean;
     supports_credentials: boolean;
+    supports_search: boolean;
   }[];
   clients: { name: string; display_name: string }[];
   notifiers: { name: string; display_name: string }[];
