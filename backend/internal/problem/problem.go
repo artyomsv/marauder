@@ -65,6 +65,9 @@ var (
 	ErrBadGateway = func(detail string) *Error {
 		return New(http.StatusBadGateway, "bad-gateway", "Bad Gateway", detail)
 	}
+	ErrTooManyRequests = func(detail string) *Error {
+		return New(http.StatusTooManyRequests, "too-many-requests", "Too Many Requests", detail)
+	}
 )
 
 // Write renders an error as a JSON RFC 7807 response.

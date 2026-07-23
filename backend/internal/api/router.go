@@ -129,7 +129,7 @@ func NewRouter(d Deps) http.Handler {
 		Timeout:   10 * time.Second,
 		BaseURL:   d.Cfg.PublicBaseURL,
 	}
-	trackersH := &handlers.Trackers{BaseURL: d.Cfg.PublicBaseURL}
+	trackersH := &handlers.Trackers{BaseURL: d.Cfg.PublicBaseURL, Creds: d.Creds, Master: d.Master}
 	trackerDomainsH := &handlers.TrackerDomains{
 		Store:   d.TrackerSettings,
 		Probe:   handlers.DefaultDomainProbe,
@@ -170,6 +170,7 @@ func NewRouter(d Deps) http.Handler {
 			r.Get("/trackers/match", trackersH.Match)
 			r.Get("/trackers/seasons", trackersH.Seasons)
 			r.Get("/trackers/preview", trackersH.Preview)
+			r.Get("/trackers/search", trackersH.Search)
 
 			r.Get("/topics", topicsH.List)
 			r.Post("/topics", topicsH.Create)
