@@ -26,9 +26,9 @@ type fakeSearchTracker struct {
 	err     error
 }
 
-func (f *fakeSearchTracker) Name() string                                  { return f.name }
-func (f *fakeSearchTracker) DisplayName() string                           { return "Fake Search " + f.name }
-func (f *fakeSearchTracker) CanParse(string) bool                          { return false }
+func (f *fakeSearchTracker) Name() string                                         { return f.name }
+func (f *fakeSearchTracker) DisplayName() string                                  { return "Fake Search " + f.name }
+func (f *fakeSearchTracker) CanParse(string) bool                                 { return false }
 func (f *fakeSearchTracker) Parse(context.Context, string) (*domain.Topic, error) { return nil, nil }
 func (f *fakeSearchTracker) Check(context.Context, *domain.Topic, *domain.TrackerCredential) (*domain.Check, error) {
 	return nil, nil
