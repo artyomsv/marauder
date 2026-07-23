@@ -119,7 +119,12 @@ func (h *Trackers) Search(w http.ResponseWriter, r *http.Request) {
 		problem.Write(w, r, h.BaseURL, problem.ErrTooManyRequests("searching too fast; wait a moment"))
 		return
 	}
-	h.searchLast.Store(uid, time.Now())
+	// Stamp at completion, not admission: a search that itself takes longer
+	// than the cooldown would otherwise leave no cooldown at all. Must be a
+	// closure — a plain `defer Store(uid, time.Now())` evaluates time.Now()
+	// at the defer statement (admission time again). Registered only after
+	// the gate passes so rejected attempts can't keep extending the window.
+	defer func() { h.searchLast.Store(uid, time.Now()) }()
 
 	var searchers []registry.WithSearch
 	for _, t := range registry.ListTrackers() {

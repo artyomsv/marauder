@@ -101,16 +101,20 @@ export function AddTopicCard({ onClose, onCreated }: AddTopicCardProps) {
             {t("topics.search.tab")}
           </ModeTab>
         </div>
-        {mode === "search" ? (
-          <div className="p-6 pt-4">
-            <TrackerSearch
-              onSelect={(url) => {
-                setPrefillUrl(url);
-                setMode("url");
-              }}
-            />
-          </div>
-        ) : (
+        {/* Both panes stay mounted; tabs only toggle the `hidden` attribute.
+            Unmounting TopicForm on a tab peek would silently discard any
+            half-filled fields (URL, quality, client, …). The key-remount
+            still fires when a search result is picked — that reset is
+            intentional (the user chose a new URL). */}
+        <div hidden={mode !== "search"} className="p-6 pt-4">
+          <TrackerSearch
+            onSelect={(url) => {
+              setPrefillUrl(url);
+              setMode("url");
+            }}
+          />
+        </div>
+        <div hidden={mode === "search"}>
           <TopicForm
             key={prefillUrl} /* remount when a search result is picked */
             mode="add"
@@ -125,7 +129,7 @@ export function AddTopicCard({ onClose, onCreated }: AddTopicCardProps) {
               create.mutate(v);
             }}
           />
-        )}
+        </div>
       </Card>
     </motion.div>
   );

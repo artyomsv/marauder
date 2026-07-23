@@ -76,14 +76,22 @@ beforeEach(() => {
 });
 
 describe("AddTopicCard", () => {
+  // Visibility is asserted via the panes' `hidden` attribute rather than
+  // toBeVisible(): the card's framer-motion wrapper starts at opacity 0 in
+  // jsdom (animations don't run), which makes CSS-visibility matchers lie.
+  const inHiddenPane = (el: HTMLElement) => el.closest("div[hidden]") !== null;
+
   it("opens in URL mode with the topic form visible", () => {
     render(<AddTopicCard onClose={() => {}} onCreated={() => {}} />, {
       wrapper: wrap(),
     });
-    expect(screen.getByLabelText(/url or magnet link/i)).toBeInTheDocument();
+    expect(inHiddenPane(screen.getByLabelText(/url or magnet link/i))).toBe(false);
+    // The search pane stays mounted (state preservation) but hidden.
     expect(
-      screen.queryByPlaceholderText(/search releases across your trackers/i),
-    ).toBeNull();
+      inHiddenPane(
+        screen.getByPlaceholderText(/search releases across your trackers/i),
+      ),
+    ).toBe(true);
   });
 
   it("switches to search mode via the tab", async () => {
@@ -92,9 +100,27 @@ describe("AddTopicCard", () => {
     });
     await userEvent.click(screen.getByRole("button", { name: /search trackers/i }));
     expect(
-      screen.getByPlaceholderText(/search releases across your trackers/i),
-    ).toBeInTheDocument();
-    expect(screen.queryByLabelText(/url or magnet link/i)).toBeNull();
+      inHiddenPane(
+        screen.getByPlaceholderText(/search releases across your trackers/i),
+      ),
+    ).toBe(false);
+    expect(inHiddenPane(screen.getByLabelText(/url or magnet link/i))).toBe(true);
+  });
+
+  it("preserves half-filled form state across a tab peek", async () => {
+    render(<AddTopicCard onClose={() => {}} onCreated={() => {}} />, {
+      wrapper: wrap(),
+    });
+    const urlInput = screen.getByLabelText(/url or magnet link/i);
+    await userEvent.type(urlInput, "https://rutor.org/torrent/12345");
+
+    await userEvent.click(screen.getByRole("button", { name: /search trackers/i }));
+    await userEvent.click(screen.getByRole("button", { name: /by url/i }));
+
+    // Peeking at the search tab must not wipe what the user typed.
+    expect(screen.getByLabelText(/url or magnet link/i)).toHaveValue(
+      "https://rutor.org/torrent/12345",
+    );
   });
 
   it("prefills the URL form when a search result is picked", async () => {
