@@ -2,6 +2,7 @@ package rutor
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -205,5 +206,127 @@ func TestFetch_RejectsOffSiteHost(t *testing.T) {
 		if _, err := p.fetch(context.Background(), target); err == nil {
 			t.Errorf("fetch(%q) should be refused by the SSRF guard", target)
 		}
+	}
+}
+
+const searchFixtureHTML = `<html><body><table>
+<tr><td>Header row without link</td></tr>
+<tr class="gai"><td>22&nbsp;&#1048;&#1102;&#1083;&nbsp;26</td><td>
+<a class="downgif" href="/download/975045"><img src="/s/i/d.gif" alt="D"></a>
+<a href="magnet:?xt=urn:btih:aaaabbbbccccddddeeeeffff0000111122223333"><img src="/s/i/m.gif" alt="M"></a>
+<a href="/torrent/975045/test-release-1080p">Test release <b>1080p</b></a></td>
+<td align="right">1.4&nbsp;GB</td>
+<td align="center"><span class="green">&nbsp;17&nbsp;</span>&nbsp;<span class="red">3</span></td></tr>
+<tr class="tum"><td>21&nbsp;&#1048;&#1102;&#1083;&nbsp;26</td><td>
+<a class="downgif" href="/download/975001"><img src="/s/i/d.gif" alt="D"></a>
+<a href="/torrent/975001/another-release">Another release</a></td>
+<td align="right">804.9&nbsp;MB</td>
+<td align="center"><span class="green">2</span></td></tr>
+</table></body></html>`
+
+func newSearchTestPlugin(t *testing.T, handler http.HandlerFunc) (*plugin, *httptest.Server) {
+	t.Helper()
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+	p := &plugin{httpClient: &http.Client{
+		Transport: &e2eHostRewrite{to: strings.TrimPrefix(srv.URL, "http://")},
+	}}
+	return p, srv
+}
+
+// e2eHostRewrite forces rutor.org -> test server (scheme https -> http).
+type e2eHostRewrite struct{ to string }
+
+func (h *e2eHostRewrite) RoundTrip(req *http.Request) (*http.Response, error) {
+	req.URL.Scheme = "http"
+	req.URL.Host = h.to
+	return http.DefaultTransport.RoundTrip(req)
+}
+
+func TestSearch_ParsesResultsFromFixture(t *testing.T) {
+	var gotPath string
+	p, _ := newSearchTestPlugin(t, func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.EscapedPath()
+		_, _ = w.Write([]byte(searchFixtureHTML))
+	})
+	results, err := p.Search(context.Background(), "test query", nil)
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if gotPath != "/search/0/0/000/0/test%20query" {
+		t.Errorf("request path = %q, want /search/0/0/000/0/test%%20query", gotPath)
+	}
+	if len(results) != 2 {
+		t.Fatalf("results = %d, want 2", len(results))
+	}
+	first := results[0]
+	if first.Title != "Test release 1080p" {
+		t.Errorf("Title = %q", first.Title)
+	}
+	if first.URL != "https://rutor.org/torrent/975045" {
+		t.Errorf("URL = %q", first.URL)
+	}
+	if first.Size != "1.4 GB" {
+		t.Errorf("Size = %q", first.Size)
+	}
+	if first.Seeders != 17 {
+		t.Errorf("Seeders = %d", first.Seeders)
+	}
+	if results[1].Seeders != 2 {
+		t.Errorf("second Seeders = %d", results[1].Seeders)
+	}
+}
+
+func TestSearch_EmptyQuery_NoRequest(t *testing.T) {
+	called := false
+	p, _ := newSearchTestPlugin(t, func(http.ResponseWriter, *http.Request) { called = true })
+	results, err := p.Search(context.Background(), "   ", nil)
+	if err != nil || results != nil {
+		t.Fatalf("empty query: results=%v err=%v, want nil,nil", results, err)
+	}
+	if called {
+		t.Error("empty query must not hit the tracker")
+	}
+}
+
+func TestSearch_NoRows_EmptyNotError(t *testing.T) {
+	p, _ := newSearchTestPlugin(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`<html><body>no matches</body></html>`))
+	})
+	results, err := p.Search(context.Background(), "nothing", nil)
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if len(results) != 0 {
+		t.Errorf("results = %d, want 0", len(results))
+	}
+}
+
+func TestSearch_FetchError_Propagates(t *testing.T) {
+	p, _ := newSearchTestPlugin(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	})
+	if _, err := p.Search(context.Background(), "anything", nil); err == nil {
+		t.Fatal("Search on a 503 must return an error")
+	}
+}
+
+func TestSearch_CapsAtFiftyResults(t *testing.T) {
+	var rows strings.Builder
+	for i := 0; i < 60; i++ {
+		fmt.Fprintf(&rows,
+			`<tr class="gai"><td>d</td><td><a href="/torrent/%d/slug">Release %d</a></td>`+
+				`<td align="right">1 GB</td><td align="center"><span class="green">1</span></td></tr>`, i, i)
+	}
+	page := "<html><body><table>" + rows.String() + "</table></body></html>"
+	p, _ := newSearchTestPlugin(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(page))
+	})
+	results, err := p.Search(context.Background(), "many", nil)
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if len(results) != 50 {
+		t.Errorf("results = %d, want capped at 50", len(results))
 	}
 }

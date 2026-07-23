@@ -41,6 +41,38 @@ The form then renders:
 
 ---
 
+## Searching trackers from the AddTopic form
+
+Since issue #129 you don't have to hunt down the topic URL in a browser
+first: the **Topics → Add topic** card has a **Search trackers** tab.
+Type a title, press Search, and Marauder queries every searchable
+tracker concurrently (15 s budget each, first result page only, max 50
+rows per tracker). Clicking a result switches back to the By-URL tab
+with the topic URL prefilled — from there the normal match → preview →
+create flow applies unchanged.
+
+Searchable trackers today:
+
+| Tracker | Account needed for search? | Notes |
+|---|---|---|
+| Rutor | No | Public search; works with zero configuration |
+| RuTracker | **Yes** | `tracker.php` is login-gated. Add a RuTracker account under **Accounts** first; without one the search reports "needs a tracker account" and other trackers still return results |
+| LostFilm | No | Searches the public series catalog (the site's own search box endpoint). Results are **series** to subscribe to, not individual releases — seeders show as "—" |
+| Kinozal | No | Public `browse.php` search (works anonymously; a stored account's session is reused when present). Cyrillic queries are cp1251-encoded |
+| Anilibria | No | Searches the AniLiberty v1 API. Results are **release pages** to subscribe to — seeders show as "—" |
+
+Per-tracker failures never block the rest: a tracker that is down,
+slow, or missing credentials shows a one-line notice under the results
+while the others' results render normally. Searches are also
+rate-limited to one in flight per user — every search triggers real
+scraping requests against the tracker, and hammering them is how
+instances get IP-banned.
+
+Cyrillic queries work on RuTracker: Marauder transcodes the query to
+the cp1251 encoding the site expects before sending it.
+
+---
+
 ## Generic plugins (no account required)
 
 ### Generic magnet

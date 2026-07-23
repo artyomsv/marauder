@@ -4,18 +4,28 @@ import (
 	"context"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/artyomsv/marauder/backend/internal/crypto"
 	"github.com/artyomsv/marauder/backend/internal/plugins/registry"
 	"github.com/artyomsv/marauder/backend/internal/problem"
 )
 
 // Trackers handles /trackers/* — capability discovery for the AddTopic
-// form. The frontend pastes a URL, debounces, then calls /match to
-// learn what optional fields the tracker supports (quality picker,
-// episode filter, credentials requirement, etc.).
+// form (the frontend pastes a URL, debounces, then calls /match to learn
+// what optional fields the tracker supports) plus the cross-tracker
+// release search (issue #129).
 type Trackers struct {
 	BaseURL string
+	Creds   credentialStore   // nil-safe: login-gated search degrades to anonymous when absent
+	Master  *crypto.MasterKey // decrypts stored credentials for login-gated search
+	// SearchBudget overrides the per-tracker search timeout (tests); zero
+	// means the 15s default.
+	SearchBudget time.Duration
+
+	searchInFlight sync.Map // userID -> struct{}; per-user single-flight search gate
+	searchLast     sync.Map // userID -> time.Time; sequential-search cooldown gate
 }
 
 // trackerMatch is the response shape for GET /api/v1/trackers/match.

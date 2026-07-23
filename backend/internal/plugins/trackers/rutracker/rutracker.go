@@ -381,6 +381,22 @@ func (p *plugin) fetchTopicPage(ctx context.Context, topic *domain.Topic, creds 
 }
 
 func (p *plugin) fetchBytes(ctx context.Context, _ *domain.Topic, creds *domain.TrackerCredential, target string) ([]byte, error) {
+	// SSRF guard: every caller builds target from p.effectiveDomain(), but
+	// fetchBytes is the last line of defense before dialing — refuse any
+	// host that isn't the resolved effective domain (covers the test-
+	// injected p.domain) or a known/admin-configured rutracker domain, and
+	// any non-HTTP scheme (mirrors the rutor fetch guard).
+	u, err := url.Parse(strings.TrimSpace(target))
+	if err != nil {
+		return nil, fmt.Errorf("rutracker: invalid URL: %w", err)
+	}
+	if u.Scheme != "https" && u.Scheme != "http" {
+		return nil, fmt.Errorf("rutracker: refusing URL scheme %q", u.Scheme)
+	}
+	if u.Host != p.effectiveDomain() && !registry.DomainAllowed(pluginName, u.Hostname(), knownDomains) {
+		return nil, fmt.Errorf("rutracker: refusing to fetch off-site host %q", u.Hostname())
+	}
+
 	key := pluginName + ":nocreds"
 	if creds != nil {
 		key = forumcommon.SessionKey(pluginName, creds.UserID.String())

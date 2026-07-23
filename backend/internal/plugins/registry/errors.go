@@ -25,3 +25,9 @@ var ErrCaptchaRequired = errors.New("tracker requires a captcha")
 // no stored session exists or the stored session no longer authenticates.
 // The user must re-run the interactive (captcha) login flow.
 var ErrSessionExpired = errors.New("tracker session expired")
+
+// ErrSearchRequiresCredentials is returned by a WithSearch tracker whose
+// search page is login-gated (RuTracker's tracker.php) when no credential —
+// or no longer-valid session — is available. The search handler surfaces it
+// as a per-tracker "needs an account" notice instead of a hard failure.
+var ErrSearchRequiresCredentials = errors.New("search requires credentials")

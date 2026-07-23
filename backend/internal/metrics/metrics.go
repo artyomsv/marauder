@@ -63,6 +63,16 @@ var (
 		[]string{"tracker"},
 	)
 
+	// TrackerSearchTotal counts interactive tracker searches (issue #129),
+	// partitioned by tracker and outcome.
+	TrackerSearchTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "marauder_tracker_search_total",
+			Help: "Number of tracker search attempts, partitioned by tracker and result.",
+		},
+		[]string{"tracker", "result"}, // "ok" | "error" | "no_credentials" | "login_failed"
+	)
+
 	TrackerUpdatesTotal = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "marauder_tracker_updates_total",

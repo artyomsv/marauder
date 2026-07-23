@@ -49,7 +49,11 @@ export function TopicEventsTimeline({ topicId }: TopicEventsTimelineProps) {
             <div className="font-medium">
               {EVENT_LABELS[e.event_type] ? t(EVENT_LABELS[e.event_type]) : e.event_type}
             </div>
-            {e.message && <div className="text-muted-foreground">{e.message}</div>}
+            {/* The persisted message is the event's Title, which for every
+                topic-scoped event is (a variant of) the topic's own display
+                name — pure duplication inside a per-topic timeline, so it is
+                deliberately not rendered. Error details have their own home
+                (TopicError / last_error_code). */}
             <time className="text-xs text-muted-foreground">
               {new Date(e.created_at).toLocaleString()}
             </time>

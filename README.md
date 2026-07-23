@@ -96,6 +96,10 @@ What works **today**:
 - OIDC sign-in via Keycloak (or any OIDC provider). Bring up the
   bundled Keycloak realm with the `sso` compose profile.
 - 16 tracker plugins, 5 torrent-client plugins, 4 notifier plugins.
+- In-app cross-tracker search: type a title in the Add-topic form,
+  pick a result, monitor it — no browser trip to find the topic URL
+  (Rutor, Kinozal, LostFilm, Anilibria public; RuTracker with a
+  stored account).
 - Generic-magnet → qBittorrent end-to-end pipeline validated against
   a real qBittorrent docker container — see
   [`docs/test-e2e-magnet.md`](docs/test-e2e-magnet.md).
