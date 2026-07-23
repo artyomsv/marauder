@@ -62,6 +62,10 @@ export const QK = {
   // to suggest values in the AddTopic form's category combobox.
   clientCategories: (id: string) => ["clientCategories", id] as const,
 
+  // /trackers/search?q=… cross-tracker release search (issue #129). Used by
+  // the AddTopic search mode.
+  trackerSearch: (q: string) => ["trackerSearch", q] as const,
+
   // /system/trackers/domains — per-tracker mirror/domain configuration
   // (admin only, issue #126).
   trackerDomains: ["tracker-domains"] as const,

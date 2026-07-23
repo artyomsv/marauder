@@ -53,6 +53,13 @@ const ru: Record<string, string> = {
   "topics.empty.cta": "Добавить первую тему",
   "topics.add.title": "Добавить новую тему",
   "topics.add.url": "URL или magnet-ссылка",
+  "topics.search.tab": "Поиск по трекерам",
+  "topics.search.byUrl": "По ссылке",
+  "topics.search.placeholder": "Поиск релизов по вашим трекерам…",
+  "topics.search.button": "Найти",
+  "topics.search.failed": "Поиск не удался. Попробуйте ещё раз.",
+  "topics.search.noResults": "Ничего не найдено",
+  "topics.search.needsAccount": "нужен аккаунт трекера — добавьте его в разделе «Аккаунты»",
   "topics.add.urlPlaceholder":
     "magnet:?xt=urn:btih:... или https://tracker.example.com/.../file.torrent",
   "topics.add.displayName": "Отображаемое имя (необязательно)",

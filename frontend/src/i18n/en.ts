@@ -51,6 +51,13 @@ const en: Record<string, string> = {
   "topics.empty.cta": "Add your first topic",
   "topics.add.title": "Add a new topic",
   "topics.add.url": "URL or magnet link",
+  "topics.search.tab": "Search trackers",
+  "topics.search.byUrl": "By URL",
+  "topics.search.placeholder": "Search releases across your trackers…",
+  "topics.search.button": "Search",
+  "topics.search.failed": "Search failed. Try again.",
+  "topics.search.noResults": "No results",
+  "topics.search.needsAccount": "needs a tracker account — add one under Accounts",
   "topics.add.urlPlaceholder":
     "magnet:?xt=urn:btih:... or https://tracker.example.com/.../file.torrent",
   "topics.add.displayName": "Display name (optional)",
