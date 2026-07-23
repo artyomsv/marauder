@@ -15,15 +15,18 @@ function wrap(ui: React.ReactNode) {
 
 describe("TopicEventsTimeline", () => {
   beforeEach(() => vi.clearAllMocks());
-  it("renders events newest-first with labels", async () => {
+  it("renders event labels and timestamps without the duplicated topic title", async () => {
     (api.topicEvents as ReturnType<typeof vi.fn>).mockResolvedValue({
       events: [
-        { id: 2, event_type: "release.found", severity: "info", message: "New release", created_at: "2026-06-25T10:00:00Z" },
-        { id: 1, event_type: "check.failed", severity: "error", message: "boom", created_at: "2026-06-25T09:00:00Z" },
+        { id: 2, event_type: "release.found", severity: "info", message: "Super Mario Galaxy Movie [2026, DCPRip 1080p]", created_at: "2026-06-25T10:00:00Z" },
+        { id: 1, event_type: "check.failed", severity: "error", message: "Super Mario Galaxy Movie [2026, DCPRip 1080p]", created_at: "2026-06-25T09:00:00Z" },
       ],
     });
     wrap(<TopicEventsTimeline topicId="t1" />);
-    expect(await screen.findByText("New release")).toBeInTheDocument();
-    expect(screen.getByText("boom")).toBeInTheDocument();
+    expect(await screen.findByText("new release")).toBeInTheDocument();
+    expect(screen.getByText("error")).toBeInTheDocument();
+    // The persisted message is the topic's own title — inside a per-topic
+    // timeline it must not be rendered (it duplicated on every row).
+    expect(screen.queryByText(/Super Mario Galaxy Movie/)).toBeNull();
   });
 });
