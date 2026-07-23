@@ -455,10 +455,12 @@ public `/series/<slug>/seasons` page, reuses the episode parser); the
 AddTopic form uses it to constrain the "start from" season/episode
 selectors to released values.
 
-`WithSearch` (Rutor, RuTracker; issue #129) searches the tracker by
-free-text query and returns candidate topics (`SearchResult{Title, URL,
+`WithSearch` (Rutor, RuTracker, LostFilm; issue #129) searches the tracker
+by free-text query and returns candidate topics (`SearchResult{Title, URL,
 Size, Seeders, Category}` — URL in canonical form so it feeds the normal
-match→parse→create pipeline). `GET /api/v1/trackers/search?q=&trackers=`
+match→parse→create pipeline). LostFilm searches its public JSON endpoint
+(`/ajaxik.php?act=common&type=search`) and returns series pages
+(Seeders -1, Category "Series") — subscribing, not grabbing a release. `GET /api/v1/trackers/search?q=&trackers=`
 fans out to all `WithSearch` trackers concurrently (15s per tracker,
 fail-open per tracker into an `errors` array, per-user single-flight →
 429, metric `marauder_tracker_search_total{tracker,result}`); for a

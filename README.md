@@ -98,7 +98,7 @@ What works **today**:
 - 16 tracker plugins, 5 torrent-client plugins, 4 notifier plugins.
 - In-app cross-tracker search: type a title in the Add-topic form,
   pick a result, monitor it — no browser trip to find the topic URL
-  (Rutor public, RuTracker with a stored account).
+  (Rutor + LostFilm public, RuTracker with a stored account).
 - Generic-magnet → qBittorrent end-to-end pipeline validated against
   a real qBittorrent docker container — see
   [`docs/test-e2e-magnet.md`](docs/test-e2e-magnet.md).

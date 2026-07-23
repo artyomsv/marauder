@@ -11,8 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **In-app tracker search** (#129): the AddTopic card gains a **Search
   trackers** tab — type a title, get live results from every searchable
-  tracker (Rutor public, RuTracker with a stored account), click one to
-  prefill the topic URL into the normal add flow. New optional
+  tracker (Rutor public, RuTracker with a stored account, LostFilm's
+  public series catalog), click one to prefill the topic URL into the
+  normal add flow. New optional
   `registry.WithSearch` plugin capability, `GET /api/v1/trackers/search`
   (concurrent per-tracker fan-out, fail-open, per-user single-flight
   guard), `supports_search` in `/system/info`, and a

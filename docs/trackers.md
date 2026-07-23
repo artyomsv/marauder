@@ -57,6 +57,7 @@ Searchable trackers today:
 |---|---|---|
 | Rutor | No | Public search; works with zero configuration |
 | RuTracker | **Yes** | `tracker.php` is login-gated. Add a RuTracker account under **Accounts** first; without one the search reports "needs a tracker account" and other trackers still return results |
+| LostFilm | No | Searches the public series catalog (the site's own search box endpoint). Results are **series** to subscribe to, not individual releases — seeders show as "—" |
 
 Per-tracker failures never block the rest: a tracker that is down,
 slow, or missing credentials shows a one-line notice under the results
