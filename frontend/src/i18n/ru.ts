@@ -60,6 +60,8 @@ const ru: Record<string, string> = {
   "topics.search.failed": "Поиск не удался. Попробуйте ещё раз.",
   "topics.search.noResults": "Ничего не найдено",
   "topics.search.needsAccount": "нужен аккаунт трекера — добавьте его в разделе «Аккаунты»",
+  "topics.search.loginFailed": "не удалось войти на трекер — проверьте аккаунт в разделе «Аккаунты»",
+  "topics.search.trackerFailed": "поиск на этом трекере не удался",
   "topics.add.urlPlaceholder":
     "magnet:?xt=urn:btih:... или https://tracker.example.com/.../file.torrent",
   "topics.add.displayName": "Отображаемое имя (необязательно)",

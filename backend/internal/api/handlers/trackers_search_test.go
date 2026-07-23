@@ -2,7 +2,9 @@ package handlers
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -14,6 +16,7 @@ import (
 
 	"github.com/artyomsv/marauder/backend/internal/api/middleware"
 	"github.com/artyomsv/marauder/backend/internal/auth"
+	"github.com/artyomsv/marauder/backend/internal/crypto"
 	"github.com/artyomsv/marauder/backend/internal/domain"
 	"github.com/artyomsv/marauder/backend/internal/plugins/registry"
 )
@@ -114,8 +117,10 @@ type searchResponse struct {
 		Seeders     int    `json:"seeders"`
 	} `json:"results"`
 	Errors []struct {
-		TrackerName string `json:"tracker_name"`
-		Error       string `json:"error"`
+		TrackerName        string `json:"tracker_name"`
+		TrackerDisplayName string `json:"tracker_display_name"`
+		Code               string `json:"code"`
+		Error              string `json:"error"`
 	} `json:"errors"`
 }
 
@@ -204,8 +209,8 @@ func TestSearch_CredsTrackerWithoutCredential_ReportsError(t *testing.T) {
 		t.Fatalf("results = %+v, want only 'public'", resp.Results)
 	}
 	if len(resp.Errors) != 1 || resp.Errors[0].TrackerName != "fake-search-gated" ||
-		resp.Errors[0].Error != "search requires credentials" {
-		t.Fatalf("errors = %+v, want gated needs-credentials entry", resp.Errors)
+		resp.Errors[0].Code != "no_credentials" {
+		t.Fatalf("errors = %+v, want gated no_credentials entry", resp.Errors)
 	}
 }
 
@@ -257,5 +262,205 @@ func TestListTrackerInfos_SupportsSearchFlag(t *testing.T) {
 	}
 	if infos[1]["supports_search"] != false {
 		t.Errorf("plain tracker: supports_search = %v, want false", infos[1]["supports_search"])
+	}
+}
+
+// fakeErrSearchTracker always fails with a generic (non-sentinel) error.
+type fakeErrSearchTracker struct{ fakeSearchTracker }
+
+func (f *fakeErrSearchTracker) Search(context.Context, string, *domain.TrackerCredential) ([]registry.SearchResult, error) {
+	return nil, errors.New("GET https://secret-mirror.internal:3128 -> 503")
+}
+
+// fakeHangSearchTracker blocks until its context expires and returns the
+// context error, for the per-tracker timeout test.
+type fakeHangSearchTracker struct{ fakeSearchTracker }
+
+func (f *fakeHangSearchTracker) Search(ctx context.Context, _ string, _ *domain.TrackerCredential) ([]registry.SearchResult, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+// fakeWarmTracker is WithCredentials + WithSearch and records the creds the
+// handler warmed for it, for the searchCredentials branch tests.
+type fakeWarmTracker struct {
+	fakeSearchTracker
+	verifyOK bool
+	loginErr error
+	gotCreds *domain.TrackerCredential
+}
+
+func (f *fakeWarmTracker) Login(context.Context, *domain.TrackerCredential) error { return f.loginErr }
+func (f *fakeWarmTracker) Verify(context.Context, *domain.TrackerCredential) (bool, error) {
+	return f.verifyOK, nil
+}
+func (f *fakeWarmTracker) Search(_ context.Context, _ string, creds *domain.TrackerCredential) ([]registry.SearchResult, error) {
+	f.gotCreds = creds
+	if creds == nil {
+		return nil, registry.ErrSearchRequiresCredentials
+	}
+	return []registry.SearchResult{{Title: "authed", URL: "https://warm.test/1", Seeders: 1}}, nil
+}
+
+func testMasterKey(t *testing.T) *crypto.MasterKey {
+	t.Helper()
+	mk, err := crypto.LoadMasterKey(base64.StdEncoding.EncodeToString([]byte(strings.Repeat("k", 32))))
+	if err != nil {
+		t.Fatalf("load master key: %v", err)
+	}
+	return mk
+}
+
+func encryptedCred(t *testing.T, mk *crypto.MasterKey, tracker string) *domain.TrackerCredential {
+	t.Helper()
+	enc, nonce, err := mk.Encrypt([]byte("hunter2"))
+	if err != nil {
+		t.Fatalf("encrypt: %v", err)
+	}
+	return &domain.TrackerCredential{
+		ID: uuid.New(), UserID: uuid.New(), TrackerName: tracker,
+		Username: "user", SecretEnc: enc, SecretNonce: nonce,
+	}
+}
+
+func TestSearch_TrackerError_ClassifiedNotLeaked(t *testing.T) {
+	registry.RegisterTracker(&fakeErrSearchTracker{fakeSearchTracker{name: "fake-search-err"}})
+
+	h := &Trackers{BaseURL: "http://test"}
+	w := httptest.NewRecorder()
+	h.Search(w, searchRequest(t, uuid.New(), "q=test&trackers=fake-search-err"))
+	var resp searchResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Errors) != 1 {
+		t.Fatalf("errors = %+v, want 1", resp.Errors)
+	}
+	if resp.Errors[0].Code != "failed" {
+		t.Errorf("code = %q, want failed", resp.Errors[0].Code)
+	}
+	// The raw transport error (internal hostnames) must never reach the client.
+	if strings.Contains(w.Body.String(), "secret-mirror.internal") {
+		t.Error("raw error text leaked into the response body")
+	}
+}
+
+func TestSearch_HungTracker_TimesOutOthersStillReturn(t *testing.T) {
+	registry.RegisterTracker(&fakeHangSearchTracker{fakeSearchTracker{name: "fake-search-hang"}})
+	registry.RegisterTracker(&fakeSearchTracker{name: "fake-search-fast", results: []registry.SearchResult{
+		{Title: "quick", URL: "https://fast.test/1", Seeders: 4},
+	}})
+
+	h := &Trackers{BaseURL: "http://test", SearchBudget: 50 * time.Millisecond}
+	w := httptest.NewRecorder()
+	h.Search(w, searchRequest(t, uuid.New(), "q=test&trackers=fake-search-hang,fake-search-fast"))
+	var resp searchResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Results) != 1 || resp.Results[0].Title != "quick" {
+		t.Fatalf("results = %+v, want quick only", resp.Results)
+	}
+	if len(resp.Errors) != 1 || resp.Errors[0].Code != "timeout" {
+		t.Fatalf("errors = %+v, want one timeout", resp.Errors)
+	}
+}
+
+func TestSearch_SequentialTooFast_TooManyRequests(t *testing.T) {
+	registry.RegisterTracker(&fakeSearchTracker{name: "fake-search-cooldown"})
+
+	h := &Trackers{BaseURL: "http://test"}
+	uid := uuid.New()
+	w1 := httptest.NewRecorder()
+	h.Search(w1, searchRequest(t, uid, "q=test&trackers=fake-search-cooldown"))
+	if w1.Code != http.StatusOK {
+		t.Fatalf("first search status = %d, want 200", w1.Code)
+	}
+	w2 := httptest.NewRecorder()
+	h.Search(w2, searchRequest(t, uid, "q=test&trackers=fake-search-cooldown"))
+	if w2.Code != http.StatusTooManyRequests {
+		t.Errorf("immediate second search status = %d, want 429", w2.Code)
+	}
+}
+
+func TestSearchCredentials_VerifyOK_UsesStoredCredential(t *testing.T) {
+	mk := testMasterKey(t)
+	cred := encryptedCred(t, mk, "fake-warm-verify")
+	warm := &fakeWarmTracker{fakeSearchTracker: fakeSearchTracker{name: "fake-warm-verify"}, verifyOK: true}
+	registry.RegisterTracker(warm)
+
+	h := &Trackers{BaseURL: "http://test", Creds: &fakeSearchCredStore{cred: cred}, Master: mk}
+	w := httptest.NewRecorder()
+	h.Search(w, searchRequest(t, cred.UserID, "q=test&trackers=fake-warm-verify"))
+	var resp searchResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Results) != 1 || resp.Results[0].Title != "authed" {
+		t.Fatalf("results = %+v, want authed", resp.Results)
+	}
+	if warm.gotCreds == nil || string(warm.gotCreds.SecretEnc) != "hunter2" {
+		t.Fatalf("plugin creds = %+v, want decrypted secret", warm.gotCreds)
+	}
+}
+
+func TestSearchCredentials_VerifyFailLoginOK_UsesStoredCredential(t *testing.T) {
+	mk := testMasterKey(t)
+	cred := encryptedCred(t, mk, "fake-warm-login")
+	warm := &fakeWarmTracker{fakeSearchTracker: fakeSearchTracker{name: "fake-warm-login"}, verifyOK: false}
+	registry.RegisterTracker(warm)
+
+	h := &Trackers{BaseURL: "http://test", Creds: &fakeSearchCredStore{cred: cred}, Master: mk}
+	w := httptest.NewRecorder()
+	h.Search(w, searchRequest(t, cred.UserID, "q=test&trackers=fake-warm-login"))
+	var resp searchResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Results) != 1 {
+		t.Fatalf("results = %+v, want 1 (login path should warm creds)", resp.Results)
+	}
+}
+
+func TestSearchCredentials_LoginFails_ReportsLoginFailed(t *testing.T) {
+	mk := testMasterKey(t)
+	cred := encryptedCred(t, mk, "fake-warm-dead")
+	warm := &fakeWarmTracker{
+		fakeSearchTracker: fakeSearchTracker{name: "fake-warm-dead"},
+		verifyOK:          false,
+		loginErr:          errors.New("bad password"),
+	}
+	registry.RegisterTracker(warm)
+
+	h := &Trackers{BaseURL: "http://test", Creds: &fakeSearchCredStore{cred: cred}, Master: mk}
+	w := httptest.NewRecorder()
+	h.Search(w, searchRequest(t, cred.UserID, "q=test&trackers=fake-warm-dead"))
+	var resp searchResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Errors) != 1 || resp.Errors[0].Code != "login_failed" {
+		t.Fatalf("errors = %+v, want login_failed (stored account, dead login)", resp.Errors)
+	}
+}
+
+func TestSearchCredentials_DecryptFails_ReportsLoginFailed(t *testing.T) {
+	mk := testMasterKey(t)
+	cred := &domain.TrackerCredential{
+		ID: uuid.New(), UserID: uuid.New(), TrackerName: "fake-warm-garbled",
+		Username: "user", SecretEnc: []byte("not-ciphertext"), SecretNonce: []byte("bad"),
+	}
+	warm := &fakeWarmTracker{fakeSearchTracker: fakeSearchTracker{name: "fake-warm-garbled"}, verifyOK: true}
+	registry.RegisterTracker(warm)
+
+	h := &Trackers{BaseURL: "http://test", Creds: &fakeSearchCredStore{cred: cred}, Master: mk}
+	w := httptest.NewRecorder()
+	h.Search(w, searchRequest(t, cred.UserID, "q=test&trackers=fake-warm-garbled"))
+	var resp searchResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Errors) != 1 || resp.Errors[0].Code != "login_failed" {
+		t.Fatalf("errors = %+v, want login_failed (undecryptable stored secret)", resp.Errors)
 	}
 }

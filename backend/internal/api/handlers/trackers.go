@@ -20,8 +20,12 @@ type Trackers struct {
 	BaseURL string
 	Creds   credentialStore   // nil-safe: login-gated search degrades to anonymous when absent
 	Master  *crypto.MasterKey // decrypts stored credentials for login-gated search
+	// SearchBudget overrides the per-tracker search timeout (tests); zero
+	// means the 15s default.
+	SearchBudget time.Duration
 
 	searchInFlight sync.Map // userID -> struct{}; per-user single-flight search gate
+	searchLast     sync.Map // userID -> time.Time; sequential-search cooldown gate
 }
 
 // trackerMatch is the response shape for GET /api/v1/trackers/match.

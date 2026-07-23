@@ -35,7 +35,14 @@ const RESULTS = {
       seeders: 17,
     },
   ],
-  errors: [{ tracker_name: "rutracker", error: "search requires credentials" }],
+  errors: [
+    {
+      tracker_name: "rutracker",
+      tracker_display_name: "RuTracker.org",
+      code: "no_credentials",
+      error: "search requires credentials",
+    },
+  ],
 };
 
 beforeEach(() => {
@@ -91,5 +98,41 @@ describe("TrackerSearch", () => {
     await userEvent.click(screen.getByRole("button", { name: /search/i }));
 
     expect(await screen.findByText("No results")).toBeInTheDocument();
+  });
+
+  it("shows the failure notice and actually retries the same query", async () => {
+    mockApi.get.mockRejectedValueOnce(new Error("boom"));
+    mockApi.get.mockResolvedValueOnce(RESULTS);
+    render(<TrackerSearch onSelect={() => {}} />, { wrapper: wrap() });
+
+    await userEvent.type(screen.getByRole("textbox"), "test");
+    await userEvent.click(screen.getByRole("button", { name: /search/i }));
+    expect(await screen.findByText(/search failed\. try again\./i)).toBeInTheDocument();
+
+    // Same query, second click — must refetch, not silently no-op.
+    await userEvent.click(screen.getByRole("button", { name: /search/i }));
+    expect(await screen.findByText("Test release 1080p")).toBeInTheDocument();
+    expect(mockApi.get).toHaveBeenCalledTimes(2);
+  });
+
+  it("labels login_failed differently from a missing account", async () => {
+    mockApi.get.mockResolvedValue({
+      results: [],
+      errors: [
+        {
+          tracker_name: "rutracker",
+          tracker_display_name: "RuTracker.org",
+          code: "login_failed",
+          error: "tracker login failed",
+        },
+      ],
+    });
+    render(<TrackerSearch onSelect={() => {}} />, { wrapper: wrap() });
+
+    await userEvent.type(screen.getByRole("textbox"), "test");
+    await userEvent.click(screen.getByRole("button", { name: /search/i }));
+
+    expect(await screen.findByText(/tracker login failed/i)).toBeInTheDocument();
+    expect(screen.queryByText(/needs a tracker account/i)).toBeNull();
   });
 });

@@ -70,7 +70,7 @@ var (
 			Name: "marauder_tracker_search_total",
 			Help: "Number of tracker search attempts, partitioned by tracker and result.",
 		},
-		[]string{"tracker", "result"}, // "ok" | "error" | "no_credentials"
+		[]string{"tracker", "result"}, // "ok" | "error" | "no_credentials" | "login_failed"
 	)
 
 	TrackerUpdatesTotal = promauto.NewCounterVec(

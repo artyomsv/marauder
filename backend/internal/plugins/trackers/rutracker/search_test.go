@@ -139,3 +139,24 @@ func TestSearch_AnonymousShell_ErrSearchRequiresCredentials(t *testing.T) {
 		t.Fatalf("err = %v, want ErrSearchRequiresCredentials", err)
 	}
 }
+
+func TestSearch_EmptyQuery_NoRequestNoCredsCheck(t *testing.T) {
+	called := false
+	p := newSearchTestPlugin(t, func(http.ResponseWriter, *http.Request) { called = true })
+	results, err := p.Search(context.Background(), "   ", nil)
+	if err != nil || results != nil {
+		t.Fatalf("empty query: results=%v err=%v, want nil,nil", results, err)
+	}
+	if called {
+		t.Error("empty query must not hit the tracker")
+	}
+}
+
+func TestSearch_FetchError_Propagates(t *testing.T) {
+	p := newSearchTestPlugin(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	})
+	if _, err := p.Search(context.Background(), "anything", testCreds()); err == nil {
+		t.Fatal("Search on a 503 must return an error")
+	}
+}

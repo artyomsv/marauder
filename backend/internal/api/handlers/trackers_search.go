@@ -3,9 +3,11 @@ package handlers
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -19,9 +21,29 @@ import (
 )
 
 const (
-	searchQueryMaxRunes    = 200
-	searchPerTrackerBudget = 15 * time.Second
+	searchQueryMaxRunes           = 200
+	defaultSearchPerTrackerBudget = 15 * time.Second
+	searchCooldown                = 2 * time.Second
 )
+
+// Stable per-tracker error codes for the search response. The frontend
+// switches on these; the human-readable text is a canned message, never a
+// raw Go error chain — transport errors embed admin-configured mirror
+// hosts, resolved IPs, and proxy topology that non-admin users must not
+// see (the raw error is server-logged instead).
+const (
+	searchErrNoCredentials = "no_credentials"
+	searchErrLoginFailed   = "login_failed"
+	searchErrTimeout       = "timeout"
+	searchErrFailed        = "failed"
+)
+
+var searchErrMessages = map[string]string{
+	searchErrNoCredentials: "search requires credentials",
+	searchErrLoginFailed:   "tracker login failed",
+	searchErrTimeout:       "search timed out",
+	searchErrFailed:        "search failed",
+}
 
 // searchResultView is one row of GET /trackers/search — a registry result
 // plus which tracker produced it.
@@ -32,18 +54,32 @@ type searchResultView struct {
 }
 
 // searchErrorView reports one tracker's failure without failing the whole
-// search (per-tracker fail-open).
+// search (per-tracker fail-open). Code is one of the searchErr* constants;
+// Error is the matching canned message (kept for display fallback).
 type searchErrorView struct {
-	TrackerName string `json:"tracker_name"`
-	Error       string `json:"error"`
+	TrackerName        string `json:"tracker_name"`
+	TrackerDisplayName string `json:"tracker_display_name"`
+	Code               string `json:"code"`
+	Error              string `json:"error"`
+}
+
+func newSearchErrorView(ws registry.WithSearch, code string) *searchErrorView {
+	return &searchErrorView{
+		TrackerName:        ws.Name(),
+		TrackerDisplayName: ws.DisplayName(),
+		Code:               code,
+		Error:              searchErrMessages[code],
+	}
 }
 
 // Search handles GET /api/v1/trackers/search?q=<query>&trackers=<csv>.
 // Fans out to every WithSearch tracker concurrently; per-tracker failures
 // degrade to entries in `errors` (fail-open) — only a bad request shape
-// produces a non-200. A per-user single-flight gate returns 429 on
-// concurrent searches: every call triggers real scraping requests, and a
-// runaway loop could get the instance's IP banned by trackers.
+// produces a non-200. Two abuse gates protect the trackers (every call
+// triggers real scraping requests, and hammering them is how instances
+// get IP-banned — and a dead session means each search replays a real
+// login): a per-user single-flight (concurrent search → 429) and a short
+// per-user cooldown between sequential searches (→ 429).
 //
 // Deliberate non-behaviour: search failures do NOT feed
 // domains.Store.ReportFailure — domain rotation stays scheduler-driven so
@@ -61,7 +97,8 @@ func (h *Trackers) Search(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if utf8.RuneCountInString(q) > searchQueryMaxRunes {
-		problem.Write(w, r, h.BaseURL, problem.ErrBadRequest("query too long (max 200 characters)"))
+		problem.Write(w, r, h.BaseURL, problem.ErrBadRequest(
+			fmt.Sprintf("query too long (max %d characters)", searchQueryMaxRunes)))
 		return
 	}
 	var filter map[string]bool
@@ -78,6 +115,11 @@ func (h *Trackers) Search(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer h.searchInFlight.Delete(uid)
+	if last, ok := h.searchLast.Load(uid); ok && time.Since(last.(time.Time)) < searchCooldown {
+		problem.Write(w, r, h.BaseURL, problem.ErrTooManyRequests("searching too fast; wait a moment"))
+		return
+	}
+	h.searchLast.Store(uid, time.Now())
 
 	var searchers []registry.WithSearch
 	for _, t := range registry.ListTrackers() {
@@ -93,23 +135,44 @@ func (h *Trackers) Search(w http.ResponseWriter, r *http.Request) {
 		errView *searchErrorView
 	}
 	outcomes := make([]outcome, len(searchers))
-	done := make(chan struct{})
+	var wg sync.WaitGroup
 	for i, ws := range searchers {
+		wg.Add(1)
 		go func(i int, ws registry.WithSearch) {
-			defer func() { done <- struct{}{} }()
-			ctx, cancel := context.WithTimeout(r.Context(), searchPerTrackerBudget)
+			defer wg.Done()
+			// A panic in a plugin's Search must not kill the process: chi's
+			// Recoverer only covers the handler goroutine, not these children.
+			defer func() {
+				if rec := recover(); rec != nil {
+					log.Error().Str("tracker", ws.Name()).Any("panic", rec).
+						Msg("tracker search panicked")
+					metrics.TrackerSearchTotal.WithLabelValues(ws.Name(), "error").Inc()
+					outcomes[i] = outcome{errView: newSearchErrorView(ws, searchErrFailed)}
+				}
+			}()
+			ctx, cancel := context.WithTimeout(r.Context(), h.perTrackerBudget())
 			defer cancel()
 			name := ws.Name()
-			creds := h.searchCredentials(ctx, uid, ws)
+			creds, loginFailed := h.searchCredentials(ctx, uid, ws)
 			results, err := ws.Search(ctx, q, creds)
 			switch {
 			case errors.Is(err, registry.ErrSearchRequiresCredentials):
-				metrics.TrackerSearchTotal.WithLabelValues(name, "no_credentials").Inc()
-				outcomes[i] = outcome{errView: &searchErrorView{TrackerName: name, Error: "search requires credentials"}}
+				// A stored-but-unusable credential is a different user story
+				// ("your login broke") than a missing one ("add an account").
+				code := searchErrNoCredentials
+				if loginFailed {
+					code = searchErrLoginFailed
+				}
+				metrics.TrackerSearchTotal.WithLabelValues(name, code).Inc()
+				outcomes[i] = outcome{errView: newSearchErrorView(ws, code)}
 			case err != nil:
+				code := searchErrFailed
+				if errors.Is(err, context.DeadlineExceeded) || ctx.Err() != nil {
+					code = searchErrTimeout
+				}
 				metrics.TrackerSearchTotal.WithLabelValues(name, "error").Inc()
 				log.Warn().Str("tracker", name).Err(err).Msg("tracker search failed")
-				outcomes[i] = outcome{errView: &searchErrorView{TrackerName: name, Error: err.Error()}}
+				outcomes[i] = outcome{errView: newSearchErrorView(ws, code)}
 			default:
 				metrics.TrackerSearchTotal.WithLabelValues(name, "ok").Inc()
 				views := make([]searchResultView, 0, len(results))
@@ -124,9 +187,7 @@ func (h *Trackers) Search(w http.ResponseWriter, r *http.Request) {
 			}
 		}(i, ws)
 	}
-	for range searchers {
-		<-done
-	}
+	wg.Wait()
 
 	results := []searchResultView{}
 	errViews := []searchErrorView{}
@@ -145,29 +206,43 @@ func (h *Trackers) Search(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"results": results, "errors": errViews})
 }
 
+// perTrackerBudget returns the per-tracker search timeout — the test seam
+// SearchBudget overrides the 15s default.
+func (h *Trackers) perTrackerBudget() time.Duration {
+	if h.SearchBudget > 0 {
+		return h.SearchBudget
+	}
+	return defaultSearchPerTrackerBudget
+}
+
 // searchCredentials loads, decrypts, and warms the user's credential for a
-// login-gated searchable tracker. Every failure degrades to nil (the plugin
-// then reports ErrSearchRequiresCredentials) — search must never hard-fail
-// on credential trouble. Ordering is Verify-first, Login-on-miss: on a warm
-// in-process session Verify is one cheap GET; only a cold/dead session pays
-// the Login round-trip. (Deliberately neither loginAndVerify — Login→Verify
-// always, right for validating fresh credentials, wasteful per search — nor
-// the scheduler's Login-only loadCredentials.)
-func (h *Trackers) searchCredentials(ctx context.Context, uid uuid.UUID, t registry.Tracker) *domain.TrackerCredential {
+// login-gated searchable tracker. Every failure degrades to nil creds
+// (the plugin then reports ErrSearchRequiresCredentials) — search must
+// never hard-fail on credential trouble. The second return distinguishes
+// "no stored credential" (false) from "stored credential exists but could
+// not be warmed" (true) so the caller can report login_failed instead of
+// telling a user with an account to go add one.
+//
+// Ordering is Verify-first, Login-on-miss: on a warm in-process session
+// Verify is one cheap GET; only a cold/dead session pays the Login round-
+// trip. (Deliberately neither loginAndVerify — Login→Verify always, right
+// for validating fresh credentials, wasteful per search — nor the
+// scheduler's Login-only loadCredentials.)
+func (h *Trackers) searchCredentials(ctx context.Context, uid uuid.UUID, t registry.Tracker) (creds *domain.TrackerCredential, loginFailed bool) {
 	wc, needsCreds := t.(registry.WithCredentials)
 	if !needsCreds || h.Creds == nil || h.Master == nil {
-		return nil
+		return nil, false
 	}
 	stored, err := h.Creds.GetForTracker(ctx, uid, t.Name())
 	if err != nil || stored == nil {
-		return nil
+		return nil, false
 	}
 	// Decrypt secret + session like Credentials.Test does — session-cookie
 	// trackers validate the session blob, not the password.
 	plain, err := h.Master.Decrypt(stored.SecretEnc, stored.SecretNonce)
 	if err != nil {
 		log.Warn().Str("tracker", t.Name()).Err(err).Msg("search credential decrypt failed; searching anonymously")
-		return nil
+		return nil, true
 	}
 	transient := &domain.TrackerCredential{
 		ID:          stored.ID,
@@ -180,16 +255,16 @@ func (h *Trackers) searchCredentials(ctx context.Context, uid uuid.UUID, t regis
 		sess, derr := h.Master.Decrypt(stored.SessionEnc, stored.SessionNonce)
 		if derr != nil {
 			log.Warn().Str("tracker", t.Name()).Err(derr).Msg("search session decrypt failed; searching anonymously")
-			return nil
+			return nil, true
 		}
 		transient.SessionEnc = sess
 	}
 	if ok, verr := wc.Verify(ctx, transient); verr == nil && ok {
-		return transient
+		return transient, false
 	}
 	if lerr := wc.Login(ctx, transient); lerr != nil {
 		log.Debug().Str("tracker", t.Name()).Err(lerr).Msg("search credential login failed; searching anonymously")
-		return nil
+		return nil, true
 	}
-	return transient
+	return transient, false
 }

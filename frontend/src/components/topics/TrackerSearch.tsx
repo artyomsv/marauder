@@ -18,9 +18,18 @@ interface SearchResultRow {
   category?: string;
 }
 
+interface SearchTrackerError {
+  tracker_name: string;
+  tracker_display_name: string;
+  // Stable classification from the backend; the raw error text never
+  // reaches the client (it can embed admin-configured mirror hosts).
+  code: "no_credentials" | "login_failed" | "timeout" | "failed";
+  error: string;
+}
+
 interface SearchResponse {
   results: SearchResultRow[];
-  errors: { tracker_name: string; error: string }[];
+  errors: SearchTrackerError[];
 }
 
 interface TrackerSearchProps {
@@ -48,7 +57,12 @@ export function TrackerSearch({ onSelect }: TrackerSearchProps) {
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     const q = query.trim();
-    if (q) setSubmitted(q);
+    if (!q) return;
+    // Re-submitting the same query must actually retry: setState with the
+    // identical value is a React no-op, so a failed search would otherwise
+    // ignore the "Try again" click until the user edits the text.
+    if (q === submitted) void search.refetch();
+    else setSubmitted(q);
   };
 
   const results = search.data?.results ?? [];
@@ -111,10 +125,12 @@ export function TrackerSearch({ onSelect }: TrackerSearchProps) {
 
       {trackerErrors.map((e) => (
         <p key={e.tracker_name} className="text-xs text-muted-foreground">
-          {e.tracker_name}:{" "}
-          {e.error === "search requires credentials"
+          {e.tracker_display_name || e.tracker_name}:{" "}
+          {e.code === "no_credentials"
             ? t("topics.search.needsAccount")
-            : e.error}
+            : e.code === "login_failed"
+              ? t("topics.search.loginFailed")
+              : t("topics.search.trackerFailed")}
         </p>
       ))}
     </div>

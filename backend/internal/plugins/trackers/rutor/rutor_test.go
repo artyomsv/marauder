@@ -2,6 +2,7 @@ package rutor
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -298,5 +299,34 @@ func TestSearch_NoRows_EmptyNotError(t *testing.T) {
 	}
 	if len(results) != 0 {
 		t.Errorf("results = %d, want 0", len(results))
+	}
+}
+
+func TestSearch_FetchError_Propagates(t *testing.T) {
+	p, _ := newSearchTestPlugin(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	})
+	if _, err := p.Search(context.Background(), "anything", nil); err == nil {
+		t.Fatal("Search on a 503 must return an error")
+	}
+}
+
+func TestSearch_CapsAtFiftyResults(t *testing.T) {
+	var rows strings.Builder
+	for i := 0; i < 60; i++ {
+		fmt.Fprintf(&rows,
+			`<tr class="gai"><td>d</td><td><a href="/torrent/%d/slug">Release %d</a></td>`+
+				`<td align="right">1 GB</td><td align="center"><span class="green">1</span></td></tr>`, i, i)
+	}
+	page := "<html><body><table>" + rows.String() + "</table></body></html>"
+	p, _ := newSearchTestPlugin(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(page))
+	})
+	results, err := p.Search(context.Background(), "many", nil)
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if len(results) != 50 {
+		t.Errorf("results = %d, want capped at 50", len(results))
 	}
 }
