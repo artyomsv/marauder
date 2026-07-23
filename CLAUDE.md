@@ -438,7 +438,7 @@ unit test plus an e2e test using `plugins/e2etest.HostRewriteTransport`.
 
 Optional capability interfaces: `WithQuality`, `WithEpisodeFilter`,
 `WithCredentials`, `WithAnonymousDownload`, `WithCloudflare`, `WithInteractiveLogin`,
-`WithSeasonCatalog`, `WithMetadata`, `WithAuthorComment`. `WithAnonymousDownload` (RuTracker)
+`WithSeasonCatalog`, `WithMetadata`, `WithAuthorComment`, `WithSearch`. `WithAnonymousDownload` (RuTracker)
 marks a `WithCredentials` tracker whose download also works without an account, so
 `/trackers/match` reports `credentials_optional` (not `requires_credentials`) and the
 AddTopic form shows an optional hint instead of a "requires login" warning. The
@@ -454,6 +454,24 @@ seasons/episodes from `GET /api/v1/trackers/seasons?url=` (fetches the
 public `/series/<slug>/seasons` page, reuses the episode parser); the
 AddTopic form uses it to constrain the "start from" season/episode
 selectors to released values.
+
+`WithSearch` (Rutor, RuTracker; issue #129) searches the tracker by
+free-text query and returns candidate topics (`SearchResult{Title, URL,
+Size, Seeders, Category}` — URL in canonical form so it feeds the normal
+match→parse→create pipeline). `GET /api/v1/trackers/search?q=&trackers=`
+fans out to all `WithSearch` trackers concurrently (15s per tracker,
+fail-open per tracker into an `errors` array, per-user single-flight →
+429, metric `marauder_tracker_search_total{tracker,result}`); for a
+`WithCredentials` searcher it loads+decrypts the user's credential and
+warms the session Verify-first/Login-on-miss, degrading to nil creds on
+any failure (RuTracker then returns the
+`registry.ErrSearchRequiresCredentials` sentinel → "needs an account"
+notice). RuTracker's `nm=` query must be cp1251-percent-encoded —
+`forumcommon.EncodeWindows1251Query`. `supports_search` is surfaced per
+tracker in `/system/info`. Frontend: `AddTopicCard` hosts a By-URL /
+Search mode toggle; `components/topics/TrackerSearch` renders the
+explicit-submit search UI and hands the picked URL back via key-remount
+of `TopicForm` (TopicForm itself untouched).
 
 `WithMetadata` (RuTracker, LostFilm, Kinozal, NNM-Club) resolves a real title + poster image
 from a topic URL. It is called best-effort (fail-open, short timeout) at add

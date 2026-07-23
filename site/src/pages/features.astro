@@ -91,6 +91,18 @@ const sections = [
     ],
   },
   {
+    title: "In-app tracker search",
+    intro:
+      "Adding a topic used to mean finding the release in your browser first — fighting mirrors, Cloudflare, and login walls just to copy a URL. Now the add-topic form searches your trackers directly.",
+    bullets: [
+      "Type a title in the Search trackers tab; Marauder queries every searchable tracker concurrently and merges the results, sorted by seeders",
+      "Click a result and the topic URL is prefilled into the normal add flow — capability detection, poster preview, and quality options all apply unchanged",
+      "Rutor searches anonymously out of the box; RuTracker search uses your stored account and reports “needs a tracker account” instead of failing when you haven't added one",
+      "Cyrillic queries are transcoded to the cp1251 encoding RuTracker expects, so «Дюна» finds Дюна",
+      "Per-tracker fail-open: a slow or unreachable tracker shows a one-line notice while the others' results render normally",
+    ],
+  },
+  {
     title: "Configurable tracker domains + mirror fallback",
     intro:
       "Trackers move. When a primary domain is blocked or down, point the tracker at a working mirror — instance-wide, without recreating a single topic — and let Marauder rotate mirrors automatically when the current one starts failing.",
