@@ -23,16 +23,16 @@ import (
 // decode path.
 const searchFixtureHTML = `<html><body><span id="logged-in-username">user</span>
 <table id="tor-tbl">
-<tr class="tCenter hl-tr">
+<tr id="trs-tr-100" class="tCenter hl-tr" data-topic_id="100">
 <td class="row1 t-ico"></td>
 <td class="row1 f-name-col"><div class="f-name"><a class="gen f ts-text" href="tracker.php?f=313">Зарубежное кино</a></div></td>
 <td class="row4 med tLeft t-title-col"><div class="t-title"><a data-topic_id="100" class="med tLink tt-text ts-text hl-tags bold" href="viewtopic.php?t=100">Дюна <span class="brackets-pair">[2026]</span></a></div></td>
 <td class="row1 t-author-col"></td>
-<td class="row4 med tor-size" data-ts_text="1500000000"><a class="small tr-dl dl-stub" href="dl.php?t=100">1.4&nbsp;GB</a></td>
+<td class="row4 med tor-size" data-ts_text="1500000000"><a class="small tr-dl dl-stub" href="dl.php?t=100">1.4&nbsp;GB &darr;</a></td>
 <td class="row4 nowrap" data-ts_text="17"><b class="seedmed">17</b></td>
 <td class="row4 leechmed bold">3</td><td class="row4 small nowrap">22-Июл-26</td>
 </tr>
-<tr class="tCenter hl-tr">
+<tr id="trs-tr-200" class="tCenter hl-tr" data-topic_id="200">
 <td class="row1 t-ico"></td>
 <td class="row1 f-name-col"><div class="f-name"><a class="gen f ts-text" href="tracker.php?f=7">Сериалы</a></div></td>
 <td class="row4 med tLeft t-title-col"><div class="t-title"><a data-topic_id="200" class="med tLink tt-text ts-text hl-tags bold" href="viewtopic.php?t=200">Другой релиз</a></div></td>

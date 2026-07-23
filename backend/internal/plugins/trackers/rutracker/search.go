@@ -15,7 +15,11 @@ import (
 var _ registry.WithSearch = (*plugin)(nil)
 
 var (
-	searchRowRe   = regexp.MustCompile(`(?s)<tr class="[^"]*tCenter[^"]*"[^>]*>(.*?)</tr>`)
+	// Attribute-order-agnostic: live rows are
+	// <tr id="trs-tr-N" class="tCenter hl-tr" data-topic_id="N"> — id comes
+	// BEFORE class, so anchoring the class to the tag name silently matches
+	// nothing (the bug that shipped zero rutracker results on 2026-07-23).
+	searchRowRe   = regexp.MustCompile(`(?s)<tr[^>]*class="[^"]*tCenter[^"]*"[^>]*>(.*?)</tr>`)
 	searchLinkRe  = regexp.MustCompile(`(?s)<a[^>]*class="[^"]*tLink[^"]*"[^>]*>(.*?)</a>`)
 	searchTIDRe   = regexp.MustCompile(`viewtopic\.php\?t=(\d+)`)
 	searchSizeRe  = regexp.MustCompile(`(?s)<td[^>]*class="[^"]*tor-size[^"]*"[^>]*>(.*?)</td>`)
@@ -65,7 +69,8 @@ func (p *plugin) Search(ctx context.Context, query string, creds *domain.Tracker
 			Seeders: -1,
 		}
 		if m := searchSizeRe.FindStringSubmatch(cell); m != nil {
-			r.Size = forumcommon.HTMLToText(m[1])
+			// Live size cells end with a download-arrow glyph ("1.4 GB ↓").
+			r.Size = strings.TrimSpace(strings.TrimSuffix(forumcommon.HTMLToText(m[1]), "↓"))
 		}
 		if m := searchSeedsRe.FindStringSubmatch(cell); m != nil {
 			if n, cerr := strconv.Atoi(m[1]); cerr == nil {
