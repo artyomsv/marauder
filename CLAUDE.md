@@ -246,7 +246,7 @@ The **status poll fallback** (in `DeliveryStatus`) is now gated by `useSseStatus
 docker run --rm -v "E:/Projects/Stukans/Marauder/backend:/backend" -w //backend golang:1.25 sh -c "go build ./... && go vet ./... && go test -race ./..."
 
 # Frontend
-docker run --rm -v "E:/Projects/Stukans/Marauder/frontend:/frontend" -w //frontend node:20-alpine sh -c "npm run typecheck && npm test && npm run build"
+docker run --rm -v "E:/Projects/Stukans/Marauder/frontend:/frontend" -w //frontend node:22-alpine sh -c "npm run typecheck && npm test && npm run build"
 
 # Stack up — dev (source-build base + dev overlay: ports + qbit/transmission)
 docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.dev.yml up -d
