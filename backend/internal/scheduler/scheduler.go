@@ -408,8 +408,18 @@ func (s *Scheduler) runCheck(ctx context.Context, log zerolog.Logger, t *domain.
 		// stamped onto both notifiable update events below.
 		authorComment = s.fetchAuthorComment(ctx, log, t, tr, creds)
 
-		// Emit release.found once per new hash, before draining episodes.
-		if s.emit != nil {
+		// Emit release.found once per error episode, before draining episodes.
+		//
+		// Deduped by the pre-check ConsecutiveErrors snapshot, the same guard
+		// notifyError uses. A failed download persists the OLD hash on purpose
+		// (see the dlErr branch below), so every retry tick re-enters this
+		// branch with the same release. release.found is both persisted and
+		// notifiable, so without this guard one unreachable client turns a
+		// single release into an unbounded stream of history rows and user
+		// notifications. The trade-off is deliberate: a genuinely new release
+		// arriving while the topic is still stuck stays silent until the topic
+		// recovers — at which point the next tick announces it.
+		if s.emit != nil && t.ConsecutiveErrors == 0 {
 			s.emit.Emit(ctx, events.Event{
 				UserID: t.UserID, TopicID: &t.ID, NotifierID: t.NotifierID,
 				Type: events.ReleaseFound, Severity: "info",
