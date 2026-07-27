@@ -766,6 +766,62 @@ func TestRunCheck_CheckError_AlreadyErrored_NoNotify(t *testing.T) {
 	}
 }
 
+// TestRunCheck_DownloadFails_AlreadyErrored_NoReleaseFound pins the dedup for
+// the stuck-download loop. A failed download deliberately persists the OLD
+// hash so the change is re-detected next tick — which means every retry
+// re-enters the `updated` branch. Without a guard that re-emits release.found
+// (persisted AND notifiable) on every retry, so one unreachable client turns
+// into an unbounded stream of "New release detected" rows and notifications.
+func TestRunCheck_DownloadFails_AlreadyErrored_NoReleaseFound(t *testing.T) {
+	const hash = "c12fe1c06bba254a9dc9f519b335aa7c1367a88a"
+	tr := &fakeTracker{
+		name: "faketracker",
+		checks: []checkResult{
+			{check: &domain.Check{Hash: "new-hash"}, err: nil},
+		},
+		downloads: []downloadResult{
+			{payload: &domain.Payload{MagnetURI: "magnet:?xt=urn:btih:" + hash}, err: nil},
+		},
+	}
+	f := newFixture(t, tr, false)
+	// The client is unreachable, so the submit fails for this tick.
+	f.clientPlugin.addErr = errors.New("dial tcp 192.0.2.1:8083: connect: connection refused")
+	// This is a RETRY: the topic already failed at least once, so the release
+	// was announced back then and must not be announced again.
+	f.topic.ConsecutiveErrors = 1
+
+	f.s.runCheck(context.Background(), f.s.log, f.topic)
+
+	if evs := f.emitter.ofType(events.ReleaseFound); len(evs) != 0 {
+		t.Errorf("expected no release.found event on a retry of an already-failing topic, got %d", len(evs))
+	}
+}
+
+// TestRunCheck_DownloadFails_FirstFailure_EmitsReleaseFound guards the other
+// side of the dedup: the FIRST detection must still announce, even though its
+// download fails. Suppressing it would hide the release entirely.
+func TestRunCheck_DownloadFails_FirstFailure_EmitsReleaseFound(t *testing.T) {
+	const hash = "c12fe1c06bba254a9dc9f519b335aa7c1367a88a"
+	tr := &fakeTracker{
+		name: "faketracker",
+		checks: []checkResult{
+			{check: &domain.Check{Hash: "new-hash"}, err: nil},
+		},
+		downloads: []downloadResult{
+			{payload: &domain.Payload{MagnetURI: "magnet:?xt=urn:btih:" + hash}, err: nil},
+		},
+	}
+	f := newFixture(t, tr, false)
+	f.clientPlugin.addErr = errors.New("dial tcp 192.0.2.1:8083: connect: connection refused")
+	f.topic.ConsecutiveErrors = 0 // healthy until this tick
+
+	f.s.runCheck(context.Background(), f.s.log, f.topic)
+
+	if evs := f.emitter.ofType(events.ReleaseFound); len(evs) != 1 {
+		t.Errorf("expected 1 release.found event on the first failing detection, got %d", len(evs))
+	}
+}
+
 func TestRunCheck_Episodes_NotifiesWithEpisodeLabels(t *testing.T) {
 	const h1 = "1111111111111111111111111111111111111111"
 	const h2 = "2222222222222222222222222222222222222222"

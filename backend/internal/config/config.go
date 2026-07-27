@@ -75,6 +75,10 @@ type Config struct {
 	ProgressPollInterval   time.Duration `env:"MARAUDER_PROGRESS_POLL_INTERVAL" envDefault:"5s"`
 	SSEHeartbeatInterval   time.Duration `env:"MARAUDER_SSE_HEARTBEAT_INTERVAL" envDefault:"25s"`
 
+	// topic_events history retention. 0 days keeps history forever.
+	EventsRetentionDays int           `env:"MARAUDER_EVENTS_RETENTION_DAYS" envDefault:"90"`
+	EventsPruneInterval time.Duration `env:"MARAUDER_EVENTS_PRUNE_INTERVAL" envDefault:"24h"`
+
 	// Optional Cloudflare solver sidecar
 	CFSolverEnabled bool   `env:"MARAUDER_CFSOLVER_ENABLED" envDefault:"false"`
 	CFSolverURL     string `env:"MARAUDER_CFSOLVER_URL" envDefault:""`
@@ -109,6 +113,12 @@ func (c *Config) validate() error {
 	}
 	if c.SSEHeartbeatInterval <= 0 {
 		return errors.New("MARAUDER_SSE_HEARTBEAT_INTERVAL must be > 0")
+	}
+	if c.EventsRetentionDays < 0 {
+		return errors.New("MARAUDER_EVENTS_RETENTION_DAYS must be >= 0 (0 keeps history forever)")
+	}
+	if c.EventsPruneInterval <= 0 {
+		return errors.New("MARAUDER_EVENTS_PRUNE_INTERVAL must be > 0")
 	}
 	return nil
 }

@@ -29,4 +29,33 @@ describe("TopicEventsTimeline", () => {
     // timeline it must not be rendered (it duplicated on every row).
     expect(screen.queryByText(/Super Mario Galaxy Movie/)).toBeNull();
   });
+
+  it("collapses a run of repeated events into one row with a count", async () => {
+    // A stuck download re-detects the same release every retry tick, so the
+    // raw feed is dominated by identical rows.
+    (api.topicEvents as ReturnType<typeof vi.fn>).mockResolvedValue({
+      events: [
+        { id: 4, event_type: "release.found", severity: "info", message: "", created_at: "2026-07-27T15:35:24Z" },
+        { id: 3, event_type: "release.found", severity: "info", message: "", created_at: "2026-07-27T09:34:23Z" },
+        { id: 2, event_type: "release.found", severity: "info", message: "", created_at: "2026-07-26T21:32:27Z" },
+        { id: 1, event_type: "check.failed", severity: "error", message: "", created_at: "2026-07-26T21:22:34Z" },
+      ],
+    });
+    wrap(<TopicEventsTimeline topicId="t1" />);
+
+    expect(await screen.findByText("×3")).toBeInTheDocument();
+    expect(screen.getAllByRole("listitem")).toHaveLength(2);
+  });
+
+  it("shows no count badge when an event did not repeat", async () => {
+    (api.topicEvents as ReturnType<typeof vi.fn>).mockResolvedValue({
+      events: [
+        { id: 1, event_type: "release.found", severity: "info", message: "", created_at: "2026-07-27T15:35:24Z" },
+      ],
+    });
+    wrap(<TopicEventsTimeline topicId="t1" />);
+
+    expect(await screen.findByText("new release")).toBeInTheDocument();
+    expect(screen.queryByText(/^×/)).toBeNull();
+  });
 });

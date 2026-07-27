@@ -76,6 +76,7 @@ techdebt/       Debt-tracking files (one per issue, see global rule)
 | `plugins/e2etest` | shared `HostRewriteTransport` test helper for tracker e2e tests |
 | `problem` | RFC-7807 error responses |
 | **`progress`** | background download-completion watcher: polls `WithStatus` clients for in-flight `topic_deliveries` (`completed_at IS NULL`), and on seeding/100% atomically marks `completed_at` (NULL→now, dedup survives restart); emits `events.DownloadProgress` (Data: infohash/percent_done/state) on each change and `events.DownloadCompleted` via the bus. Go-forward only — migration `0011` backfills existing deliveries as complete so upgrading doesn't back-notify. Gated by `MARAUDER_PROGRESS_WATCHER_ENABLED`, polls every `MARAUDER_PROGRESS_POLL_INTERVAL` (default 5s); zero idle cost |
+| **`retention`** | background `Pruner` that trims the append-only `topic_events` history (`TopicEvents.DeleteOlderThan`). Nothing else deletes from that table, so without it the per-topic timeline grows for the life of the install. Prunes once at boot then every `MARAUDER_EVENTS_PRUNE_INTERVAL` (default 24h), deleting rows older than `MARAUDER_EVENTS_RETENTION_DAYS` (default 90; **0 keeps history forever** and skips the DELETE entirely). Best-effort: a DB error is logged and the loop retries next tick |
 | `scheduler` | per-topic check loop with bounded worker pool, exponential backoff, per-episode multi-download loop, and unit tests |
 | `version` | build-time version stamping (`-ldflags -X`) |
 
@@ -101,6 +102,16 @@ techdebt/       Debt-tracking files (one per issue, see global rule)
    on errors, capped at 6h) and writes the run summary metrics.
 
 **Event emission:** the scheduler emits typed `events.Event`s via `events.Bus.Emit` at key points: `check.started`/`check.completed`/`check.failed` (per check cycle), `release.found` (per new torrent detected), `download.submitted` (after client send), and `session.expired` (on credential session loss). (`topic.added` is emitted separately by the topics HTTP handler on `POST /topics`, not by the scheduler.) The bus fans out to `topic_events` history table (all events persisted if policy allows), the notifier dispatcher (for event-type subscriptions), and the SSE hub (wired as of Phase 3 — `sse.Hub`, the live `events.Publisher`).
+
+**Repeat-emission dedup:** both `release.found` and `check.failed` are gated on
+the pre-check `ConsecutiveErrors == 0` snapshot, so they fire **once per error
+episode**, not once per retry tick. This matters because the failed-download
+path deliberately persists the *old* hash (see below), which makes every retry
+re-enter the `updated` branch with the same release. Both events are
+`Persist:true, Notifiable:true`, so without the guard one unreachable client
+turns a single release into an unbounded stream of history rows *and* user
+notifications. Deliberate trade-off: a genuinely new release that lands while
+the topic is still failing stays silent until the topic recovers.
 
 **Per-topic delivery:** `sendViaClient` passes `domain.AddOptions{DownloadDir:
 t.DownloadDir, Category: t.Category}` to the client plugin. Category is a
@@ -181,6 +192,8 @@ src/
 │   ├── queryKeys.ts           Centralised React Query key factory (QK)
 │   ├── utils.ts               cn() helper
 │   ├── events.ts              Event type defs + `eventLabel()` i18n helper
+│   │                          + `groupConsecutiveEvents()` — collapses runs of
+│   │                          the same event type into one timeline row
 │   ├── check-status.ts        zustand store: live per-topic check phase (checking/idle/error)
 │   ├── sse-status.ts          zustand store: SSE connection state (connected boolean)
 │   ├── events-stream.ts       `applyEvent` router: patches React Query cache + check store on SSE events
@@ -245,8 +258,18 @@ The **status poll fallback** (in `DeliveryStatus`) is now gated by `useSseStatus
 # Backend (Docker — never install Go locally)
 docker run --rm -v "E:/Projects/Stukans/Marauder/backend:/backend" -w //backend golang:1.25 sh -c "go build ./... && go vet ./... && go test -race ./..."
 
-# Frontend
-docker run --rm -v "E:/Projects/Stukans/Marauder/frontend:/frontend" -w //frontend node:22-alpine sh -c "npm run typecheck && npm test && npm run build"
+# Frontend — run from a container-local node_modules volume, NOT the bind mount.
+# node_modules is a linux-x64-musl install (alpine is correct; glibc node:22 and
+# the Windows host both fail on the missing rolldown native binding). Running
+# vitest 4 straight off the Windows bind mount makes every worker miss its 60s
+# startup deadline ("Timeout waiting for worker to respond") — the source is
+# fine, the mount is just too slow. One-time setup:
+#   docker volume create marauder-fe-nm
+#   docker run --rm -v "E:/Projects/Stukans/Marauder/frontend:/host:ro" -v marauder-fe-nm:/app \
+#     node:22-alpine sh -c "cp /host/package.json /host/package-lock.json /app/ && cd /app && npm ci"
+# Then per run (copies only the small source tree, ~3s):
+docker run --rm -v "E:/Projects/Stukans/Marauder/frontend:/host:ro" -v marauder-fe-nm:/app -w //app node:22-alpine \
+  sh -c "cp -r /host/src /host/vitest.config.ts /host/vite.config.ts /host/index.html /host/tsconfig*.json /app/ 2>/dev/null; npx tsc --noEmit && npx vitest run"
 
 # Stack up — dev (source-build base + dev overlay: ports + qbit/transmission)
 docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.dev.yml up -d
@@ -426,6 +449,7 @@ container is the backend itself.
 - `MARAUDER_VERSION` — image tag the prebuilt `docker-compose.ghcr.yml` stack pulls (default `1.0.1`); ignored by the source-build stack
 - `MARAUDER_SCHEDULER_WORKERS` — worker pool size (default 8)
 - `MARAUDER_SCHEDULER_MAX_EPISODES_PER_TICK` — per-episode loop cap (default 25)
+- `MARAUDER_EVENTS_RETENTION_DAYS` / `MARAUDER_EVENTS_PRUNE_INTERVAL` — `topic_events` history retention (default 90 days, pruned every 24h; 0 days = keep forever)
 - `MARAUDER_OIDC_*` — Keycloak settings (optional, gated by `MARAUDER_OIDC_ENABLED`)
 - See `deploy/.env.example` for the full list.
 

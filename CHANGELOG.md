@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Repeated "New release detected" events and notifications while a
+  download keeps failing.** A failed download deliberately persists the
+  topic's *old* hash so the change is re-detected and retried, which meant
+  every retry tick re-emitted `release.found` — a persisted **and**
+  notifiable event. One unreachable torrent client turned a single release
+  into dozens of history rows and dozens of push notifications. It is now
+  deduped on the pre-check `ConsecutiveErrors` snapshot, the same guard
+  `check.failed` already used, so it fires once per error episode.
+
+### Added
+
+- **`topic_events` history retention.** The table was append-only with
+  nothing ever deleting from it, so a topic's timeline grew for the life of
+  the install. A background pruner now trims rows older than
+  `MARAUDER_EVENTS_RETENTION_DAYS` (default 90) every
+  `MARAUDER_EVENTS_PRUNE_INTERVAL` (default 24h); set the retention to `0`
+  to keep history forever.
+
+### Changed
+
+- The per-topic history timeline collapses runs of consecutive same-type
+  events into a single row with a `×N` count and the time range they span,
+  so a burst of repeats no longer buries the events that differ.
+
 ## [1.13.0] - 2026-07-23
 
 ### Added

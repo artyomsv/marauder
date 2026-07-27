@@ -90,6 +90,19 @@ LIMIT 200`
 	return scanTopicEvents(rows)
 }
 
+// DeleteOlderThan prunes history rows created before cutoff and returns how
+// many were removed. topic_events is otherwise append-only — nothing else in
+// the codebase deletes from it — so without periodic pruning the table grows
+// for the life of the install.
+func (r *TopicEvents) DeleteOlderThan(ctx context.Context, cutoff time.Time) (int64, error) {
+	const q = `DELETE FROM topic_events WHERE created_at < $1`
+	tag, err := r.pool.Exec(ctx, q, cutoff)
+	if err != nil {
+		return 0, fmt.Errorf("topic_events: prune: %w", err)
+	}
+	return tag.RowsAffected(), nil
+}
+
 func scanTopicEvents(rows pgx.Rows) ([]*domain.TopicEvent, error) {
 	var out []*domain.TopicEvent
 	for rows.Next() {

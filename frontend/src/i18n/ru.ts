@@ -248,6 +248,7 @@ const ru: Record<string, string> = {
   "topics.history.empty": "История пока пуста",
   "topics.history.show": "История",
   "topics.history.hide": "Скрыть историю",
+  "topics.history.repeated": "повторов: {count}",
 
   // Generic
   "common.loading": "Загрузка...",

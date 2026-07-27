@@ -246,6 +246,7 @@ const en: Record<string, string> = {
   "topics.history.empty": "No history yet",
   "topics.history.show": "History",
   "topics.history.hide": "Hide history",
+  "topics.history.repeated": "repeated {count} times",
 
   // Generic
   "common.loading": "Loading...",

@@ -3,6 +3,7 @@ package repo
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -25,6 +26,7 @@ type fakeTEPool struct {
 	lastSQL  string
 	lastArgs []any
 	row      fakeRow
+	execTag  pgconn.CommandTag
 }
 
 func (f *fakeTEPool) QueryRow(_ context.Context, sql string, args ...any) pgx.Row {
@@ -35,8 +37,10 @@ func (f *fakeTEPool) QueryRow(_ context.Context, sql string, args ...any) pgx.Ro
 func (f *fakeTEPool) Query(_ context.Context, _ string, _ ...any) (pgx.Rows, error) {
 	return nil, nil
 }
-func (f *fakeTEPool) Exec(_ context.Context, _ string, _ ...any) (pgconn.CommandTag, error) {
-	return pgconn.CommandTag{}, nil
+func (f *fakeTEPool) Exec(_ context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
+	f.lastSQL = sql
+	f.lastArgs = args
+	return f.execTag, nil
 }
 
 func TestTopicEvents_Record_ReturnsID_AndMarshalsData(t *testing.T) {
@@ -62,5 +66,28 @@ func TestTopicEvents_Record_ReturnsID_AndMarshalsData(t *testing.T) {
 	var back map[string]any
 	if err := json.Unmarshal(raw, &back); err != nil {
 		t.Fatalf("data not valid JSON: %v", err)
+	}
+}
+
+// TestTopicEvents_DeleteOlderThan_PrunesByCutoff pins the retention query:
+// topic_events is append-only and nothing else ever deletes from it, so
+// without this the table grows without bound.
+func TestTopicEvents_DeleteOlderThan_PrunesByCutoff(t *testing.T) {
+	pool := &fakeTEPool{execTag: pgconn.NewCommandTag("DELETE 42")}
+	r := &TopicEvents{pool: pool}
+	cutoff := time.Date(2026, 4, 28, 0, 0, 0, 0, time.UTC)
+
+	n, err := r.DeleteOlderThan(context.Background(), cutoff)
+	if err != nil {
+		t.Fatalf("DeleteOlderThan: %v", err)
+	}
+	if n != 42 {
+		t.Errorf("rows deleted = %d, want 42", n)
+	}
+	if len(pool.lastArgs) != 1 || pool.lastArgs[0] != cutoff {
+		t.Errorf("query args = %v, want the cutoff %v as the only bind", pool.lastArgs, cutoff)
+	}
+	if !strings.Contains(pool.lastSQL, "DELETE FROM topic_events") {
+		t.Errorf("SQL = %q, want a DELETE against topic_events", pool.lastSQL)
 	}
 }

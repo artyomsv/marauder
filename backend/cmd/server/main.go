@@ -27,6 +27,7 @@ import (
 	"github.com/artyomsv/marauder/backend/internal/notify"
 	"github.com/artyomsv/marauder/backend/internal/plugins/registry"
 	"github.com/artyomsv/marauder/backend/internal/progress"
+	"github.com/artyomsv/marauder/backend/internal/retention"
 	"github.com/artyomsv/marauder/backend/internal/scheduler"
 	"github.com/artyomsv/marauder/backend/internal/sonarr"
 	"github.com/artyomsv/marauder/backend/internal/sse"
@@ -199,6 +200,23 @@ func run() error {
 		)
 		if err := watcher.Start(rootCtx); err != nil {
 			logger.Error().Err(err).Msg("progress watcher failed to start")
+		}
+	}
+
+	// History retention: topic_events is append-only, so without this the
+	// table (and the per-topic timeline built on it) grows forever.
+	// MARAUDER_EVENTS_RETENTION_DAYS=0 keeps everything.
+	if cfg.EventsRetentionDays > 0 {
+		pruner := retention.New(
+			topicEventsRepo,
+			retention.Config{
+				MaxAge:   time.Duration(cfg.EventsRetentionDays) * 24 * time.Hour,
+				Interval: cfg.EventsPruneInterval,
+			},
+			logger,
+		)
+		if err := pruner.Start(rootCtx); err != nil {
+			logger.Error().Err(err).Msg("history pruner failed to start")
 		}
 	}
 
