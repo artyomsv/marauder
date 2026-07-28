@@ -23,6 +23,7 @@ import (
 	"github.com/artyomsv/marauder/backend/internal/domain"
 	"github.com/artyomsv/marauder/backend/internal/domains"
 	"github.com/artyomsv/marauder/backend/internal/events"
+	"github.com/artyomsv/marauder/backend/internal/flaresolverr"
 	"github.com/artyomsv/marauder/backend/internal/logging"
 	"github.com/artyomsv/marauder/backend/internal/notify"
 	"github.com/artyomsv/marauder/backend/internal/plugins/registry"
@@ -124,6 +125,19 @@ func run() error {
 		logger.Warn().Err(err).Msg("tracker domain settings load failed; using plugin defaults")
 	}
 	registry.SetDomainResolver(domainStore.Resolve)
+
+	// Challenge transport: trackers that declare WithCloudflare fetch through
+	// a real browser instead of dialling directly. Required for RuTracker,
+	// whose Cloudflare clearance cookie is bound to the TLS fingerprint of the
+	// client that earned it and so cannot be replayed from Go. Unset leaves
+	// those trackers dialling directly, which is the previous behaviour.
+	if cfg.FlareSolverrURL != "" {
+		registry.SetChallengeTransport(flaresolverr.New(cfg.FlareSolverrURL, cfg.FlareSolverrTimeout))
+		logger.Info().
+			Str("url", cfg.FlareSolverrURL).
+			Dur("timeout", cfg.FlareSolverrTimeout).
+			Msg("flaresolverr challenge transport enabled")
+	}
 
 	// Optional OIDC provider (nil when MARAUDER_OIDC_ENABLED=false)
 	oidcProvider, err := auth.NewOIDCProvider(rootCtx, cfg)

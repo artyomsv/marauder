@@ -44,7 +44,11 @@ const (
 	userAgent     = "Marauder/0.3 (+https://marauder.cc)"
 )
 
-var knownDomains = []string{"rutracker.org", "rutracker.net", "rutracker.nl", "rutracker.cr"}
+// knownDomains lists the mirrors the rotation ring may try, canonical first.
+// rutracker.cr was removed on 2026-07-28: it stopped resolving entirely
+// (NXDOMAIN), so keeping it only bought a guaranteed failed lookup whenever
+// the ring advanced onto it.
+var knownDomains = []string{"rutracker.org", "rutracker.net", "rutracker.nl"}
 
 // urlPattern is host-agnostic; CanParse gates the captured host against the
 // known + admin-configured domain allowlist (the SSRF barrier — see
@@ -66,6 +70,27 @@ func init() {
 
 func (p *plugin) Name() string        { return pluginName }
 func (p *plugin) DisplayName() string { return displayName }
+
+var _ registry.WithCloudflare = (*plugin)(nil)
+
+// UsesCloudflare implements registry.WithCloudflare. Verified against the
+// live site on 2026-07-28: every request — login form and topic page alike —
+// is answered with a 403 Cf-Mitigated interstitial, and a clearance cookie
+// earned by a browser is rejected when replayed from Go. Declaring this opts
+// the plugin into the challenge transport, which fetches through a browser.
+func (p *plugin) UsesCloudflare() bool { return true }
+
+// effectiveTransport picks the RoundTripper this plugin's sessions use.
+// A plugin-local transport wins (tests inject one to reach an httptest
+// server); otherwise the process-wide challenge transport is used when one is
+// configured. Nil means "dial directly", preserving the previous behaviour
+// for deployments that have not configured a solver.
+func (p *plugin) effectiveTransport() http.RoundTripper {
+	if p.transport != nil {
+		return p.transport
+	}
+	return registry.ChallengeTransport()
+}
 
 // SupportsAnonymousDownload implements registry.WithAnonymousDownload: the
 // topic page exposes a magnet without login (Download falls back to it when
@@ -119,6 +144,22 @@ func (p *plugin) Parse(_ context.Context, rawURL string) (*domain.Topic, error) 
 	}, nil
 }
 
+// isCloudflareChallenge reports whether a response is a Cloudflare
+// interstitial rather than the page we asked for. Cloudflare labels these
+// with Cf-Mitigated (403 for the challenge, 503 for the legacy "checking
+// your browser" page), which is a far more reliable signal than sniffing the
+// body — and, unlike the body, it is available before reading it.
+func isCloudflareChallenge(resp *http.Response) bool {
+	if resp == nil {
+		return false
+	}
+	if resp.Header.Get("Cf-Mitigated") == "" {
+		return false
+	}
+	return resp.StatusCode == http.StatusForbidden ||
+		resp.StatusCode == http.StatusServiceUnavailable
+}
+
 // --- WithCredentials ---------------------------------------------------
 
 // Login posts the login form. The cookie jar attached to the session
@@ -127,9 +168,33 @@ func (p *plugin) Login(ctx context.Context, creds *domain.TrackerCredential) err
 	if creds == nil || creds.Username == "" {
 		return errors.New("rutracker credentials are required")
 	}
+	// When routing through the challenge transport we deliberately skip the
+	// login POST and run anonymously.
+	//
+	// Not because logging in is impossible — FlareSolverr does support
+	// request.post and persistent cookie sessions. It is skipped because the
+	// only thing a RuTracker login unlocks is dl.php, whose binary .torrent
+	// cannot survive FlareSolverr's string-typed response (verified
+	// 2026-07-28). So login would add a round-trip, a stored-credential
+	// dependency and a failure mode, and unlock nothing.
+	//
+	// Returning success rather than an error is deliberate too: the scheduler
+	// treats a Login failure as fatal for the whole check, so erroring here
+	// would break checks for exactly the users who have credentials stored —
+	// the group this path exists to unblock.
+	//
+	// Anonymous is a complete answer here: the topic page is public and
+	// carries a magnet with an announce URL, and Download already prefers
+	// that fallback whenever dl.php is unauthorised.
+	if p.transport == nil && registry.ChallengeTransport() != nil {
+		log.Debug().Str("plugin", pluginName).
+			Msg("challenge transport active: skipping login, RuTracker runs anonymously")
+		return nil
+	}
+
 	sess := p.sessions.GetOrCreate(forumcommon.SessionKey(pluginName, creds.UserID.String()), userAgent)
-	if p.transport != nil {
-		sess.Client.Transport = p.transport
+	if tr := p.effectiveTransport(); tr != nil {
+		sess.Client.Transport = tr
 	}
 	form := url.Values{
 		"login_username": {creds.Username},
@@ -148,6 +213,12 @@ func (p *plugin) Login(ctx context.Context, creds *domain.TrackerCredential) err
 		return fmt.Errorf("rutracker login: %w", err)
 	}
 	defer resp.Body.Close()
+	// Check for the interstitial BEFORE testing for the logged-in marker: a
+	// challenge page naturally lacks that marker, and reporting it as bad
+	// credentials is the misdiagnosis this guard exists to prevent.
+	if isCloudflareChallenge(resp) {
+		return fmt.Errorf("rutracker login: %w", registry.ErrCloudflareChallenge)
+	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
 	if err != nil {
 		return fmt.Errorf("rutracker login: read body: %w", err)
@@ -402,8 +473,8 @@ func (p *plugin) fetchBytes(ctx context.Context, _ *domain.Topic, creds *domain.
 		key = forumcommon.SessionKey(pluginName, creds.UserID.String())
 	}
 	sess := p.sessions.GetOrCreate(key, userAgent)
-	if p.transport != nil {
-		sess.Client.Transport = p.transport
+	if tr := p.effectiveTransport(); tr != nil {
+		sess.Client.Transport = tr
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
@@ -415,6 +486,9 @@ func (p *plugin) fetchBytes(ctx context.Context, _ *domain.Topic, creds *domain.
 		return nil, err
 	}
 	defer resp.Body.Close()
+	if isCloudflareChallenge(resp) {
+		return nil, fmt.Errorf("rutracker GET %s: %w", target, registry.ErrCloudflareChallenge)
+	}
 	if resp.StatusCode != 200 {
 		return nil, fmt.Errorf("rutracker GET %s -> %d", target, resp.StatusCode)
 	}

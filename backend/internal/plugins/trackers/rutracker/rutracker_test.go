@@ -2,6 +2,8 @@ package rutracker
 
 import (
 	"context"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -433,7 +435,9 @@ func TestEffectiveDomain_ResolverOverride(t *testing.T) {
 
 func TestDomains_CanonicalFirst(t *testing.T) {
 	p := &plugin{}
-	want := []string{"rutracker.org", "rutracker.net", "rutracker.nl", "rutracker.cr"}
+	// rutracker.cr is deliberately absent — it stopped resolving (NXDOMAIN),
+	// see TestKnownDomains_ExcludesDeadMirror.
+	want := []string{"rutracker.org", "rutracker.net", "rutracker.nl"}
 	if !reflect.DeepEqual(p.Domains(), want) {
 		t.Errorf("Domains() = %v, want %v", p.Domains(), want)
 	}
@@ -530,5 +534,174 @@ func TestDownload_RewritesToActiveDomain(t *testing.T) {
 		if h != "rutracker.net" {
 			t.Errorf("download request[%d] host = %q, want rutracker.net", i, h)
 		}
+	}
+}
+
+// newChallengedPlugin points the plugin at a server that answers every
+// request the way live RuTracker does when Cloudflare is interposing: a 403
+// carrying the Cf-Mitigated header and an interstitial body — never the
+// login form.
+func newChallengedPlugin(t *testing.T) *plugin {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Cf-Mitigated", "challenge")
+		w.Header().Set("Server", "cloudflare")
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`<html><head><title>Just a moment...</title></head><body></body></html>`))
+	}))
+	t.Cleanup(srv.Close)
+
+	hostNoScheme := strings.TrimPrefix(srv.URL, "http://")
+	return &plugin{
+		sessions:  forumcommon.New(),
+		domain:    hostNoScheme,
+		transport: &schemeRewrite{target: hostNoScheme},
+	}
+}
+
+// TestLogin_CloudflareChallenge_NotReportedAsBadCredentials is the whole
+// point of this change. Login tests for a positive logged-in marker, so a
+// Cloudflare interstitial — which of course lacks that marker — was reported
+// as "invalid credentials". That sent a user hunting a password problem that
+// did not exist while the real cause was a network-layer block.
+func TestLogin_CloudflareChallenge_NotReportedAsBadCredentials(t *testing.T) {
+	p := newChallengedPlugin(t)
+	creds := &domain.TrackerCredential{
+		UserID:    uuid.New(),
+		Username:  "alice",
+		SecretEnc: []byte("password123"),
+	}
+
+	err := p.Login(context.Background(), creds)
+
+	if err == nil {
+		t.Fatal("expected an error when Cloudflare challenges the login")
+	}
+	if !errors.Is(err, registry.ErrCloudflareChallenge) {
+		t.Errorf("Login error = %v, want it to wrap registry.ErrCloudflareChallenge", err)
+	}
+	if strings.Contains(strings.ToLower(err.Error()), "invalid credentials") {
+		t.Errorf("Login error must not blame the credentials, got %q", err)
+	}
+}
+
+// TestKnownDomains_ExcludesDeadMirror keeps rutracker.cr out of the rotation
+// ring: it stopped resolving (NXDOMAIN), so leaving it in costs a failed
+// lookup every time the ring advances onto it.
+func TestKnownDomains_ExcludesDeadMirror(t *testing.T) {
+	for _, d := range knownDomains {
+		if d == "rutracker.cr" {
+			t.Errorf("rutracker.cr no longer resolves and must not be a known domain; got %v", knownDomains)
+		}
+	}
+	if len(knownDomains) == 0 {
+		t.Fatal("knownDomains must not be empty")
+	}
+	if knownDomains[0] != "rutracker.org" {
+		t.Errorf("canonical domain must stay first, got %q", knownDomains[0])
+	}
+}
+
+// recordingRT stands in for the FlareSolverr transport: it never dials, it
+// just records what was asked for and serves a fixture.
+type recordingRT struct {
+	calls []string
+	body  string
+}
+
+func (r *recordingRT) RoundTrip(req *http.Request) (*http.Response, error) {
+	r.calls = append(r.calls, req.URL.String())
+	return &http.Response{
+		StatusCode: 200,
+		Header:     http.Header{"Content-Type": []string{"text/html"}},
+		Body:       io.NopCloser(strings.NewReader(r.body)),
+		Request:    req,
+	}, nil
+}
+
+// TestUsesCloudflare_OptsIntoTheChallengeTransport pins the marker's meaning.
+// WithCloudflare used to be inert — surfaced as a JSON flag and consulted by
+// nothing — so declaring it changed no behaviour. It is now the opt-in that
+// routes a tracker through the browser transport.
+func TestUsesCloudflare_OptsIntoTheChallengeTransport(t *testing.T) {
+	p := &plugin{}
+	var cf registry.WithCloudflare = p
+	if !cf.UsesCloudflare() {
+		t.Error("rutracker must declare UsesCloudflare: it is challenge-gated (verified live 2026-07-28)")
+	}
+}
+
+// TestCheck_RoutesThroughChallengeTransport proves the wiring end to end: a
+// plugin with no test transport of its own (i.e. shaped like production) must
+// fetch via the installed challenge transport rather than dialling the
+// tracker, because dialling directly is exactly what Cloudflare blocks.
+func TestCheck_RoutesThroughChallengeTransport(t *testing.T) {
+	rt := &recordingRT{body: fixtureTopicHTML}
+	registry.SetChallengeTransport(rt)
+	t.Cleanup(func() { registry.SetChallengeTransport(nil) })
+
+	p := &plugin{sessions: forumcommon.New(), domain: defaultDomain}
+	topic := &domain.Topic{
+		TrackerName: "rutracker",
+		URL:         "https://rutracker.org/forum/viewtopic.php?t=987654",
+		Extra:       map[string]any{"topic_id": 987654},
+	}
+
+	if _, err := p.Check(context.Background(), topic, nil); err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	if len(rt.calls) == 0 {
+		t.Fatal("Check did not use the challenge transport; it would have been blocked by Cloudflare")
+	}
+	if !strings.Contains(rt.calls[0], "viewtopic.php?t=987654") {
+		t.Errorf("challenge transport asked for %q, want the topic page", rt.calls[0])
+	}
+}
+
+// Without a configured transport the plugin must behave exactly as before —
+// the feature is opt-in, and an unconfigured deployment keeps dialling
+// directly rather than failing closed.
+func TestCheck_NoChallengeTransport_StillUsesPluginTransport(t *testing.T) {
+	registry.SetChallengeTransport(nil)
+	p, _ := newTestPlugin(t)
+	topic := &domain.Topic{
+		TrackerName: "rutracker",
+		URL:         "https://rutracker.org/forum/viewtopic.php?t=987654",
+		Extra:       map[string]any{"topic_id": 987654},
+	}
+	if _, err := p.Check(context.Background(), topic, nil); err != nil {
+		t.Fatalf("Check with no challenge transport: %v", err)
+	}
+}
+
+// TestLogin_ViaChallengeTransport_FallsBackToAnonymous covers the interaction
+// that would otherwise make things worse rather than better. The transport is
+// GET-only by choice (FlareSolverr itself can POST; the binary .torrent that
+// a login unlocks is what cannot be transported), so the login form is not
+// submitted. The scheduler treats a Login error as fatal for the whole check
+// (loadCredentials returns ok=false), so returning an error here would break
+// checks for any user WITH stored credentials — precisely the users we are
+// trying to unblock.
+//
+// RuTracker declares SupportsAnonymousDownload and its topic page carries a
+// magnet, so anonymous operation is fully functional. Login therefore becomes
+// a no-op in this mode instead of an error.
+func TestLogin_ViaChallengeTransport_FallsBackToAnonymous(t *testing.T) {
+	rt := &recordingRT{body: `<html></html>`}
+	registry.SetChallengeTransport(rt)
+	t.Cleanup(func() { registry.SetChallengeTransport(nil) })
+
+	p := &plugin{sessions: forumcommon.New(), domain: defaultDomain}
+	creds := &domain.TrackerCredential{
+		UserID:    uuid.New(),
+		Username:  "Nossp",
+		SecretEnc: []byte("password123"),
+	}
+
+	if err := p.Login(context.Background(), creds); err != nil {
+		t.Fatalf("Login must not fail the check when routing through the challenge transport: %v", err)
+	}
+	if len(rt.calls) != 0 {
+		t.Errorf("Login must not attempt a POST through a GET-only transport, got calls %v", rt.calls)
 	}
 }

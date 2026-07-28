@@ -76,6 +76,8 @@ const en: Record<string, string> = {
     "Couldn't reach the tracker — it may be offline or blocking requests. Retrying automatically.",
   "topics.error.auth":
     "Login failed or the session expired — check this tracker's credentials.",
+  "topics.error.cloudflare":
+    "Blocked by Cloudflare before reaching the tracker — your credentials are fine. This tracker needs a browser to get through.",
   "topics.error.parse":
     "Couldn't read the tracker's page — its layout may have changed.",
   "topics.error.pluginMissing":

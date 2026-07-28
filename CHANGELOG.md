@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **RuTracker topics reported "invalid credentials" when the account was
+  fine.** RuTracker now fronts requests with a Cloudflare challenge; the
+  plugin tested for a logged-in marker, didn't find one on the interstitial,
+  and blamed the password. Verified against the live site — the stored
+  account is valid and the block is network-level. A new
+  `registry.ErrCloudflareChallenge` sentinel and a `cloudflare` error code
+  surface an accurate message instead. The code is matched ahead of the
+  HTTP-status and keyword passes, which would otherwise reclassify its 403
+  as an auth failure.
+- **The Cloudflare solver reported success unconditionally.** `cfsolver` set
+  `ok: true` after a fixed 8-second sleep without ever checking whether the
+  challenge cleared, and advertised `HeadlessChrome` in its User-Agent —
+  which Cloudflare fingerprints directly. It now polls until the challenge
+  actually clears, returns a real error on timeout, and presents a stock
+  Chrome UA. With those fixes it genuinely clears RuTracker's challenge.
+  Adds the first unit tests for this module.
+- Removed the dead `rutracker.cr` mirror (NXDOMAIN) from the rotation ring.
+- The solve budget sent to FlareSolverr now tracks the caller's remaining
+  deadline instead of the configured timeout. The scheduler grants a check
+  only `MARAUDER_TRACKER_HTTP_TIMEOUT` (+5s), so the configured 60s was
+  unreachable — the caller always cancelled first, leaving a browser working
+  on a request nobody awaited and surfacing a context cancellation rather
+  than a real "challenge not solved" answer.
+- `cf_clearance` is now the sole proof that a challenge was passed. `__cf_bm`
+  is bot-management telemetry that Cloudflare also sets on the interstitial,
+  so accepting it could end the poll while still on the challenge page —
+  reintroducing the false-success behaviour this release removes.
+
+### Known limitation
+
+- The solver's clearance cookie **cannot** be reused by Marauder's HTTP
+  client: Cloudflare binds it to the TLS fingerprint of the client that
+  earned it, so replaying it from Go still returns 403 even with the same IP,
+  User-Agent and full browser headers. RuTracker stays unreachable until
+  requests are issued through the browser itself. Evidence and the proposed
+  browser-as-fetcher design are in
+  `docs/superpowers/specs/2026-07-28-rutracker-cloudflare-design.md`.
+
 ## [1.14.0] - 2026-07-27
 
 ### Fixed

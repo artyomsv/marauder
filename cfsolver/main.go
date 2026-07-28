@@ -14,22 +14,22 @@
 //
 // API:
 //
-//   POST /solve
-//   {"url":"https://example.com/protected","timeout_seconds":30}
+//	POST /solve
+//	{"url":"https://example.com/protected","timeout_seconds":30}
 //
 // Response:
 //
-//   {
-//     "ok": true,
-//     "user_agent": "Mozilla/5.0 (...)",
-//     "cookies": [
-//       {"name":"cf_clearance","value":"...","domain":".example.com",
-//        "path":"/","secure":true,"http_only":true,"expires":1234567890}
-//     ]
-//   }
+//	{
+//	  "ok": true,
+//	  "user_agent": "Mozilla/5.0 (...)",
+//	  "cookies": [
+//	    {"name":"cf_clearance","value":"...","domain":".example.com",
+//	     "path":"/","secure":true,"http_only":true,"expires":1234567890}
+//	  ]
+//	}
 //
-//   GET /health
-//   200 "ok"
+//	GET /health
+//	200 "ok"
 package main
 
 import (
@@ -40,6 +40,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -48,6 +49,56 @@ import (
 	"github.com/chromedp/chromedp"
 	"github.com/rs/zerolog"
 )
+
+const (
+	// pollInterval is how often the solver re-checks whether the challenge
+	// has cleared.
+	pollInterval = 1 * time.Second
+
+	// defaultUserAgent deliberately omits the "HeadlessChrome" token that
+	// Chromium reports by default — Cloudflare fingerprints it directly.
+	defaultUserAgent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 " +
+		"(KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36"
+)
+
+// challengeMarkers are substrings unique to a Cloudflare interstitial. The
+// solver inspects the rendered DOM because, inside the browser, the original
+// response headers are not reachable.
+var challengeMarkers = []string{
+	"challenge-form",
+	"cf-browser-verification",
+	"_cf_chl_opt",
+	"Just a moment",
+	"cf-challenge-running",
+}
+
+// isChallengePage reports whether the rendered HTML is still a Cloudflare
+// interstitial rather than the destination page.
+func isChallengePage(html string) bool {
+	for _, m := range challengeMarkers {
+		if strings.Contains(html, m) {
+			return true
+		}
+	}
+	return false
+}
+
+// hasClearance reports whether Cloudflare has issued cf_clearance — the only
+// cookie that actually proves the challenge was passed. It is HttpOnly, so it
+// is visible over CDP but never via document.cookie.
+//
+// __cf_bm is deliberately NOT accepted: it is bot-management telemetry that
+// Cloudflare sets on the interstitial itself, so honouring it would let the
+// poll exit while still sitting on the challenge page and report success —
+// the exact false-positive this service was repaired to stop producing.
+func hasClearance(cookies []*network.Cookie) bool {
+	for _, c := range cookies {
+		if c.Name == "cf_clearance" {
+			return true
+		}
+	}
+	return false
+}
 
 type solveRequest struct {
 	URL            string `json:"url"`
@@ -158,9 +209,17 @@ func (s *server) solve(parent context.Context, req solveRequest) (solveResponse,
 		chromedp.Flag("disable-dev-shm-usage", true),
 		chromedp.Flag("ignore-certificate-errors", true),
 	)
-	if req.UserAgent != "" {
-		allocOpts = append(allocOpts, chromedp.UserAgent(req.UserAgent))
+	// Cloudflare binds a clearance cookie to the User-Agent that earned it,
+	// so the UA must (a) not advertise automation and (b) be reported back to
+	// the caller verbatim, which must replay it on every re-used request.
+	ua := req.UserAgent
+	if ua == "" {
+		ua = defaultUserAgent
 	}
+	allocOpts = append(allocOpts,
+		chromedp.UserAgent(ua),
+		chromedp.Flag("disable-blink-features", "AutomationControlled"),
+	)
 
 	allocCtx, allocCancel := chromedp.NewExecAllocator(parent, allocOpts...)
 	defer allocCancel()
@@ -169,25 +228,64 @@ func (s *server) solve(parent context.Context, req solveRequest) (solveResponse,
 	ctx, timeout := context.WithTimeout(ctx, time.Duration(req.TimeoutSeconds)*time.Second)
 	defer timeout()
 
-	var ua string
 	var cookies []*network.Cookie
+	var cleared bool
+	// Captured for diagnostics: a timeout is far easier to interpret when the
+	// error says what the browser was actually looking at.
+	var lastTitle string
+	var lastHTMLLen int
 
 	err := chromedp.Run(ctx,
 		chromedp.Navigate(req.URL),
-		chromedp.Sleep(8*time.Second),
-		chromedp.Evaluate(`navigator.userAgent`, &ua),
 		chromedp.ActionFunc(func(ctx context.Context) error {
-			c, err := network.GetCookies().Do(ctx)
-			if err != nil {
-				return err
+			// Poll until the challenge actually clears rather than sleeping a
+			// fixed interval and hoping. Cloudflare only issues the clearance
+			// cookie once its JS has run to completion.
+			for {
+				var html string
+				if err := chromedp.Evaluate(`document.documentElement.outerHTML`, &html).Do(ctx); err != nil {
+					return err
+				}
+				_ = chromedp.Evaluate(`document.title`, &lastTitle).Do(ctx)
+				// network.GetCookies on the page context returns HttpOnly
+				// cookies too (verified: it yields cf_clearance), so no
+				// browser-level Storage call is needed here.
+				c, err := network.GetCookies().Do(ctx)
+				if err != nil {
+					return err
+				}
+				cookies = c
+				lastHTMLLen = len(html)
+				if !isChallengePage(html) || hasClearance(c) {
+					cleared = true
+					return nil
+				}
+				select {
+				case <-ctx.Done():
+					// Deadline hit while still challenged: report honestly.
+					return nil
+				case <-time.After(pollInterval):
+				}
 			}
-			cookies = c
-			return nil
 		}),
 	)
-	if err != nil {
+	// A context deadline means "still challenged when time ran out", which is
+	// a legitimate negative answer, not a transport failure.
+	if err != nil && !errors.Is(err, context.DeadlineExceeded) {
 		return solveResponse{}, fmt.Errorf("chromedp: %w", err)
 	}
+	if !cleared {
+		return solveResponse{}, fmt.Errorf(
+			"cloudflare challenge did not clear before timeout (title=%q html_bytes=%d cookies=%d)",
+			lastTitle, lastHTMLLen, len(cookies))
+	}
+
+	s.log.Info().
+		Str("url", req.URL).
+		Str("title", lastTitle).
+		Int("html_bytes", lastHTMLLen).
+		Int("cookies", len(cookies)).
+		Msg("solve completed")
 
 	out := solveResponse{OK: true, UserAgent: ua}
 	for _, c := range cookies {

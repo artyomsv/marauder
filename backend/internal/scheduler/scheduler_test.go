@@ -1848,6 +1848,13 @@ func TestClassifyError_MapsKnownPatternsToCodes(t *testing.T) {
 		{"tls handshake timeout", "net/http: TLS handshake timeout", errCodeTimeout},
 		{"tls handshake error (no timeout word)", "net/http: TLS handshake error from 1.2.3.4", errCodeUnreachable},
 		{"connection reset", "read: connection reset by peer", errCodeUnreachable},
+		// Cloudflare must win over BOTH later passes. The HTTP-status pass maps
+		// 403 -> auth, and the keyword pass matches "invalid credentials" and
+		// "login failed" — either would swallow these back into `auth`, which
+		// is exactly the misdiagnosis this code exists to prevent.
+		{"cloudflare challenge with a 403 in the message", `rutracker GET https://rutracker.org/forum/index.php -> 403: cloudflare challenge`, errCodeCloudflare},
+		{"cloudflare challenge wrapped by the login path", "auth failed: rutracker login failed: cloudflare challenge", errCodeCloudflare},
+		{"cloudflare wording from the sentinel", "tracker is behind a cloudflare challenge", errCodeCloudflare},
 		{"auth failed prefix", "auth failed: invalid credentials", errCodeAuth},
 		{"session expired", "lostfilm: session expired", errCodeAuth},
 		{"unauthorized 401", "unexpected status 401 unauthorized", errCodeAuth},
