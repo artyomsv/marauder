@@ -87,8 +87,19 @@ func TestHasClearance(t *testing.T) {
 			want:    true,
 		},
 		{
-			name:    "bot-management cookie present",
+			// __cf_bm is bot-management telemetry that Cloudflare sets on the
+			// interstitial itself, so it says nothing about whether the
+			// challenge was passed. Treating it as clearance would let the
+			// poll exit while still on the challenge page and report ok:true
+			// — precisely the false-success bug this service was fixed to
+			// stop doing. Only cf_clearance is proof.
+			name:    "bot-management cookie is not clearance",
 			cookies: []*network.Cookie{{Name: "__cf_bm"}},
+			want:    false,
+		},
+		{
+			name:    "clearance still detected alongside the bot cookie",
+			cookies: []*network.Cookie{{Name: "__cf_bm"}, {Name: "cf_clearance"}},
 			want:    true,
 		},
 	}

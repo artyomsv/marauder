@@ -108,6 +108,38 @@ type solveResponse struct {
 	Solution solution `json:"solution"`
 }
 
+// minSolveBudget is the floor for maxTimeout. Below roughly this, a solve
+// cannot finish anyway, and sending a near-zero budget would make
+// FlareSolverr fail instantly with a confusing message rather than letting
+// the caller's own deadline surface.
+const minSolveBudget = 5 * time.Second
+
+// maxTimeoutMillis is the solve budget handed to FlareSolverr, in
+// milliseconds.
+//
+// It tracks the caller's remaining deadline rather than the configured
+// timeout, because callers routinely allow far less: the scheduler's checkCtx
+// is TrackerHTTPTimeout+5s (35s by default) and each download iteration gets
+// only TrackerHTTPTimeout (30s). Sending the configured value regardless
+// meant the caller always cancelled first — leaving FlareSolverr driving a
+// browser for a request nobody was waiting on, and surfacing a context
+// cancellation instead of a real "challenge not solved" answer.
+//
+// The configured timeout remains the ceiling; the deadline only ever
+// tightens it.
+func (t *Transport) maxTimeoutMillis(ctx context.Context) int {
+	budget := t.Timeout
+	if deadline, ok := ctx.Deadline(); ok {
+		if remaining := time.Until(deadline); remaining < budget {
+			budget = remaining
+		}
+	}
+	if budget < minSolveBudget {
+		budget = minSolveBudget
+	}
+	return int(budget / time.Millisecond)
+}
+
 // RoundTrip fetches req.URL through FlareSolverr and rebuilds the result as a
 // normal *http.Response.
 //
@@ -122,18 +154,18 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 		return nil, fmt.Errorf("%w (got %s %s)", ErrMethodUnsupported, req.Method, req.URL)
 	}
 
-	payload, err := json.Marshal(solveRequest{
-		Cmd:        "request.get",
-		URL:        req.URL.String(),
-		MaxTimeout: int(t.Timeout / time.Millisecond),
-	})
-	if err != nil {
-		return nil, fmt.Errorf("flaresolverr: encode request: %w", err)
-	}
-
 	ctx := req.Context()
 	if ctx == nil {
 		ctx = context.Background()
+	}
+
+	payload, err := json.Marshal(solveRequest{
+		Cmd:        "request.get",
+		URL:        req.URL.String(),
+		MaxTimeout: t.maxTimeoutMillis(ctx),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("flaresolverr: encode request: %w", err)
 	}
 	solveReq, err := http.NewRequestWithContext(ctx, http.MethodPost, t.URL+"/v1", bytes.NewReader(payload))
 	if err != nil {

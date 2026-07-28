@@ -105,6 +105,53 @@ func TestRoundTrip_SendsRequestGetForTheTargetURL(t *testing.T) {
 	}
 }
 
+// The scheduler gives a check far less time than this transport's own
+// timeout: checkCtx is TrackerHTTPTimeout+5s (35s by default) and a download
+// iteration only gets TrackerHTTPTimeout (30s). Sending the configured 60s
+// regardless means the caller cancels first, so FlareSolverr keeps driving a
+// browser nobody is waiting for and the operator sees a context cancellation
+// instead of a real answer. maxTimeout must therefore track whatever deadline
+// the caller actually granted.
+func TestRoundTrip_MaxTimeoutRespectsCallerDeadline(t *testing.T) {
+	f := newFakeSolver(t, func(w http.ResponseWriter, _, _ string) {
+		okSolution(w, 200, "<html></html>")
+	})
+	rt := New(f.srv.URL, 60*time.Second) // configured far higher than the caller allows
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://rutracker.org/forum/index.php", nil)
+	resp, err := rt.RoundTrip(req)
+	if err != nil {
+		t.Fatalf("RoundTrip: %v", err)
+	}
+	resp.Body.Close()
+
+	got, _ := f.lastBody["maxTimeout"].(float64)
+	if got <= 0 || got > 10_000 {
+		t.Errorf("maxTimeout = %v ms, want it bounded by the caller's 10s deadline", got)
+	}
+}
+
+// With no deadline on the request the configured timeout is the bound.
+func TestRoundTrip_MaxTimeoutFallsBackToConfigured(t *testing.T) {
+	f := newFakeSolver(t, func(w http.ResponseWriter, _, _ string) {
+		okSolution(w, 200, "<html></html>")
+	})
+	rt := New(f.srv.URL, 45*time.Second)
+
+	req, _ := http.NewRequest(http.MethodGet, "https://rutracker.org/forum/index.php", nil)
+	resp, err := rt.RoundTrip(req)
+	if err != nil {
+		t.Fatalf("RoundTrip: %v", err)
+	}
+	resp.Body.Close()
+
+	if got, _ := f.lastBody["maxTimeout"].(float64); got != 45_000 {
+		t.Errorf("maxTimeout = %v ms, want the configured 45000", got)
+	}
+}
+
 // A tracker-level failure (404, 403) is a legitimate HTTP outcome and must be
 // handed back as a response, not swallowed into a transport error — callers
 // like the rutracker plugin branch on the status code.

@@ -83,12 +83,17 @@ func isChallengePage(html string) bool {
 	return false
 }
 
-// hasClearance reports whether Cloudflare has issued a clearance cookie —
-// the positive signal that the challenge was passed. Both cookies are
-// HttpOnly, so they are only visible over CDP, never via document.cookie.
+// hasClearance reports whether Cloudflare has issued cf_clearance — the only
+// cookie that actually proves the challenge was passed. It is HttpOnly, so it
+// is visible over CDP but never via document.cookie.
+//
+// __cf_bm is deliberately NOT accepted: it is bot-management telemetry that
+// Cloudflare sets on the interstitial itself, so honouring it would let the
+// poll exit while still sitting on the challenge page and report success —
+// the exact false-positive this service was repaired to stop producing.
 func hasClearance(cookies []*network.Cookie) bool {
 	for _, c := range cookies {
-		if c.Name == "cf_clearance" || c.Name == "__cf_bm" {
+		if c.Name == "cf_clearance" {
 			return true
 		}
 	}
