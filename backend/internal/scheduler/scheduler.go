@@ -1015,6 +1015,7 @@ const (
 	errCodeTimeout       = "timeout"
 	errCodeUnreachable   = "unreachable"
 	errCodeAuth          = "auth"
+	errCodeCloudflare    = "cloudflare"
 	errCodeParse         = "parse"
 	errCodePluginMissing = "plugin_missing"
 	errCodeUnknown       = "unknown"
@@ -1047,6 +1048,16 @@ func classifyError(msg string) string {
 
 	if strings.Contains(m, "plugin not installed") {
 		return errCodePluginMissing
+	}
+
+	// Cloudflare MUST be decided before both passes below, not after. The
+	// HTTP-status pass maps 403 -> auth, and the keyword pass matches
+	// "login failed" / "invalid credentials" — a challenge error carries a
+	// 403 and often arrives wrapped by the login path, so either would
+	// reclassify it as an auth failure and reinstate exactly the misleading
+	// "your credentials are wrong" message this code removes.
+	if strings.Contains(m, "cloudflare challenge") {
+		return errCodeCloudflare
 	}
 
 	// HTTP status code reported by the tracker plugin. Range-map rather than

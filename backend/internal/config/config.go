@@ -82,6 +82,12 @@ type Config struct {
 	// Optional Cloudflare solver sidecar
 	CFSolverEnabled bool   `env:"MARAUDER_CFSOLVER_ENABLED" envDefault:"false"`
 	CFSolverURL     string `env:"MARAUDER_CFSOLVER_URL" envDefault:""`
+
+	// FlareSolverr: fetches pages for challenge-gated trackers (RuTracker)
+	// through a real browser. Empty disables it and those trackers keep
+	// dialling directly — which Cloudflare blocks.
+	FlareSolverrURL     string        `env:"MARAUDER_FLARESOLVERR_URL" envDefault:""`
+	FlareSolverrTimeout time.Duration `env:"MARAUDER_FLARESOLVERR_TIMEOUT" envDefault:"60s"`
 }
 
 // Load reads configuration from environment variables and validates it.

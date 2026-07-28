@@ -130,6 +130,11 @@ jobs:
       - name: go vet
         run: go vet ./...
 
+      # cfsolver is its own Go module, so the backend job's `go test ./...`
+      # does not reach it — without this step its tests silently never run.
+      - name: go test
+        run: go test ./...
+
   # ------------------------------------------------------- release scripts
   # Unit-test the pure helper logic behind the auto-release pipeline
   # (Conventional Commit -> semver bump, next-version arithmetic, issue-ref

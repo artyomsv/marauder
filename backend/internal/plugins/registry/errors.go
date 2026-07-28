@@ -21,6 +21,22 @@ var ErrNoPendingEpisodes = errors.New("no pending episodes")
 // with %w so callers can match via errors.Is.
 var ErrCaptchaRequired = errors.New("tracker requires a captcha")
 
+// ErrCloudflareChallenge is returned when a tracker's response is a
+// Cloudflare interstitial rather than the page (or login result) that was
+// requested. It exists because a positive-indicator check — "is the
+// logged-in marker present?" — cannot distinguish "wrong password" from "we
+// never reached the site at all", and defaulting to the former sends users
+// chasing a credential problem that does not exist.
+//
+// Verified against live RuTracker on 2026-07-28: the block is a JS challenge,
+// and a clearance cookie earned by a browser is rejected when replayed by a
+// plain HTTP client (Cloudflare binds it to the client's TLS fingerprint).
+// So this error means "this tracker is unreachable without a browser", not
+// "retry later" and not "fix your credentials".
+//
+// Plugins wrap it with %w so callers can match via errors.Is.
+var ErrCloudflareChallenge = errors.New("tracker is behind a cloudflare challenge")
+
 // ErrSessionExpired is returned by a cookie-session plugin's Login when
 // no stored session exists or the stored session no longer authenticates.
 // The user must re-run the interactive (captcha) login flow.
