@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **RuTracker topics broke again, with "no infohash found in topic page" and
+  a "Redirecting..." display name.** Three compounding defects, all now
+  fixed:
+  - Every FlareSolverr request created a fresh browser and re-solved the
+    Cloudflare challenge (10-20s measured). FlareSolverr serialises requests,
+    so several topics checking at once queued past the scheduler's budget and
+    all failed. A **session is now created once and reused**, and released on
+    shutdown. This was the root cause.
+  - Those timeouts were classified as network errors, which triggered
+    **domain rotation** — reading our own transport's slowness as the tracker
+    being unreachable. Solver failures now carry their own `solver` error
+    code, excluded from the rotation gate. Rotation is one-directional, so a
+    single overload permanently migrated the tracker to a worse domain.
+  - `rutracker.nl` was in the rotation ring but serves only a 5 KB
+    "Redirecting..." stub with no torrent content — it is **removed**. This
+    is what rotation landed on, and what produced both symptoms.
+
+  Recovery for an install already stuck this way: the stored active domain
+  must be cleared (Settings → Tracker domains, or set
+  `tracker_settings.active_domain` to NULL and restart).
+
 ## [1.15.0] - 2026-07-28
 
 ### Fixed

@@ -12,6 +12,7 @@ const CODE_KEYS: Record<string, string> = {
   unreachable: "topics.error.unreachable",
   auth: "topics.error.auth",
   cloudflare: "topics.error.cloudflare",
+  solver: "topics.error.solver",
   parse: "topics.error.parse",
   plugin_missing: "topics.error.pluginMissing",
 };

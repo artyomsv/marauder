@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -16,7 +18,47 @@ import (
 // was handed so tests can assert on the wire format.
 type fakeSolver struct {
 	srv      *httptest.Server
+	mu       sync.Mutex
 	lastBody map[string]any
+	bodies   []map[string]any
+}
+
+// cmdCount returns how many requests carried the given cmd.
+func (f *fakeSolver) cmdCount(cmd string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.cmdCountLocked(cmd)
+}
+
+// cmdCountLocked is cmdCount for callers already holding f.mu.
+func (f *fakeSolver) cmdCountLocked(cmd string) int {
+	n := 0
+	for _, b := range f.bodies {
+		if c, _ := b["cmd"].(string); c == cmd {
+			n++
+		}
+	}
+	return n
+}
+
+// sessionsUsed returns the distinct non-empty session values seen on
+// request.get calls.
+func (f *fakeSolver) sessionsUsed() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	seen := map[string]bool{}
+	var out []string
+	for _, b := range f.bodies {
+		if c, _ := b["cmd"].(string); c != "request.get" {
+			continue
+		}
+		s, _ := b["session"].(string)
+		if s != "" && !seen[s] {
+			seen[s] = true
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 func newFakeSolver(t *testing.T, respond func(w http.ResponseWriter, cmd, url string)) *fakeSolver {
@@ -29,10 +71,28 @@ func newFakeSolver(t *testing.T, respond func(w http.ResponseWriter, cmd, url st
 		}
 		var body map[string]any
 		_ = json.NewDecoder(r.Body).Decode(&body)
-		f.lastBody = body
 		cmd, _ := body["cmd"].(string)
 		target, _ := body["url"].(string)
+		f.mu.Lock()
+		f.lastBody = body
+		f.bodies = append(f.bodies, body)
+		nth := f.cmdCountLocked("sessions.create")
+		f.mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
+		// Sessions are handled here so individual tests only describe the
+		// request.get behaviour they care about.
+		if cmd == "sessions.create" {
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"status":  "ok",
+				"message": "Session created successfully.",
+				"session": fmt.Sprintf("sess-%d", nth),
+			})
+			return
+		}
+		if cmd == "sessions.destroy" {
+			_ = json.NewEncoder(w).Encode(map[string]any{"status": "ok", "message": "The session has been removed."})
+			return
+		}
 		respond(w, cmd, target)
 	}))
 	t.Cleanup(f.srv.Close)
@@ -222,6 +282,120 @@ func TestRoundTrip_HonoursContextCancellation(t *testing.T) {
 
 	if _, err := rt.RoundTrip(req); err == nil {
 		t.Error("expected an error for an already-cancelled context")
+	}
+}
+
+// --- session reuse -------------------------------------------------------
+
+// TestRoundTrip_ReusesOneSessionAcrossRequests is the fix for the root cause
+// of the 2026-07-30 outage. Without a session, FlareSolverr spins a fresh
+// browser and re-solves the Cloudflare challenge on every single request
+// (measured at 10-20s against RuTracker), and because it serialises requests,
+// several topics checking at once queue past the scheduler's 35s budget and
+// all fail. Solving once and reusing the cleared context removes both the
+// per-request cost and the queue.
+func TestRoundTrip_ReusesOneSessionAcrossRequests(t *testing.T) {
+	f := newFakeSolver(t, func(w http.ResponseWriter, _, _ string) {
+		okSolution(w, 200, "<html></html>")
+	})
+	rt := New(f.srv.URL, 30*time.Second)
+
+	for i := 0; i < 3; i++ {
+		req, _ := http.NewRequest(http.MethodGet, "https://rutracker.org/forum/index.php", nil)
+		resp, err := rt.RoundTrip(req)
+		if err != nil {
+			t.Fatalf("RoundTrip %d: %v", i, err)
+		}
+		resp.Body.Close()
+	}
+
+	if got := f.cmdCount("sessions.create"); got != 1 {
+		t.Errorf("sessions.create calls = %d, want exactly 1 across three fetches", got)
+	}
+	if used := f.sessionsUsed(); len(used) != 1 {
+		t.Errorf("distinct sessions used = %v, want exactly one reused session", used)
+	}
+}
+
+// A session that FlareSolverr no longer knows about — it restarted, or the
+// session aged out — must be transparently replaced rather than failing the
+// check. Without this, one FlareSolverr restart would wedge every
+// challenge-gated tracker until Marauder itself was restarted.
+func TestRoundTrip_RecreatesSessionWhenItIsGone(t *testing.T) {
+	var calls int
+	f := newFakeSolver(t, func(w http.ResponseWriter, _, _ string) {
+		calls++
+		if calls == 1 {
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"status":  "error",
+				"message": "Error: This session does not exist.",
+			})
+			return
+		}
+		okSolution(w, 200, "<html>recovered</html>")
+	})
+	rt := New(f.srv.URL, 30*time.Second)
+
+	req, _ := http.NewRequest(http.MethodGet, "https://rutracker.org/forum/index.php", nil)
+	resp, err := rt.RoundTrip(req)
+	if err != nil {
+		t.Fatalf("RoundTrip should have recovered by recreating the session: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(body), "recovered") {
+		t.Errorf("body = %q, want the retried fetch's page", string(body))
+	}
+	if got := f.cmdCount("sessions.create"); got != 2 {
+		t.Errorf("sessions.create calls = %d, want 2 (initial + replacement)", got)
+	}
+}
+
+// A non-session error must NOT trigger a retry: re-driving a browser through
+// an unsolvable challenge doubles the cost and delays the real answer.
+func TestRoundTrip_DoesNotRetryOnOrdinarySolverError(t *testing.T) {
+	f := newFakeSolver(t, func(w http.ResponseWriter, _, _ string) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"status":  "error",
+			"message": "Challenge not solved!",
+		})
+	})
+	rt := New(f.srv.URL, 30*time.Second)
+
+	req, _ := http.NewRequest(http.MethodGet, "https://rutracker.org/forum/index.php", nil)
+	if _, err := rt.RoundTrip(req); err == nil {
+		t.Fatal("expected the solver error to surface")
+	}
+	if got := f.cmdCount("request.get"); got != 1 {
+		t.Errorf("request.get calls = %d, want 1 (no retry on a non-session error)", got)
+	}
+}
+
+// Concurrent first requests must not each create their own session — that
+// would spawn several browsers at once on a service that serialises anyway.
+func TestRoundTrip_ConcurrentFirstRequestsCreateOneSession(t *testing.T) {
+	f := newFakeSolver(t, func(w http.ResponseWriter, _, _ string) {
+		okSolution(w, 200, "<html></html>")
+	})
+	rt := New(f.srv.URL, 30*time.Second)
+
+	var wg sync.WaitGroup
+	for i := 0; i < 6; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			req, _ := http.NewRequest(http.MethodGet, "https://rutracker.org/forum/index.php", nil)
+			resp, err := rt.RoundTrip(req)
+			if err == nil {
+				resp.Body.Close()
+			}
+		}()
+	}
+	wg.Wait()
+
+	if got := f.cmdCount("sessions.create"); got != 1 {
+		t.Errorf("sessions.create calls = %d, want 1 under concurrency", got)
 	}
 }
 

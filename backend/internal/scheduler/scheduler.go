@@ -1016,6 +1016,7 @@ const (
 	errCodeUnreachable   = "unreachable"
 	errCodeAuth          = "auth"
 	errCodeCloudflare    = "cloudflare"
+	errCodeSolver        = "solver"
 	errCodeParse         = "parse"
 	errCodePluginMissing = "plugin_missing"
 	errCodeUnknown       = "unknown"
@@ -1058,6 +1059,17 @@ func classifyError(msg string) string {
 	// "your credentials are wrong" message this code removes.
 	if strings.Contains(m, "cloudflare challenge") {
 		return errCodeCloudflare
+	}
+
+	// Solver failures must also be decided before the timeout/unreachable
+	// passes. Their messages routinely embed "context deadline exceeded"
+	// (the caller giving up on a queued solve), and letting that win would
+	// classify our own transport's slowness as a network fault — which then
+	// triggers domain rotation on evidence that says nothing about the
+	// domain. On 2026-07-30 exactly that rotated RuTracker onto a mirror
+	// serving only a "Redirecting..." stub, and rotation never migrates back.
+	if strings.Contains(m, "flaresolverr") {
+		return errCodeSolver
 	}
 
 	// HTTP status code reported by the tracker plugin. Range-map rather than

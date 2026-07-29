@@ -435,9 +435,9 @@ func TestEffectiveDomain_ResolverOverride(t *testing.T) {
 
 func TestDomains_CanonicalFirst(t *testing.T) {
 	p := &plugin{}
-	// rutracker.cr is deliberately absent — it stopped resolving (NXDOMAIN),
-	// see TestKnownDomains_ExcludesDeadMirror.
-	want := []string{"rutracker.org", "rutracker.net", "rutracker.nl"}
+	// rutracker.cr and rutracker.nl are deliberately absent — neither serves
+	// real content, see TestKnownDomains_ExcludesDeadMirror.
+	want := []string{"rutracker.org", "rutracker.net"}
 	if !reflect.DeepEqual(p.Domains(), want) {
 		t.Errorf("Domains() = %v, want %v", p.Domains(), want)
 	}
@@ -585,13 +585,24 @@ func TestLogin_CloudflareChallenge_NotReportedAsBadCredentials(t *testing.T) {
 	}
 }
 
-// TestKnownDomains_ExcludesDeadMirror keeps rutracker.cr out of the rotation
-// ring: it stopped resolving (NXDOMAIN), so leaving it in costs a failed
-// lookup every time the ring advances onto it.
+// TestKnownDomains_ExcludesDeadMirror keeps non-serving hosts out of the
+// rotation ring. Anything listed here is a domain the ring may silently
+// migrate onto, so an entry that does not serve real content is worse than no
+// entry at all:
+//
+//   - rutracker.cr — stopped resolving entirely (NXDOMAIN)
+//   - rutracker.nl — resolves and returns 200, but serves a 5 KB stub titled
+//     "Redirecting..." with no torrent content. Rotation landed on it and every
+//     check then failed with "no infohash found in topic page", including the
+//     AddTopic preview which showed "Redirecting..." as the display name.
 func TestKnownDomains_ExcludesDeadMirror(t *testing.T) {
+	nonServing := map[string]string{
+		"rutracker.cr": "NXDOMAIN",
+		"rutracker.nl": "serves a Redirecting... stub, no content",
+	}
 	for _, d := range knownDomains {
-		if d == "rutracker.cr" {
-			t.Errorf("rutracker.cr no longer resolves and must not be a known domain; got %v", knownDomains)
+		if why, bad := nonServing[d]; bad {
+			t.Errorf("%s must not be a known domain (%s); got %v", d, why, knownDomains)
 		}
 	}
 	if len(knownDomains) == 0 {
