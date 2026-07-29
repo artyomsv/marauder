@@ -100,10 +100,14 @@ type Topic struct {
 	Status            TopicStatus
 	LastError         string
 	// LastErrorCode is a stable, machine-readable classification of
-	// LastError (timeout / unreachable / auth / parse / plugin_missing /
-	// unknown) so the UI can render a localised, user-friendly message
-	// while LastError keeps the raw detail for debugging. Empty when the
-	// last check succeeded.
+	// LastError (timeout / unreachable / auth / cloudflare / solver / parse /
+	// plugin_missing / unknown) so the UI can render a localised,
+	// user-friendly message while LastError keeps the raw detail for
+	// debugging. Empty when the last check succeeded.
+	//
+	// This list is the third copy of the same vocabulary — keep it in step
+	// with the errCode* constants in internal/scheduler/scheduler.go and the
+	// CODE_KEYS map in frontend/src/components/topics/TopicError.tsx.
 	LastErrorCode string
 	CreatedAt     time.Time
 	UpdatedAt     time.Time

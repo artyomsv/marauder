@@ -128,6 +128,25 @@ var (
 		},
 		[]string{"tracker"},
 	)
+
+	// FlareSolverrSessionsTotal counts challenge-solver session lifecycle
+	// events by result: "created", "replaced" (the previous one was gone and
+	// has been destroyed), "error" (sessions.create failed), and "degraded" (a
+	// fetch had to run without a session).
+	//
+	// "degraded" is the important one: without a session, FlareSolverr
+	// re-solves the Cloudflare challenge on every request (10-20s) and
+	// serialises them, so concurrent checks queue past the scheduler's budget
+	// and fail. That is the 2026-07-30 RuTracker outage, and it was invisible
+	// because nothing measured it. A non-zero rate here means checks are
+	// silently slow.
+	FlareSolverrSessionsTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "marauder_flaresolverr_sessions_total",
+			Help: "Challenge-solver session lifecycle events, partitioned by result (created/replaced/error/degraded).",
+		},
+		[]string{"result"},
+	)
 )
 
 // Notifier metrics --------------------------------------------------------

@@ -17,10 +17,38 @@ import (
 // fakeSolver stands in for a FlareSolverr instance, recording the request it
 // was handed so tests can assert on the wire format.
 type fakeSolver struct {
-	srv      *httptest.Server
-	mu       sync.Mutex
-	lastBody map[string]any
-	bodies   []map[string]any
+	srv           *httptest.Server
+	mu            sync.Mutex
+	lastBody      map[string]any
+	bodies        []map[string]any
+	destroyShould bool // when true, sessions.destroy answers 200 + status:error
+	createFails   bool // when true, sessions.create answers 200 + status:error
+	createGate    chan struct{}
+}
+
+// failCreate makes sessions.create return an envelope-level failure.
+func (f *fakeSolver) failCreate(v bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.createFails = v
+}
+
+// gateCreate makes sessions.create block until the returned func is called,
+// so a test can hold a create in flight and observe what waiters do.
+func (f *fakeSolver) gateCreate() (release func()) {
+	f.mu.Lock()
+	f.createGate = make(chan struct{})
+	g := f.createGate
+	f.mu.Unlock()
+	return func() { close(g) }
+}
+
+// failDestroy makes sessions.destroy return an envelope-level failure while
+// still answering HTTP 200 — the shape FlareSolverr actually uses.
+func (f *fakeSolver) failDestroy(v bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.destroyShould = v
 }
 
 // cmdCount returns how many requests carried the given cmd.
@@ -82,6 +110,19 @@ func newFakeSolver(t *testing.T, respond func(w http.ResponseWriter, cmd, url st
 		// Sessions are handled here so individual tests only describe the
 		// request.get behaviour they care about.
 		if cmd == "sessions.create" {
+			f.mu.Lock()
+			gate, fail := f.createGate, f.createFails
+			f.mu.Unlock()
+			if gate != nil {
+				<-gate // hold the create in flight until the test releases it
+			}
+			if fail {
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"status":  "error",
+					"message": "Error: browser limit reached.",
+				})
+				return
+			}
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"status":  "ok",
 				"message": "Session created successfully.",
@@ -90,6 +131,18 @@ func newFakeSolver(t *testing.T, respond func(w http.ResponseWriter, cmd, url st
 			return
 		}
 		if cmd == "sessions.destroy" {
+			f.mu.Lock()
+			fail := f.destroyShould
+			f.mu.Unlock()
+			if fail {
+				// HTTP 200 with an envelope-level failure: FlareSolverr's
+				// actual shape for a command that did not succeed.
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"status":  "error",
+					"message": "Error: This session does not exist.",
+				})
+				return
+			}
 			_ = json.NewEncoder(w).Encode(map[string]any{"status": "ok", "message": "The session has been removed."})
 			return
 		}
@@ -322,10 +375,12 @@ func TestRoundTrip_ReusesOneSessionAcrossRequests(t *testing.T) {
 // check. Without this, one FlareSolverr restart would wedge every
 // challenge-gated tracker until Marauder itself was restarted.
 func TestRoundTrip_RecreatesSessionWhenItIsGone(t *testing.T) {
-	var calls int
-	f := newFakeSolver(t, func(w http.ResponseWriter, _, _ string) {
-		calls++
-		if calls == 1 {
+	var f *fakeSolver
+	f = newFakeSolver(t, func(w http.ResponseWriter, _, _ string) {
+		// The first request.get reports a gone session; the retry succeeds.
+		// Counting via the fake's mutex-guarded request log avoids a second,
+		// unsynchronised counter written from handler goroutines.
+		if f.cmdCount("request.get") == 1 {
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"status":  "error",
 				"message": "Error: This session does not exist.",
@@ -396,6 +451,234 @@ func TestRoundTrip_ConcurrentFirstRequestsCreateOneSession(t *testing.T) {
 
 	if got := f.cmdCount("sessions.create"); got != 1 {
 		t.Errorf("sessions.create calls = %d, want 1 under concurrency", got)
+	}
+}
+
+// --- availability under a slow or failing solver -------------------------
+
+// TestRoundTrip_WaiterHonoursItsOwnDeadline is an availability fix, not a
+// correctness one. Session acquisition originally held a plain sync.Mutex
+// across the sessions.create round-trip; sync.Mutex.Lock is not
+// context-aware, so a waiter cannot abandon on its own deadline. The
+// scheduler runs ONE bounded worker pool shared by every tracker (default 8),
+// each check bounded at TrackerHTTPTimeout+5s, so a slow solver could park
+// all workers and delay checks for trackers that don't use the solver at all.
+func TestRoundTrip_WaiterHonoursItsOwnDeadline(t *testing.T) {
+	f := newFakeSolver(t, func(w http.ResponseWriter, _, _ string) {
+		okSolution(w, 200, "<html></html>")
+	})
+	release := f.gateCreate()
+	defer release()
+	rt := New(f.srv.URL, 30*time.Second)
+
+	// Hold a create in flight.
+	started := make(chan struct{})
+	go func() {
+		close(started)
+		req, _ := http.NewRequest(http.MethodGet, "https://rutracker.org/forum/index.php", nil)
+		if resp, err := rt.RoundTrip(req); err == nil {
+			resp.Body.Close()
+		}
+	}()
+	<-started
+
+	// A second caller with a short deadline must give up on time rather than
+	// blocking until the creator finishes.
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://rutracker.org/forum/index.php", nil)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		if resp, err := rt.RoundTrip(req); err == nil {
+			resp.Body.Close()
+		}
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("waiter blocked well past its own deadline; acquisition is not context-aware")
+	}
+}
+
+// A solver that cannot create sessions (browser limit, solver down) must be
+// asked once per cooldown, not once per request. Without this, every check
+// pays a failed round-trip and the failure is never cached.
+func TestRoundTrip_NegativeCachesCreateFailure(t *testing.T) {
+	f := newFakeSolver(t, func(w http.ResponseWriter, _, _ string) {
+		okSolution(w, 200, "<html></html>")
+	})
+	f.failCreate(true)
+	rt := New(f.srv.URL, 30*time.Second)
+
+	for i := 0; i < 4; i++ {
+		req, _ := http.NewRequest(http.MethodGet, "https://rutracker.org/forum/index.php", nil)
+		if resp, err := rt.RoundTrip(req); err == nil {
+			resp.Body.Close()
+		}
+	}
+
+	if got := f.cmdCount("sessions.create"); got != 1 {
+		t.Errorf("sessions.create attempts = %d, want 1 within the cooldown", got)
+	}
+}
+
+// --- abandoned sessions --------------------------------------------------
+
+// A replaced session must be destroyed, not merely forgotten. FlareSolverr
+// holds one Chrome per session and does not expire them unless
+// SESSION_TTL_MINUTES is set (it is not, in deploy/), so a forgotten session
+// strands roughly 300 MB until the container restarts.
+func TestRoundTrip_DestroysTheSessionItAbandons(t *testing.T) {
+	var f *fakeSolver
+	f = newFakeSolver(t, func(w http.ResponseWriter, _, _ string) {
+		// The first request.get reports a gone session; the retry succeeds.
+		// Counting via the fake's mutex-guarded request log avoids a second,
+		// unsynchronised counter written from handler goroutines.
+		if f.cmdCount("request.get") == 1 {
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"status":  "error",
+				"message": "Error: This session does not exist.",
+			})
+			return
+		}
+		okSolution(w, 200, "<html>recovered</html>")
+	})
+	rt := New(f.srv.URL, 30*time.Second)
+
+	req, _ := http.NewRequest(http.MethodGet, "https://rutracker.org/forum/index.php", nil)
+	resp, err := rt.RoundTrip(req)
+	if err != nil {
+		t.Fatalf("RoundTrip: %v", err)
+	}
+	resp.Body.Close()
+
+	if got := f.cmdCount("sessions.destroy"); got != 1 {
+		t.Errorf("sessions.destroy calls = %d, want 1 — the abandoned session leaks a browser otherwise", got)
+	}
+}
+
+// isSessionGone must require wording that means the session is ABSENT. A
+// message that merely mentions a session (capacity limits, "session already
+// exists", a crash naming the session) would otherwise discard a healthy
+// session — and if the follow-up create fails for the same reason, the
+// transport is left permanently sessionless, reinstating the very re-solve
+// storm this change removes.
+func TestIsSessionGone_RequiresAbsenceWording(t *testing.T) {
+	tests := []struct {
+		name string
+		msg  string
+		want bool
+	}{
+		{"session does not exist", "flaresolverr: request.get: Error: This session does not exist.", true},
+		{"session not found", "flaresolverr: request.get: session not found", true},
+		{"unknown session", "flaresolverr: request.get: unknown session id", true},
+		{"capacity mentions session", "flaresolverr: sessions.create: browser session limit reached", false},
+		{"session already exists", "flaresolverr: sessions.create: Session already exists", false},
+		{"unsolved challenge", "flaresolverr: request.get: Challenge not solved!", false},
+		{"no error", "", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var err error
+			if tt.msg != "" {
+				err = errors.New(tt.msg)
+			}
+			if got := isSessionGone(err); got != tt.want {
+				t.Errorf("isSessionGone(%q) = %v, want %v", tt.msg, got, tt.want)
+			}
+		})
+	}
+}
+
+// --- defence in depth ----------------------------------------------------
+
+// The transport hands its URL to a real browser running inside the solver
+// container, from a network position Marauder may not itself have. Today the
+// only consumer validates hosts, but the transport is installed process-wide
+// and now stateful, so a future plugin that forgets the guard must not be able
+// to make the browser read local files or cloud metadata.
+func TestRoundTrip_RejectsNonHTTPSchemes(t *testing.T) {
+	f := newFakeSolver(t, func(w http.ResponseWriter, _, _ string) {
+		okSolution(w, 200, "<html></html>")
+	})
+	rt := New(f.srv.URL, 30*time.Second)
+
+	for _, raw := range []string{"file:///etc/passwd", "ftp://example.com/x", "gopher://example.com"} {
+		req, err := http.NewRequest(http.MethodGet, raw, nil)
+		if err != nil {
+			continue
+		}
+		if _, err := rt.RoundTrip(req); err == nil {
+			t.Errorf("RoundTrip(%q) succeeded; non-http(s) schemes must be refused", raw)
+		}
+	}
+	if got := f.cmdCount("request.get"); got != 0 {
+		t.Errorf("request.get calls = %d, want 0 — nothing should reach the browser", got)
+	}
+}
+
+// --- shutdown ------------------------------------------------------------
+
+// TestClose_PreventsResurrectingASession closes the orphan hole that Close
+// itself would otherwise open. Shutdown does not join the scheduler's
+// workers, so a worker can still be mid-check when Close runs. Its in-flight
+// request then fails with a session error, the retry path creates a
+// REPLACEMENT session, and that one is never destroyed — exactly the orphan
+// Close exists to prevent. After Close the transport must therefore refuse to
+// mint new sessions; a check failing during shutdown is fine, a leaked
+// browser is not.
+func TestClose_PreventsResurrectingASession(t *testing.T) {
+	f := newFakeSolver(t, func(w http.ResponseWriter, _, _ string) {
+		okSolution(w, 200, "<html></html>")
+	})
+	rt := New(f.srv.URL, 30*time.Second)
+
+	// Establish a session, then shut down.
+	req, _ := http.NewRequest(http.MethodGet, "https://rutracker.org/forum/index.php", nil)
+	resp, err := rt.RoundTrip(req)
+	if err != nil {
+		t.Fatalf("first RoundTrip: %v", err)
+	}
+	resp.Body.Close()
+	if err := rt.Close(context.Background()); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	created := f.cmdCount("sessions.create")
+
+	// A late in-flight request must not resurrect a session.
+	req2, _ := http.NewRequest(http.MethodGet, "https://rutracker.org/forum/index.php", nil)
+	if resp2, err := rt.RoundTrip(req2); err == nil {
+		resp2.Body.Close()
+	}
+
+	if got := f.cmdCount("sessions.create"); got != created {
+		t.Errorf("sessions.create calls = %d, want %d — Close must not be followed by a new session", got, created)
+	}
+}
+
+// FlareSolverr answers HTTP 200 even when the command failed, signalling the
+// real outcome in the envelope's status field. Ignoring it made Close report
+// successful cleanup while the browser session stayed alive, which is a
+// silent leak — the operator never sees the warning that would explain it.
+func TestClose_SurfacesAnEnvelopeError(t *testing.T) {
+	f := newFakeSolver(t, func(w http.ResponseWriter, _, _ string) {
+		okSolution(w, 200, "<html></html>")
+	})
+	rt := New(f.srv.URL, 30*time.Second)
+	req, _ := http.NewRequest(http.MethodGet, "https://rutracker.org/forum/index.php", nil)
+	resp, err := rt.RoundTrip(req)
+	if err != nil {
+		t.Fatalf("RoundTrip: %v", err)
+	}
+	resp.Body.Close()
+
+	// Swap the handler so sessions.destroy fails at the envelope level.
+	f.failDestroy(true)
+
+	if err := rt.Close(context.Background()); err == nil {
+		t.Error("Close must report an envelope-level failure, not silently accept it")
 	}
 }
 

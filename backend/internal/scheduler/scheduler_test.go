@@ -1860,8 +1860,15 @@ func TestClassifyError_MapsKnownPatternsToCodes(t *testing.T) {
 		// letting that win would classify them as network errors and trigger
 		// domain rotation on evidence that says nothing about the domain.
 		{"solver timeout keeps the solver code", `flaresolverr: call: Post "http://flaresolverr:8191/v1": context deadline exceeded`, errCodeSolver},
-		{"solver refusal", "flaresolverr: Challenge not solved!", errCodeSolver},
 		{"solver disabled", "flaresolverr is not configured", errCodeSolver},
+		// An unsolved challenge is NOT a solver malfunction — the solver
+		// answered promptly and the tracker is genuinely gated. Bucketing it as
+		// `solver` told the user "the tracker itself is probably fine,
+		// retrying", which is the opposite of the truth.
+		{"unsolved challenge is a cloudflare problem", "flaresolverr: request.get: Challenge not solved!", errCodeCloudflare},
+		// A tracker or custom-mirror hostname containing the solver's name must
+		// not hijack the classification; only our own wrapper prefix counts.
+		{"tracker url mentioning the solver is still a network error", `kinozal GET https://flaresolverr.example.com/details.php?id=1 -> 522`, errCodeUnreachable},
 		{"auth failed prefix", "auth failed: invalid credentials", errCodeAuth},
 		{"session expired", "lostfilm: session expired", errCodeAuth},
 		{"unauthorized 401", "unexpected status 401 unauthorized", errCodeAuth},

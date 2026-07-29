@@ -8,6 +8,7 @@ package domains
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -84,9 +85,56 @@ func (s *Store) Load(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, r := range rows {
-		s.cfg[r.TrackerName] = registry.DomainConfig{Active: r.ActiveDomain, Custom: r.CustomDomains}
+		cfg := registry.DomainConfig{Active: r.ActiveDomain, Custom: r.CustomDomains}
+		// Re-validate the persisted active domain against what the plugin
+		// still recognises. A domain removed from a plugin's list stays in
+		// tracker_settings, and rotation is one-directional, so without this
+		// an install that rotated onto a since-removed mirror keeps fetching
+		// it after upgrading and cannot recover on its own — that is exactly
+		// how rutracker.nl (a "Redirecting..." stub) kept breaking checks on
+		// 2026-07-30. Dropping it here lets the plugin fall back to its
+		// canonical domain.
+		if cfg.Active != "" && !domainStillKnown(r.TrackerName, cfg.Active, cfg.Custom) {
+			s.log.Warn().
+				Str("tracker", r.TrackerName).
+				Str("dropped_domain", cfg.Active).
+				Msg("persisted active domain is no longer a known mirror; falling back to the plugin default")
+			cfg.Active = ""
+		}
+		s.cfg[r.TrackerName] = cfg
 	}
 	return nil
+}
+
+// domainStillKnown reports whether host is one the tracker continues to
+// recognise: a domain its plugin ships, or an admin-added custom mirror.
+//
+// A tracker with no registered plugin — or one that does not implement
+// WithDomains — is treated as known, so configuration for a tracker this
+// build doesn't carry is never silently wiped. Matching mirrors
+// registry.DomainAllowed's normalisation, but reads Custom from the row
+// rather than the resolver: Load runs before SetDomainResolver is installed,
+// so the resolver would still be empty here.
+func domainStillKnown(trackerName, host string, custom []string) bool {
+	wd, ok := registry.GetTracker(trackerName).(registry.WithDomains)
+	if !ok {
+		return true
+	}
+	return domainInList(host, wd.Domains()) || domainInList(host, custom)
+}
+
+func domainInList(host string, list []string) bool {
+	host = normaliseHost(host)
+	for _, d := range list {
+		if normaliseHost(d) == host {
+			return true
+		}
+	}
+	return false
+}
+
+func normaliseHost(h string) string {
+	return strings.TrimPrefix(strings.ToLower(strings.TrimSpace(h)), "www.")
 }
 
 // Resolve implements registry.DomainResolver.

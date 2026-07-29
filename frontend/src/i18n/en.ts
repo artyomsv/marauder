@@ -79,7 +79,7 @@ const en: Record<string, string> = {
   "topics.error.cloudflare":
     "Blocked by Cloudflare before reaching the tracker — your credentials are fine. This tracker needs a browser to get through.",
   "topics.error.solver":
-    "The Cloudflare solver didn't answer in time — the tracker itself is probably fine. Retrying automatically.",
+    "The Cloudflare solver isn't available or didn't answer in time — the tracker itself is probably reachable. Checks will keep retrying.",
   "topics.error.parse":
     "Couldn't read the tracker's page — its layout may have changed.",
   "topics.error.pluginMissing":

@@ -4,9 +4,9 @@
 |-------|-------|
 | Criticality | Low |
 | Complexity | Medium |
-| Location | all tracker plugins (`backend/internal/plugins/trackers/*`) — every `Check`/`Download`/`ResolveMetadata`/`AuthorComment` HTTP fetch |
+| Location | all tracker plugins (`backend/internal/plugins/trackers/*`) — every `Check`/`Download`/`ResolveMetadata`/`AuthorComment` HTTP fetch — **and** `backend/internal/flaresolverr` (`command`, `fetch`) |
 | Found during | Code review of issue #110 (author comment in notifications), rules-compliance agent |
-| Date | 2026-07-04 |
+| Date | 2026-07-04 (scope widened 2026-07-30) |
 
 ## Issue
 
@@ -42,6 +42,24 @@ a shared `trackerhttp` package.
   one notification excerpt, never a check).
 - Tracker hosts are user-configured third parties; a breaker would mainly
   save wasted egress, not protect Marauder's own availability.
+
+## Scope note — `internal/flaresolverr` (added 2026-07-30)
+
+The FlareSolverr challenge transport has the same shape: `command`
+(`sessions.create` / `sessions.destroy`) and `fetch` (`request.get`) are
+timeout-bounded but have no retry-with-backoff or per-host breaker. Two
+deliberate deviations already exist there and are **not** part of this debt:
+
+- a single bounded retry on a session-gone error (recreate + repeat once),
+  which is recovery from a specific known state, not a general retry policy;
+- an explicit fail-open when a session cannot be created (fetch proceeds
+  session-less rather than failing the check).
+
+Note that a *general* retry here would be actively harmful: a solve drives a
+real browser for 10-20s and FlareSolverr serialises requests, so blind retries
+would deepen the very queue backlog that caused the 2026-07-30 RuTracker
+outage. Any breaker/retry work for this call site must account for that —
+it is not a mechanical copy of the plugin-side fix.
 
 ## Suggested fix
 

@@ -17,6 +17,24 @@ describe("TopicError", () => {
     expect(screen.getByTitle(RAW)).toBeInTheDocument();
   });
 
+  // The code -> i18n-key map is a hand-maintained third copy of the backend's
+  // errCode* vocabulary, and tsc cannot catch a typo in it because CODE_KEYS is
+  // a plain Record<string, string> and a missing key silently falls through to
+  // the raw error. These two cases pin the newer codes so a rename or typo in
+  // either the map or the dictionaries fails a test instead of quietly
+  // degrading the UI to a stack-trace-looking string.
+  it("renders the friendly message for a solver failure", () => {
+    render(<TopicError topic={topicWith(RAW, "solver")} />);
+    expect(screen.getByText(/Cloudflare solver/i)).toBeInTheDocument();
+    expect(screen.queryByText(RAW)).toBeNull();
+  });
+
+  it("renders the friendly message for a cloudflare block", () => {
+    render(<TopicError topic={topicWith(RAW, "cloudflare")} />);
+    expect(screen.getByText(/Blocked by Cloudflare/i)).toBeInTheDocument();
+    expect(screen.queryByText(RAW)).toBeNull();
+  });
+
   it("falls back to the raw error when the code is unknown", () => {
     render(<TopicError topic={topicWith(RAW, "unknown")} />);
     expect(screen.getByText(RAW)).toBeInTheDocument();

@@ -50,6 +50,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/artyomsv/marauder/backend/internal/metrics"
 )
 
 // ErrDisabled is returned when no FlareSolverr URL is configured. Callers can
@@ -63,6 +65,33 @@ var ErrDisabled = errors.New("flaresolverr is not configured")
 // successful request that never submitted the form.
 var ErrMethodUnsupported = errors.New("flaresolverr transport supports GET only")
 
+// ErrClosed is returned once Close has run: the transport will not create
+// another session, so a request arriving during shutdown fails instead of
+// leaving an orphaned browser behind.
+var ErrClosed = errors.New("flaresolverr transport is closed")
+
+// ErrCreateCoolingDown is returned while a recent sessions.create failure is
+// still being negative-cached, so a solver that cannot make sessions is asked
+// once per cooldown rather than once per request.
+var ErrCreateCoolingDown = errors.New("flaresolverr session creation is cooling down")
+
+// ErrBudgetTooShort is returned when the caller's remaining deadline is below
+// what a solve could possibly use. Refusing beats dialling: FlareSolverr would
+// keep driving a browser for the full budget we asked for after we had already
+// abandoned the request, and because it serialises, that abandoned browser
+// blocks the next topic's fetch — the exact queue amplification behind the
+// 2026-07-30 outage.
+var ErrBudgetTooShort = errors.New("flaresolverr: remaining deadline too short to attempt a solve")
+
+const (
+	// createFailureCooldown is how long a failed sessions.create suppresses
+	// further attempts.
+	createFailureCooldown = 30 * time.Second
+	// sessionDestroyTimeout bounds the detached best-effort destroy of an
+	// abandoned session.
+	sessionDestroyTimeout = 10 * time.Second
+)
+
 // Transport issues requests through a FlareSolverr instance.
 type Transport struct {
 	// URL is the FlareSolverr root, e.g. "http://flaresolverr:8191".
@@ -72,12 +101,38 @@ type Transport struct {
 	// HTTP talks to FlareSolverr itself (not to the tracker).
 	HTTP *http.Client
 
-	// mu guards session. It is deliberately held across the sessions.create
-	// round-trip so concurrent first requests produce exactly one session
-	// rather than one browser each. That serialisation costs nothing real:
-	// FlareSolverr processes requests one at a time regardless.
+	// OnDegraded, when set, is called whenever a fetch has to fall back to
+	// session-less mode. That fallback silently reinstates the per-request
+	// challenge re-solve which caused the 2026-07-30 outage, so it must be
+	// observable rather than invisible; the package has no logger of its own.
+	OnDegraded func(error)
+
+	// mu guards the fields below. It is NEVER held across a network call:
+	// sync.Mutex.Lock cannot be cancelled, so a waiter could not honour its
+	// own deadline, and the scheduler runs ONE bounded worker pool shared by
+	// every tracker — a sick solver would park workers belonging to trackers
+	// that never touch it. Single-flight is provided by sem instead, which
+	// can be selected against ctx.Done().
 	mu      sync.Mutex
 	session string
+	closed  bool
+	// nextCreateAttempt negative-caches a failed sessions.create so a solver
+	// that cannot make sessions is asked once per cooldown instead of once
+	// per request.
+	nextCreateAttempt time.Time
+
+	// sem is a one-slot semaphore serialising session creation.
+	sem chan struct{}
+	// now is a clock seam for the negative-cache cooldown.
+	now func() time.Time
+
+	// The session is shared by every user and topic. That is safe ONLY
+	// because Login is skipped whenever this transport is active, so no
+	// per-user credential or auth cookie ever enters the shared browser. If
+	// request.post/login is ever added (see the package doc), the session
+	// must become per-credential — otherwise one user's tracker cookies
+	// would ride along on every other user's fetches.
+	_ struct{}
 }
 
 var _ http.RoundTripper = (*Transport)(nil)
@@ -95,6 +150,8 @@ func New(url string, timeout time.Duration) *Transport {
 		// budget so FlareSolverr gets the chance to answer "not solved"
 		// rather than being cut off mid-challenge.
 		HTTP: &http.Client{Timeout: timeout + 15*time.Second},
+		sem:  make(chan struct{}, 1),
+		now:  time.Now,
 	}
 }
 
@@ -120,32 +177,101 @@ type sessionRequest struct {
 // once queue past the scheduler's budget and all fail. Solving once and
 // reusing the cleared context removes both the per-request cost and the queue.
 func (t *Transport) ensureSession(ctx context.Context) (string, error) {
+	if s, err, ready := t.cachedSession(); ready {
+		return s, err
+	}
+
+	// Acquire the creation slot in a way the caller can abandon. A plain
+	// mutex here would block a waiter past its own deadline (measured at
+	// ~1.2s over a 200ms budget) and, because the scheduler's worker pool is
+	// shared by every tracker, would delay checks for trackers that do not
+	// use the solver at all.
+	select {
+	case t.sem <- struct{}{}:
+		defer func() { <-t.sem }()
+	case <-ctx.Done():
+		return "", ctx.Err()
+	}
+
+	// Re-check: the goroutine that held the slot may have just succeeded, or
+	// recorded a failure we should now honour rather than repeat.
+	if s, err, ready := t.cachedSession(); ready {
+		return s, err
+	}
+
+	var sr sessionResponse
+	// FlareSolverr names the session: several Marauder instances may share one
+	// solver, and a fixed name would have them fighting over it. The
+	// trade-off is that a SIGKILLed Marauder leaves a session nobody can
+	// identify at boot; a "marauder-<uuid>" scheme would keep both properties
+	// and allow a future sessions.list sweep.
+	err := t.command(ctx, sessionRequest{Cmd: "sessions.create"}, &sr)
+	if err == nil && sr.Session == "" {
+		err = fmt.Errorf("flaresolverr: sessions.create returned no session: %s", sr.Message)
+	}
+
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if err != nil {
+		t.nextCreateAttempt = t.now().Add(createFailureCooldown)
+		metrics.FlareSolverrSessionsTotal.WithLabelValues("error").Inc()
+		return "", err
+	}
+	t.session = sr.Session
+	t.nextCreateAttempt = time.Time{}
+	metrics.FlareSolverrSessionsTotal.WithLabelValues("created").Inc()
+	return t.session, nil
+}
+
+// cachedSession reports the session state without any network call. ready is
+// false only when the caller should attempt a creation itself.
+func (t *Transport) cachedSession() (session string, err error, ready bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.session != "" {
-		return t.session, nil
+		return t.session, nil, true
 	}
-	var sr sessionResponse
-	// Let FlareSolverr name the session: several Marauder instances may share
-	// one solver, and a fixed name would have them fighting over it.
-	if err := t.command(ctx, sessionRequest{Cmd: "sessions.create"}, &sr); err != nil {
-		return "", err
+	// After Close, never mint another session. Shutdown does not join the
+	// scheduler's workers, so a worker can still be mid-check when Close
+	// runs; its request fails with a session error and the retry path would
+	// otherwise create a replacement that nothing is left to destroy — the
+	// very orphan Close exists to prevent. Failing an in-flight check during
+	// shutdown is acceptable; leaking a browser is not.
+	if t.closed {
+		return "", ErrClosed, true
 	}
-	if sr.Status != "ok" || sr.Session == "" {
-		return "", fmt.Errorf("flaresolverr: sessions.create: %s", sr.Message)
+	if t.now().Before(t.nextCreateAttempt) {
+		return "", ErrCreateCoolingDown, true
 	}
-	t.session = sr.Session
-	return t.session, nil
+	return "", nil, false
 }
 
 // dropSession forgets name, but only if it is still the active one — otherwise
 // it would discard a replacement another goroutine has already installed.
+//
+// It also asks the solver to destroy the abandoned session. FlareSolverr holds
+// one Chrome per session and does not expire them unless SESSION_TTL_MINUTES
+// is configured, so merely forgetting a name strands ~300 MB until the
+// container restarts. The destroy is best-effort and detached: it legitimately
+// fails when the session really is gone, and it must not inherit a request
+// context that is already cancelled.
 func (t *Transport) dropSession(name string) {
 	t.mu.Lock()
-	defer t.mu.Unlock()
-	if t.session == name {
+	stale := t.session == name
+	if stale {
 		t.session = ""
 	}
+	t.mu.Unlock()
+	if !stale {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), sessionDestroyTimeout)
+		defer cancel()
+		var sr sessionResponse
+		_ = t.command(ctx, sessionRequest{Cmd: "sessions.destroy", Session: name}, &sr)
+		metrics.FlareSolverrSessionsTotal.WithLabelValues("replaced").Inc()
+	}()
 }
 
 // Close destroys the shared session so a restart does not leave an orphaned
@@ -157,6 +283,7 @@ func (t *Transport) Close(ctx context.Context) error {
 	t.mu.Lock()
 	name := t.session
 	t.session = ""
+	t.closed = true
 	t.mu.Unlock()
 	if name == "" {
 		return nil
@@ -165,12 +292,29 @@ func (t *Transport) Close(ctx context.Context) error {
 	return t.command(ctx, sessionRequest{Cmd: "sessions.destroy", Session: name}, &sr)
 }
 
-// isSessionGone reports whether err looks like FlareSolverr rejecting our
-// session rather than failing the fetch on its merits. Matching on the word is
-// deliberately loose: the exact wording varies across FlareSolverr versions,
-// and the cost of a false positive is one extra session creation.
+// isSessionGone reports whether err says our session is ABSENT — the one state
+// a replacement actually fixes.
+//
+// It deliberately requires absence wording rather than the bare word
+// "session". A capacity message ("browser session limit reached") or "Session
+// already exists" names a session that is alive; discarding it there destroys
+// a working browser, and if the follow-up create fails for the same reason the
+// transport is left session-less, reinstating the per-request re-solve storm
+// this whole change exists to remove.
 func isSessionGone(err error) bool {
-	return err != nil && strings.Contains(strings.ToLower(err.Error()), "session")
+	if err == nil {
+		return false
+	}
+	m := strings.ToLower(err.Error())
+	if !strings.Contains(m, "session") {
+		return false
+	}
+	for _, absent := range []string{"not exist", "does not exist", "not found", "unknown", "invalid", "expired"} {
+		if strings.Contains(m, absent) {
+			return true
+		}
+	}
+	return false
 }
 
 // command performs a sessions.* round-trip and decodes the envelope.
@@ -194,6 +338,14 @@ func (t *Transport) command(ctx context.Context, body sessionRequest, out *sessi
 	}
 	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
 		return fmt.Errorf("flaresolverr: decode %s: %w", body.Cmd, err)
+	}
+	// FlareSolverr answers HTTP 200 even for a command that failed, reporting
+	// the real outcome in the envelope. Checking it here rather than at each
+	// call site means no caller can forget: Close previously reported
+	// successful cleanup on an envelope error, silently leaving the browser
+	// session alive with no warning to explain the leak.
+	if out.Status != "ok" {
+		return fmt.Errorf("flaresolverr: %s: %s", body.Cmd, out.Message)
 	}
 	return nil
 }
@@ -233,19 +385,28 @@ const minSolveBudget = 5 * time.Second
 // browser for a request nobody was waiting on, and surfacing a context
 // cancellation instead of a real "challenge not solved" answer.
 //
-// The configured timeout remains the ceiling; the deadline only ever
-// tightens it.
-func (t *Transport) maxTimeoutMillis(ctx context.Context) int {
+// The configured timeout is the ceiling and the deadline only tightens it. If
+// what remains is below minSolveBudget the caller gets ErrBudgetTooShort
+// instead of a floored budget: telling the solver "you have 5s" when we will
+// abandon in 200ms leaves a browser running for a request nobody awaits, and
+// FlareSolverr serialises, so that browser blocks the next topic.
+func (t *Transport) solveBudget(ctx context.Context) (time.Duration, error) {
 	budget := t.Timeout
 	if deadline, ok := ctx.Deadline(); ok {
 		if remaining := time.Until(deadline); remaining < budget {
 			budget = remaining
 		}
 	}
-	if budget < minSolveBudget {
-		budget = minSolveBudget
+	// A configured timeout below the floor is the operator's explicit choice,
+	// so honour it rather than silently exceeding the documented ceiling.
+	floor := minSolveBudget
+	if t.Timeout < floor {
+		floor = t.Timeout
 	}
-	return int(budget / time.Millisecond)
+	if budget < floor {
+		return 0, fmt.Errorf("%w (%s left, need %s)", ErrBudgetTooShort, budget.Round(time.Millisecond), floor)
+	}
+	return budget, nil
 }
 
 // RoundTrip fetches req.URL through FlareSolverr and rebuilds the result as a
@@ -262,17 +423,36 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 		return nil, fmt.Errorf("%w (got %s %s)", ErrMethodUnsupported, req.Method, req.URL)
 	}
 
+	// The URL is handed to a real browser inside the solver container, from a
+	// network position Marauder may not itself hold. Today's only consumer
+	// validates hosts, but this transport is installed process-wide and is now
+	// stateful, so guard here too: a future plugin that forgets its own check
+	// must not be able to make the browser read local files or cloud metadata.
+	if req.URL == nil || (req.URL.Scheme != "http" && req.URL.Scheme != "https") || req.URL.Host == "" {
+		return nil, fmt.Errorf("flaresolverr: refusing to fetch %q: only absolute http(s) URLs are allowed", req.URL)
+	}
+
 	ctx := req.Context()
 	if ctx == nil {
 		ctx = context.Background()
 	}
 
 	// A session lets FlareSolverr reuse an already-cleared browser context
-	// instead of re-solving the challenge every call. If a session cannot be
-	// obtained we fetch without one: strictly slower, but still correct, so a
-	// FlareSolverr that has sessions disabled or is at capacity degrades
-	// rather than breaking every check.
-	session, _ := t.ensureSession(ctx)
+	// instead of re-solving the challenge every call. If one cannot be
+	// obtained we fetch without it: strictly slower, but still correct, so a
+	// solver with sessions disabled or at capacity degrades rather than
+	// breaking every check.
+	//
+	// That degradation reinstates the per-request re-solve behind the
+	// 2026-07-30 outage, so it is reported rather than swallowed — the package
+	// has no logger, hence the hook.
+	session, serr := t.ensureSession(ctx)
+	if serr != nil {
+		metrics.FlareSolverrSessionsTotal.WithLabelValues("degraded").Inc()
+		if t.OnDegraded != nil {
+			t.OnDegraded(serr)
+		}
+	}
 
 	out, err := t.fetch(ctx, req, session)
 	// A session FlareSolverr no longer recognises — it restarted, or the
@@ -291,10 +471,14 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 // fetch performs one request.get against FlareSolverr. An empty session omits
 // the field, which makes FlareSolverr use a throwaway browser.
 func (t *Transport) fetch(ctx context.Context, req *http.Request, session string) (*http.Response, error) {
+	budget, err := t.solveBudget(ctx)
+	if err != nil {
+		return nil, err
+	}
 	payload, err := json.Marshal(solveRequest{
 		Cmd:        "request.get",
 		URL:        req.URL.String(),
-		MaxTimeout: t.maxTimeoutMillis(ctx),
+		MaxTimeout: int(budget / time.Millisecond),
 		Session:    session,
 	})
 	if err != nil {
