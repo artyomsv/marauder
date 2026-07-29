@@ -1016,6 +1016,7 @@ const (
 	errCodeUnreachable   = "unreachable"
 	errCodeAuth          = "auth"
 	errCodeCloudflare    = "cloudflare"
+	errCodeSolver        = "solver"
 	errCodeParse         = "parse"
 	errCodePluginMissing = "plugin_missing"
 	errCodeUnknown       = "unknown"
@@ -1056,8 +1057,27 @@ func classifyError(msg string) string {
 	// 403 and often arrives wrapped by the login path, so either would
 	// reclassify it as an auth failure and reinstate exactly the misleading
 	// "your credentials are wrong" message this code removes.
-	if strings.Contains(m, "cloudflare challenge") {
+	// "challenge not solved" belongs here, not with the solver codes below: the
+	// solver answered promptly and the tracker is genuinely gated, so telling
+	// the user the tracker is probably fine would be actively misleading.
+	if strings.Contains(m, "cloudflare challenge") || strings.Contains(m, "challenge not solved") {
 		return errCodeCloudflare
+	}
+
+	// Solver failures must also be decided before the timeout/unreachable
+	// passes. Their messages routinely embed "context deadline exceeded"
+	// (the caller giving up on a queued solve), and letting that win would
+	// classify our own transport's slowness as a network fault — which then
+	// triggers domain rotation on evidence that says nothing about the
+	// domain. On 2026-07-30 exactly that rotated RuTracker onto a mirror
+	// serving only a "Redirecting..." stub, and rotation never migrates back.
+	// Match our own wrapper prefixes, not the bare product name: this runs
+	// against messages that embed target URLs, and an operator-supplied
+	// tracker host or custom mirror containing "flaresolverr" would otherwise
+	// misclassify a genuine network failure and suppress domain rotation.
+	if strings.Contains(m, "flaresolverr: ") || strings.Contains(m, "flaresolverr is not configured") ||
+		strings.Contains(m, "flaresolverr transport") {
+		return errCodeSolver
 	}
 
 	// HTTP status code reported by the tracker plugin. Range-map rather than

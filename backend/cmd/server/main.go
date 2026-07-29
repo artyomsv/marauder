@@ -132,7 +132,26 @@ func run() error {
 	// client that earned it and so cannot be replayed from Go. Unset leaves
 	// those trackers dialling directly, which is the previous behaviour.
 	if cfg.FlareSolverrURL != "" {
-		registry.SetChallengeTransport(flaresolverr.New(cfg.FlareSolverrURL, cfg.FlareSolverrTimeout))
+		solver := flaresolverr.New(cfg.FlareSolverrURL, cfg.FlareSolverrTimeout)
+		// Session-less fetches silently reinstate the per-request challenge
+		// re-solve that caused the 2026-07-30 outage, and that was invisible
+		// because nothing reported it. Log it (the metric counterpart is
+		// marauder_flaresolverr_sessions_total{result="degraded"}).
+		solver.OnDegraded = func(err error) {
+			logger.Warn().Err(err).
+				Msg("flaresolverr session unavailable; fetching without one (checks will be much slower)")
+		}
+		registry.SetChallengeTransport(solver)
+		// The transport keeps one long-lived browser session on the solver so
+		// the Cloudflare challenge is cleared once rather than per request.
+		// Release it on shutdown so restarts don't accumulate orphans.
+		defer func() {
+			shCtx, shCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer shCancel()
+			if err := solver.Close(shCtx); err != nil {
+				logger.Warn().Err(err).Msg("flaresolverr session cleanup failed")
+			}
+		}()
 		logger.Info().
 			Str("url", cfg.FlareSolverrURL).
 			Dur("timeout", cfg.FlareSolverrTimeout).

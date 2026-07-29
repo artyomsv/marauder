@@ -7,6 +7,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **RuTracker topics broke again, with "no infohash found in topic page" and
+  a "Redirecting..." display name.** Three compounding defects, all now
+  fixed:
+  - Every FlareSolverr request created a fresh browser and re-solved the
+    Cloudflare challenge (10-20s measured). FlareSolverr serialises requests,
+    so several topics checking at once queued past the scheduler's budget and
+    all failed. A **session is now created once and reused**, and released on
+    shutdown. This was the root cause.
+  - Those timeouts were classified as network errors, which triggered
+    **domain rotation** — reading our own transport's slowness as the tracker
+    being unreachable. Solver failures now carry their own `solver` error
+    code, excluded from the rotation gate. Rotation is one-directional, so a
+    single overload permanently migrated the tracker to a worse domain.
+  - `rutracker.nl` was in the rotation ring but serves only a 5 KB
+    "Redirecting..." stub with no torrent content — it is **removed**. This
+    is what rotation landed on, and what produced both symptoms.
+
+  **An install already stuck this way now heals itself on upgrade:** the
+  domain store re-validates the persisted active domain at boot and discards
+  one the plugin no longer recognises, falling back to the canonical host. No
+  manual SQL or settings change is needed.
+
+- Hardening found while reviewing the above:
+  - Session acquisition no longer holds a lock across the network call. A
+    plain mutex is not cancellable, so a caller could block well past its own
+    deadline (measured ~1.2s over a 200ms budget) — and because the scheduler
+    has one worker pool shared by every tracker, a sick solver delayed checks
+    for trackers that never touch it.
+  - A failed `sessions.create` is negative-cached, so a solver that cannot
+    make sessions is asked once per cooldown instead of once per request.
+  - A replaced session is now destroyed rather than just forgotten
+    (FlareSolverr holds one browser per session and does not expire them by
+    default), and "session gone" detection requires wording that actually
+    means absent — a capacity message no longer discards a healthy session.
+  - A request whose remaining deadline is too short to finish is refused
+    instead of being floored, so the solver is not left driving a browser for
+    a request nobody is waiting on — which, since it serialises, blocked the
+    next topic.
+  - An unsolved challenge now reports as `cloudflare`, not `solver`: the
+    solver answered fine and the tracker is genuinely gated, so the previous
+    message ("the tracker itself is probably fine") was misleading.
+  - Solver classification matches our own error prefix rather than the bare
+    product name, so a tracker URL containing it cannot suppress rotation.
+  - New `marauder_flaresolverr_sessions_total{result}` metric plus a log line
+    when a fetch degrades to session-less. That degradation *is* the outage,
+    and nothing measured it.
+
 ## [1.15.0] - 2026-07-28
 
 ### Fixed

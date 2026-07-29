@@ -45,10 +45,20 @@ const (
 )
 
 // knownDomains lists the mirrors the rotation ring may try, canonical first.
-// rutracker.cr was removed on 2026-07-28: it stopped resolving entirely
-// (NXDOMAIN), so keeping it only bought a guaranteed failed lookup whenever
-// the ring advanced onto it.
-var knownDomains = []string{"rutracker.org", "rutracker.net", "rutracker.nl"}
+//
+// Every entry is a domain rotation may silently migrate onto, so an entry that
+// does not serve real content is worse than no entry at all. Two were removed
+// after being checked against the live hosts:
+//
+//   - rutracker.cr (2026-07-28) — stopped resolving entirely (NXDOMAIN).
+//   - rutracker.nl (2026-07-30) — resolves and answers 200, but serves a 5 KB
+//     stub titled "Redirecting..." with no torrent content and no Cloudflare
+//     challenge. Rotation reached it and every check then failed with "no
+//     infohash found in topic page".
+//
+// Verify a candidate actually serves a topic page before adding one here;
+// "it resolves" is not sufficient.
+var knownDomains = []string{"rutracker.org", "rutracker.net"}
 
 // urlPattern is host-agnostic; CanParse gates the captured host against the
 // known + admin-configured domain allowlist (the SSRF barrier — see

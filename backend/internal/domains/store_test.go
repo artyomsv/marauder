@@ -277,3 +277,79 @@ func TestStore_ReportFailure_UnknownTracker_NoOp(t *testing.T) {
 		t.Errorf("unknown tracker cache mutated: %+v", cfg)
 	}
 }
+
+// TestStore_Load_DropsActiveDomainNoLongerInTheRing is the self-heal for the
+// 2026-07-30 RuTracker incident. Rotation moved the tracker onto
+// rutracker.nl, which was later removed from the plugin's domain list for
+// serving only a "Redirecting..." stub. Removing it from the code is not
+// enough on its own: the dead host stays in tracker_settings, so an upgraded
+// install keeps fetching it and cannot recover by itself — the stub's failure
+// classifies as `parse`, and only timeout/unreachable rotate.
+//
+// Load therefore re-validates the persisted active domain and discards one
+// the plugin no longer recognises, letting effectiveDomain fall back to the
+// canonical host.
+func TestStore_Load_DropsActiveDomainNoLongerInTheRing(t *testing.T) {
+	registry.RegisterTracker(&stubTracker{name: "loadheal", domains: []string{"canonical.example", "mirror.example"}})
+	f := &fakeRepo{rows: []repo.TrackerSetting{
+		{TrackerName: "loadheal", ActiveDomain: "removed.example"},
+	}}
+	s := New(f, zerolog.Nop())
+
+	if err := s.Load(context.Background()); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := s.Resolve("loadheal").Active; got != "" {
+		t.Errorf("active = %q, want it dropped so the plugin falls back to its canonical domain", got)
+	}
+}
+
+// A still-valid active domain must survive Load untouched — the self-heal
+// must not undo a deliberate admin choice.
+func TestStore_Load_KeepsValidActiveDomain(t *testing.T) {
+	registry.RegisterTracker(&stubTracker{name: "loadkeep", domains: []string{"canonical.example", "mirror.example"}})
+	f := &fakeRepo{rows: []repo.TrackerSetting{
+		{TrackerName: "loadkeep", ActiveDomain: "mirror.example"},
+	}}
+	s := New(f, zerolog.Nop())
+
+	if err := s.Load(context.Background()); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := s.Resolve("loadkeep").Active; got != "mirror.example" {
+		t.Errorf("active = %q, want mirror.example preserved", got)
+	}
+}
+
+// An admin-added custom mirror is legitimate even though the plugin does not
+// ship it, so it must not be treated as stale.
+func TestStore_Load_KeepsActiveCustomDomain(t *testing.T) {
+	registry.RegisterTracker(&stubTracker{name: "loadcustom", domains: []string{"canonical.example"}})
+	f := &fakeRepo{rows: []repo.TrackerSetting{
+		{TrackerName: "loadcustom", ActiveDomain: "self.hosted.example", CustomDomains: []string{"self.hosted.example"}},
+	}}
+	s := New(f, zerolog.Nop())
+
+	if err := s.Load(context.Background()); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := s.Resolve("loadcustom").Active; got != "self.hosted.example" {
+		t.Errorf("active = %q, want the custom domain preserved", got)
+	}
+}
+
+// A tracker with no registered plugin (or one without WithDomains) must be
+// left alone rather than having its configuration silently wiped.
+func TestStore_Load_UnknownTrackerKeepsActive(t *testing.T) {
+	f := &fakeRepo{rows: []repo.TrackerSetting{
+		{TrackerName: "notregistered", ActiveDomain: "whatever.example"},
+	}}
+	s := New(f, zerolog.Nop())
+
+	if err := s.Load(context.Background()); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := s.Resolve("notregistered").Active; got != "whatever.example" {
+		t.Errorf("active = %q, want it untouched for an unknown tracker", got)
+	}
+}

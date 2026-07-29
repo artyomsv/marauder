@@ -1855,6 +1855,20 @@ func TestClassifyError_MapsKnownPatternsToCodes(t *testing.T) {
 		{"cloudflare challenge with a 403 in the message", `rutracker GET https://rutracker.org/forum/index.php -> 403: cloudflare challenge`, errCodeCloudflare},
 		{"cloudflare challenge wrapped by the login path", "auth failed: rutracker login failed: cloudflare challenge", errCodeCloudflare},
 		{"cloudflare wording from the sentinel", "tracker is behind a cloudflare challenge", errCodeCloudflare},
+		// Solver failures must also outrank the timeout/unreachable passes:
+		// their messages routinely carry "context deadline exceeded", and
+		// letting that win would classify them as network errors and trigger
+		// domain rotation on evidence that says nothing about the domain.
+		{"solver timeout keeps the solver code", `flaresolverr: call: Post "http://flaresolverr:8191/v1": context deadline exceeded`, errCodeSolver},
+		{"solver disabled", "flaresolverr is not configured", errCodeSolver},
+		// An unsolved challenge is NOT a solver malfunction — the solver
+		// answered promptly and the tracker is genuinely gated. Bucketing it as
+		// `solver` told the user "the tracker itself is probably fine,
+		// retrying", which is the opposite of the truth.
+		{"unsolved challenge is a cloudflare problem", "flaresolverr: request.get: Challenge not solved!", errCodeCloudflare},
+		// A tracker or custom-mirror hostname containing the solver's name must
+		// not hijack the classification; only our own wrapper prefix counts.
+		{"tracker url mentioning the solver is still a network error", `kinozal GET https://flaresolverr.example.com/details.php?id=1 -> 522`, errCodeUnreachable},
 		{"auth failed prefix", "auth failed: invalid credentials", errCodeAuth},
 		{"session expired", "lostfilm: session expired", errCodeAuth},
 		{"unauthorized 401", "unexpected status 401 unauthorized", errCodeAuth},
@@ -1930,6 +1944,20 @@ func TestRecordResult_NetworkError_ReportsDomainFailure(t *testing.T) {
 		{"timeout rotates", "context deadline exceeded", 1},
 		{"auth error does not rotate", "kinozal login failed: invalid credentials", 0},
 		{"success does not rotate", "", 0},
+		// A slow or failing challenge solver says nothing about the tracker's
+		// domain, and rotation is one-directional — it never migrates back. On
+		// 2026-07-30 a FlareSolverr queue backlog rotated RuTracker from .org
+		// onto a mirror that serves only a "Redirecting..." stub, breaking
+		// every check until the active domain was reset by hand. Note the
+		// message also contains "context deadline exceeded", which the row
+		// above proves rotates — so this is specifically about the solver
+		// prefix winning.
+		{
+			"solver timeout does not rotate",
+			`Get "https://rutracker.org/forum/viewtopic.php?t=1": flaresolverr: call: Post "http://flaresolverr:8191/v1": context deadline exceeded (Client.Timeout exceeded while awaiting headers)`,
+			0,
+		},
+		{"solver refusal does not rotate", "flaresolverr: Challenge not solved!", 0},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
