@@ -1,5 +1,5 @@
 import { motion } from "framer-motion";
-import { Pencil } from "lucide-react";
+import { Pencil, RotateCcw } from "lucide-react";
 
 import type { Topic } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
@@ -26,6 +26,7 @@ export interface TopicRowLookups {
 export interface TopicRowActions {
   onToggleSelect: () => void;
   onEdit: () => void;
+  onReset: () => void;
   onDelete: () => void;
 }
 
@@ -120,6 +121,14 @@ export function TopicRow({
           onClick={() => actions.onEdit()}
         >
           <Pencil className="size-4" />
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon"
+          aria-label="Reset topic"
+          onClick={actions.onReset}
+        >
+          <RotateCcw className="size-4" />
         </Button>
         <DeleteConfirm
           onConfirm={() => actions.onDelete()}

@@ -4,7 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { type ReactNode } from "react";
 
-import { AddTopicCard } from "./Topics";
+import { AddTopicCard, TopicsPage } from "./Topics";
 import { EditTopicCard } from "@/components/topics/EditTopicCard";
 import { ApiError, type Topic } from "@/lib/api";
 
@@ -22,6 +22,7 @@ vi.mock("@/lib/api", async () => {
       del: vi.fn(),
       updateTopic: vi.fn(),
       previewTracker: vi.fn(),
+      resetTopic: vi.fn(),
     },
   };
 });
@@ -33,6 +34,7 @@ const mockApi = api as unknown as {
   post: ReturnType<typeof vi.fn>;
   updateTopic: ReturnType<typeof vi.fn>;
   previewTracker: ReturnType<typeof vi.fn>;
+  resetTopic: ReturnType<typeof vi.fn>;
 };
 
 const LOSTFILM_URL = "https://www.lostfilm.tv/series/Some_Show/seasons";
@@ -644,5 +646,53 @@ describe("EditTopicCard — prefill + update", () => {
       "t-1",
       expect.objectContaining({ notifier_id: "n2" }),
     );
+  });
+});
+
+const RESET_ROW_TOPICS: Topic[] = [
+  { ...EXISTING_TOPIC, ID: "t1", DisplayName: "Alpha", TrackerName: "rutracker", URL: "https://x/1" },
+  { ...EXISTING_TOPIC, ID: "t2", DisplayName: "Beta", TrackerName: "rutracker", URL: "https://x/2" },
+];
+
+function renderTopicsPage() {
+  return render(<TopicsPage />, { wrapper: wrapperWithClient() });
+}
+
+describe("TopicsPage reset", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockApi.get.mockImplementation((path: string) => {
+      if (path === "/topics") return Promise.resolve({ topics: RESET_ROW_TOPICS });
+      if (path === "/clients") return Promise.resolve({ clients: [] });
+      if (path === "/notifiers") return Promise.resolve({ notifiers: [] });
+      return Promise.resolve({});
+    });
+  });
+
+  it("opens the reset card for a single topic from the row action", async () => {
+    renderTopicsPage();
+    await screen.findByText("Alpha");
+
+    await userEvent.click(screen.getAllByRole("button", { name: /reset topic/i })[0]);
+
+    expect(await screen.findByText(/Reset Alpha/)).toBeInTheDocument();
+  });
+
+  it("resets every selected topic from the bulk bar", async () => {
+    mockApi.resetTopic.mockResolvedValue({ removed: 0, warnings: [] });
+    renderTopicsPage();
+    await screen.findByText("Alpha");
+
+    await userEvent.click(screen.getByLabelText("Select all"));
+    await userEvent.click(screen.getByRole("button", { name: /^reset$/i }));
+    // The bulk bar's own "Reset" button (outline, opens the card) shares an
+    // accessible name with the card's "Reset" confirm button (destructive,
+    // submits). Scope to the card — identified by its title row's closest
+    // Card ancestor — so this queries the confirm button, not the bar's.
+    const card = (await screen.findByText(/Reset 2 topics/)).closest("div")!.parentElement!;
+    await userEvent.click(within(card).getByRole("button", { name: /^reset$/i }));
+
+    await waitFor(() => expect(mockApi.resetTopic).toHaveBeenCalledTimes(2));
+    expect(mockApi.resetTopic.mock.calls.map((c: unknown[]) => c[0]).sort()).toEqual(["t1", "t2"]);
   });
 });

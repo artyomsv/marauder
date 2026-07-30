@@ -10,6 +10,7 @@ import { usePrefs } from "@/lib/prefs";
 import { QK } from "@/lib/queryKeys";
 import { AddTopicCard } from "@/components/topics/AddTopicCard";
 import { EditTopicCard } from "@/components/topics/EditTopicCard";
+import { ResetTopicCard } from "@/components/topics/ResetTopicCard";
 import type { ClientRef } from "@/components/topics/ClientBadge";
 import type { NotifierRef } from "@/components/topics/NotifierBadge";
 import { TopicRow } from "@/components/topics/TopicRow";
@@ -50,6 +51,10 @@ export function TopicsPage() {
   const [showAdd, setShowAdd] = useState(false);
   const [editing, setEditing] = useState<Topic | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  // Topics currently being reset. Held separately from `selected` because
+  // finishing a bulk reset clears the selection, and the card must stay
+  // mounted afterwards to show its result.
+  const [resetting, setResetting] = useState<Topic[] | null>(null);
 
   const del = useMutation({
     mutationFn: (id: string) => api.del<void>(`/topics/${id}`),
@@ -87,6 +92,16 @@ export function TopicsPage() {
     const ids = Array.from(selected);
     const fn = op === "pause" ? pause : op === "resume" ? resume : del;
     await Promise.all(ids.map((id) => fn.mutateAsync(id)));
+    setSelected(new Set());
+  };
+
+  const onResetDone = () => {
+    for (const topic of resetting ?? []) {
+      useCheckStatus.getState().clear(topic.ID);
+      qc.invalidateQueries({ queryKey: QK.topicStatus(topic.ID) });
+      qc.invalidateQueries({ queryKey: QK.topicEvents(topic.ID) });
+    }
+    qc.invalidateQueries({ queryKey: QK.topics });
     setSelected(new Set());
   };
 
@@ -134,6 +149,14 @@ export function TopicsPage() {
             }}
           />
         )}
+        {resetting && (
+          <ResetTopicCard
+            key={resetting.map((t) => t.ID).join(",")}
+            topics={resetting}
+            onClose={() => setResetting(null)}
+            onDone={onResetDone}
+          />
+        )}
       </AnimatePresence>
 
       {selected.size > 0 && (
@@ -141,6 +164,7 @@ export function TopicsPage() {
           count={selected.size}
           onPause={() => bulk("pause")}
           onResume={() => bulk("resume")}
+          onReset={() => setResetting(topics.filter((t) => selected.has(t.ID)))}
           onDelete={() => bulk("delete")}
           onClear={() => setSelected(new Set())}
         />
@@ -178,6 +202,7 @@ export function TopicsPage() {
                   actions={{
                     onToggleSelect: () => toggleOne(t.ID),
                     onEdit: () => setEditing(t),
+                    onReset: () => setResetting([t]),
                     onDelete: () => del.mutate(t.ID),
                   }}
                 />

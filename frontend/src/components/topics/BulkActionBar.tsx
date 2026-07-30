@@ -1,5 +1,5 @@
 import { motion } from "framer-motion";
-import { Pause, Play, Trash2, Check, X } from "lucide-react";
+import { Pause, Play, RotateCcw, Trash2, Check, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { useArmedConfirm } from "@/lib/hooks/useArmedConfirm";
@@ -8,6 +8,7 @@ export interface BulkActionBarProps {
   count: number;
   onPause: () => void;
   onResume: () => void;
+  onReset: () => void;
   onDelete: () => void;
   onClear: () => void;
 }
@@ -16,6 +17,7 @@ export function BulkActionBar({
   count,
   onPause,
   onResume,
+  onReset,
   onDelete,
   onClear,
 }: BulkActionBarProps) {
@@ -36,6 +38,10 @@ export function BulkActionBar({
         <Button variant="outline" size="sm" onClick={onResume}>
           <Play className="size-4" />
           Resume
+        </Button>
+        <Button variant="outline" size="sm" onClick={onReset}>
+          <RotateCcw className="size-4" />
+          Reset
         </Button>
         {armed ? (
           <span
