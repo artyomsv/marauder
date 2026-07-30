@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -586,8 +587,15 @@ func (h *Topics) Reset(w http.ResponseWriter, r *http.Request) {
 		if _, derr := h.Deliveries.DeleteForTopic(r.Context(), id); derr != nil {
 			// Fail-closed: a surviving row makes the re-delivery record a
 			// silent no-op (unique index + ON CONFLICT DO NOTHING), so the
-			// topic must not be armed for a re-check.
-			problem.Write(w, r, h.BaseURL, problem.ErrInternal(derr.Error()))
+			// topic must not be armed for a re-check. removed may already be
+			// non-zero here — step 1 can have already removed torrents from
+			// the client before this step failed — so the message must say
+			// so and tell the user to retry, or the removal is silently lost
+			// (the topic's hash is unchanged, so the scheduler won't
+			// re-download on its own).
+			problem.Write(w, r, h.BaseURL, problem.ErrInternal(fmt.Sprintf(
+				"removed %d torrent(s) from the client but could not clear the delivery records; retry the reset: %v",
+				removed, derr)))
 			return
 		}
 	}
@@ -597,7 +605,12 @@ func (h *Topics) Reset(w http.ResponseWriter, r *http.Request) {
 			problem.Write(w, r, h.BaseURL, problem.ErrNotFound("topic not found"))
 			return
 		}
-		problem.Write(w, r, h.BaseURL, problem.ErrInternal(rerr.Error()))
+		// Same reasoning as the delivery-delete failure above: torrents may
+		// already be gone from the client, so the message must carry the
+		// count and tell the user to retry.
+		problem.Write(w, r, h.BaseURL, problem.ErrInternal(fmt.Sprintf(
+			"removed %d torrent(s) and cleared delivery records but could not reset the topic's check state; retry the reset: %v",
+			removed, rerr)))
 		return
 	}
 

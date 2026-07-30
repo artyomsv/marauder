@@ -188,11 +188,36 @@ func TestTopicsReset_ForeignTopicIsNotFound(t *testing.T) {
 	}
 }
 
+// problemDetail decodes the RFC-7807 body's "detail" field so tests can
+// assert on the actionable text, not just the status code.
+func problemDetail(t *testing.T, rec *httptest.ResponseRecorder) string {
+	t.Helper()
+	var got struct {
+		Detail string `json:"detail"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode problem response: %v", err)
+	}
+	return got.Detail
+}
+
+// TestTopicsReset_DeliveryDeleteFailureAborts covers the case where step 1
+// (client removal) already succeeded before step 2 (delivery-row delete)
+// fails: the torrent is gone from the client, but nothing has told the user
+// that, and the topic's hash is unchanged so the scheduler will not
+// re-download on its own. The 500 body must carry the removed count and say
+// to retry, or the removal is silently lost.
 func TestTopicsReset_DeliveryDeleteFailureAborts(t *testing.T) {
-	topicID, userID := uuid.New(), uuid.New()
+	topicID, userID, clientID := uuid.New(), uuid.New(), uuid.New()
 	store := &fakeTopicStore{getByID: &domain.Topic{ID: topicID, UserID: userID}}
-	deliveries := &fakeDeliveriesStore{deleteErr: errors.New("connection refused")}
-	h := &Topics{Topics: store, Deliveries: deliveries, Remover: &fakeRemover{}}
+	deliveries := &fakeDeliveriesStore{
+		items:     []*domain.TopicDelivery{{Infohash: "aaa", ClientID: &clientID}},
+		deleteErr: errors.New("connection refused"),
+	}
+	remover := &fakeRemover{results: []clientremove.Result{
+		{ClientID: clientID, ClientName: "transmission", Hashes: []string{"aaa"}, OK: true},
+	}}
+	h := &Topics{Topics: store, Deliveries: deliveries, Remover: remover}
 
 	rec := httptest.NewRecorder()
 	h.Reset(rec, resetRequest(t, topicID, userID, `{}`))
@@ -200,7 +225,65 @@ func TestTopicsReset_DeliveryDeleteFailureAborts(t *testing.T) {
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("want 500, got %d: %s", rec.Code, rec.Body.String())
 	}
+	detail := problemDetail(t, rec)
+	if !strings.Contains(detail, "1") || !strings.Contains(strings.ToLower(detail), "retry") {
+		t.Errorf("500 body must report the removed count and tell the user to retry, got %q", detail)
+	}
 	if len(store.resetCalls) != 0 {
 		t.Error("topic state must not be reset when the delivery rows survived")
+	}
+}
+
+// TestTopicsReset_CheckStateResetFailure_ReportsRemovedCountAndRetry covers
+// the last fail-closed step: by this point client removal AND the delivery
+// delete have already succeeded, so a failure here must not report a bare
+// generic error — the user needs to know torrents are already gone and to
+// retry the reset to finish arming the scheduler.
+func TestTopicsReset_CheckStateResetFailure_ReportsRemovedCountAndRetry(t *testing.T) {
+	topicID, userID, clientID := uuid.New(), uuid.New(), uuid.New()
+	store := &fakeTopicStore{
+		getByID:  &domain.Topic{ID: topicID, UserID: userID},
+		resetErr: errors.New("connection refused"),
+	}
+	deliveries := &fakeDeliveriesStore{items: []*domain.TopicDelivery{
+		{Infohash: "aaa", ClientID: &clientID},
+	}}
+	remover := &fakeRemover{results: []clientremove.Result{
+		{ClientID: clientID, ClientName: "transmission", Hashes: []string{"aaa"}, OK: true},
+	}}
+	h := &Topics{Topics: store, Deliveries: deliveries, Remover: remover}
+
+	rec := httptest.NewRecorder()
+	h.Reset(rec, resetRequest(t, topicID, userID, `{}`))
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("want 500, got %d: %s", rec.Code, rec.Body.String())
+	}
+	detail := problemDetail(t, rec)
+	if !strings.Contains(detail, "1") || !strings.Contains(strings.ToLower(detail), "retry") {
+		t.Errorf("500 body must report the removed count and tell the user to retry, got %q", detail)
+	}
+	if !deliveries.deleted {
+		t.Error("delivery rows must already be deleted by the time the check-state reset runs")
+	}
+}
+
+// TestTopicsReset_CheckStateResetNotFound_404 covers ResetCheckState
+// surfacing repo.ErrNotFound (e.g. the topic was deleted concurrently) —
+// this must map to 404, not the generic 500 path.
+func TestTopicsReset_CheckStateResetNotFound_404(t *testing.T) {
+	topicID, userID := uuid.New(), uuid.New()
+	store := &fakeTopicStore{
+		getByID:  &domain.Topic{ID: topicID, UserID: userID},
+		resetErr: repo.ErrNotFound,
+	}
+	deliveries := &fakeDeliveriesStore{}
+	h := &Topics{Topics: store, Deliveries: deliveries, Remover: &fakeRemover{}}
+
+	rec := httptest.NewRecorder()
+	h.Reset(rec, resetRequest(t, topicID, userID, `{}`))
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("want 404, got %d: %s", rec.Code, rec.Body.String())
 	}
 }
