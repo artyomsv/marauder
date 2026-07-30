@@ -47,3 +47,24 @@ func TestNotifiableTypes(t *testing.T) {
 		}
 	}
 }
+
+func TestPolicyFor_TopicReset(t *testing.T) {
+	p := PolicyFor(TopicReset)
+	if !p.Persist {
+		t.Error("topic.reset must be persisted so the timeline explains the emptied delivery list")
+	}
+	if p.Notifiable {
+		t.Error("topic.reset must not be notifiable — the user performed the action themselves")
+	}
+	if !p.SSE {
+		t.Error("topic.reset must be pushed over SSE so open tabs refresh")
+	}
+}
+
+func TestNotifiableTypes_ExcludesTopicReset(t *testing.T) {
+	for _, ty := range NotifiableTypes() {
+		if ty == TopicReset {
+			t.Fatal("topic.reset leaked into the notifier subscription list")
+		}
+	}
+}
