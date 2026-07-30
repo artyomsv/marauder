@@ -231,6 +231,20 @@ const en: Record<string, string> = {
   "topics.delivery.copy": "Copy label",
   "topics.delivery.copied": "Copied",
 
+  // Reset topic (discard deliveries/progress/error state, re-check from scratch)
+  "topics.reset.action": "Reset topic",
+  "topics.reset.title": "Reset {name}",
+  "topics.reset.titleBulk": "Reset {count} topics",
+  "topics.reset.body":
+    "Discards delivery records, downloaded-episode progress and error state, then checks again immediately so everything is downloaded from scratch. Settings and history are kept. A paused topic stays paused.",
+  "topics.reset.deleteData": "Also delete the downloaded files from the client",
+  "topics.reset.confirm": "Reset",
+  "topics.reset.cancel": "Cancel",
+  "topics.reset.pending": "Resetting…",
+  "topics.reset.done": "Removed {count} torrent(s). Queued for a fresh check.",
+  "topics.reset.warnings": "Some torrents could not be removed:",
+  "topics.reset.close": "Close",
+
   // Notifier event subscriptions (which events a notifier fires on)
   "notifiers.events.prefix": "Notifies on",
   "notifiers.notify_on": "Notify on",
@@ -245,6 +259,7 @@ const en: Record<string, string> = {
   "events.download_completed": "download finished",
   "events.check_failed": "error",
   "events.session_expired": "session expired",
+  "events.topic_reset": "Topic reset",
 
   // Topic history timeline
   "topics.history.empty": "No history yet",

@@ -17,7 +17,7 @@ export interface WireEvent {
 }
 
 const PERSISTED = new Set([
-  "topic.added", "release.found", "download.submitted",
+  "topic.added", "topic.reset", "release.found", "download.submitted",
   "download.completed", "check.failed", "session.expired",
 ]);
 
@@ -52,6 +52,7 @@ export function applyEvent(qc: QueryClient, ev: WireEvent): void {
       return;
     case "release.found":
     case "download.submitted":
+    case "topic.reset":
       if (topicId) qc.invalidateQueries({ queryKey: QK.topicStatus(topicId) });
       qc.invalidateQueries({ queryKey: QK.topics });
       return;

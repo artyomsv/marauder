@@ -83,6 +83,7 @@ export function groupConsecutiveEvents(events: GroupableEvent[]): EventGroup[] {
 // the history view can render them too.
 export const EVENT_LABELS: Record<string, string> = {
   "topic.added": "events.topic_added",
+  "topic.reset": "events.topic_reset",
   "check.started": "events.check_started",
   "check.completed": "events.check_completed",
   "release.found": "events.release_found",

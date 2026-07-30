@@ -233,6 +233,20 @@ const ru: Record<string, string> = {
   "topics.delivery.copy": "Скопировать метку",
   "topics.delivery.copied": "Скопировано",
 
+  // Сброс темы (сброс доставок/прогресса/ошибок, повторная проверка с нуля)
+  "topics.reset.action": "Сбросить топик",
+  "topics.reset.title": "Сбросить «{name}»",
+  "topics.reset.titleBulk": "Сбросить топиков: {count}",
+  "topics.reset.body":
+    "Удаляет записи о загрузках, прогресс по сериям и состояние ошибки, затем сразу проверяет топик заново, чтобы всё скачалось с нуля. Настройки и история сохраняются. Приостановленный топик останется приостановленным.",
+  "topics.reset.deleteData": "Также удалить скачанные файлы из клиента",
+  "topics.reset.confirm": "Сбросить",
+  "topics.reset.cancel": "Отмена",
+  "topics.reset.pending": "Сброс…",
+  "topics.reset.done": "Удалено торрентов: {count}. Поставлено в очередь на проверку.",
+  "topics.reset.warnings": "Некоторые торренты удалить не удалось:",
+  "topics.reset.close": "Закрыть",
+
   // Notifier event subscriptions (which events a notifier fires on)
   "notifiers.events.prefix": "Уведомлять о",
   "notifiers.notify_on": "Уведомлять о",
@@ -247,6 +261,7 @@ const ru: Record<string, string> = {
   "events.download_completed": "загрузка завершена",
   "events.check_failed": "ошибка",
   "events.session_expired": "сессия истекла",
+  "events.topic_reset": "Топик сброшен",
 
   // Topic history timeline
   "topics.history.empty": "История пока пуста",
