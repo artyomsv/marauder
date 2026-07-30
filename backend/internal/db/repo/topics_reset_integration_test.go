@@ -215,6 +215,59 @@ func TestIntegration_CheckStateToken_NullSemantics(t *testing.T) {
 	}
 }
 
+// TestIntegration_VerifyCheckState_TracksTheSameToken proves the read-only
+// pre-submit guard agrees with the writes it protects, against real rows. It is
+// consulted immediately before a payload reaches a torrent client, so a drift
+// between its WHERE clause and RecordCheckResult's would either wave through
+// submissions the write then refuses to record, or block valid ones — and it
+// carries the same `IS NOT DISTINCT FROM` NULL semantics, so `=` breaks it in
+// the same way.
+func TestIntegration_VerifyCheckState_TracksTheSameToken(t *testing.T) {
+	pool := integrationPool(t)
+	userID := seedUser(t, pool)
+	topics := NewTopics(pool)
+	ctx := context.Background()
+
+	topic := seedTopic(t, pool, userID, domain.TopicStatusActive, extraWithEpisodes())
+
+	// Freshly seeded: last_checked_at is NULL, so this is the `=` trap.
+	if err := topics.VerifyCheckState(ctx, topic); err != nil {
+		t.Fatalf("a NULL last_checked_at must verify: %v", err)
+	}
+
+	// A check lands, moving the token on.
+	observed := *topic
+	if err := topics.RecordCheckResult(ctx, &observed, "hash-1", true,
+		time.Now().Add(time.Hour), "", ""); err != nil {
+		t.Fatalf("RecordCheckResult: %v", err)
+	}
+	if err := topics.VerifyCheckState(ctx, &observed); !errors.Is(err, ErrStaleCheckResult) {
+		t.Fatalf("want ErrStaleCheckResult for a spent token, got %v", err)
+	}
+	// ...and the current token verifies again.
+	if err := topics.VerifyCheckState(ctx, reload(t, pool, topic.ID)); err != nil {
+		t.Fatalf("the current token must verify: %v", err)
+	}
+
+	// A reset moves it on again, and the check the reset queued verifies.
+	if err := topics.ResetCheckState(ctx, topic.ID, userID); err != nil {
+		t.Fatalf("ResetCheckState: %v", err)
+	}
+	if err := topics.VerifyCheckState(ctx, reload(t, pool, topic.ID)); err != nil {
+		t.Fatalf("the post-reset token must verify: %v", err)
+	}
+
+	// A deleted topic reads as stale rather than as an error, so the scheduler
+	// treats "gone" the same as "moved on".
+	fresh := reload(t, pool, topic.ID)
+	if err := topics.Delete(ctx, topic.ID, userID); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if err := topics.VerifyCheckState(ctx, fresh); !errors.Is(err, ErrStaleCheckResult) {
+		t.Fatalf("want ErrStaleCheckResult for a deleted topic, got %v", err)
+	}
+}
+
 // TestIntegration_ResetFlow_Composed exercises the whole reset as the handler
 // drives it, over a mixed selection: seed populated topics, run a check on one,
 // reset all three, then assert every property the feature depends on at once.

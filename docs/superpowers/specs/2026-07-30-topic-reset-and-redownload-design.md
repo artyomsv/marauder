@@ -277,7 +277,7 @@ the batch, so a reset cannot be followed by further episode submissions.
 
 ### Known limitation: the mid-check submission window
 
-**This is not fully closed, and deliberately so.**
+**This is narrowed but not fully closed, and deliberately so.**
 
 The reset's removal snapshot (`Deliveries.ListForTopic`, step 1) runs at one
 instant. A torrent that a worker hands to the client *after* that snapshot is
@@ -300,6 +300,38 @@ save path, a user who reset specifically to purge corrupt data may still have
 it. The torrent is already in the client by the time any database write happens,
 so no write-side guard can retract it.
 
+#### What the pre-submit token check does and does not buy
+
+`sendViaClient` calls `Topics.VerifyCheckState` immediately before
+`clientPlugin.Add` — the read-only form of the same `(last_checked_at,
+next_check_at)` guard the two writes carry. A stale token aborts the tick
+before anything reaches the client, returning `repo.ErrStaleCheckResult`, which
+`downloadAllPending` treats exactly like the episode-mark abort: stop draining,
+keep and report whatever was already delivered, and do not report an error.
+
+What it removes is the **unbounded** case. A worker can sit in `tr.Download` for
+up to `MARAUDER_TRACKER_HTTP_TIMEOUT` (30s by default), *per episode*. Before
+this check, such a worker submitted no matter how long ago the reset had
+finished. Now it aborts.
+
+What it does **not** do is reduce the window to the `Add` round-trip. The reset
+writes its check state **last** — `ResetCheckState` is step 3, after the client
+removal and the row delete — precisely because that is the step that arms the
+scheduler. So the token does not change until the reset is essentially over,
+and a worker that reads it at any point *during* the reset sees a valid token
+and proceeds. The residual window is therefore the reset's own span, from its
+delivery snapshot to its `ResetCheckState` write.
+
+That span is not small. Each per-client `Remove` is bounded by
+`TrackerHTTPTimeout` (the same 30s), and it is slowest exactly when the client
+is unreachable — which is the most common reason to reset in the first place.
+Moving `ResetCheckState` earlier would shrink it, but the ordering is load-
+bearing for other reasons (see "step ordering" above) and was not changed here.
+
+Summary: exposure goes from "any submission after the reset's snapshot,
+unbounded into the future" to "a submission whose token read falls inside the
+reset's own execution". Strictly better, still real.
+
 Note the delivery row itself is **not** the problem and is deliberately left
 unguarded. `recordDelivery` runs strictly after a successful `Add`, so the row
 accurately describes a torrent that is in the client. `topic_deliveries` is a
@@ -313,10 +345,11 @@ missed file into a permanently untracked torrent whenever no subsequent check
 succeeds (a paused topic, a deleted topic, a tracker that stays down). Guarding
 the insert would make this limitation worse, not better.
 
-Fully closing the window needs a claim-on-dispatch marker (the reset refusing to
-proceed, or waiting, while a check holds the topic) or a per-topic lock spanning
-submission and reset. Both add a blocking path to an endpoint that bulk reset
-calls N times concurrently. Judged out of scope for this change.
+Fully closing the window still needs a claim-on-dispatch marker (the reset
+refusing to proceed, or waiting, while a check holds the topic) or a per-topic
+lock spanning submission and reset. Both add a blocking path to an endpoint that
+bulk reset calls N times concurrently, and both need schema. Judged out of scope
+for this change; the pre-submit check above is the no-migration mitigation.
 
 ## Testing
 

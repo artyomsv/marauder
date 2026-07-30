@@ -52,14 +52,17 @@ import (
 
 // topicsRepo is the subset of *repo.Topics that the scheduler uses.
 //
-// RecordCheckResult and MarkEpisodeDownloaded both take the whole topic, not
-// just its id, because each write is guarded on the (last_checked_at,
-// next_check_at) version token the worker observed at dispatch — both return
-// repo.ErrStaleCheckResult when it no longer matches.
+// RecordCheckResult, MarkEpisodeDownloaded and VerifyCheckState all take the
+// whole topic, not just its id, because each is guarded on the
+// (last_checked_at, next_check_at) version token the worker observed at
+// dispatch — all three return repo.ErrStaleCheckResult when it no longer
+// matches. The first two carry the guard in the WHERE clause of their write;
+// VerifyCheckState is the read-only form, used before an irreversible step.
 type topicsRepo interface {
 	DueForCheck(ctx context.Context, limit int) ([]*domain.Topic, error)
 	RecordCheckResult(ctx context.Context, t *domain.Topic, hash string, updated bool, nextCheckAt time.Time, errMsg, errCode string) error
 	MarkEpisodeDownloaded(ctx context.Context, t *domain.Topic, packed string) error
+	VerifyCheckState(ctx context.Context, t *domain.Topic) error
 }
 
 // displayNamePersister is an optional capability of topicsRepo: it lets the
@@ -723,6 +726,18 @@ func (s *Scheduler) downloadAllPending(ctx context.Context, log zerolog.Logger, 
 		}
 
 		if err := s.submitToClient(ctx, log, t, payload, label); err != nil {
+			if errors.Is(err, repo.ErrStaleCheckResult) {
+				// The pre-submit guard refused: the topic's check state changed
+				// after this worker was dispatched, so nothing was handed to the
+				// client. Stop draining for the same reason the episode-mark
+				// abort below does — the state this tick is working from no
+				// longer exists, and the check the reset queued re-downloads
+				// from scratch. Not an error: whatever this tick already
+				// delivered stays delivered and reported.
+				log.Info().Str("label", label).
+					Msg("submission skipped: another write won the state guard")
+				return delivered, deliveredHashes, nil
+			}
 			metrics.SchedulerTopicChecksTotal.WithLabelValues(t.TrackerName, "submit_error").Inc()
 			return delivered, deliveredHashes, fmt.Errorf("submit: %w", err)
 		}
@@ -819,6 +834,27 @@ func (s *Scheduler) sendViaClient(ctx context.Context, log zerolog.Logger, cfg *
 	if err != nil {
 		metrics.ClientSubmitTotal.WithLabelValues(cfg.ClientName, "decrypt_error").Inc()
 		return fmt.Errorf("decrypt client config: %w", err)
+	}
+	// Last check before the irreversible step. Handing a payload to the client
+	// is the one thing in this tick that a reset cannot undo afterwards: the
+	// reset removes exactly the torrents its delivery snapshot listed, so a
+	// torrent added after that snapshot survives it, keeps its files on disk
+	// even under delete_data, and the re-delivered release then rechecks and
+	// resumes against them. Verified here rather than in submitToClient so the
+	// client lookup and config decrypt are already behind us — the shorter the
+	// gap between this read and Add, the less can land inside it.
+	//
+	// This narrows the window, it does not close it: the reset writes its check
+	// state last, so a worker reading the token while the reset is still
+	// removing torrents sees a valid one. See repo.Topics.VerifyCheckState.
+	if err := s.topics.VerifyCheckState(ctx, t); err != nil {
+		if errors.Is(err, repo.ErrStaleCheckResult) {
+			return err
+		}
+		// A DB failure here is not evidence the topic moved on. Log it and
+		// submit anyway: refusing to deliver on an unrelated blip would strand
+		// the release until the tracker's own hash changes again.
+		log.Warn().Err(err).Msg("could not verify check state before submit; submitting anyway")
 	}
 	if err := clientPlugin.Add(ctx, rawConfig, payload, domain.AddOptions{
 		DownloadDir: t.DownloadDir,

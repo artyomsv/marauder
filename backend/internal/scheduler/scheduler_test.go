@@ -94,6 +94,8 @@ type fakeTopics struct {
 	updateDisplayNameCalls []updateDisplayNameCall
 	markCalls              []markCall
 	markErr                error
+	verifyCalls            []uuid.UUID
+	verifyErr              error
 }
 
 type recordCall struct {
@@ -133,6 +135,14 @@ func (f *fakeTopics) UpdateDisplayName(_ context.Context, id uuid.UUID, name str
 func (f *fakeTopics) MarkEpisodeDownloaded(_ context.Context, t *domain.Topic, packed string) error {
 	f.markCalls = append(f.markCalls, markCall{t.ID, packed})
 	return f.markErr
+}
+
+// VerifyCheckState is the pre-submit read-only guard. verifyErr lets a test
+// stage a reset landing between Check and Add; the zero value means "token
+// still valid", so every existing test keeps submitting as before.
+func (f *fakeTopics) VerifyCheckState(_ context.Context, t *domain.Topic) error {
+	f.verifyCalls = append(f.verifyCalls, t.ID)
+	return f.verifyErr
 }
 
 // fakeClients records GetByID / GetDefault calls and always returns a
@@ -261,6 +271,10 @@ type fakeClientPlugin struct {
 	addCalls int
 	addErr   error
 	lastOpts domain.AddOptions
+	// onAdd runs after the call is recorded, so a test can land a reset in
+	// the narrow gap the pre-submit guard cannot cover: between Add returning
+	// and the episode mark that follows it.
+	onAdd func()
 
 	// Remove tracking for the replace-on-update path.
 	removeCalls      int
@@ -278,6 +292,9 @@ func (f *fakeClientPlugin) Test(_ context.Context, _ []byte) error {
 func (f *fakeClientPlugin) Add(_ context.Context, _ []byte, _ *domain.Payload, opts domain.AddOptions) error {
 	f.addCalls++
 	f.lastOpts = opts
+	if f.onAdd != nil {
+		f.onAdd()
+	}
 	return f.addErr
 }
 
@@ -1929,14 +1946,19 @@ type fakeTopicsGuarded struct {
 
 	// The version token, as persisted. BOTH columns form it: last_checked_at
 	// alone is NULL after every reset and so cannot tell two resets apart.
-	lastCheckedAt *time.Time
-	nextCheckAt   time.Time
-	lastHash      string
-	downloaded    []string
-	resets        int
-	accepted      int
-	rejected      int
-	markRejected  int
+	lastCheckedAt  *time.Time
+	nextCheckAt    time.Time
+	lastHash       string
+	downloaded     []string
+	resets         int
+	accepted       int
+	rejected       int
+	markRejected   int
+	verifyCalls    int
+	verifyRejected int
+	// afterAcceptedMark runs once an episode mark has been accepted, so a test
+	// can land a reset exactly between two loop iterations.
+	afterAcceptedMark func()
 }
 
 // tokenMatches is the Go equivalent of the SQL guard
@@ -1961,6 +1983,17 @@ func (f *fakeTopicsGuarded) RecordCheckResult(_ context.Context, t *domain.Topic
 	return nil
 }
 
+// VerifyCheckState is the read-only form of the same token guard, applied
+// before a submission instead of after one.
+func (f *fakeTopicsGuarded) VerifyCheckState(_ context.Context, t *domain.Topic) error {
+	f.verifyCalls++
+	if !f.tokenMatches(t) {
+		f.verifyRejected++
+		return repo.ErrStaleCheckResult
+	}
+	return nil
+}
+
 func (f *fakeTopicsGuarded) MarkEpisodeDownloaded(_ context.Context, t *domain.Topic, packed string) error {
 	f.markCalls = append(f.markCalls, markCall{t.ID, packed})
 	if !f.tokenMatches(t) {
@@ -1968,6 +2001,9 @@ func (f *fakeTopicsGuarded) MarkEpisodeDownloaded(_ context.Context, t *domain.T
 		return repo.ErrStaleCheckResult
 	}
 	f.downloaded = append(f.downloaded, packed)
+	if f.afterAcceptedMark != nil {
+		f.afterAcceptedMark()
+	}
 	return nil
 }
 
@@ -2129,10 +2165,72 @@ func TestRunCheck_SecondReset_SurvivesWorkerDispatchedByFirstReset(t *testing.T)
 	}
 }
 
-// TestRunCheck_ResetMidEpisodeLoop_DoesNotStrandEpisode covers the narrower
-// race the MarkEpisodeDownloaded guard closes, which only per-episode trackers
-// (WithEpisodeFilter — LostFilm today) can hit, since downloadAllPending
-// returns before the mark for single-payload plugins.
+// TestRunCheck_ResetBeforeSubmit_DoesNotSubmit covers the pre-submit token
+// check: a reset that lands between Check and Add must stop the worker BEFORE
+// it hands anything to the client.
+//
+// Handing over a payload is the one step of a tick a reset cannot undo
+// afterwards. The reset removes exactly the torrents its delivery snapshot
+// listed, so a torrent added after that snapshot survives it — with
+// delete_data set the reset reports success while that torrent's files stay on
+// disk, and the re-delivered release then rechecks and resumes against them.
+//
+// Aborting is not an error: the check ends cleanly, and the check the reset
+// queued re-downloads from scratch, which is what the reset asked for.
+func TestRunCheck_ResetBeforeSubmit_DoesNotSubmit(t *testing.T) {
+	guarded := &fakeTopicsGuarded{}
+	guarded.reset()
+
+	tr := &fakeTracker{
+		name: "faketracker",
+		checks: []checkResult{{check: &domain.Check{
+			Hash: "new-hash",
+			Extra: map[string]any{
+				"pending_episodes": []string{"S01E01", "S01E02"},
+				"pending_human":    []string{"s01e01", "s01e02"},
+			},
+		}}},
+		downloads: []downloadResult{
+			{payload: &domain.Payload{MagnetURI: "magnet:1"}},
+			{payload: &domain.Payload{MagnetURI: "magnet:2"}},
+		},
+	}
+	f := newFixture(t, tr)
+	f.s.topics = guarded
+	f.topic.LastCheckedAt = nil
+	f.topic.NextCheckAt = guarded.nextCheckAt
+	f.topic.LastHash = ""
+	// The reset lands while the worker is still at the tracker, so the token
+	// has already moved on by the time the worker reaches the submit.
+	tr.onCheck = guarded.reset
+
+	f.s.runCheck(context.Background(), f.s.log, f.topic)
+
+	if f.clientPlugin.addCalls != 0 {
+		t.Fatalf("client Add calls = %d, want 0 — nothing may reach the client after the reset", f.clientPlugin.addCalls)
+	}
+	if guarded.verifyRejected != 1 {
+		t.Errorf("want the pre-submit guard to reject once, got %d (verifies attempted: %d)",
+			guarded.verifyRejected, guarded.verifyCalls)
+	}
+	// Nothing was submitted, so nothing may be marked downloaded either.
+	if len(guarded.markCalls) != 0 {
+		t.Errorf("episode mark attempted after an aborted submit: %v", guarded.markCalls)
+	}
+	if len(guarded.downloaded) != 0 {
+		t.Errorf("episode stranded: downloaded_episodes = %v, want empty", guarded.downloaded)
+	}
+	// The check's own result is discarded too, so the reset stands whole.
+	if guarded.accepted != 0 || guarded.rejected != 1 {
+		t.Errorf("check result not discarded: accepted=%d rejected=%d", guarded.accepted, guarded.rejected)
+	}
+}
+
+// TestRunCheck_ResetMidEpisodeLoop_DoesNotStrandEpisode covers the residual
+// gap the pre-submit check cannot cover: a reset landing after Add returns but
+// before the episode mark. Only per-episode trackers (WithEpisodeFilter —
+// LostFilm today) can hit it, since downloadAllPending returns before the mark
+// for single-payload plugins.
 //
 // Unguarded, the mark fires later in the check than the reset: the worker
 // delivers episode E, the reset then removes E from the client, deletes its
@@ -2165,9 +2263,13 @@ func TestRunCheck_ResetMidEpisodeLoop_DoesNotStrandEpisode(t *testing.T) {
 	f.topic.LastCheckedAt = nil
 	f.topic.NextCheckAt = guarded.nextCheckAt
 	f.topic.LastHash = ""
-	// The reset lands while the worker is at the tracker, so the first
-	// episode's mark is written against a token that has already moved on.
-	tr.onCheck = guarded.reset
+	// The reset lands in the one gap the pre-submit check leaves open: after
+	// the payload has reached the client, before the mark is written. Fires
+	// once so the second iteration is not double-reset.
+	f.clientPlugin.onAdd = func() {
+		f.clientPlugin.onAdd = nil
+		guarded.reset()
+	}
 
 	f.s.runCheck(context.Background(), f.s.log, f.topic)
 
@@ -2187,5 +2289,121 @@ func TestRunCheck_ResetMidEpisodeLoop_DoesNotStrandEpisode(t *testing.T) {
 	// And the check's own result is discarded too, so the reset stands whole.
 	if guarded.accepted != 0 || guarded.rejected != 1 {
 		t.Errorf("check result not discarded: accepted=%d rejected=%d", guarded.accepted, guarded.rejected)
+	}
+}
+
+// TestRunCheck_ResetMidEpisodeLoop_PreservesEarlierProgress proves the abort
+// keeps partial progress. A reset landing after the first episode is fully
+// delivered and marked must stop the second submission without discarding the
+// first: the episode is in the client, its mark persisted, and the tick reports
+// it as delivered rather than failing.
+func TestRunCheck_ResetMidEpisodeLoop_PreservesEarlierProgress(t *testing.T) {
+	guarded := &fakeTopicsGuarded{}
+	guarded.reset()
+
+	tr := &fakeTracker{
+		name: "faketracker",
+		checks: []checkResult{{check: &domain.Check{
+			Hash: "new-hash",
+			Extra: map[string]any{
+				"pending_episodes": []string{"S01E01", "S01E02", "S01E03"},
+				"pending_human":    []string{"s01e01", "s01e02", "s01e03"},
+			},
+		}}},
+		downloads: []downloadResult{
+			{payload: &domain.Payload{MagnetURI: "magnet:1"}},
+			{payload: &domain.Payload{MagnetURI: "magnet:2"}},
+			{payload: &domain.Payload{MagnetURI: "magnet:3"}},
+		},
+	}
+	f := newFixture(t, tr)
+	f.s.topics = guarded
+	f.topic.LastCheckedAt = nil
+	f.topic.NextCheckAt = guarded.nextCheckAt
+	f.topic.LastHash = ""
+
+	// Let episode 1 complete end to end, then land the reset so episode 2's
+	// pre-submit check is the one that rejects.
+	guardedAfterFirstMark(guarded)
+
+	f.s.runCheck(context.Background(), f.s.log, f.topic)
+
+	if f.clientPlugin.addCalls != 1 {
+		t.Fatalf("client Add calls = %d, want 1 — episode 1 delivered, episode 2 refused", f.clientPlugin.addCalls)
+	}
+	if guarded.verifyRejected != 1 {
+		t.Errorf("want exactly one pre-submit rejection, got %d", guarded.verifyRejected)
+	}
+	// Episode 1's mark was written and accepted before the reset landed. (The
+	// reset then clears downloaded_episodes, which is correct and is why this
+	// asserts on the mark rather than on the surviving list — the reset asked
+	// for a re-download.)
+	if len(guarded.markCalls) != 1 || guarded.markRejected != 0 {
+		t.Errorf("episode 1's mark: %d attempted, %d rejected — want 1 and 0",
+			len(guarded.markCalls), guarded.markRejected)
+	}
+	// The tick still reports what it delivered, so the user is told episode 1
+	// landed rather than the whole tick vanishing.
+	submitted := f.emitter.ofType(events.DownloadSubmitted)
+	if len(submitted) != 1 {
+		t.Fatalf("want the delivered episode reported once, got %d submitted events", len(submitted))
+	}
+	if !strings.Contains(submitted[0].Body, "s01e01") {
+		t.Errorf("submitted event does not name the delivered episode: %q", submitted[0].Body)
+	}
+	// The abort is not a failure: the check records a clean result (which the
+	// token guard then discards, as it should).
+	if len(guarded.recordCalls) != 1 {
+		t.Fatalf("want one recorded result, got %d", len(guarded.recordCalls))
+	}
+	if guarded.recordCalls[0].errMsg != "" {
+		t.Errorf("abort reported as an error: %q", guarded.recordCalls[0].errMsg)
+	}
+}
+
+// guardedAfterFirstMark makes the fake reset itself the moment the first
+// episode mark is accepted — the point at which episode 1 is fully done and
+// episode 2 has not yet been submitted.
+func guardedAfterFirstMark(g *fakeTopicsGuarded) {
+	g.afterAcceptedMark = func() {
+		g.afterAcceptedMark = nil
+		g.reset()
+	}
+}
+
+// TestRunCheck_NoReset_StillSubmits is the other half of the pre-submit check:
+// with an untouched token the guard must wave the submission through. Without
+// it, a guard that rejected everything would look identical to a working one in
+// every abort test above.
+func TestRunCheck_NoReset_StillSubmits(t *testing.T) {
+	guarded := &fakeTopicsGuarded{}
+	guarded.reset()
+
+	tr := &fakeTracker{
+		name:      "faketracker",
+		checks:    []checkResult{{check: &domain.Check{Hash: "new-hash"}}},
+		downloads: []downloadResult{{payload: &domain.Payload{MagnetURI: "magnet:1"}}},
+	}
+	f := newFixture(t, tr)
+	f.s.topics = guarded
+	f.topic.LastCheckedAt = nil
+	f.topic.NextCheckAt = guarded.nextCheckAt
+	f.topic.LastHash = ""
+
+	f.s.runCheck(context.Background(), f.s.log, f.topic)
+
+	if f.clientPlugin.addCalls != 1 {
+		t.Fatalf("client Add calls = %d, want 1 — a valid token must not block the submit", f.clientPlugin.addCalls)
+	}
+	if guarded.verifyCalls != 1 || guarded.verifyRejected != 0 {
+		t.Errorf("guard consulted %d time(s), rejected %d — want 1 and 0",
+			guarded.verifyCalls, guarded.verifyRejected)
+	}
+	// The check completes normally and its result is persisted.
+	if guarded.accepted != 1 || guarded.rejected != 0 {
+		t.Errorf("check result not persisted: accepted=%d rejected=%d", guarded.accepted, guarded.rejected)
+	}
+	if guarded.lastHash != "new-hash" {
+		t.Errorf("last_hash = %q, want %q", guarded.lastHash, "new-hash")
 	}
 }

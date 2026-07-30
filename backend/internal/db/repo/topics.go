@@ -166,13 +166,14 @@ func (r *Topics) UpdateStatus(ctx context.Context, id uuid.UUID, userID uuid.UUI
 	return err
 }
 
-// ErrStaleCheckResult is returned by RecordCheckResult and
-// MarkEpisodeDownloaded when the topic's check state changed between the
-// worker observing it and writing its result back — in practice a reset
-// landing mid-check, the topic being deleted, or a long check being
-// re-dispatched and the second worker winning. The write is discarded on
-// purpose; it describes state that no longer exists. Callers should log it and
-// carry on, not treat it as a persistence failure.
+// ErrStaleCheckResult is returned by RecordCheckResult, MarkEpisodeDownloaded
+// and VerifyCheckState when the topic's check state changed between the worker
+// observing it and acting on it — in practice a reset landing mid-check, the
+// topic being deleted, or a long check being re-dispatched and the second
+// worker winning. For the two writes the write is discarded on purpose; for
+// VerifyCheckState the caller has not acted yet and should stop. Either way it
+// describes state that no longer exists: callers should log it and carry on,
+// not treat it as a persistence failure.
 var ErrStaleCheckResult = errors.New("stale check result")
 
 // The check-state version token
@@ -240,6 +241,43 @@ WHERE id = $1 AND last_checked_at IS NOT DISTINCT FROM $7 AND next_check_at = $8
 	}
 	if ct.RowsAffected() == 0 {
 		return ErrStaleCheckResult
+	}
+	return nil
+}
+
+// VerifyCheckState reports whether the topic's check-state version token still
+// holds the values the worker observed at dispatch. It is the read-only form of
+// the guard RecordCheckResult and MarkEpisodeDownloaded carry in their WHERE
+// clauses, for callers that need to know *before* doing something irreversible
+// rather than after.
+//
+// Its caller is the scheduler, immediately before handing a payload to a
+// torrent client. A topic reset takes a snapshot of the topic's deliveries and
+// removes exactly those torrents, so a torrent added after that snapshot is
+// invisible to it: with delete_data set, the reset reports success while that
+// torrent's files stay on disk, and the re-delivered release then rechecks and
+// resumes against them.
+//
+// This narrows that window; it does not close it. ResetCheckState is the last
+// statement the reset runs, so the token does not change until the reset is
+// essentially finished — a worker that reads the token while the reset is still
+// removing torrents sees a valid one and proceeds. What it does remove is the
+// unbounded case: a worker that reaches the submit point at any point *after*
+// the reset completed. Closing the remainder needs a claim-on-dispatch marker.
+//
+// Returns nil when the token matches and ErrStaleCheckResult when it does not
+// (including when the topic no longer exists), so callers handle "the topic
+// moved on" in one shape regardless of which guard reported it.
+func (r *Topics) VerifyCheckState(ctx context.Context, t *domain.Topic) error {
+	const q = `SELECT 1 FROM topics
+WHERE id = $1 AND last_checked_at IS NOT DISTINCT FROM $2 AND next_check_at = $3`
+	var one int
+	err := r.pool.QueryRow(ctx, q, t.ID, t.LastCheckedAt, t.NextCheckAt).Scan(&one)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrStaleCheckResult
+	}
+	if err != nil {
+		return fmt.Errorf("topics: verify check state: %w", err)
 	}
 	return nil
 }

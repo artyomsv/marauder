@@ -804,3 +804,67 @@ func TestTopics_ResetCheckState_DBError(t *testing.T) {
 		t.Fatalf("ResetCheckState: want wrapped %v, got %v", dbErr, err)
 	}
 }
+
+// ---------- VerifyCheckState ----------
+
+// TestTopics_VerifyCheckState_MatchingTokenReturnsNil pins the read-only form
+// of the guard onto the same token as the two writes. It runs before a payload
+// reaches a torrent client, so its WHERE clause must be the same one — a guard
+// that drifted from RecordCheckResult's would wave through exactly the
+// submissions the writes then refuse to record.
+func TestTopics_VerifyCheckState_MatchingTokenReturnsNil(t *testing.T) {
+	repo, mock := newMockTopics(t)
+	t.Cleanup(func() { assertExpectationsMet(t, mock) })
+
+	observed := time.Now().Add(-time.Minute)
+	observedNext := time.Now().Add(-time.Second)
+	topic := &domain.Topic{ID: uuid.New(), LastCheckedAt: &observed, NextCheckAt: observedNext}
+
+	mock.ExpectQuery(`SELECT 1 FROM topics\s+WHERE id = \$1 AND last_checked_at IS NOT DISTINCT FROM \$2 AND next_check_at = \$3`).
+		WithArgs(topic.ID, &observed, observedNext).
+		WillReturnRows(pgxmock.NewRows([]string{"?column?"}).AddRow(1))
+
+	if err := repo.VerifyCheckState(context.Background(), topic); err != nil {
+		t.Fatalf("VerifyCheckState: unexpected error: %v", err)
+	}
+}
+
+// TestTopics_VerifyCheckState_NoRowIsStale covers the rejection path: no
+// matching row means the topic moved on (reset, deleted, or another worker
+// won). It must map to ErrStaleCheckResult — the same sentinel the two writes
+// return — so the scheduler handles "the topic moved on" in one shape.
+func TestTopics_VerifyCheckState_NoRowIsStale(t *testing.T) {
+	repo, mock := newMockTopics(t)
+	t.Cleanup(func() { assertExpectationsMet(t, mock) })
+
+	topic := &domain.Topic{ID: uuid.New(), NextCheckAt: time.Now()}
+
+	mock.ExpectQuery(`SELECT 1 FROM topics`).
+		WithArgs(topic.ID, (*time.Time)(nil), topic.NextCheckAt).
+		WillReturnError(pgx.ErrNoRows)
+
+	err := repo.VerifyCheckState(context.Background(), topic)
+	if !errors.Is(err, ErrStaleCheckResult) {
+		t.Fatalf("want ErrStaleCheckResult, got %v", err)
+	}
+}
+
+// TestTopics_VerifyCheckState_DBErrorIsNotStale keeps a transport failure
+// distinguishable from a moved-on topic. The scheduler submits anyway on a
+// plain error, so misreporting a blip as staleness would silently strand the
+// release until the tracker's hash changed again.
+func TestTopics_VerifyCheckState_DBErrorIsNotStale(t *testing.T) {
+	repo, mock := newMockTopics(t)
+	t.Cleanup(func() { assertExpectationsMet(t, mock) })
+
+	topic := &domain.Topic{ID: uuid.New(), NextCheckAt: time.Now()}
+
+	mock.ExpectQuery(`SELECT 1 FROM topics`).
+		WithArgs(topic.ID, (*time.Time)(nil), topic.NextCheckAt).
+		WillReturnError(errors.New("connection reset"))
+
+	err := repo.VerifyCheckState(context.Background(), topic)
+	if err == nil || errors.Is(err, ErrStaleCheckResult) {
+		t.Fatalf("want a plain wrapped error, got %v", err)
+	}
+}
