@@ -202,11 +202,17 @@ queries.
 
 ### Frontend
 
-**`components/topics/ResetTopicDialog.tsx`** — new, shared by the row action and
+**`components/topics/ResetTopicCard.tsx`** — new, shared by the row action and
 the bulk bar. `Topics.tsx` is already 425 lines against the project's 250-line
-limit (tracked tech debt), so the dialog does not go inline.
+limit (tracked tech debt), so it does not go inline.
 
-Dialog contents:
+Not a modal: `components/ui/` holds only `button`, `input`, `label`, `card` and
+`badge` — there is no shadcn `Dialog` primitive in this project. The confirm
+follows the established `AddTopicCard` / `EditTopicCard` pattern instead — an
+inline `<Card>` animated into the page by the existing `AnimatePresence` block
+above the topic list.
+
+Card contents:
 
 - Title naming the target: the topic's display name, or the count for a bulk
   reset.
@@ -215,11 +221,11 @@ Dialog contents:
   (or, when paused, remains paused).
 - One checkbox: **"Also delete downloaded files from the client"**, default
   unchecked.
-- On confirm, the dialog switches to a **result view** — `Removed N torrents.
+- On confirm, the card switches to a **result view** — `Removed N torrents.
   Queued for re-check.` plus any warnings — with an explicit Close. It does not
   auto-dismiss.
 
-  This frontend has no toast library (no `sonner`, no `useToast`), so the dialog
+  This frontend has no toast library (no `sonner`, no `useToast`), so the card
   is the only place a warning can be surfaced. For a destructive action this is
   preferable anyway: a client failure cannot scroll past unnoticed.
 
@@ -244,16 +250,22 @@ All new strings added to both the `en` and `ru` dictionaries.
 
 ## Testing
 
-**`repo` (DB-backed, alongside the existing `topics_test.go` /
-`deliveries_test.go`):**
+**`repo`** — the existing `topics_test.go` / `deliveries_test.go` use **pgxmock**,
+not a live Postgres. They assert the SQL text and the bound arguments, not the
+database's behaviour. So the tests pin:
 
-- `ResetCheckState` clears every check column and sets `next_check_at` to now.
-- A `paused` topic stays `paused`; an `error` topic becomes `active`.
-- `extra.downloaded_episodes` is removed while `quality` / `start_season` /
-  `start_episode` survive.
-- A mismatched `userID` affects no rows and returns `ErrNotFound`.
-- `DeleteForTopic` removes all rows for the topic, none for a sibling topic, and
-  returns the count.
+- `ResetCheckState` issues one statement containing each required clause
+  (`last_hash = NULL`, the `extra - 'downloaded_episodes'` key delete, the
+  paused-preserving `status` CASE, `next_check_at = now()`), bound to
+  `(id, userID)`.
+- Zero rows affected → `ErrNotFound`; a pool error is wrapped.
+- `DeleteForTopic` issues a delete scoped to `topic_id` and returns the row
+  count.
+
+The SQL *semantics* — that `-` really drops only that JSONB key, that the CASE
+really preserves `paused` — are not covered by these tests. They are verified
+once by hand against the dev stack (see the manual acceptance step) rather than
+by introducing a Postgres test dependency this repo does not currently have.
 
 **`clientremove`:** table-driven against a fake client plugin — success, plugin
 not installed, plugin without `WithRemoval`, decrypt failure, `Remove` error.
