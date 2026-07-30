@@ -244,18 +244,15 @@ WHERE id = $1 AND last_checked_at IS NOT DISTINCT FROM $7 AND next_check_at = $8
 	return nil
 }
 
-// UpdateExtra overwrites the topic.extra JSONB blob with the supplied
-// map. Used by the scheduler's fallback path when a plugin reports
-// per-episode download progress (e.g. LostFilm tracks the list of
-// already-downloaded packed episode IDs in extra["downloaded_episodes"]
-// so the next check only fetches what's missing).
+// UpdateExtra overwrites the topic.extra JSONB blob with the supplied map.
 //
-// Deprecated: this method overwrites the entire JSONB blob and is
-// unsafe under concurrent updates — a partially populated map will
-// wipe server-side fields (quality, start_season, etc.). Prefer
-// MarkEpisodeDownloaded for the episode-tracking hot path. Kept in
-// place for backward compatibility with the scheduler's
-// non-atomic fallback branch.
+// Deprecated: unused. Its only caller was the scheduler's non-atomic
+// episode-tracking fallback, which has been removed. It overwrites the entire
+// JSONB blob and is unsafe under concurrent updates — a partially populated
+// map wipes server-side fields (quality, start_season, downloaded_episodes) —
+// and it carries no check-state guard, so a write built from a worker's
+// in-memory copy would undo a reset wholesale. Use MarkEpisodeDownloaded for
+// episode progress and Update for user edits; do not add new callers.
 func (r *Topics) UpdateExtra(ctx context.Context, id uuid.UUID, extra map[string]any) error {
 	raw, err := json.Marshal(extra)
 	if err != nil {
