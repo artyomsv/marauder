@@ -105,7 +105,10 @@ var (
 	// SchedulerReplacedPreviousTotal counts how many previously delivered
 	// torrents the "replace previous version" policy (issue #101) removed from
 	// a client when a single-release topic was updated, partitioned by client
-	// and result ("ok" / "error").
+	// and result ("ok", or one of the clientremove failure reasons: lookup /
+	// no_plugin / unsupported / decrypt / error). Alert on result != "ok", not
+	// on result == "error" alone — the latter misses decrypt and lookup
+	// failures, which are just as much "the old torrent is still there".
 	SchedulerReplacedPreviousTotal = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "marauder_scheduler_replaced_previous_total",

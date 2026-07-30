@@ -336,15 +336,19 @@ func (s *Scheduler) recordResult(ctx context.Context, log zerolog.Logger, t *dom
 	err := s.topics.RecordCheckResult(ctx, t, hash, updated, nextCheckAt, errMsg, errCode)
 	switch {
 	case errors.Is(err, repo.ErrStaleCheckResult):
-		// The topic was reset (or deleted) while this check was running, so
-		// the result describes state that no longer exists and the guard threw
-		// it away. Info, not Warn: this is the designed outcome of a user
-		// action, and there is nothing for anyone to act on.
+		// Something else wrote the topic's check state after this worker was
+		// dispatched, so the guard threw this result away. Legitimate causes:
+		// a reset landing mid-check, the topic being deleted, or — with no
+		// in-flight set in DueForCheck (it selects purely on next_check_at <=
+		// now()) — a long check being re-dispatched on a later tick, with the
+		// second worker's write winning. Info, not Warn: every one of those is
+		// a designed outcome with nothing for anyone to act on, and the message
+		// must not assert a reset that may never have happened.
 		log.Info().
 			Str("hash", hash).
 			Bool("updated", updated).
 			Str("error_code", errCode).
-			Msg("check result discarded: topic state changed mid-check")
+			Msg("check result discarded: another write won the state guard")
 	case err != nil:
 		log.Warn().Err(err).Msg("RecordCheckResult failed")
 	}
@@ -917,7 +921,8 @@ func (s *Scheduler) replacePrevious(ctx context.Context, log zerolog.Logger, t *
 		// label, matching its Help text.
 		n := float64(len(res.Hashes))
 		if res.OK {
-			metrics.SchedulerReplacedPreviousTotal.WithLabelValues(res.ClientName, "ok").Add(n)
+			metrics.SchedulerReplacedPreviousTotal.
+				WithLabelValues(clientremove.ClientLabel(res.ClientName), "ok").Add(n)
 			removed = append(removed, res.Hashes...)
 			continue
 		}
