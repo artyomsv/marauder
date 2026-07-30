@@ -2,6 +2,7 @@ package repo
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -200,5 +201,39 @@ func TestDeliveries_ListInFlight_ReturnsIncompleteDeliveries(t *testing.T) {
 	}
 	if got[0].NotifierID == nil || *got[0].NotifierID != notifierID {
 		t.Errorf("notifier_id not scanned correctly: %+v", got[0].NotifierID)
+	}
+}
+
+// ---------- DeleteForTopic ----------
+
+func TestDeliveries_DeleteForTopic_RemovesAllRows(t *testing.T) {
+	repo, mock := newMockDeliveries(t)
+	t.Cleanup(func() { assertExpectationsMet(t, mock) })
+
+	topicID := uuid.New()
+	mock.ExpectExec(`DELETE FROM topic_deliveries WHERE topic_id = \$1`).
+		WithArgs(topicID).
+		WillReturnResult(pgxmock.NewResult("DELETE", 3))
+
+	n, err := repo.DeleteForTopic(context.Background(), topicID)
+	if err != nil {
+		t.Fatalf("DeleteForTopic: unexpected error: %v", err)
+	}
+	if n != 3 {
+		t.Fatalf("DeleteForTopic: want 3 rows, got %d", n)
+	}
+}
+
+func TestDeliveries_DeleteForTopic_DBError(t *testing.T) {
+	repo, mock := newMockDeliveries(t)
+	t.Cleanup(func() { assertExpectationsMet(t, mock) })
+
+	dbErr := errors.New("connection refused")
+	mock.ExpectExec(`DELETE FROM topic_deliveries`).
+		WithArgs(pgxmock.AnyArg()).
+		WillReturnError(dbErr)
+
+	if _, err := repo.DeleteForTopic(context.Background(), uuid.New()); !errors.Is(err, dbErr) {
+		t.Fatalf("DeleteForTopic: want wrapped %v, got %v", dbErr, err)
 	}
 }

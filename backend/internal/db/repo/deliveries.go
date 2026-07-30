@@ -104,6 +104,20 @@ func (r *Deliveries) DeleteByInfohashes(ctx context.Context, topicID uuid.UUID, 
 	return ct.RowsAffected(), nil
 }
 
+// DeleteForTopic removes every delivery row for a topic. Used by the topic
+// reset endpoint: the (topic_id, infohash) unique index plus Record's
+// ON CONFLICT DO NOTHING means a surviving row would make the post-reset
+// re-delivery record a silent no-op, leaving the status view permanently
+// empty for that torrent. Returns the number of rows removed.
+func (r *Deliveries) DeleteForTopic(ctx context.Context, topicID uuid.UUID) (int64, error) {
+	const q = `DELETE FROM topic_deliveries WHERE topic_id = $1`
+	ct, err := r.pool.Exec(ctx, q, topicID)
+	if err != nil {
+		return 0, fmt.Errorf("deliveries: delete for topic: %w", err)
+	}
+	return ct.RowsAffected(), nil
+}
+
 // ListInFlight returns deliveries not yet marked complete, joined with their
 // topic's owner, notifier override, display name and tracker URL. Bounded to
 // the last 30 days and to deliveries with a known client, so rows that can
