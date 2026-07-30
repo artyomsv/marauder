@@ -35,6 +35,19 @@ func (f *fakeRemover) Remove(_ context.Context, _ uuid.UUID, byClient map[uuid.U
 	return f.results
 }
 
+// resetWarnings decodes the reset response's warnings array so tests can
+// assert on the sentences the user actually sees.
+func resetWarnings(t *testing.T, rec *httptest.ResponseRecorder) []string {
+	t.Helper()
+	var got struct {
+		Warnings []string `json:"warnings"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode reset response: %v", err)
+	}
+	return got.Warnings
+}
+
 // resetRequest builds a POST /topics/{id}/reset request carrying the chi URL
 // param and an authenticated user, using the same claims-in-context and
 // withURLParam helpers the other handler tests in this package use.
@@ -92,6 +105,11 @@ func TestTopicsReset_WipesStateAndForwardsDeleteData(t *testing.T) {
 	}
 	if len(store.resetCalls) != 1 || store.resetCalls[0] != [2]uuid.UUID{topicID, userID} {
 		t.Errorf("ResetCheckState called wrong: %v", store.resetCalls)
+	}
+	// The delivery delete must be scoped to the owner, not just the topic, so
+	// the repo's ownership join can do its job.
+	if deliveries.deletedFor != [2]uuid.UUID{topicID, userID} {
+		t.Errorf("DeleteForTopic not scoped to the owner: %v", deliveries.deletedFor)
 	}
 	if len(emitted) != 1 || emitted[0].Type != events.TopicReset {
 		t.Errorf("want one topic.reset event, got %v", emitted)
@@ -231,6 +249,80 @@ func TestTopicsReset_OnlyClientlessDeliveries_WarnsRatherThanSilentZero(t *testi
 	}
 	if len(got.Warnings) != 1 || !strings.Contains(got.Warnings[0], "1 torrent(s) had no recorded client") {
 		t.Fatalf("want one warning, got %v", got.Warnings)
+	}
+}
+
+// TestTopicsReset_ListFailureIsWarnedAbout covers the branch where the
+// delivery list itself fails. Removal is fail-open, so the reset proceeds —
+// but silently returning "Removed 0 torrent(s)" would tell the user their old
+// torrents are handled when nothing was even looked at.
+func TestTopicsReset_ListFailureIsWarnedAbout(t *testing.T) {
+	topicID, userID := uuid.New(), uuid.New()
+	store := &fakeTopicStore{getByID: &domain.Topic{ID: topicID, UserID: userID}}
+	deliveries := &fakeDeliveriesStore{listErr: errors.New("connection refused")}
+	remover := &fakeRemover{}
+	h := &Topics{Topics: store, Deliveries: deliveries, Remover: remover}
+
+	rec := httptest.NewRecorder()
+	h.Reset(rec, resetRequest(t, topicID, userID, `{}`))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("listing is fail-open, want 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	warnings := resetWarnings(t, rec)
+	if len(warnings) != 1 || !strings.Contains(warnings[0], "could not list delivered torrents") {
+		t.Fatalf("want a warning naming the list failure, got %v", warnings)
+	}
+	if remover.called {
+		t.Error("nothing was listed, so there is nothing to remove")
+	}
+	if len(store.resetCalls) != 1 {
+		t.Error("the topic must still be reset — client removal is fail-open")
+	}
+}
+
+// TestTopicsReset_NoRemoverConfigured_Warns covers the nil Remover seam: the
+// torrents stay in the client, so the reset must say so rather than report a
+// clean zero.
+func TestTopicsReset_NoRemoverConfigured_Warns(t *testing.T) {
+	topicID, userID, clientID := uuid.New(), uuid.New(), uuid.New()
+	store := &fakeTopicStore{getByID: &domain.Topic{ID: topicID, UserID: userID}}
+	deliveries := &fakeDeliveriesStore{items: []*domain.TopicDelivery{
+		{Infohash: "aaa", ClientID: &clientID},
+	}}
+	h := &Topics{Topics: store, Deliveries: deliveries} // Remover nil
+
+	rec := httptest.NewRecorder()
+	h.Reset(rec, resetRequest(t, topicID, userID, `{}`))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	warnings := resetWarnings(t, rec)
+	if len(warnings) != 1 || !strings.Contains(warnings[0], "torrent removal is not configured") {
+		t.Fatalf("want a warning about the missing remover, got %v", warnings)
+	}
+}
+
+// TestTopicsReset_NoDeliveriesStoreConfigured_Warns covers the other nil seam.
+// Without a Deliveries store the fail-closed row delete is skipped entirely,
+// so the scheduler gets armed with every delivery row intact — the exact state
+// that step exists to prevent. Returning a clean 200 there would report the
+// failure as a success, so it must warn like its Remover sibling does.
+func TestTopicsReset_NoDeliveriesStoreConfigured_Warns(t *testing.T) {
+	topicID, userID := uuid.New(), uuid.New()
+	store := &fakeTopicStore{getByID: &domain.Topic{ID: topicID, UserID: userID}}
+	h := &Topics{Topics: store, Remover: &fakeRemover{}} // Deliveries nil
+
+	rec := httptest.NewRecorder()
+	h.Reset(rec, resetRequest(t, topicID, userID, `{}`))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	warnings := resetWarnings(t, rec)
+	if len(warnings) != 1 || !strings.Contains(warnings[0], "delivery tracking is not configured") {
+		t.Fatalf("want a warning about the missing delivery store, got %v", warnings)
 	}
 }
 

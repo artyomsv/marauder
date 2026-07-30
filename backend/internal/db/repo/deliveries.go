@@ -110,13 +110,17 @@ func (r *Deliveries) DeleteByInfohashes(ctx context.Context, topicID uuid.UUID, 
 // re-delivery record a silent no-op, leaving the status view permanently
 // empty for that torrent. Returns the number of rows removed.
 //
-// Not user-scoped: the DELETE keys on topic_id alone, so the caller must have
-// already established that the topic belongs to the requesting user (the reset
-// handler does, via a user-scoped Topics.GetByID). Calling this with an
-// unverified id deletes another user's delivery history.
-func (r *Deliveries) DeleteForTopic(ctx context.Context, topicID uuid.UUID) (int64, error) {
-	const q = `DELETE FROM topic_deliveries WHERE topic_id = $1`
-	ct, err := r.pool.Exec(ctx, q, topicID)
+// The DELETE joins topics and keys on the owner, so ownership is enforced here
+// rather than resting on caller discipline: passing a topic id belonging to
+// another user deletes nothing. Callers still check ownership up front (the
+// reset handler does, via a user-scoped Topics.GetByID) so they can return 404
+// instead of a silent no-op — this is the second line of defence, not the first.
+func (r *Deliveries) DeleteForTopic(ctx context.Context, topicID, userID uuid.UUID) (int64, error) {
+	const q = `
+DELETE FROM topic_deliveries d
+USING topics t
+WHERE d.topic_id = t.id AND t.id = $1 AND t.user_id = $2`
+	ct, err := r.pool.Exec(ctx, q, topicID, userID)
 	if err != nil {
 		return 0, fmt.Errorf("deliveries: delete for topic: %w", err)
 	}

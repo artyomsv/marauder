@@ -206,21 +206,47 @@ func TestDeliveries_ListInFlight_ReturnsIncompleteDeliveries(t *testing.T) {
 
 // ---------- DeleteForTopic ----------
 
+// TestDeliveries_DeleteForTopic_RemovesAllRows also pins the ownership join:
+// the DELETE must key on the owning user, not on topic_id alone, so passing an
+// id the caller does not own can never delete another user's history even if a
+// future caller forgets its own ownership check.
 func TestDeliveries_DeleteForTopic_RemovesAllRows(t *testing.T) {
 	repo, mock := newMockDeliveries(t)
 	t.Cleanup(func() { assertExpectationsMet(t, mock) })
 
-	topicID := uuid.New()
-	mock.ExpectExec(`DELETE FROM topic_deliveries WHERE topic_id = \$1`).
-		WithArgs(topicID).
+	topicID, userID := uuid.New(), uuid.New()
+	mock.ExpectExec(`(?s)DELETE FROM topic_deliveries d.*`+
+		`USING topics t.*`+
+		`WHERE d\.topic_id = t\.id AND t\.id = \$1 AND t\.user_id = \$2`).
+		WithArgs(topicID, userID).
 		WillReturnResult(pgxmock.NewResult("DELETE", 3))
 
-	n, err := repo.DeleteForTopic(context.Background(), topicID)
+	n, err := repo.DeleteForTopic(context.Background(), topicID, userID)
 	if err != nil {
 		t.Fatalf("DeleteForTopic: unexpected error: %v", err)
 	}
 	if n != 3 {
 		t.Fatalf("DeleteForTopic: want 3 rows, got %d", n)
+	}
+}
+
+// TestDeliveries_DeleteForTopic_ForeignTopicRemovesNothing is the point of the
+// ownership join: the statement is well-formed but matches no row, so the
+// method reports zero rather than deleting someone else's history.
+func TestDeliveries_DeleteForTopic_ForeignTopicRemovesNothing(t *testing.T) {
+	repo, mock := newMockDeliveries(t)
+	t.Cleanup(func() { assertExpectationsMet(t, mock) })
+
+	mock.ExpectExec(`DELETE FROM topic_deliveries`).
+		WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg()).
+		WillReturnResult(pgxmock.NewResult("DELETE", 0))
+
+	n, err := repo.DeleteForTopic(context.Background(), uuid.New(), uuid.New())
+	if err != nil {
+		t.Fatalf("DeleteForTopic: unexpected error: %v", err)
+	}
+	if n != 0 {
+		t.Fatalf("DeleteForTopic: want 0 rows for a foreign topic, got %d", n)
 	}
 }
 
@@ -230,10 +256,10 @@ func TestDeliveries_DeleteForTopic_DBError(t *testing.T) {
 
 	dbErr := errors.New("connection refused")
 	mock.ExpectExec(`DELETE FROM topic_deliveries`).
-		WithArgs(pgxmock.AnyArg()).
+		WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg()).
 		WillReturnError(dbErr)
 
-	if _, err := repo.DeleteForTopic(context.Background(), uuid.New()); !errors.Is(err, dbErr) {
+	if _, err := repo.DeleteForTopic(context.Background(), uuid.New(), uuid.New()); !errors.Is(err, dbErr) {
 		t.Fatalf("DeleteForTopic: want wrapped %v, got %v", dbErr, err)
 	}
 }

@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/artyomsv/marauder/backend/internal/api/middleware"
+	"github.com/artyomsv/marauder/backend/internal/audit"
 	"github.com/artyomsv/marauder/backend/internal/clientremove"
 	"github.com/artyomsv/marauder/backend/internal/db/repo"
 	"github.com/artyomsv/marauder/backend/internal/domain"
@@ -42,7 +43,7 @@ type topicStore interface {
 // deliveries rather than failing.
 type deliveriesStore interface {
 	ListForTopic(ctx context.Context, topicID uuid.UUID) ([]*domain.TopicDelivery, error)
-	DeleteForTopic(ctx context.Context, topicID uuid.UUID) (int64, error)
+	DeleteForTopic(ctx context.Context, topicID, userID uuid.UUID) (int64, error)
 }
 
 // clientsLookup is the consumer seam over *repo.Clients used to resolve a
@@ -79,6 +80,7 @@ type Topics struct {
 	Clients    clientsLookup
 	Notifiers  notifiersLookup
 	Master     configDecryptor
+	Audit      *audit.Logger
 	BaseURL    string
 	// Emit is an optional hook called after a topic is successfully created.
 	// Nil-safe: existing handler tests that don't set Emit continue to pass.
@@ -599,7 +601,7 @@ func (h *Topics) Reset(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	if h.Deliveries != nil {
-		if _, derr := h.Deliveries.DeleteForTopic(finish, id); derr != nil {
+		if _, derr := h.Deliveries.DeleteForTopic(finish, id, uid); derr != nil {
 			// Fail-closed: a surviving row makes the re-delivery record a
 			// silent no-op (unique index + ON CONFLICT DO NOTHING), so the
 			// topic must not be armed for a re-check. removed may already be
@@ -629,6 +631,20 @@ func (h *Topics) Reset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if h.Audit != nil {
+		// This is the only endpoint that can delete a user's files from disk,
+		// so what it did has to be recoverable from the audit log alone.
+		ip, ua := audit.FromRequest(r)
+		h.Audit.Generic(&uid, "topic_reset", "topic", id.String(), "success",
+			map[string]any{
+				"delete_data": req.DeleteData,
+				"removed":     removed,
+				"warnings":    len(warnings),
+				"ip":          ip,
+				"ua":          ua,
+			})
+	}
+
 	if h.Emit != nil {
 		h.Emit(finish, events.Event{
 			UserID:     topic.UserID,
@@ -653,7 +669,12 @@ func (h *Topics) Reset(w http.ResponseWriter, r *http.Request) {
 func (h *Topics) removeDeliveredTorrents(ctx context.Context, topic *domain.Topic, uid uuid.UUID, deleteData bool) (int, []string) {
 	warnings := []string{}
 	if h.Deliveries == nil {
-		return 0, warnings
+		// Say so, exactly as the Remover == nil seam below does. A silent
+		// return here would arm the scheduler with every delivery row intact
+		// and hand back a clean 200 — the precise state the fail-closed
+		// delivery-delete exists to prevent, reported as a success.
+		return 0, append(warnings,
+			"delivery tracking is not configured; the old torrents were left in the client and their records kept")
 	}
 	deliveries, err := h.Deliveries.ListForTopic(ctx, topic.ID)
 	if err != nil {

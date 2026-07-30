@@ -101,6 +101,7 @@ func NewRouter(d Deps) http.Handler {
 		Clients:    d.Clients,
 		Notifiers:  d.Notifiers,
 		Master:     d.Master,
+		Audit:      d.AuditLog,
 		Remover:    clientremove.New(d.Clients, d.Master, d.Cfg.TrackerHTTPTimeout),
 		BaseURL:    d.Cfg.PublicBaseURL,
 		Emit:       d.Emit,
