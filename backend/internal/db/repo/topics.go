@@ -257,6 +257,49 @@ WHERE  id = $1`
 	return nil
 }
 
+// ResetCheckState discards a topic's check/download state so the next check
+// re-detects the current release as new and re-delivers it. It is the inverse
+// of RecordCheckResult, plus the per-episode progress MarkEpisodeDownloaded
+// accumulates in extra.
+//
+// Configuration is deliberately untouched: client, notifier, category,
+// download dir, interval, replace policy, display name, and the capability
+// keys in extra (quality, start_season, start_episode, source) all survive.
+// Only downloaded_episodes is dropped, via a targeted JSONB key delete rather
+// than the whole-blob overwrite UpdateExtra would do.
+//
+// A paused topic stays paused — only 'error' is normalised back to 'active'.
+// Resetting must not silently resume topics the user deliberately stopped,
+// which matters most under a bulk reset over a mixed selection.
+//
+// next_check_at = now() is what "check now" means here: DueForCheck selects on
+// it, and there is no separate manual-trigger path in the scheduler.
+//
+// Returns ErrNotFound when the topic does not exist or belongs to another user.
+func (r *Topics) ResetCheckState(ctx context.Context, id, userID uuid.UUID) error {
+	const q = `
+UPDATE topics SET
+    last_hash          = NULL,
+    last_checked_at    = NULL,
+    last_updated_at    = NULL,
+    consecutive_errors = 0,
+    last_error         = NULL,
+    last_error_code    = '',
+    next_check_at      = now(),
+    status             = CASE WHEN status = 'paused' THEN 'paused' ELSE 'active' END,
+    extra              = COALESCE(extra, '{}'::jsonb) - 'downloaded_episodes',
+    updated_at         = now()
+WHERE id = $1 AND user_id = $2`
+	ct, err := r.pool.Exec(ctx, q, id, userID)
+	if err != nil {
+		return fmt.Errorf("topics: reset check state: %w", err)
+	}
+	if ct.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 // Update edits a topic's user-editable fields (display name, client, notifier,
 // download dir, category, and the capability Extra map). It does NOT
 // touch url/tracker/status/hash/scheduling. Returns ErrNotFound when the

@@ -607,3 +607,60 @@ func TestTopics_RecordCheckResult_SuccessClearsCode(t *testing.T) {
 		t.Fatalf("RecordCheckResult: unexpected error: %v", err)
 	}
 }
+
+// ---------- ResetCheckState ----------
+
+func TestTopics_ResetCheckState_ClearsCheckStateAndQueuesRecheck(t *testing.T) {
+	repo, mock := newMockTopics(t)
+	t.Cleanup(func() { assertExpectationsMet(t, mock) })
+
+	id, userID := uuid.New(), uuid.New()
+
+	// One statement must carry every clause the reset depends on. Pinning
+	// them individually means a future edit that silently drops, say, the
+	// JSONB key delete fails here instead of in production, where the
+	// symptom would be "episodic topics never re-download".
+	mock.ExpectExec(`(?s)UPDATE topics SET.*`+
+		`last_hash\s+= NULL.*`+
+		`consecutive_errors\s+= 0.*`+
+		`last_error_code\s+= ''.*`+
+		`next_check_at\s+= now\(\).*`+
+		`status\s+= CASE WHEN status = 'paused' THEN 'paused' ELSE 'active' END.*`+
+		`extra\s+= COALESCE\(extra, '\{\}'::jsonb\) - 'downloaded_episodes'.*`+
+		`WHERE id = \$1 AND user_id = \$2`).
+		WithArgs(id, userID).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+
+	if err := repo.ResetCheckState(context.Background(), id, userID); err != nil {
+		t.Fatalf("ResetCheckState: unexpected error: %v", err)
+	}
+}
+
+func TestTopics_ResetCheckState_NotFound(t *testing.T) {
+	repo, mock := newMockTopics(t)
+	t.Cleanup(func() { assertExpectationsMet(t, mock) })
+
+	mock.ExpectExec(`UPDATE topics SET`).
+		WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg()).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
+
+	err := repo.ResetCheckState(context.Background(), uuid.New(), uuid.New())
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("ResetCheckState: want ErrNotFound, got %v", err)
+	}
+}
+
+func TestTopics_ResetCheckState_DBError(t *testing.T) {
+	repo, mock := newMockTopics(t)
+	t.Cleanup(func() { assertExpectationsMet(t, mock) })
+
+	dbErr := errors.New("connection refused")
+	mock.ExpectExec(`UPDATE topics SET`).
+		WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg()).
+		WillReturnError(dbErr)
+
+	err := repo.ResetCheckState(context.Background(), uuid.New(), uuid.New())
+	if !errors.Is(err, dbErr) {
+		t.Fatalf("ResetCheckState: want wrapped %v, got %v", dbErr, err)
+	}
+}
