@@ -577,10 +577,11 @@ func TestTopics_RecordCheckResult_PersistsErrorCode(t *testing.T) {
 	t.Cleanup(func() { assertExpectationsMet(t, mock) })
 
 	observed := time.Now().Add(-time.Minute)
-	topic := &domain.Topic{ID: uuid.New(), LastCheckedAt: &observed}
+	observedNext := time.Now().Add(-time.Second)
+	topic := &domain.Topic{ID: uuid.New(), LastCheckedAt: &observed, NextCheckAt: observedNext}
 	next := time.Now().Add(time.Hour)
 	mock.ExpectExec(`UPDATE topics SET[\s\S]*last_error_code\s+= CASE WHEN \$5 = '' THEN '' ELSE \$6 END[\s\S]*WHERE id = \$1`).
-		WithArgs(topic.ID, "", false, next, "kinozal GET: context deadline exceeded", "timeout", &observed).
+		WithArgs(topic.ID, "", false, next, "kinozal GET: context deadline exceeded", "timeout", &observed, observedNext).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 
 	err := repo.RecordCheckResult(context.Background(), topic, "", false, next,
@@ -601,15 +602,46 @@ func TestTopics_RecordCheckResult_GuardsOnObservedLastCheckedAt(t *testing.T) {
 	t.Cleanup(func() { assertExpectationsMet(t, mock) })
 
 	observed := time.Now().Add(-time.Minute)
-	topic := &domain.Topic{ID: uuid.New(), LastCheckedAt: &observed}
+	observedNext := time.Now().Add(-time.Second)
+	topic := &domain.Topic{ID: uuid.New(), LastCheckedAt: &observed, NextCheckAt: observedNext}
 	next := time.Now().Add(time.Hour)
 
-	mock.ExpectExec(`UPDATE topics SET[\s\S]*WHERE id = \$1 AND last_checked_at IS NOT DISTINCT FROM \$7`).
-		WithArgs(topic.ID, "new-hash", true, next, "", "", &observed).
+	// BOTH columns must be in the guard. last_checked_at alone is not a usable
+	// token: ResetCheckState nulls it, so two consecutive resets are
+	// indistinguishable and a worker dispatched by the first would still match
+	// after the second, restoring the pre-reset hash.
+	mock.ExpectExec(`UPDATE topics SET[\s\S]*WHERE id = \$1 AND last_checked_at IS NOT DISTINCT FROM \$7 AND next_check_at = \$8`).
+		WithArgs(topic.ID, "new-hash", true, next, "", "", &observed, observedNext).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 
 	if err := repo.RecordCheckResult(context.Background(), topic, "new-hash", true, next, "", ""); err != nil {
 		t.Fatalf("RecordCheckResult: unexpected error: %v", err)
+	}
+}
+
+// TestTopics_RecordCheckResult_ConsecutiveResetsBindDistinctTokens is the
+// regression guard for the collision the next_check_at half of the token
+// closes. Two resets leave last_checked_at NULL both times, so the ONLY thing
+// separating a worker dispatched by reset #1 from the state reset #2 left is
+// next_check_at. If a future edit drops it from the bound args, reset #2 gets
+// silently undone after it has already removed torrents and deleted files.
+func TestTopics_RecordCheckResult_ConsecutiveResetsBindDistinctTokens(t *testing.T) {
+	repo, mock := newMockTopics(t)
+	t.Cleanup(func() { assertExpectationsMet(t, mock) })
+
+	// The worker was dispatched by reset #1: NULL token, reset #1's next_check_at.
+	firstReset := time.Now().Add(-10 * time.Second)
+	topic := &domain.Topic{ID: uuid.New(), NextCheckAt: firstReset} // LastCheckedAt nil
+	next := time.Now().Add(time.Hour)
+
+	// Reset #2 has since stamped a later next_check_at, so no row matches.
+	mock.ExpectExec(`UPDATE topics SET[\s\S]*next_check_at = \$8`).
+		WithArgs(topic.ID, "new-hash", true, next, "", "", (*time.Time)(nil), firstReset).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
+
+	err := repo.RecordCheckResult(context.Background(), topic, "new-hash", true, next, "", "")
+	if !errors.Is(err, ErrStaleCheckResult) {
+		t.Fatalf("RecordCheckResult: want ErrStaleCheckResult, got %v", err)
 	}
 }
 
@@ -621,11 +653,12 @@ func TestTopics_RecordCheckResult_FreshTopicBindsNullToken(t *testing.T) {
 	repo, mock := newMockTopics(t)
 	t.Cleanup(func() { assertExpectationsMet(t, mock) })
 
-	topic := &domain.Topic{ID: uuid.New()} // LastCheckedAt nil
+	observedNext := time.Now().Add(-time.Second)
+	topic := &domain.Topic{ID: uuid.New(), NextCheckAt: observedNext} // LastCheckedAt nil
 	next := time.Now().Add(time.Hour)
 
 	mock.ExpectExec(`UPDATE topics SET[\s\S]*last_checked_at IS NOT DISTINCT FROM \$7`).
-		WithArgs(topic.ID, "new-hash", true, next, "", "", (*time.Time)(nil)).
+		WithArgs(topic.ID, "new-hash", true, next, "", "", (*time.Time)(nil), observedNext).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 
 	if err := repo.RecordCheckResult(context.Background(), topic, "new-hash", true, next, "", ""); err != nil {
@@ -646,7 +679,7 @@ func TestTopics_RecordCheckResult_StaleWriteIsDropped(t *testing.T) {
 
 	mock.ExpectExec(`UPDATE topics SET`).
 		WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
-			pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
+			pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
 
 	err := repo.RecordCheckResult(context.Background(), topic, "new-hash", true, time.Now(), "", "")
@@ -663,10 +696,11 @@ func TestTopics_RecordCheckResult_SuccessClearsCode(t *testing.T) {
 	t.Cleanup(func() { assertExpectationsMet(t, mock) })
 
 	observed := time.Now().Add(-time.Minute)
-	topic := &domain.Topic{ID: uuid.New(), LastCheckedAt: &observed}
+	observedNext := time.Now().Add(-time.Second)
+	topic := &domain.Topic{ID: uuid.New(), LastCheckedAt: &observed, NextCheckAt: observedNext}
 	next := time.Now().Add(time.Hour)
 	mock.ExpectExec(`UPDATE topics SET[\s\S]*last_error_code\s+= CASE WHEN \$5 = '' THEN '' ELSE \$6 END`).
-		WithArgs(topic.ID, "new-hash", true, next, "", "", &observed).
+		WithArgs(topic.ID, "new-hash", true, next, "", "", &observed, observedNext).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 
 	err := repo.RecordCheckResult(context.Background(), topic, "new-hash", true, next, "", "")
@@ -687,8 +721,15 @@ func TestTopics_ResetCheckState_ClearsCheckStateAndQueuesRecheck(t *testing.T) {
 	// them individually means a future edit that silently drops, say, the
 	// JSONB key delete fails here instead of in production, where the
 	// symptom would be "episodic topics never re-download".
+	//
+	// next_check_at = now() carries double duty: it is what "check now" means,
+	// AND it is the half of the check-state version token that makes two
+	// consecutive resets distinguishable (last_checked_at is NULL after both).
+	// Dropping it would let a worker dispatched by the first reset overwrite
+	// the second one's state.
 	mock.ExpectExec(`(?s)UPDATE topics SET.*`+
 		`last_hash\s+= NULL.*`+
+		`last_checked_at\s+= NULL.*`+
 		`consecutive_errors\s+= 0.*`+
 		`last_error_code\s+= ''.*`+
 		`next_check_at\s+= now\(\).*`+

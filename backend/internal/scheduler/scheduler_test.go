@@ -1999,30 +1999,51 @@ func TestRecordResult_NetworkError_ReportsDomainFailure(t *testing.T) {
 type fakeTopicsGuarded struct {
 	fakeTopics
 
-	lastCheckedAt *time.Time // the version token, as persisted
+	// The version token, as persisted. BOTH columns form it: last_checked_at
+	// alone is NULL after every reset and so cannot tell two resets apart.
+	lastCheckedAt *time.Time
+	nextCheckAt   time.Time
 	lastHash      string
+	resets        int
 	accepted      int
 	rejected      int
 }
 
+// tokenMatches is the Go equivalent of the SQL guard
+// `last_checked_at IS NOT DISTINCT FROM $n AND next_check_at = $n+1`.
+func (f *fakeTopicsGuarded) tokenMatches(t *domain.Topic) bool {
+	return sameInstant(f.lastCheckedAt, t.LastCheckedAt) && f.nextCheckAt.Equal(t.NextCheckAt)
+}
+
 func (f *fakeTopicsGuarded) RecordCheckResult(_ context.Context, t *domain.Topic, hash string, updated bool, nextCheckAt time.Time, errMsg, errCode string) error {
 	f.recordCalls = append(f.recordCalls, recordCall{t.ID, t.LastCheckedAt, hash, updated, nextCheckAt, errMsg, errCode})
-	if !sameInstant(f.lastCheckedAt, t.LastCheckedAt) {
+	if !f.tokenMatches(t) {
 		f.rejected++
 		return repo.ErrStaleCheckResult
 	}
 	f.accepted++
 	now := time.Now()
 	f.lastCheckedAt = &now
+	f.nextCheckAt = nextCheckAt
 	if hash != "" {
 		f.lastHash = hash
 	}
 	return nil
 }
 
-// reset mirrors what repo.Topics.ResetCheckState does to the guard's inputs.
+// resetClock stands in for Postgres now() as ResetCheckState writes it. Only
+// one property matters — consecutive resets stamp distinct, increasing
+// next_check_at values — so the fake advances a counter rather than depending
+// on the host clock's resolution.
+var resetClock = time.Date(2026, 7, 30, 12, 0, 0, 0, time.UTC)
+
+// reset mirrors what repo.Topics.ResetCheckState does to the guard's inputs:
+// last_checked_at cleared and — crucially — a fresh next_check_at stamped,
+// which is what makes consecutive resets distinguishable.
 func (f *fakeTopicsGuarded) reset() {
+	f.resets++
 	f.lastCheckedAt = nil
+	f.nextCheckAt = resetClock.Add(time.Duration(f.resets) * time.Microsecond)
 	f.lastHash = ""
 }
 
@@ -2045,7 +2066,12 @@ func sameInstant(a, b *time.Time) bool {
 // tracker's own hash changes.
 func TestRunCheck_ResetMidCheck_DoesNotClobberReset(t *testing.T) {
 	observed := time.Now().Add(-time.Hour)
-	guarded := &fakeTopicsGuarded{lastCheckedAt: &observed, lastHash: "old-hash"}
+	observedNext := time.Now().Add(-time.Minute)
+	guarded := &fakeTopicsGuarded{
+		lastCheckedAt: &observed,
+		nextCheckAt:   observedNext,
+		lastHash:      "old-hash",
+	}
 
 	tr := &fakeTracker{
 		name:      "faketracker",
@@ -2055,6 +2081,7 @@ func TestRunCheck_ResetMidCheck_DoesNotClobberReset(t *testing.T) {
 	f := newFixture(t, tr, false)
 	f.s.topics = guarded
 	f.topic.LastCheckedAt = &observed
+	f.topic.NextCheckAt = observedNext
 	// The reset lands while the worker is inside tr.Check.
 	tr.onCheck = guarded.reset
 
@@ -2085,7 +2112,8 @@ func TestRunCheck_ResetMidCheck_DoesNotClobberReset(t *testing.T) {
 // NOT DISTINCT FROM NULL is true, so its result must land — a `= $7` guard
 // would silently drop every post-reset check instead.
 func TestRunCheck_AfterReset_WritesResult(t *testing.T) {
-	guarded := &fakeTopicsGuarded{} // freshly reset: no token, no hash
+	guarded := &fakeTopicsGuarded{}
+	guarded.reset() // freshly reset: no token, no hash, fresh next_check_at
 
 	tr := &fakeTracker{
 		name:      "faketracker",
@@ -2095,6 +2123,7 @@ func TestRunCheck_AfterReset_WritesResult(t *testing.T) {
 	f := newFixture(t, tr, false)
 	f.s.topics = guarded
 	f.topic.LastCheckedAt = nil
+	f.topic.NextCheckAt = guarded.nextCheckAt
 	f.topic.LastHash = ""
 
 	f.s.runCheck(context.Background(), f.s.log, f.topic)
@@ -2107,5 +2136,53 @@ func TestRunCheck_AfterReset_WritesResult(t *testing.T) {
 	}
 	if f.clientPlugin.addCalls != 1 {
 		t.Errorf("client Add calls = %d, want 1 (the re-download)", f.clientPlugin.addCalls)
+	}
+}
+
+// TestRunCheck_SecondReset_SurvivesWorkerDispatchedByFirstReset is the case a
+// last_checked_at-only token could never catch, because NULL is not monotonic.
+//
+// Reset #1 clears last_checked_at and sets next_check_at = now(), so a worker
+// is dispatched almost immediately and observes the NULL token. While it is
+// out at the tracker — 10-20s for a Cloudflare-gated tracker going through
+// FlareSolverr — the user resets again, and reset #2 removes the torrents from
+// the client and deletes their on-disk data. Under the single-column guard the
+// worker's write then MATCHED (NULL IS NOT DISTINCT FROM NULL) and restored the
+// pre-reset hash: reset #2 silently undone after its irreversible half had
+// already run, with nothing left to re-download it.
+//
+// This is reachable through the workflow the reset handler itself prescribes —
+// its fail-closed 500s tell the user to retry the reset, and reset #1 has
+// already armed the scheduler. next_check_at differs per reset, so the pair
+// rejects the write.
+func TestRunCheck_SecondReset_SurvivesWorkerDispatchedByFirstReset(t *testing.T) {
+	guarded := &fakeTopicsGuarded{}
+	guarded.reset() // reset #1
+
+	tr := &fakeTracker{
+		name:      "faketracker",
+		checks:    []checkResult{{check: &domain.Check{Hash: "new-hash"}}},
+		downloads: []downloadResult{{payload: &domain.Payload{MagnetURI: "magnet:?xt=urn:btih:abc"}}},
+	}
+	f := newFixture(t, tr, false)
+	f.s.topics = guarded
+	// The worker carries the token reset #1 left behind: a NULL
+	// last_checked_at, and reset #1's next_check_at.
+	f.topic.LastCheckedAt = nil
+	f.topic.NextCheckAt = guarded.nextCheckAt
+	f.topic.LastHash = ""
+	// Reset #2 lands while the worker is inside tr.Check.
+	tr.onCheck = guarded.reset
+
+	f.s.runCheck(context.Background(), f.s.log, f.topic)
+
+	if guarded.accepted != 0 || guarded.rejected != 1 {
+		t.Fatalf("reset #1's worker overwrote reset #2: accepted=%d rejected=%d", guarded.accepted, guarded.rejected)
+	}
+	if guarded.lastHash != "" {
+		t.Errorf("reset #2 clobbered: last_hash = %q, want empty", guarded.lastHash)
+	}
+	if guarded.lastCheckedAt != nil {
+		t.Errorf("reset #2 clobbered: last_checked_at = %v, want nil", guarded.lastCheckedAt)
 	}
 }
