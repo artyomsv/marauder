@@ -14,6 +14,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/artyomsv/marauder/backend/internal/config"
+	"github.com/artyomsv/marauder/backend/internal/db/repo"
 	"github.com/artyomsv/marauder/backend/internal/domain"
 	"github.com/artyomsv/marauder/backend/internal/events"
 	"github.com/artyomsv/marauder/backend/internal/plugins/registry"
@@ -33,6 +34,10 @@ type fakeTracker struct {
 	// scheduler treats it as a per-episode tracker (replace-on-update is then
 	// skipped to protect sibling episodes — issue #101).
 	episodic bool
+	// onCheck runs at the top of Check, before the configured result is
+	// returned. It is the seam for simulating something happening to the topic
+	// while the worker is out at the tracker — a reset, say.
+	onCheck func()
 
 	callsCheck    int
 	callsDownload int
@@ -56,6 +61,9 @@ func (f *fakeTracker) Parse(_ context.Context, _ string) (*domain.Topic, error) 
 }
 
 func (f *fakeTracker) Check(_ context.Context, _ *domain.Topic, _ *domain.TrackerCredential) (*domain.Check, error) {
+	if f.onCheck != nil {
+		f.onCheck()
+	}
 	idx := f.callsCheck
 	if idx >= len(f.checks) {
 		idx = len(f.checks) - 1
@@ -80,29 +88,24 @@ func (f *fakeTracker) Download(_ context.Context, _ *domain.Topic, _ *domain.Che
 }
 
 // fakeTopics records every persistence call without touching a DB.
-// It satisfies topicsRepo (and optionally markEpisodeDownloader).
+// It satisfies topicsRepo.
 type fakeTopics struct {
 	recordCalls            []recordCall
-	updateExtraCalls       []updateExtraCall
 	updateDisplayNameCalls []updateDisplayNameCall
 	markCalls              []markCall
 	markErr                error
-	updateExtraErr         error
-	implementMarkAtomic    bool // when true, the test exercises the atomic path
+	verifyCalls            []uuid.UUID
+	verifyErr              error
 }
 
 type recordCall struct {
 	id          uuid.UUID
+	observed    *time.Time // the last_checked_at the worker carried in
 	hash        string
 	updated     bool
 	nextCheckAt time.Time
 	errMsg      string
 	errCode     string
-}
-
-type updateExtraCall struct {
-	id    uuid.UUID
-	extra map[string]any
 }
 
 type markCall struct {
@@ -119,20 +122,9 @@ func (f *fakeTopics) DueForCheck(_ context.Context, _ int) ([]*domain.Topic, err
 	return nil, nil
 }
 
-func (f *fakeTopics) RecordCheckResult(_ context.Context, id uuid.UUID, hash string, updated bool, nextCheckAt time.Time, errMsg, errCode string) error {
-	f.recordCalls = append(f.recordCalls, recordCall{id, hash, updated, nextCheckAt, errMsg, errCode})
+func (f *fakeTopics) RecordCheckResult(_ context.Context, t *domain.Topic, hash string, updated bool, nextCheckAt time.Time, errMsg, errCode string) error {
+	f.recordCalls = append(f.recordCalls, recordCall{t.ID, t.LastCheckedAt, hash, updated, nextCheckAt, errMsg, errCode})
 	return nil
-}
-
-func (f *fakeTopics) UpdateExtra(_ context.Context, id uuid.UUID, extra map[string]any) error {
-	// Snapshot the map so the test sees the value at the time of the call,
-	// not after the scheduler mutates it again on the next iteration.
-	snap := make(map[string]any, len(extra))
-	for k, v := range extra {
-		snap[k] = v
-	}
-	f.updateExtraCalls = append(f.updateExtraCalls, updateExtraCall{id, snap})
-	return f.updateExtraErr
 }
 
 func (f *fakeTopics) UpdateDisplayName(_ context.Context, id uuid.UUID, name string) error {
@@ -140,16 +132,17 @@ func (f *fakeTopics) UpdateDisplayName(_ context.Context, id uuid.UUID, name str
 	return nil
 }
 
-// fakeTopicsAtomic is fakeTopics + the optional atomic method, used by
-// the persistence-failure test to exercise the markEpisodeDownloader
-// branch.
-type fakeTopicsAtomic struct {
-	fakeTopics
+func (f *fakeTopics) MarkEpisodeDownloaded(_ context.Context, t *domain.Topic, packed string) error {
+	f.markCalls = append(f.markCalls, markCall{t.ID, packed})
+	return f.markErr
 }
 
-func (f *fakeTopicsAtomic) MarkEpisodeDownloaded(_ context.Context, id uuid.UUID, packed string) error {
-	f.markCalls = append(f.markCalls, markCall{id, packed})
-	return f.markErr
+// VerifyCheckState is the pre-submit read-only guard. verifyErr lets a test
+// stage a reset landing between Check and Add; the zero value means "token
+// still valid", so every existing test keeps submitting as before.
+func (f *fakeTopics) VerifyCheckState(_ context.Context, t *domain.Topic) error {
+	f.verifyCalls = append(f.verifyCalls, t.ID)
+	return f.verifyErr
 }
 
 // fakeClients records GetByID / GetDefault calls and always returns a
@@ -278,6 +271,10 @@ type fakeClientPlugin struct {
 	addCalls int
 	addErr   error
 	lastOpts domain.AddOptions
+	// onAdd runs after the call is recorded, so a test can land a reset in
+	// the narrow gap the pre-submit guard cannot cover: between Add returning
+	// and the episode mark that follows it.
+	onAdd func()
 
 	// Remove tracking for the replace-on-update path.
 	removeCalls      int
@@ -295,6 +292,9 @@ func (f *fakeClientPlugin) Test(_ context.Context, _ []byte) error {
 func (f *fakeClientPlugin) Add(_ context.Context, _ []byte, _ *domain.Payload, opts domain.AddOptions) error {
 	f.addCalls++
 	f.lastOpts = opts
+	if f.onAdd != nil {
+		f.onAdd()
+	}
 	return f.addErr
 }
 
@@ -310,7 +310,6 @@ func (f *fakeClientPlugin) Remove(_ context.Context, _ []byte, hashes []string, 
 type fixture struct {
 	s            *Scheduler
 	topics       *fakeTopics
-	atomicTopics *fakeTopicsAtomic
 	clientPlugin *fakeClientPlugin
 	deliveries   *fakeDeliveries
 	emitter      *fakeEmitter
@@ -318,9 +317,8 @@ type fixture struct {
 	topic        *domain.Topic
 }
 
-// newFixture wires a scheduler with all-fakes dependencies. If atomic
-// is true, the topics repo also implements markEpisodeDownloader.
-func newFixture(t *testing.T, tracker *fakeTracker, atomic bool) *fixture {
+// newFixture wires a scheduler with all-fakes dependencies.
+func newFixture(t *testing.T, tracker *fakeTracker) *fixture {
 	t.Helper()
 
 	cfg := &config.Config{
@@ -339,17 +337,7 @@ func newFixture(t *testing.T, tracker *fakeTracker, atomic bool) *fixture {
 	}
 	clientPlugin := &fakeClientPlugin{name: "fakeclient"}
 
-	var topicsImpl topicsRepo
-	var plain *fakeTopics
-	var atomicImpl *fakeTopicsAtomic
-	if atomic {
-		atomicImpl = &fakeTopicsAtomic{}
-		plain = &atomicImpl.fakeTopics
-		topicsImpl = atomicImpl
-	} else {
-		plain = &fakeTopics{}
-		topicsImpl = plain
-	}
+	topicsImpl := &fakeTopics{}
 
 	deliveries := &fakeDeliveries{}
 	emit := &fakeEmitter{}
@@ -385,8 +373,7 @@ func newFixture(t *testing.T, tracker *fakeTracker, atomic bool) *fixture {
 
 	return &fixture{
 		s:            s,
-		topics:       plain,
-		atomicTopics: atomicImpl,
+		topics:       topicsImpl,
 		clientPlugin: clientPlugin,
 		deliveries:   deliveries,
 		emitter:      emit,
@@ -414,7 +401,7 @@ func TestRunCheck_HashUnchanged(t *testing.T) {
 			{check: &domain.Check{Hash: "old-hash"}, err: nil},
 		},
 	}
-	f := newFixture(t, tr, false)
+	f := newFixture(t, tr)
 
 	f.s.runCheck(context.Background(), f.s.log, f.topic)
 
@@ -449,7 +436,7 @@ func TestRunCheck_SinglePayload_HappyPath(t *testing.T) {
 			{err: registry.ErrNoPendingEpisodes},
 		},
 	}
-	f := newFixture(t, tr, false)
+	f := newFixture(t, tr)
 
 	f.s.runCheck(context.Background(), f.s.log, f.topic)
 
@@ -480,7 +467,7 @@ func TestRunCheck_SinglePayload_RecordsDelivery(t *testing.T) {
 			{err: registry.ErrNoPendingEpisodes},
 		},
 	}
-	f := newFixture(t, tr, false)
+	f := newFixture(t, tr)
 
 	f.s.runCheck(context.Background(), f.s.log, f.topic)
 
@@ -512,7 +499,7 @@ func TestRunCheck_SinglePayload_NotifiesUpdated(t *testing.T) {
 			{err: registry.ErrNoPendingEpisodes},
 		},
 	}
-	f := newFixture(t, tr, false)
+	f := newFixture(t, tr)
 
 	f.s.runCheck(context.Background(), f.s.log, f.topic)
 
@@ -548,7 +535,7 @@ func TestRunCheck_NoDownload_DoesNotNotify(t *testing.T) {
 		name:   "faketracker",
 		checks: []checkResult{{check: &domain.Check{Hash: "old-hash"}, err: nil}}, // unchanged
 	}
-	f := newFixture(t, tr, false)
+	f := newFixture(t, tr)
 
 	f.s.runCheck(context.Background(), f.s.log, f.topic)
 
@@ -562,7 +549,7 @@ func TestRunCheck_CheckError_NotifiesError(t *testing.T) {
 		name:   "faketracker",
 		checks: []checkResult{{err: errors.New("tracker boom")}},
 	}
-	f := newFixture(t, tr, false)
+	f := newFixture(t, tr)
 
 	f.s.runCheck(context.Background(), f.s.log, f.topic)
 
@@ -600,7 +587,7 @@ func TestRunCheck_NewRelease_EventsCarrySourceURL(t *testing.T) {
 			{err: registry.ErrNoPendingEpisodes},
 		},
 	}
-	f := newFixture(t, tr, false)
+	f := newFixture(t, tr)
 
 	f.s.runCheck(context.Background(), f.s.log, f.topic)
 
@@ -647,7 +634,7 @@ func newCommentFixture(t *testing.T, comment string, commentErr error) (*fixture
 		comment:    comment,
 		commentErr: commentErr,
 	}
-	f := newFixture(t, &tr.fakeTracker, false)
+	f := newFixture(t, &tr.fakeTracker)
 	f.s.lookupTracker = func(string) registry.Tracker { return tr }
 	return f, tr
 }
@@ -756,7 +743,7 @@ func TestRunCheck_CheckError_AlreadyErrored_NoNotify(t *testing.T) {
 		name:   "faketracker",
 		checks: []checkResult{{err: errors.New("tracker boom")}},
 	}
-	f := newFixture(t, tr, false)
+	f := newFixture(t, tr)
 	f.topic.ConsecutiveErrors = 1 // already in the error state — must not re-notify
 
 	f.s.runCheck(context.Background(), f.s.log, f.topic)
@@ -783,7 +770,7 @@ func TestRunCheck_DownloadFails_AlreadyErrored_NoReleaseFound(t *testing.T) {
 			{payload: &domain.Payload{MagnetURI: "magnet:?xt=urn:btih:" + hash}, err: nil},
 		},
 	}
-	f := newFixture(t, tr, false)
+	f := newFixture(t, tr)
 	// The client is unreachable, so the submit fails for this tick.
 	f.clientPlugin.addErr = errors.New("dial tcp 192.0.2.1:8083: connect: connection refused")
 	// This is a RETRY: the topic already failed at least once, so the release
@@ -811,7 +798,7 @@ func TestRunCheck_DownloadFails_FirstFailure_EmitsReleaseFound(t *testing.T) {
 			{payload: &domain.Payload{MagnetURI: "magnet:?xt=urn:btih:" + hash}, err: nil},
 		},
 	}
-	f := newFixture(t, tr, false)
+	f := newFixture(t, tr)
 	f.clientPlugin.addErr = errors.New("dial tcp 192.0.2.1:8083: connect: connection refused")
 	f.topic.ConsecutiveErrors = 0 // healthy until this tick
 
@@ -844,7 +831,7 @@ func TestRunCheck_Episodes_NotifiesWithEpisodeLabels(t *testing.T) {
 			{err: registry.ErrNoPendingEpisodes},
 		},
 	}
-	f := newFixture(t, tr, true)
+	f := newFixture(t, tr)
 
 	f.s.runCheck(context.Background(), f.s.log, f.topic)
 
@@ -880,7 +867,7 @@ func TestRunCheck_Episodes_RecordsDeliveryWithEpisodeLabel(t *testing.T) {
 			{err: registry.ErrNoPendingEpisodes},
 		},
 	}
-	f := newFixture(t, tr, true)
+	f := newFixture(t, tr)
 
 	f.s.runCheck(context.Background(), f.s.log, f.topic)
 
@@ -923,7 +910,7 @@ func TestRunCheck_ThreePendingEpisodes(t *testing.T) {
 			{err: registry.ErrNoPendingEpisodes},
 		},
 	}
-	f := newFixture(t, tr, true)
+	f := newFixture(t, tr)
 
 	f.s.runCheck(context.Background(), f.s.log, f.topic)
 
@@ -933,13 +920,13 @@ func TestRunCheck_ThreePendingEpisodes(t *testing.T) {
 	if got := tr.callsDownload; got != 3 {
 		t.Errorf("expected 3 Download calls, got %d", got)
 	}
-	if got := len(f.atomicTopics.markCalls); got != 3 {
+	if got := len(f.topics.markCalls); got != 3 {
 		t.Errorf("expected 3 MarkEpisodeDownloaded calls, got %d", got)
 	}
 	wantPacked := []string{"S01E01", "S01E02", "S01E03"}
 	for i, w := range wantPacked {
-		if f.atomicTopics.markCalls[i].packed != w {
-			t.Errorf("mark call %d: got %q, want %q", i, f.atomicTopics.markCalls[i].packed, w)
+		if f.topics.markCalls[i].packed != w {
+			t.Errorf("mark call %d: got %q, want %q", i, f.topics.markCalls[i].packed, w)
 		}
 	}
 	rec := f.lastRecord(t)
@@ -961,7 +948,7 @@ func TestRunCheck_FirstDownloadError(t *testing.T) {
 			{err: errors.New("connection refused")},
 		},
 	}
-	f := newFixture(t, tr, false)
+	f := newFixture(t, tr)
 
 	f.s.runCheck(context.Background(), f.s.log, f.topic)
 
@@ -1002,14 +989,14 @@ func TestRunCheck_MidLoopDownloadError(t *testing.T) {
 			{err: errors.New("network blip")},
 		},
 	}
-	f := newFixture(t, tr, true)
+	f := newFixture(t, tr)
 
 	f.s.runCheck(context.Background(), f.s.log, f.topic)
 
 	if got := f.clientPlugin.addCalls; got != 2 {
 		t.Errorf("expected 2 client Add calls, got %d", got)
 	}
-	if got := len(f.atomicTopics.markCalls); got != 2 {
+	if got := len(f.topics.markCalls); got != 2 {
 		t.Errorf("expected 2 MarkEpisodeDownloaded calls, got %d", got)
 	}
 	rec := f.lastRecord(t)
@@ -1042,7 +1029,7 @@ func TestRunCheck_CaughtUpNoPending(t *testing.T) {
 			{err: registry.ErrNoPendingEpisodes},
 		},
 	}
-	f := newFixture(t, tr, false)
+	f := newFixture(t, tr)
 
 	f.s.runCheck(context.Background(), f.s.log, f.topic)
 
@@ -1079,10 +1066,10 @@ func TestRunCheck_PersistFailureMidLoop(t *testing.T) {
 			{payload: &domain.Payload{MagnetURI: "magnet:3"}},
 		},
 	}
-	f := newFixture(t, tr, true)
+	f := newFixture(t, tr)
 	// Fail the SECOND mark call. The submit succeeded, so anySubmitted
 	// should be true and the recorded result should reflect "updated".
-	f.atomicTopics.markErr = errors.New("db down")
+	f.topics.markErr = errors.New("db down")
 
 	f.s.runCheck(context.Background(), f.s.log, f.topic)
 
@@ -1125,14 +1112,14 @@ func TestRunCheck_HitsMaxPerTick(t *testing.T) {
 		},
 		downloads: downloads,
 	}
-	f := newFixture(t, tr, true)
+	f := newFixture(t, tr)
 
 	f.s.runCheck(context.Background(), f.s.log, f.topic)
 
 	if got := f.clientPlugin.addCalls; got != cap {
 		t.Errorf("expected exactly %d client Add calls (capped), got %d", cap, got)
 	}
-	if got := len(f.atomicTopics.markCalls); got != cap {
+	if got := len(f.topics.markCalls); got != cap {
 		t.Errorf("expected exactly %d MarkEpisodeDownloaded calls, got %d", cap, got)
 	}
 	rec := f.lastRecord(t)
@@ -1141,39 +1128,6 @@ func TestRunCheck_HitsMaxPerTick(t *testing.T) {
 	}
 	if rec.errMsg != "" {
 		t.Errorf("expected empty errMsg on capped run, got %q", rec.errMsg)
-	}
-}
-
-func TestRunCheck_NonAtomicFallback(t *testing.T) {
-	// Verifies the fallback path: when topicsRepo does NOT implement
-	// markEpisodeDownloader, the scheduler should call UpdateExtra
-	// with downloaded_episodes appended.
-	tr := &fakeTracker{
-		name: "faketracker",
-		checks: []checkResult{
-			{
-				check: &domain.Check{
-					Hash: "new-hash",
-					Extra: map[string]any{
-						"pending_episodes": []string{"S01E01", "S01E02"},
-					},
-				},
-			},
-		},
-		downloads: []downloadResult{
-			{payload: &domain.Payload{MagnetURI: "magnet:1"}},
-			{payload: &domain.Payload{MagnetURI: "magnet:2"}},
-		},
-	}
-	f := newFixture(t, tr, false)
-
-	f.s.runCheck(context.Background(), f.s.log, f.topic)
-
-	if got := f.clientPlugin.addCalls; got != 2 {
-		t.Errorf("expected 2 client Add calls, got %d", got)
-	}
-	if got := len(f.topics.updateExtraCalls); got != 2 {
-		t.Errorf("expected 2 UpdateExtra calls in fallback path, got %d", got)
 	}
 }
 
@@ -1197,7 +1151,7 @@ func singlePayloadTracker(newHash string) *fakeTracker {
 func TestRunCheck_ReplaceOnUpdate_RemovesPreviousAndPrunes(t *testing.T) {
 	const oldHash = "1111111111111111111111111111111111111111"
 	const newHash = "c12fe1c06bba254a9dc9f519b335aa7c1367a88a"
-	f := newFixture(t, singlePayloadTracker(newHash), false)
+	f := newFixture(t, singlePayloadTracker(newHash))
 	f.topic.ReplaceOnUpdate = true
 	f.topic.ReplaceDeleteData = true
 	f.deliveries.prior = []*domain.TopicDelivery{
@@ -1230,7 +1184,7 @@ func TestRunCheck_ReplaceOnUpdate_RemovesPreviousAndPrunes(t *testing.T) {
 func TestRunCheck_ReplaceOnUpdate_KeepData(t *testing.T) {
 	const oldHash = "1111111111111111111111111111111111111111"
 	const newHash = "c12fe1c06bba254a9dc9f519b335aa7c1367a88a"
-	f := newFixture(t, singlePayloadTracker(newHash), false)
+	f := newFixture(t, singlePayloadTracker(newHash))
 	f.topic.ReplaceOnUpdate = true
 	f.topic.ReplaceDeleteData = false
 	f.deliveries.prior = []*domain.TopicDelivery{{Infohash: oldHash, ClientID: f.topic.ClientID}}
@@ -1255,7 +1209,7 @@ func TestRunCheck_ReplaceOnUpdate_SkipsCurrentInfohash(t *testing.T) {
 	// is unchanged, so the "previous" snapshot contains the SAME infohash that
 	// was just (re)delivered. The guard must never remove it.
 	const sameHash = "c12fe1c06bba254a9dc9f519b335aa7c1367a88a"
-	f := newFixture(t, singlePayloadTracker(sameHash), false)
+	f := newFixture(t, singlePayloadTracker(sameHash))
 	f.topic.ReplaceOnUpdate = true
 	f.deliveries.prior = []*domain.TopicDelivery{{Infohash: sameHash, ClientID: f.topic.ClientID}}
 
@@ -1278,7 +1232,7 @@ func TestRunCheck_ReplaceOnUpdate_RemovesFromEachHoldingClient(t *testing.T) {
 	const newHash = "c12fe1c06bba254a9dc9f519b335aa7c1367a88a"
 	clientA := uuid.New()
 	clientB := uuid.New()
-	f := newFixture(t, singlePayloadTracker(newHash), false)
+	f := newFixture(t, singlePayloadTracker(newHash))
 	f.topic.ReplaceOnUpdate = true
 	f.deliveries.prior = []*domain.TopicDelivery{
 		{Infohash: h1, ClientID: &clientA},
@@ -1303,7 +1257,7 @@ func TestRunCheck_ReplaceOnUpdate_RemovesFromEachHoldingClient(t *testing.T) {
 func TestRunCheck_ReplaceDisabled_NoRemoval(t *testing.T) {
 	const oldHash = "1111111111111111111111111111111111111111"
 	const newHash = "c12fe1c06bba254a9dc9f519b335aa7c1367a88a"
-	f := newFixture(t, singlePayloadTracker(newHash), false)
+	f := newFixture(t, singlePayloadTracker(newHash))
 	f.topic.ReplaceOnUpdate = false // default — keep all versions
 	f.deliveries.prior = []*domain.TopicDelivery{{Infohash: oldHash, ClientID: f.topic.ClientID}}
 
@@ -1324,7 +1278,7 @@ func TestRunCheck_ReplaceOnUpdate_Episodic_NoRemoval(t *testing.T) {
 	const newHash = "c12fe1c06bba254a9dc9f519b335aa7c1367a88a"
 	tr := singlePayloadTracker(newHash)
 	tr.episodic = true
-	f := newFixture(t, tr, false)
+	f := newFixture(t, tr)
 	f.topic.ReplaceOnUpdate = true
 	f.deliveries.prior = []*domain.TopicDelivery{{Infohash: oldHash, ClientID: f.topic.ClientID}}
 
@@ -1339,7 +1293,7 @@ func TestRunCheck_ReplaceOnUpdate_RemoveFailsOpen(t *testing.T) {
 	// A removal failure must not fail the check: the new release was delivered.
 	const oldHash = "1111111111111111111111111111111111111111"
 	const newHash = "c12fe1c06bba254a9dc9f519b335aa7c1367a88a"
-	f := newFixture(t, singlePayloadTracker(newHash), false)
+	f := newFixture(t, singlePayloadTracker(newHash))
 	f.topic.ReplaceOnUpdate = true
 	f.deliveries.prior = []*domain.TopicDelivery{{Infohash: oldHash, ClientID: f.topic.ClientID}}
 	f.clientPlugin.removeErr = errors.New("qbit unreachable")
@@ -1737,7 +1691,7 @@ func TestRunCheck_NewRelease_EmitsReleaseFoundAndSubmitted(t *testing.T) {
 			{err: registry.ErrNoPendingEpisodes},
 		},
 	}
-	f := newFixture(t, tr, false)
+	f := newFixture(t, tr)
 
 	f.s.runCheck(context.Background(), f.s.log, f.topic)
 
@@ -1793,7 +1747,7 @@ func TestRunCheck_SelfHeal_PlaceholderName_Persists(t *testing.T) {
 			{check: &domain.Check{Hash: "old-hash", DisplayName: "Real Title"}, err: nil},
 		},
 	}
-	f := newFixture(t, tr, false)
+	f := newFixture(t, tr)
 	f.topic.DisplayName = "Fake topic 1"
 	f.topic.DisplayNameIsPlaceholder = true
 
@@ -1816,7 +1770,7 @@ func TestRunCheck_SelfHeal_ResolvedName_DoesNotDowngrade(t *testing.T) {
 			{check: &domain.Check{Hash: "old-hash", DisplayName: "Kinozal.TV Main Page"}, err: nil},
 		},
 	}
-	f := newFixture(t, tr, false)
+	f := newFixture(t, tr)
 	f.topic.DisplayName = "Real Release Name"
 	f.topic.DisplayNameIsPlaceholder = false
 
@@ -1898,10 +1852,10 @@ func TestClassifyError_MapsKnownPatternsToCodes(t *testing.T) {
 }
 
 func TestRecordResult_ClassifiesAndPersistsErrorCode(t *testing.T) {
-	f := newFixture(t, &fakeTracker{}, false)
-	id := uuid.New()
+	f := newFixture(t, &fakeTracker{})
+	topic := &domain.Topic{ID: uuid.New(), TrackerName: "kinozal"}
 	f.s.recordResult(
-		context.Background(), zerolog.Nop(), id, "kinozal", "", false,
+		context.Background(), zerolog.Nop(), topic, "", false,
 		time.Now(), `kinozal GET: Get "https://kinozal.tv/details.php?id=1": context deadline exceeded`,
 	)
 	if len(f.topics.recordCalls) != 1 {
@@ -1913,9 +1867,9 @@ func TestRecordResult_ClassifiesAndPersistsErrorCode(t *testing.T) {
 }
 
 func TestRecordResult_SuccessLeavesErrorCodeEmpty(t *testing.T) {
-	f := newFixture(t, &fakeTracker{}, false)
-	id := uuid.New()
-	f.s.recordResult(context.Background(), zerolog.Nop(), id, "faketracker", "abc", true, time.Now(), "")
+	f := newFixture(t, &fakeTracker{})
+	topic := &domain.Topic{ID: uuid.New(), TrackerName: "faketracker"}
+	f.s.recordResult(context.Background(), zerolog.Nop(), topic, "abc", true, time.Now(), "")
 	if len(f.topics.recordCalls) != 1 {
 		t.Fatalf("want 1 record call, got %d", len(f.topics.recordCalls))
 	}
@@ -1962,9 +1916,10 @@ func TestRecordResult_NetworkError_ReportsDomainFailure(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			rot := &fakeRotator{}
-			f := newFixture(t, &fakeTracker{}, false)
+			f := newFixture(t, &fakeTracker{})
 			f.s.domains = rot
-			f.s.recordResult(context.Background(), zerolog.Nop(), uuid.New(), "kinozal",
+			topic := &domain.Topic{ID: uuid.New(), TrackerName: "kinozal"}
+			f.s.recordResult(context.Background(), zerolog.Nop(), topic,
 				"", false, time.Now(), tt.errMsg)
 			if len(rot.calls) != tt.wantCalls {
 				t.Errorf("ReportFailure calls = %d, want %d", len(rot.calls), tt.wantCalls)
@@ -1973,5 +1928,482 @@ func TestRecordResult_NetworkError_ReportsDomainFailure(t *testing.T) {
 				t.Errorf("ReportFailure tracker = %q, want kinozal", rot.calls[0])
 			}
 		})
+	}
+}
+
+// --- Stale-write guard: a reset landing mid-check ------------------------
+
+// fakeTopicsGuarded models repo.Topics' optimistic-concurrency guard on
+// last_checked_at in memory: it holds the persisted state and accepts a
+// RecordCheckResult only while the token the caller observed still matches.
+//
+// The guard itself is SQL (`WHERE ... last_checked_at IS NOT DISTINCT FROM $7`)
+// and is pinned by repo's pgxmock tests. This fake exists to prove the other
+// half — that the scheduler carries the observed token through to the write and
+// survives a rejection without undoing the reset.
+type fakeTopicsGuarded struct {
+	fakeTopics
+
+	// The version token, as persisted. BOTH columns form it: last_checked_at
+	// alone is NULL after every reset and so cannot tell two resets apart.
+	lastCheckedAt  *time.Time
+	nextCheckAt    time.Time
+	lastHash       string
+	downloaded     []string
+	resets         int
+	accepted       int
+	rejected       int
+	markRejected   int
+	verifyCalls    int
+	verifyRejected int
+	// afterAcceptedMark runs once an episode mark has been accepted, so a test
+	// can land a reset exactly between two loop iterations.
+	afterAcceptedMark func()
+}
+
+// tokenMatches is the Go equivalent of the SQL guard
+// `last_checked_at IS NOT DISTINCT FROM $n AND next_check_at = $n+1`.
+func (f *fakeTopicsGuarded) tokenMatches(t *domain.Topic) bool {
+	return sameInstant(f.lastCheckedAt, t.LastCheckedAt) && f.nextCheckAt.Equal(t.NextCheckAt)
+}
+
+func (f *fakeTopicsGuarded) RecordCheckResult(_ context.Context, t *domain.Topic, hash string, updated bool, nextCheckAt time.Time, errMsg, errCode string) error {
+	f.recordCalls = append(f.recordCalls, recordCall{t.ID, t.LastCheckedAt, hash, updated, nextCheckAt, errMsg, errCode})
+	if !f.tokenMatches(t) {
+		f.rejected++
+		return repo.ErrStaleCheckResult
+	}
+	f.accepted++
+	now := time.Now()
+	f.lastCheckedAt = &now
+	f.nextCheckAt = nextCheckAt
+	if hash != "" {
+		f.lastHash = hash
+	}
+	return nil
+}
+
+// VerifyCheckState is the read-only form of the same token guard, applied
+// before a submission instead of after one.
+func (f *fakeTopicsGuarded) VerifyCheckState(_ context.Context, t *domain.Topic) error {
+	f.verifyCalls++
+	if !f.tokenMatches(t) {
+		f.verifyRejected++
+		return repo.ErrStaleCheckResult
+	}
+	return nil
+}
+
+func (f *fakeTopicsGuarded) MarkEpisodeDownloaded(_ context.Context, t *domain.Topic, packed string) error {
+	f.markCalls = append(f.markCalls, markCall{t.ID, packed})
+	if !f.tokenMatches(t) {
+		f.markRejected++
+		return repo.ErrStaleCheckResult
+	}
+	f.downloaded = append(f.downloaded, packed)
+	if f.afterAcceptedMark != nil {
+		f.afterAcceptedMark()
+	}
+	return nil
+}
+
+// resetClock stands in for Postgres now() as ResetCheckState writes it. Only
+// one property matters — consecutive resets stamp distinct, increasing
+// next_check_at values — so the fake advances a counter rather than depending
+// on the host clock's resolution.
+var resetClock = time.Date(2026, 7, 30, 12, 0, 0, 0, time.UTC)
+
+// reset mirrors what repo.Topics.ResetCheckState does to the guard's inputs:
+// last_checked_at cleared, downloaded_episodes dropped, and — crucially — a
+// fresh next_check_at stamped, which is what makes consecutive resets
+// distinguishable.
+func (f *fakeTopicsGuarded) reset() {
+	f.resets++
+	f.lastCheckedAt = nil
+	f.nextCheckAt = resetClock.Add(time.Duration(f.resets) * time.Microsecond)
+	f.lastHash = ""
+	f.downloaded = nil
+}
+
+// sameInstant is the Go equivalent of SQL's IS NOT DISTINCT FROM over a
+// nullable timestamp: two NULLs match, a NULL and a value do not.
+func sameInstant(a, b *time.Time) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return a.Equal(*b)
+}
+
+// TestRunCheck_ResetMidCheck_DoesNotClobberReset reproduces the race the
+// last_checked_at guard exists for. A worker is out at the tracker when the
+// user resets the topic; the reset removes the delivered torrents, drops the
+// hash and queues an immediate re-check. Without the guard the worker's write
+// lands afterwards and restores the pre-reset hash plus a backoff
+// next_check_at — the topic then looks like it was never reset, except its
+// torrents are gone from the client, and nothing re-downloads until the
+// tracker's own hash changes.
+func TestRunCheck_ResetMidCheck_DoesNotClobberReset(t *testing.T) {
+	observed := time.Now().Add(-time.Hour)
+	observedNext := time.Now().Add(-time.Minute)
+	guarded := &fakeTopicsGuarded{
+		lastCheckedAt: &observed,
+		nextCheckAt:   observedNext,
+		lastHash:      "old-hash",
+	}
+
+	tr := &fakeTracker{
+		name:      "faketracker",
+		checks:    []checkResult{{check: &domain.Check{Hash: "new-hash"}}},
+		downloads: []downloadResult{{payload: &domain.Payload{MagnetURI: "magnet:?xt=urn:btih:abc"}}},
+	}
+	f := newFixture(t, tr)
+	f.s.topics = guarded
+	f.topic.LastCheckedAt = &observed
+	f.topic.NextCheckAt = observedNext
+	// The reset lands while the worker is inside tr.Check.
+	tr.onCheck = guarded.reset
+
+	f.s.runCheck(context.Background(), f.s.log, f.topic)
+
+	// f.topics is the fixture's default fake; the guarded one replaced it on
+	// s.topics, so its own call log is the authoritative record here.
+	if len(guarded.recordCalls) != 1 {
+		t.Fatalf("want 1 RecordCheckResult call, got %d", len(guarded.recordCalls))
+	}
+	rec := guarded.recordCalls[0]
+	if rec.observed == nil || !rec.observed.Equal(observed) {
+		t.Fatalf("worker carried observed last_checked_at %v, want %v", rec.observed, observed)
+	}
+	if guarded.accepted != 0 || guarded.rejected != 1 {
+		t.Fatalf("stale write not rejected: accepted=%d rejected=%d", guarded.accepted, guarded.rejected)
+	}
+	if guarded.lastHash != "" {
+		t.Errorf("reset clobbered: last_hash = %q, want empty", guarded.lastHash)
+	}
+	if guarded.lastCheckedAt != nil {
+		t.Errorf("reset clobbered: last_checked_at = %v, want nil", guarded.lastCheckedAt)
+	}
+}
+
+// TestRunCheck_AfterReset_WritesResult is the other half of the guard. The
+// fresh check that a reset queues observes last_checked_at = NULL, and NULL IS
+// NOT DISTINCT FROM NULL is true, so its result must land — a `= $7` guard
+// would silently drop every post-reset check instead.
+func TestRunCheck_AfterReset_WritesResult(t *testing.T) {
+	guarded := &fakeTopicsGuarded{}
+	guarded.reset() // freshly reset: no token, no hash, fresh next_check_at
+
+	tr := &fakeTracker{
+		name:      "faketracker",
+		checks:    []checkResult{{check: &domain.Check{Hash: "new-hash"}}},
+		downloads: []downloadResult{{payload: &domain.Payload{MagnetURI: "magnet:?xt=urn:btih:abc"}}},
+	}
+	f := newFixture(t, tr)
+	f.s.topics = guarded
+	f.topic.LastCheckedAt = nil
+	f.topic.NextCheckAt = guarded.nextCheckAt
+	f.topic.LastHash = ""
+
+	f.s.runCheck(context.Background(), f.s.log, f.topic)
+
+	if guarded.accepted != 1 || guarded.rejected != 0 {
+		t.Fatalf("post-reset write not accepted: accepted=%d rejected=%d", guarded.accepted, guarded.rejected)
+	}
+	if guarded.lastHash != "new-hash" {
+		t.Errorf("last_hash = %q, want new-hash", guarded.lastHash)
+	}
+	if f.clientPlugin.addCalls != 1 {
+		t.Errorf("client Add calls = %d, want 1 (the re-download)", f.clientPlugin.addCalls)
+	}
+}
+
+// TestRunCheck_SecondReset_SurvivesWorkerDispatchedByFirstReset is the case a
+// last_checked_at-only token could never catch, because NULL is not monotonic.
+//
+// Reset #1 clears last_checked_at and sets next_check_at = now(), so a worker
+// is dispatched almost immediately and observes the NULL token. While it is
+// out at the tracker — 10-20s for a Cloudflare-gated tracker going through
+// FlareSolverr — the user resets again, and reset #2 removes the torrents from
+// the client and deletes their on-disk data. Under the single-column guard the
+// worker's write then MATCHED (NULL IS NOT DISTINCT FROM NULL) and restored the
+// pre-reset hash: reset #2 silently undone after its irreversible half had
+// already run, with nothing left to re-download it.
+//
+// This is reachable through the workflow the reset handler itself prescribes —
+// its fail-closed 500s tell the user to retry the reset, and reset #1 has
+// already armed the scheduler. next_check_at differs per reset, so the pair
+// rejects the write.
+func TestRunCheck_SecondReset_SurvivesWorkerDispatchedByFirstReset(t *testing.T) {
+	guarded := &fakeTopicsGuarded{}
+	guarded.reset() // reset #1
+
+	tr := &fakeTracker{
+		name:      "faketracker",
+		checks:    []checkResult{{check: &domain.Check{Hash: "new-hash"}}},
+		downloads: []downloadResult{{payload: &domain.Payload{MagnetURI: "magnet:?xt=urn:btih:abc"}}},
+	}
+	f := newFixture(t, tr)
+	f.s.topics = guarded
+	// The worker carries the token reset #1 left behind: a NULL
+	// last_checked_at, and reset #1's next_check_at.
+	f.topic.LastCheckedAt = nil
+	f.topic.NextCheckAt = guarded.nextCheckAt
+	f.topic.LastHash = ""
+	// Reset #2 lands while the worker is inside tr.Check.
+	tr.onCheck = guarded.reset
+
+	f.s.runCheck(context.Background(), f.s.log, f.topic)
+
+	if guarded.accepted != 0 || guarded.rejected != 1 {
+		t.Fatalf("reset #1's worker overwrote reset #2: accepted=%d rejected=%d", guarded.accepted, guarded.rejected)
+	}
+	if guarded.lastHash != "" {
+		t.Errorf("reset #2 clobbered: last_hash = %q, want empty", guarded.lastHash)
+	}
+	if guarded.lastCheckedAt != nil {
+		t.Errorf("reset #2 clobbered: last_checked_at = %v, want nil", guarded.lastCheckedAt)
+	}
+}
+
+// TestRunCheck_ResetBeforeSubmit_DoesNotSubmit covers the pre-submit token
+// check: a reset that lands between Check and Add must stop the worker BEFORE
+// it hands anything to the client.
+//
+// Handing over a payload is the one step of a tick a reset cannot undo
+// afterwards. The reset removes exactly the torrents its delivery snapshot
+// listed, so a torrent added after that snapshot survives it — with
+// delete_data set the reset reports success while that torrent's files stay on
+// disk, and the re-delivered release then rechecks and resumes against them.
+//
+// Aborting is not an error: the check ends cleanly, and the check the reset
+// queued re-downloads from scratch, which is what the reset asked for.
+func TestRunCheck_ResetBeforeSubmit_DoesNotSubmit(t *testing.T) {
+	guarded := &fakeTopicsGuarded{}
+	guarded.reset()
+
+	tr := &fakeTracker{
+		name: "faketracker",
+		checks: []checkResult{{check: &domain.Check{
+			Hash: "new-hash",
+			Extra: map[string]any{
+				"pending_episodes": []string{"S01E01", "S01E02"},
+				"pending_human":    []string{"s01e01", "s01e02"},
+			},
+		}}},
+		downloads: []downloadResult{
+			{payload: &domain.Payload{MagnetURI: "magnet:1"}},
+			{payload: &domain.Payload{MagnetURI: "magnet:2"}},
+		},
+	}
+	f := newFixture(t, tr)
+	f.s.topics = guarded
+	f.topic.LastCheckedAt = nil
+	f.topic.NextCheckAt = guarded.nextCheckAt
+	f.topic.LastHash = ""
+	// The reset lands while the worker is still at the tracker, so the token
+	// has already moved on by the time the worker reaches the submit.
+	tr.onCheck = guarded.reset
+
+	f.s.runCheck(context.Background(), f.s.log, f.topic)
+
+	if f.clientPlugin.addCalls != 0 {
+		t.Fatalf("client Add calls = %d, want 0 — nothing may reach the client after the reset", f.clientPlugin.addCalls)
+	}
+	if guarded.verifyRejected != 1 {
+		t.Errorf("want the pre-submit guard to reject once, got %d (verifies attempted: %d)",
+			guarded.verifyRejected, guarded.verifyCalls)
+	}
+	// Nothing was submitted, so nothing may be marked downloaded either.
+	if len(guarded.markCalls) != 0 {
+		t.Errorf("episode mark attempted after an aborted submit: %v", guarded.markCalls)
+	}
+	if len(guarded.downloaded) != 0 {
+		t.Errorf("episode stranded: downloaded_episodes = %v, want empty", guarded.downloaded)
+	}
+	// The check's own result is discarded too, so the reset stands whole.
+	if guarded.accepted != 0 || guarded.rejected != 1 {
+		t.Errorf("check result not discarded: accepted=%d rejected=%d", guarded.accepted, guarded.rejected)
+	}
+}
+
+// TestRunCheck_ResetMidEpisodeLoop_DoesNotStrandEpisode covers the residual
+// gap the pre-submit check cannot cover: a reset landing after Add returns but
+// before the episode mark. Only per-episode trackers (WithEpisodeFilter —
+// LostFilm today) can hit it, since downloadAllPending returns before the mark
+// for single-payload plugins.
+//
+// Unguarded, the mark fires later in the check than the reset: the worker
+// delivers episode E, the reset then removes E from the client, deletes its
+// data and its delivery row, and clears downloaded_episodes — and only then
+// does the append land, re-marking E as downloaded. E ends up absent from the
+// client, absent from disk, and skipped by every future check.
+//
+// Dropping the mark is the correct outcome: the post-reset check re-downloads
+// the episode, which is what the reset asked for.
+func TestRunCheck_ResetMidEpisodeLoop_DoesNotStrandEpisode(t *testing.T) {
+	guarded := &fakeTopicsGuarded{}
+	guarded.reset()
+
+	tr := &fakeTracker{
+		name: "faketracker",
+		checks: []checkResult{{check: &domain.Check{
+			Hash: "new-hash",
+			Extra: map[string]any{
+				"pending_episodes": []string{"S01E01", "S01E02"},
+				"pending_human":    []string{"s01e01", "s01e02"},
+			},
+		}}},
+		downloads: []downloadResult{
+			{payload: &domain.Payload{MagnetURI: "magnet:1"}},
+			{payload: &domain.Payload{MagnetURI: "magnet:2"}},
+		},
+	}
+	f := newFixture(t, tr)
+	f.s.topics = guarded
+	f.topic.LastCheckedAt = nil
+	f.topic.NextCheckAt = guarded.nextCheckAt
+	f.topic.LastHash = ""
+	// The reset lands in the one gap the pre-submit check leaves open: after
+	// the payload has reached the client, before the mark is written. Fires
+	// once so the second iteration is not double-reset.
+	f.clientPlugin.onAdd = func() {
+		f.clientPlugin.onAdd = nil
+		guarded.reset()
+	}
+
+	f.s.runCheck(context.Background(), f.s.log, f.topic)
+
+	if guarded.markRejected != 1 {
+		t.Fatalf("want the episode mark rejected once, got %d (marks attempted: %d)",
+			guarded.markRejected, len(guarded.markCalls))
+	}
+	if len(guarded.downloaded) != 0 {
+		t.Errorf("episode stranded: downloaded_episodes = %v, want empty so the reset re-downloads it",
+			guarded.downloaded)
+	}
+	// The loop must stop on the rejection rather than keep draining episodes
+	// into state that no longer exists.
+	if f.clientPlugin.addCalls != 1 {
+		t.Errorf("client Add calls = %d, want 1 — the loop should stop once the guard rejects", f.clientPlugin.addCalls)
+	}
+	// And the check's own result is discarded too, so the reset stands whole.
+	if guarded.accepted != 0 || guarded.rejected != 1 {
+		t.Errorf("check result not discarded: accepted=%d rejected=%d", guarded.accepted, guarded.rejected)
+	}
+}
+
+// TestRunCheck_ResetMidEpisodeLoop_PreservesEarlierProgress proves the abort
+// keeps partial progress. A reset landing after the first episode is fully
+// delivered and marked must stop the second submission without discarding the
+// first: the episode is in the client, its mark persisted, and the tick reports
+// it as delivered rather than failing.
+func TestRunCheck_ResetMidEpisodeLoop_PreservesEarlierProgress(t *testing.T) {
+	guarded := &fakeTopicsGuarded{}
+	guarded.reset()
+
+	tr := &fakeTracker{
+		name: "faketracker",
+		checks: []checkResult{{check: &domain.Check{
+			Hash: "new-hash",
+			Extra: map[string]any{
+				"pending_episodes": []string{"S01E01", "S01E02", "S01E03"},
+				"pending_human":    []string{"s01e01", "s01e02", "s01e03"},
+			},
+		}}},
+		downloads: []downloadResult{
+			{payload: &domain.Payload{MagnetURI: "magnet:1"}},
+			{payload: &domain.Payload{MagnetURI: "magnet:2"}},
+			{payload: &domain.Payload{MagnetURI: "magnet:3"}},
+		},
+	}
+	f := newFixture(t, tr)
+	f.s.topics = guarded
+	f.topic.LastCheckedAt = nil
+	f.topic.NextCheckAt = guarded.nextCheckAt
+	f.topic.LastHash = ""
+
+	// Let episode 1 complete end to end, then land the reset so episode 2's
+	// pre-submit check is the one that rejects.
+	guardedAfterFirstMark(guarded)
+
+	f.s.runCheck(context.Background(), f.s.log, f.topic)
+
+	if f.clientPlugin.addCalls != 1 {
+		t.Fatalf("client Add calls = %d, want 1 — episode 1 delivered, episode 2 refused", f.clientPlugin.addCalls)
+	}
+	if guarded.verifyRejected != 1 {
+		t.Errorf("want exactly one pre-submit rejection, got %d", guarded.verifyRejected)
+	}
+	// Episode 1's mark was written and accepted before the reset landed. (The
+	// reset then clears downloaded_episodes, which is correct and is why this
+	// asserts on the mark rather than on the surviving list — the reset asked
+	// for a re-download.)
+	if len(guarded.markCalls) != 1 || guarded.markRejected != 0 {
+		t.Errorf("episode 1's mark: %d attempted, %d rejected — want 1 and 0",
+			len(guarded.markCalls), guarded.markRejected)
+	}
+	// The tick still reports what it delivered, so the user is told episode 1
+	// landed rather than the whole tick vanishing.
+	submitted := f.emitter.ofType(events.DownloadSubmitted)
+	if len(submitted) != 1 {
+		t.Fatalf("want the delivered episode reported once, got %d submitted events", len(submitted))
+	}
+	if !strings.Contains(submitted[0].Body, "s01e01") {
+		t.Errorf("submitted event does not name the delivered episode: %q", submitted[0].Body)
+	}
+	// The abort is not a failure: the check records a clean result (which the
+	// token guard then discards, as it should).
+	if len(guarded.recordCalls) != 1 {
+		t.Fatalf("want one recorded result, got %d", len(guarded.recordCalls))
+	}
+	if guarded.recordCalls[0].errMsg != "" {
+		t.Errorf("abort reported as an error: %q", guarded.recordCalls[0].errMsg)
+	}
+}
+
+// guardedAfterFirstMark makes the fake reset itself the moment the first
+// episode mark is accepted — the point at which episode 1 is fully done and
+// episode 2 has not yet been submitted.
+func guardedAfterFirstMark(g *fakeTopicsGuarded) {
+	g.afterAcceptedMark = func() {
+		g.afterAcceptedMark = nil
+		g.reset()
+	}
+}
+
+// TestRunCheck_NoReset_StillSubmits is the other half of the pre-submit check:
+// with an untouched token the guard must wave the submission through. Without
+// it, a guard that rejected everything would look identical to a working one in
+// every abort test above.
+func TestRunCheck_NoReset_StillSubmits(t *testing.T) {
+	guarded := &fakeTopicsGuarded{}
+	guarded.reset()
+
+	tr := &fakeTracker{
+		name:      "faketracker",
+		checks:    []checkResult{{check: &domain.Check{Hash: "new-hash"}}},
+		downloads: []downloadResult{{payload: &domain.Payload{MagnetURI: "magnet:1"}}},
+	}
+	f := newFixture(t, tr)
+	f.s.topics = guarded
+	f.topic.LastCheckedAt = nil
+	f.topic.NextCheckAt = guarded.nextCheckAt
+	f.topic.LastHash = ""
+
+	f.s.runCheck(context.Background(), f.s.log, f.topic)
+
+	if f.clientPlugin.addCalls != 1 {
+		t.Fatalf("client Add calls = %d, want 1 — a valid token must not block the submit", f.clientPlugin.addCalls)
+	}
+	if guarded.verifyCalls != 1 || guarded.verifyRejected != 0 {
+		t.Errorf("guard consulted %d time(s), rejected %d — want 1 and 0",
+			guarded.verifyCalls, guarded.verifyRejected)
+	}
+	// The check completes normally and its result is persisted.
+	if guarded.accepted != 1 || guarded.rejected != 0 {
+		t.Errorf("check result not persisted: accepted=%d rejected=%d", guarded.accepted, guarded.rejected)
+	}
+	if guarded.lastHash != "new-hash" {
+		t.Errorf("last_hash = %q, want %q", guarded.lastHash, "new-hash")
 	}
 }

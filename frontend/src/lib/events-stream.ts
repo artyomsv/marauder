@@ -17,7 +17,7 @@ export interface WireEvent {
 }
 
 const PERSISTED = new Set([
-  "topic.added", "release.found", "download.submitted",
+  "topic.added", "topic.reset", "release.found", "download.submitted",
   "download.completed", "check.failed", "session.expired",
 ]);
 
@@ -49,6 +49,16 @@ export function applyEvent(qc: QueryClient, ev: WireEvent): void {
       return;
     case "check.failed":
       if (topicId) useCheckStatus.getState().setFailed(topicId, ev.body);
+      return;
+    case "topic.reset":
+      if (topicId) {
+        // A tab that did not perform the reset never ran onResetDone, so its
+        // check chip would keep whatever check.* phase was last set — a stale
+        // error, typically — until the next check reports in.
+        useCheckStatus.getState().clear(topicId);
+        qc.invalidateQueries({ queryKey: QK.topicStatus(topicId) });
+      }
+      qc.invalidateQueries({ queryKey: QK.topics });
       return;
     case "release.found":
     case "download.submitted":

@@ -140,35 +140,67 @@ func TestTopics_UpdateExtra_NilMap_Serialization(t *testing.T) {
 
 // ---------- MarkEpisodeDownloaded ----------
 
+// TestTopics_MarkEpisodeDownloaded_HappyPath also pins the check-state guard.
+// The append fires earlier in a check than RecordCheckResult and writes the
+// very key ResetCheckState deletes, so without the same version token a reset
+// landing between the delivery and the mark strands the episode: removed from
+// the client, deleted from disk, yet flagged as already downloaded.
 func TestTopics_MarkEpisodeDownloaded_HappyPath(t *testing.T) {
 	repo, mock := newMockTopics(t)
 	t.Cleanup(func() { assertExpectationsMet(t, mock) })
 
-	id := uuid.New()
+	observed := time.Now().Add(-time.Minute)
+	next := time.Now().Add(time.Hour)
+	topic := &domain.Topic{ID: uuid.New(), LastCheckedAt: &observed, NextCheckAt: next}
 	packed := "S01E05"
 
-	// Regex-match the jsonb_set expression. Escape parens/dollar signs.
-	mock.ExpectExec(`UPDATE topics\s+SET\s+extra = jsonb_set\(`).
-		WithArgs(id, packed).
+	// Regex-match the jsonb_set expression and the guard. Escape parens/dollars.
+	mock.ExpectExec(`(?s)UPDATE topics\s+SET\s+extra = jsonb_set\(.*`+
+		`WHERE\s+id = \$1 AND last_checked_at IS NOT DISTINCT FROM \$3 AND next_check_at = \$4`).
+		WithArgs(topic.ID, packed, &observed, next).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 
-	if err := repo.MarkEpisodeDownloaded(context.Background(), id, packed); err != nil {
+	if err := repo.MarkEpisodeDownloaded(context.Background(), topic, packed); err != nil {
 		t.Fatalf("MarkEpisodeDownloaded: unexpected error: %v", err)
 	}
 }
 
-func TestTopics_MarkEpisodeDownloaded_NotFound(t *testing.T) {
+// TestTopics_MarkEpisodeDownloaded_StaleWriteIsDropped covers the guard
+// rejecting the append — the topic was reset (or deleted) mid-check. Dropping
+// the mark is correct: the episode is simply re-downloaded next tick, which is
+// what the reset asked for, so the scheduler must get the stale sentinel and
+// not a generic failure it would report as a persistence error.
+func TestTopics_MarkEpisodeDownloaded_StaleWriteIsDropped(t *testing.T) {
 	repo, mock := newMockTopics(t)
 	t.Cleanup(func() { assertExpectationsMet(t, mock) })
 
-	id := uuid.New()
+	stale := time.Now().Add(-time.Hour)
+	topic := &domain.Topic{ID: uuid.New(), LastCheckedAt: &stale, NextCheckAt: time.Now()}
 	mock.ExpectExec(`UPDATE topics\s+SET\s+extra = jsonb_set`).
-		WithArgs(id, "S02E03").
+		WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
 
-	err := repo.MarkEpisodeDownloaded(context.Background(), id, "S02E03")
-	if !errors.Is(err, ErrNotFound) {
-		t.Fatalf("MarkEpisodeDownloaded: want ErrNotFound, got %v", err)
+	err := repo.MarkEpisodeDownloaded(context.Background(), topic, "S02E03")
+	if !errors.Is(err, ErrStaleCheckResult) {
+		t.Fatalf("MarkEpisodeDownloaded: want ErrStaleCheckResult, got %v", err)
+	}
+}
+
+// TestTopics_MarkEpisodeDownloaded_FreshTopicBindsNullToken is the
+// post-reset case: the token is NULL, so it must be bound as such for
+// NULL IS NOT DISTINCT FROM NULL to match and the re-download to be recorded.
+func TestTopics_MarkEpisodeDownloaded_FreshTopicBindsNullToken(t *testing.T) {
+	repo, mock := newMockTopics(t)
+	t.Cleanup(func() { assertExpectationsMet(t, mock) })
+
+	next := time.Now().Add(time.Hour)
+	topic := &domain.Topic{ID: uuid.New(), NextCheckAt: next} // LastCheckedAt nil
+	mock.ExpectExec(`UPDATE topics\s+SET\s+extra = jsonb_set`).
+		WithArgs(topic.ID, "S01E01", (*time.Time)(nil), next).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+
+	if err := repo.MarkEpisodeDownloaded(context.Background(), topic, "S01E01"); err != nil {
+		t.Fatalf("MarkEpisodeDownloaded: unexpected error: %v", err)
 	}
 }
 
@@ -176,13 +208,13 @@ func TestTopics_MarkEpisodeDownloaded_DBError(t *testing.T) {
 	repo, mock := newMockTopics(t)
 	t.Cleanup(func() { assertExpectationsMet(t, mock) })
 
-	id := uuid.New()
+	topic := &domain.Topic{ID: uuid.New(), NextCheckAt: time.Now()}
 	dbErr := errors.New("deadlock detected")
 	mock.ExpectExec(`UPDATE topics\s+SET\s+extra = jsonb_set`).
-		WithArgs(id, "S03E01").
+		WithArgs(topic.ID, "S03E01", pgxmock.AnyArg(), pgxmock.AnyArg()).
 		WillReturnError(dbErr)
 
-	err := repo.MarkEpisodeDownloaded(context.Background(), id, "S03E01")
+	err := repo.MarkEpisodeDownloaded(context.Background(), topic, "S03E01")
 	if err == nil {
 		t.Fatalf("MarkEpisodeDownloaded: want error, got nil")
 	}
@@ -576,16 +608,115 @@ func TestTopics_RecordCheckResult_PersistsErrorCode(t *testing.T) {
 	repo, mock := newMockTopics(t)
 	t.Cleanup(func() { assertExpectationsMet(t, mock) })
 
-	id := uuid.New()
+	observed := time.Now().Add(-time.Minute)
+	observedNext := time.Now().Add(-time.Second)
+	topic := &domain.Topic{ID: uuid.New(), LastCheckedAt: &observed, NextCheckAt: observedNext}
 	next := time.Now().Add(time.Hour)
 	mock.ExpectExec(`UPDATE topics SET[\s\S]*last_error_code\s+= CASE WHEN \$5 = '' THEN '' ELSE \$6 END[\s\S]*WHERE id = \$1`).
-		WithArgs(id, "", false, next, "kinozal GET: context deadline exceeded", "timeout").
+		WithArgs(topic.ID, "", false, next, "kinozal GET: context deadline exceeded", "timeout", &observed, observedNext).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 
-	err := repo.RecordCheckResult(context.Background(), id, "", false, next,
+	err := repo.RecordCheckResult(context.Background(), topic, "", false, next,
 		"kinozal GET: context deadline exceeded", "timeout")
 	if err != nil {
 		t.Fatalf("RecordCheckResult: unexpected error: %v", err)
+	}
+}
+
+// TestTopics_RecordCheckResult_GuardsOnObservedLastCheckedAt pins the
+// optimistic-concurrency guard: the WHERE clause must compare last_checked_at
+// against the value the worker observed at dispatch, and it must use IS NOT
+// DISTINCT FROM rather than = so a post-reset NULL still matches. Losing
+// either half silently re-opens the race where a reset landing mid-check is
+// overwritten by the finishing check.
+func TestTopics_RecordCheckResult_GuardsOnObservedLastCheckedAt(t *testing.T) {
+	repo, mock := newMockTopics(t)
+	t.Cleanup(func() { assertExpectationsMet(t, mock) })
+
+	observed := time.Now().Add(-time.Minute)
+	observedNext := time.Now().Add(-time.Second)
+	topic := &domain.Topic{ID: uuid.New(), LastCheckedAt: &observed, NextCheckAt: observedNext}
+	next := time.Now().Add(time.Hour)
+
+	// BOTH columns must be in the guard. last_checked_at alone is not a usable
+	// token: ResetCheckState nulls it, so two consecutive resets are
+	// indistinguishable and a worker dispatched by the first would still match
+	// after the second, restoring the pre-reset hash.
+	mock.ExpectExec(`UPDATE topics SET[\s\S]*WHERE id = \$1 AND last_checked_at IS NOT DISTINCT FROM \$7 AND next_check_at = \$8`).
+		WithArgs(topic.ID, "new-hash", true, next, "", "", &observed, observedNext).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+
+	if err := repo.RecordCheckResult(context.Background(), topic, "new-hash", true, next, "", ""); err != nil {
+		t.Fatalf("RecordCheckResult: unexpected error: %v", err)
+	}
+}
+
+// TestTopics_RecordCheckResult_ConsecutiveResetsBindDistinctTokens is the
+// regression guard for the collision the next_check_at half of the token
+// closes. Two resets leave last_checked_at NULL both times, so the ONLY thing
+// separating a worker dispatched by reset #1 from the state reset #2 left is
+// next_check_at. If a future edit drops it from the bound args, reset #2 gets
+// silently undone after it has already removed torrents and deleted files.
+func TestTopics_RecordCheckResult_ConsecutiveResetsBindDistinctTokens(t *testing.T) {
+	repo, mock := newMockTopics(t)
+	t.Cleanup(func() { assertExpectationsMet(t, mock) })
+
+	// The worker was dispatched by reset #1: NULL token, reset #1's next_check_at.
+	firstReset := time.Now().Add(-10 * time.Second)
+	topic := &domain.Topic{ID: uuid.New(), NextCheckAt: firstReset} // LastCheckedAt nil
+	next := time.Now().Add(time.Hour)
+
+	// Reset #2 has since stamped a later next_check_at, so no row matches.
+	mock.ExpectExec(`UPDATE topics SET[\s\S]*next_check_at = \$8`).
+		WithArgs(topic.ID, "new-hash", true, next, "", "", (*time.Time)(nil), firstReset).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
+
+	err := repo.RecordCheckResult(context.Background(), topic, "new-hash", true, next, "", "")
+	if !errors.Is(err, ErrStaleCheckResult) {
+		t.Fatalf("RecordCheckResult: want ErrStaleCheckResult, got %v", err)
+	}
+}
+
+// TestTopics_RecordCheckResult_FreshTopicBindsNullToken covers the topic that
+// has never been checked (and the topic just reset): the observed token is
+// NULL, which must be bound as such so NULL IS NOT DISTINCT FROM NULL matches
+// and the check's own result lands.
+func TestTopics_RecordCheckResult_FreshTopicBindsNullToken(t *testing.T) {
+	repo, mock := newMockTopics(t)
+	t.Cleanup(func() { assertExpectationsMet(t, mock) })
+
+	observedNext := time.Now().Add(-time.Second)
+	topic := &domain.Topic{ID: uuid.New(), NextCheckAt: observedNext} // LastCheckedAt nil
+	next := time.Now().Add(time.Hour)
+
+	mock.ExpectExec(`UPDATE topics SET[\s\S]*last_checked_at IS NOT DISTINCT FROM \$7`).
+		WithArgs(topic.ID, "new-hash", true, next, "", "", (*time.Time)(nil), observedNext).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+
+	if err := repo.RecordCheckResult(context.Background(), topic, "new-hash", true, next, "", ""); err != nil {
+		t.Fatalf("RecordCheckResult: unexpected error: %v", err)
+	}
+}
+
+// TestTopics_RecordCheckResult_StaleWriteIsDropped asserts that zero rows
+// affected — the guard rejecting a write whose topic moved on — reports
+// ErrStaleCheckResult rather than a generic failure or a panic. Dropping the
+// write is the correct outcome; the scheduler logs it and carries on.
+func TestTopics_RecordCheckResult_StaleWriteIsDropped(t *testing.T) {
+	repo, mock := newMockTopics(t)
+	t.Cleanup(func() { assertExpectationsMet(t, mock) })
+
+	stale := time.Now().Add(-time.Hour)
+	topic := &domain.Topic{ID: uuid.New(), LastCheckedAt: &stale}
+
+	mock.ExpectExec(`UPDATE topics SET`).
+		WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
+			pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
+
+	err := repo.RecordCheckResult(context.Background(), topic, "new-hash", true, time.Now(), "", "")
+	if !errors.Is(err, ErrStaleCheckResult) {
+		t.Fatalf("RecordCheckResult: want ErrStaleCheckResult, got %v", err)
 	}
 }
 
@@ -596,14 +727,144 @@ func TestTopics_RecordCheckResult_SuccessClearsCode(t *testing.T) {
 	repo, mock := newMockTopics(t)
 	t.Cleanup(func() { assertExpectationsMet(t, mock) })
 
-	id := uuid.New()
+	observed := time.Now().Add(-time.Minute)
+	observedNext := time.Now().Add(-time.Second)
+	topic := &domain.Topic{ID: uuid.New(), LastCheckedAt: &observed, NextCheckAt: observedNext}
 	next := time.Now().Add(time.Hour)
 	mock.ExpectExec(`UPDATE topics SET[\s\S]*last_error_code\s+= CASE WHEN \$5 = '' THEN '' ELSE \$6 END`).
-		WithArgs(id, "new-hash", true, next, "", "").
+		WithArgs(topic.ID, "new-hash", true, next, "", "", &observed, observedNext).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 
-	err := repo.RecordCheckResult(context.Background(), id, "new-hash", true, next, "", "")
+	err := repo.RecordCheckResult(context.Background(), topic, "new-hash", true, next, "", "")
 	if err != nil {
 		t.Fatalf("RecordCheckResult: unexpected error: %v", err)
+	}
+}
+
+// ---------- ResetCheckState ----------
+
+func TestTopics_ResetCheckState_ClearsCheckStateAndQueuesRecheck(t *testing.T) {
+	repo, mock := newMockTopics(t)
+	t.Cleanup(func() { assertExpectationsMet(t, mock) })
+
+	id, userID := uuid.New(), uuid.New()
+
+	// One statement must carry every clause the reset depends on. Pinning
+	// them individually means a future edit that silently drops, say, the
+	// JSONB key delete fails here instead of in production, where the
+	// symptom would be "episodic topics never re-download".
+	//
+	// next_check_at = now() carries double duty: it is what "check now" means,
+	// AND it is the half of the check-state version token that makes two
+	// consecutive resets distinguishable (last_checked_at is NULL after both).
+	// Dropping it would let a worker dispatched by the first reset overwrite
+	// the second one's state.
+	mock.ExpectExec(`(?s)UPDATE topics SET.*`+
+		`last_hash\s+= NULL.*`+
+		`last_checked_at\s+= NULL.*`+
+		`consecutive_errors\s+= 0.*`+
+		`last_error_code\s+= ''.*`+
+		`next_check_at\s+= now\(\).*`+
+		`status\s+= CASE WHEN status = 'paused' THEN 'paused' ELSE 'active' END.*`+
+		`extra\s+= COALESCE\(extra, '\{\}'::jsonb\) - 'downloaded_episodes'.*`+
+		`WHERE id = \$1 AND user_id = \$2`).
+		WithArgs(id, userID).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+
+	if err := repo.ResetCheckState(context.Background(), id, userID); err != nil {
+		t.Fatalf("ResetCheckState: unexpected error: %v", err)
+	}
+}
+
+func TestTopics_ResetCheckState_NotFound(t *testing.T) {
+	repo, mock := newMockTopics(t)
+	t.Cleanup(func() { assertExpectationsMet(t, mock) })
+
+	mock.ExpectExec(`UPDATE topics SET`).
+		WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg()).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
+
+	err := repo.ResetCheckState(context.Background(), uuid.New(), uuid.New())
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("ResetCheckState: want ErrNotFound, got %v", err)
+	}
+}
+
+func TestTopics_ResetCheckState_DBError(t *testing.T) {
+	repo, mock := newMockTopics(t)
+	t.Cleanup(func() { assertExpectationsMet(t, mock) })
+
+	dbErr := errors.New("connection refused")
+	mock.ExpectExec(`UPDATE topics SET`).
+		WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg()).
+		WillReturnError(dbErr)
+
+	err := repo.ResetCheckState(context.Background(), uuid.New(), uuid.New())
+	if !errors.Is(err, dbErr) {
+		t.Fatalf("ResetCheckState: want wrapped %v, got %v", dbErr, err)
+	}
+}
+
+// ---------- VerifyCheckState ----------
+
+// TestTopics_VerifyCheckState_MatchingTokenReturnsNil pins the read-only form
+// of the guard onto the same token as the two writes. It runs before a payload
+// reaches a torrent client, so its WHERE clause must be the same one — a guard
+// that drifted from RecordCheckResult's would wave through exactly the
+// submissions the writes then refuse to record.
+func TestTopics_VerifyCheckState_MatchingTokenReturnsNil(t *testing.T) {
+	repo, mock := newMockTopics(t)
+	t.Cleanup(func() { assertExpectationsMet(t, mock) })
+
+	observed := time.Now().Add(-time.Minute)
+	observedNext := time.Now().Add(-time.Second)
+	topic := &domain.Topic{ID: uuid.New(), LastCheckedAt: &observed, NextCheckAt: observedNext}
+
+	mock.ExpectQuery(`SELECT 1 FROM topics\s+WHERE id = \$1 AND last_checked_at IS NOT DISTINCT FROM \$2 AND next_check_at = \$3`).
+		WithArgs(topic.ID, &observed, observedNext).
+		WillReturnRows(pgxmock.NewRows([]string{"?column?"}).AddRow(1))
+
+	if err := repo.VerifyCheckState(context.Background(), topic); err != nil {
+		t.Fatalf("VerifyCheckState: unexpected error: %v", err)
+	}
+}
+
+// TestTopics_VerifyCheckState_NoRowIsStale covers the rejection path: no
+// matching row means the topic moved on (reset, deleted, or another worker
+// won). It must map to ErrStaleCheckResult — the same sentinel the two writes
+// return — so the scheduler handles "the topic moved on" in one shape.
+func TestTopics_VerifyCheckState_NoRowIsStale(t *testing.T) {
+	repo, mock := newMockTopics(t)
+	t.Cleanup(func() { assertExpectationsMet(t, mock) })
+
+	topic := &domain.Topic{ID: uuid.New(), NextCheckAt: time.Now()}
+
+	mock.ExpectQuery(`SELECT 1 FROM topics`).
+		WithArgs(topic.ID, (*time.Time)(nil), topic.NextCheckAt).
+		WillReturnError(pgx.ErrNoRows)
+
+	err := repo.VerifyCheckState(context.Background(), topic)
+	if !errors.Is(err, ErrStaleCheckResult) {
+		t.Fatalf("want ErrStaleCheckResult, got %v", err)
+	}
+}
+
+// TestTopics_VerifyCheckState_DBErrorIsNotStale keeps a transport failure
+// distinguishable from a moved-on topic. The scheduler submits anyway on a
+// plain error, so misreporting a blip as staleness would silently strand the
+// release until the tracker's hash changed again.
+func TestTopics_VerifyCheckState_DBErrorIsNotStale(t *testing.T) {
+	repo, mock := newMockTopics(t)
+	t.Cleanup(func() { assertExpectationsMet(t, mock) })
+
+	topic := &domain.Topic{ID: uuid.New(), NextCheckAt: time.Now()}
+
+	mock.ExpectQuery(`SELECT 1 FROM topics`).
+		WithArgs(topic.ID, (*time.Time)(nil), topic.NextCheckAt).
+		WillReturnError(errors.New("connection reset"))
+
+	err := repo.VerifyCheckState(context.Background(), topic)
+	if err == nil || errors.Is(err, ErrStaleCheckResult) {
+		t.Fatalf("want a plain wrapped error, got %v", err)
 	}
 }

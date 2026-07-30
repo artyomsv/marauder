@@ -31,6 +31,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 
+	"github.com/artyomsv/marauder/backend/internal/clientremove"
 	"github.com/artyomsv/marauder/backend/internal/config"
 	"github.com/artyomsv/marauder/backend/internal/crypto"
 	"github.com/artyomsv/marauder/backend/internal/db/repo"
@@ -50,18 +51,18 @@ import (
 // repo.TrackerCredentials types satisfy these interfaces structurally.
 
 // topicsRepo is the subset of *repo.Topics that the scheduler uses.
+//
+// RecordCheckResult, MarkEpisodeDownloaded and VerifyCheckState all take the
+// whole topic, not just its id, because each is guarded on the
+// (last_checked_at, next_check_at) version token the worker observed at
+// dispatch — all three return repo.ErrStaleCheckResult when it no longer
+// matches. The first two carry the guard in the WHERE clause of their write;
+// VerifyCheckState is the read-only form, used before an irreversible step.
 type topicsRepo interface {
 	DueForCheck(ctx context.Context, limit int) ([]*domain.Topic, error)
-	RecordCheckResult(ctx context.Context, id uuid.UUID, hash string, updated bool, nextCheckAt time.Time, errMsg, errCode string) error
-	UpdateExtra(ctx context.Context, id uuid.UUID, extra map[string]any) error
-}
-
-// markEpisodeDownloader is an optional capability of topicsRepo.
-// Track C is adding *repo.Topics.MarkEpisodeDownloaded as an atomic
-// JSONB append; if present, the scheduler uses it instead of the
-// non-atomic UpdateExtra(full map) round-trip.
-type markEpisodeDownloader interface {
-	MarkEpisodeDownloaded(ctx context.Context, id uuid.UUID, packed string) error
+	RecordCheckResult(ctx context.Context, t *domain.Topic, hash string, updated bool, nextCheckAt time.Time, errMsg, errCode string) error
+	MarkEpisodeDownloaded(ctx context.Context, t *domain.Topic, packed string) error
+	VerifyCheckState(ctx context.Context, t *domain.Topic) error
 }
 
 // displayNamePersister is an optional capability of topicsRepo: it lets the
@@ -327,15 +328,31 @@ func (s *Scheduler) worker(ctx context.Context, id int) {
 // #126 Phase 2): a timeout or unreachable classification means the
 // tracker's current domain may be dead, so the store gets a chance to
 // rotate to a configured mirror (cooldown-gated on its side).
-func (s *Scheduler) recordResult(ctx context.Context, log zerolog.Logger, id uuid.UUID, trackerName string, hash string, updated bool, nextCheckAt time.Time, errMsg string) {
+func (s *Scheduler) recordResult(ctx context.Context, log zerolog.Logger, t *domain.Topic, hash string, updated bool, nextCheckAt time.Time, errMsg string) {
 	var errCode string
 	if errMsg != "" {
 		errCode = classifyError(errMsg)
 	}
 	if s.domains != nil && (errCode == errCodeTimeout || errCode == errCodeUnreachable) {
-		s.domains.ReportFailure(ctx, trackerName)
+		s.domains.ReportFailure(ctx, t.TrackerName)
 	}
-	if err := s.topics.RecordCheckResult(ctx, id, hash, updated, nextCheckAt, errMsg, errCode); err != nil {
+	err := s.topics.RecordCheckResult(ctx, t, hash, updated, nextCheckAt, errMsg, errCode)
+	switch {
+	case errors.Is(err, repo.ErrStaleCheckResult):
+		// Something else wrote the topic's check state after this worker was
+		// dispatched, so the guard threw this result away. Legitimate causes:
+		// a reset landing mid-check, the topic being deleted, or — with no
+		// in-flight set in DueForCheck (it selects purely on next_check_at <=
+		// now()) — a long check being re-dispatched on a later tick, with the
+		// second worker's write winning. Info, not Warn: every one of those is
+		// a designed outcome with nothing for anyone to act on, and the message
+		// must not assert a reset that may never have happened.
+		log.Info().
+			Str("hash", hash).
+			Bool("updated", updated).
+			Str("error_code", errCode).
+			Msg("check result discarded: another write won the state guard")
+	case err != nil:
 		log.Warn().Err(err).Msg("RecordCheckResult failed")
 	}
 }
@@ -361,7 +378,7 @@ func (s *Scheduler) runCheck(ctx context.Context, log zerolog.Logger, t *domain.
 	if tr == nil {
 		log.Error().Msg("no registered tracker")
 		metrics.SchedulerTopicChecksTotal.WithLabelValues(t.TrackerName, "no_plugin").Inc()
-		s.recordResult(ctx, log, t.ID, t.TrackerName, "", false, s.backoff(t, true, nil), "tracker plugin not installed")
+		s.recordResult(ctx, log, t, "", false, s.backoff(t, true, nil), "tracker plugin not installed")
 		s.notifyError(ctx, t, "tracker plugin not installed")
 		s.recordChecked(false, true)
 		return
@@ -389,7 +406,7 @@ func (s *Scheduler) runCheck(ctx context.Context, log zerolog.Logger, t *domain.
 	if err != nil {
 		log.Warn().Err(err).Msg("check failed")
 		metrics.SchedulerTopicChecksTotal.WithLabelValues(t.TrackerName, "error").Inc()
-		s.recordResult(ctx, log, t.ID, t.TrackerName, "", false, s.backoff(t, true, err), err.Error())
+		s.recordResult(ctx, log, t, "", false, s.backoff(t, true, err), err.Error())
 		s.notifyError(ctx, t, err.Error())
 		s.recordChecked(false, true)
 		return
@@ -461,7 +478,7 @@ func (s *Scheduler) runCheck(ctx context.Context, log zerolog.Logger, t *domain.
 				log.Warn().Err(dlErr).Msg("download failed")
 				metrics.SchedulerTopicChecksTotal.WithLabelValues(t.TrackerName, "download_error").Inc()
 			}
-			s.recordResult(ctx, log, t.ID, t.TrackerName, t.LastHash, anySubmitted, s.backoff(t, true, dlErr), dlErr.Error())
+			s.recordResult(ctx, log, t, t.LastHash, anySubmitted, s.backoff(t, true, dlErr), dlErr.Error())
 			s.notifyError(ctx, t, dlErr.Error())
 			s.recordChecked(true, true)
 			return
@@ -501,7 +518,7 @@ func (s *Scheduler) runCheck(ctx context.Context, log zerolog.Logger, t *domain.
 			Data: map[string]any{"next_check_at": nextCheckAt.UTC().Format(time.RFC3339)},
 		})
 	}
-	s.recordResult(ctx, log, t.ID, t.TrackerName, check.Hash, updated || anySubmitted, nextCheckAt, "")
+	s.recordResult(ctx, log, t, check.Hash, updated || anySubmitted, nextCheckAt, "")
 	s.recordChecked(updated || anySubmitted, false)
 }
 
@@ -647,7 +664,7 @@ func (s *Scheduler) loadCredentials(ctx context.Context, checkCtx context.Contex
 		}
 		log.Warn().Err(loginErr).Msg("tracker login failed")
 		metrics.SchedulerTopicChecksTotal.WithLabelValues(t.TrackerName, "auth_error").Inc()
-		s.recordResult(ctx, log, t.ID, t.TrackerName, "", false, s.backoff(t, true, loginErr), "auth failed: "+loginErr.Error())
+		s.recordResult(ctx, log, t, "", false, s.backoff(t, true, loginErr), "auth failed: "+loginErr.Error())
 		s.recordChecked(false, true)
 		return nil, false
 	}
@@ -709,6 +726,18 @@ func (s *Scheduler) downloadAllPending(ctx context.Context, log zerolog.Logger, 
 		}
 
 		if err := s.submitToClient(ctx, log, t, payload, label); err != nil {
+			if errors.Is(err, repo.ErrStaleCheckResult) {
+				// The pre-submit guard refused: the topic's check state changed
+				// after this worker was dispatched, so nothing was handed to the
+				// client. Stop draining for the same reason the episode-mark
+				// abort below does — the state this tick is working from no
+				// longer exists, and the check the reset queued re-downloads
+				// from scratch. Not an error: whatever this tick already
+				// delivered stays delivered and reported.
+				log.Info().Str("label", label).
+					Msg("submission skipped: another write won the state guard")
+				return delivered, deliveredHashes, nil
+			}
 			metrics.SchedulerTopicChecksTotal.WithLabelValues(t.TrackerName, "submit_error").Inc()
 			return delivered, deliveredHashes, fmt.Errorf("submit: %w", err)
 		}
@@ -735,7 +764,17 @@ func (s *Scheduler) downloadAllPending(ctx context.Context, log zerolog.Logger, 
 			// Single-payload plugin (most trackers) — done.
 			return delivered, deliveredHashes, nil
 		}
-		if err := s.markDownloaded(ctx, t, pending[0]); err != nil {
+		if err := s.topics.MarkEpisodeDownloaded(ctx, t, pending[0]); err != nil {
+			if errors.Is(err, repo.ErrStaleCheckResult) {
+				// A reset (or a delete) landed mid-check, so the guard dropped
+				// the mark. Stop draining rather than keep delivering episodes
+				// into state that no longer exists: the fresh post-reset check
+				// re-downloads every episode, which is what the reset asked for.
+				log.Info().
+					Str("packed", pending[0]).
+					Msg("episode mark discarded: another write won the state guard")
+				return delivered, deliveredHashes, nil
+			}
 			return delivered, deliveredHashes, fmt.Errorf("persist downloaded: %w", err)
 		}
 		log.Info().Str("packed", pending[0]).Msg("marked episode downloaded")
@@ -758,25 +797,6 @@ func (s *Scheduler) downloadAllPending(ctx context.Context, log zerolog.Logger, 
 		metrics.SchedulerEpisodesPerTickCappedTotal.WithLabelValues(t.TrackerName).Inc()
 	}
 	return delivered, deliveredHashes, nil
-}
-
-// markDownloaded persists the fact that one packed episode id was
-// successfully handed to a torrent client. If the underlying topics
-// repo implements the atomic MarkEpisodeDownloaded method (Track C),
-// it is used; otherwise this falls back to a read-modify-write through
-// UpdateExtra. The fallback path mutates t.Extra in place.
-func (s *Scheduler) markDownloaded(ctx context.Context, t *domain.Topic, packed string) error {
-	if med, ok := s.topics.(markEpisodeDownloader); ok {
-		return med.MarkEpisodeDownloaded(ctx, t.ID, packed)
-	}
-	// TODO Track C: drop this fallback once *repo.Topics.MarkEpisodeDownloaded ships.
-	if t.Extra == nil {
-		t.Extra = map[string]any{}
-	}
-	already := extra.StringSlice(t.Extra, "downloaded_episodes")
-	already = append(already, packed)
-	t.Extra["downloaded_episodes"] = already
-	return s.topics.UpdateExtra(ctx, t.ID, t.Extra)
 }
 
 // isNoPendingError reports whether err signals that a per-episode
@@ -814,6 +834,27 @@ func (s *Scheduler) sendViaClient(ctx context.Context, log zerolog.Logger, cfg *
 	if err != nil {
 		metrics.ClientSubmitTotal.WithLabelValues(cfg.ClientName, "decrypt_error").Inc()
 		return fmt.Errorf("decrypt client config: %w", err)
+	}
+	// Last check before the irreversible step. Handing a payload to the client
+	// is the one thing in this tick that a reset cannot undo afterwards: the
+	// reset removes exactly the torrents its delivery snapshot listed, so a
+	// torrent added after that snapshot survives it, keeps its files on disk
+	// even under delete_data, and the re-delivered release then rechecks and
+	// resumes against them. Verified here rather than in submitToClient so the
+	// client lookup and config decrypt are already behind us — the shorter the
+	// gap between this read and Add, the less can land inside it.
+	//
+	// This narrows the window, it does not close it: the reset writes its check
+	// state last, so a worker reading the token while the reset is still
+	// removing torrents sees a valid one. See repo.Topics.VerifyCheckState.
+	if err := s.topics.VerifyCheckState(ctx, t); err != nil {
+		if errors.Is(err, repo.ErrStaleCheckResult) {
+			return err
+		}
+		// A DB failure here is not evidence the topic moved on. Log it and
+		// submit anyway: refusing to deliver on an unrelated blip would strand
+		// the release until the tracker's own hash changes again.
+		log.Warn().Err(err).Msg("could not verify check state before submit; submitting anyway")
 	}
 	if err := clientPlugin.Add(ctx, rawConfig, payload, domain.AddOptions{
 		DownloadDir: t.DownloadDir,
@@ -886,9 +927,8 @@ func (s *Scheduler) listPriorDeliveries(ctx context.Context, log zerolog.Logger,
 //
 // Best-effort / fail-open throughout: the new release was already delivered
 // successfully, so every failure here is logged and metered but never affects
-// the check result. Each prior delivery is removed from the client it was
-// actually sent to (grouped by client_id), which may differ from the topic's
-// current client if the user reassigned it.
+// the check result. Only rows whose client confirmed the removal are pruned —
+// an unremoved torrent keeps its delivery record rather than being orphaned.
 func (s *Scheduler) replacePrevious(ctx context.Context, log zerolog.Logger, t *domain.Topic, prior []*domain.TopicDelivery, keepHashes []string) {
 	// Never remove a torrent that was just (re)delivered this tick: if a tracker
 	// bumped its opaque check hash while the torrent itself is unchanged, the
@@ -898,25 +938,38 @@ func (s *Scheduler) replacePrevious(ctx context.Context, log zerolog.Logger, t *
 	for _, h := range keepHashes {
 		keep[strings.ToLower(h)] = struct{}{}
 	}
-	byClient := map[uuid.UUID][]string{}
+	candidates := make([]*domain.TopicDelivery, 0, len(prior))
 	for _, d := range prior {
-		if d.ClientID == nil {
-			// Orphan row with no client (legacy/edge — recordDelivery always
-			// sets one): we can't address a client to remove it, so leave it.
-			continue
-		}
 		if _, ok := keep[strings.ToLower(d.Infohash)]; ok {
 			continue // still the current delivery — never remove it
 		}
-		byClient[*d.ClientID] = append(byClient[*d.ClientID], d.Infohash)
+		candidates = append(candidates, d)
+	}
+
+	byClient := clientremove.GroupByClient(candidates)
+	if len(byClient) == 0 {
+		return
 	}
 
 	var removed []string
-	for clientID, hashes := range byClient {
-		if s.removeFromClient(ctx, log, t, clientID, hashes) {
-			removed = append(removed, hashes...)
+	for _, res := range s.remover().Remove(ctx, t.UserID, byClient, t.ReplaceDeleteData) {
+		// The metric counts torrents (not calls) uniformly across every result
+		// label, matching its Help text.
+		n := float64(len(res.Hashes))
+		if res.OK {
+			metrics.SchedulerReplacedPreviousTotal.
+				WithLabelValues(clientremove.ClientLabel(res.ClientName), "ok").Add(n)
+			removed = append(removed, res.Hashes...)
+			continue
 		}
+		metrics.SchedulerReplacedPreviousTotal.
+			WithLabelValues(clientremove.ClientLabel(res.ClientName), res.Reason).Add(n)
+		log.Warn().Err(res.Err).
+			Str("client", clientremove.ClientLabel(res.ClientName)).
+			Str("reason", res.Reason).
+			Msg("replace-on-update: keeping previous version")
 	}
+
 	if len(removed) == 0 {
 		return
 	}
@@ -929,50 +982,15 @@ func (s *Scheduler) replacePrevious(ctx context.Context, log zerolog.Logger, t *
 		Msg("replaced previous version")
 }
 
-// removeFromClient removes the given infohashes from one client. Returns true
-// only when the client confirmed the removal, so the caller knows it is safe to
-// drop the corresponding delivery rows. A client that can't remove (no
-// WithRemoval capability — e.g. downloadfolder) is logged and skipped, leaving
-// the old torrent in place rather than orphaning its delivery record.
-func (s *Scheduler) removeFromClient(ctx context.Context, log zerolog.Logger, t *domain.Topic, clientID uuid.UUID, hashes []string) bool {
-	cfg, err := s.clients.GetByID(ctx, clientID, t.UserID)
-	if err != nil {
-		log.Warn().Err(err).Msg("replace-on-update: load client failed")
-		return false
+// remover builds a clientremove.Remover from the scheduler's own dependencies,
+// so the lookupClient test seam stays in force for unit tests.
+func (s *Scheduler) remover() *clientremove.Remover {
+	return &clientremove.Remover{
+		Clients: s.clients,
+		Master:  s.master,
+		Lookup:  clientremove.PluginLookup(s.lookupClient),
+		Timeout: s.cfg.TrackerHTTPTimeout,
 	}
-	// The metric counts torrents (not calls) uniformly across every result
-	// label, matching its Help text; n is the number of torrents this call
-	// would have removed.
-	n := float64(len(hashes))
-	plugin := s.lookupClient(cfg.ClientName)
-	if plugin == nil {
-		log.Warn().Str("client", cfg.ClientName).
-			Msg("replace-on-update: client plugin not installed; keeping previous version")
-		metrics.SchedulerReplacedPreviousTotal.WithLabelValues(cfg.ClientName, "no_plugin").Add(n)
-		return false
-	}
-	remover, ok := plugin.(registry.WithRemoval)
-	if !ok {
-		log.Warn().Str("client", cfg.ClientName).
-			Msg("replace-on-update: client cannot remove torrents; keeping previous version")
-		metrics.SchedulerReplacedPreviousTotal.WithLabelValues(cfg.ClientName, "unsupported").Add(n)
-		return false
-	}
-	rawConfig, err := s.master.Decrypt(cfg.ConfigEnc, cfg.ConfigNonce)
-	if err != nil {
-		log.Warn().Err(err).Msg("replace-on-update: decrypt client config failed")
-		metrics.SchedulerReplacedPreviousTotal.WithLabelValues(cfg.ClientName, "error").Add(n)
-		return false
-	}
-	rctx, cancel := context.WithTimeout(ctx, s.cfg.TrackerHTTPTimeout)
-	defer cancel()
-	if err := remover.Remove(rctx, rawConfig, hashes, t.ReplaceDeleteData); err != nil {
-		log.Warn().Err(err).Msg("replace-on-update: remove from client failed")
-		metrics.SchedulerReplacedPreviousTotal.WithLabelValues(cfg.ClientName, "error").Add(n)
-		return false
-	}
-	metrics.SchedulerReplacedPreviousTotal.WithLabelValues(cfg.ClientName, "ok").Add(n)
-	return true
 }
 
 // transientRetryDelay is how soon a topic is re-checked after a transient

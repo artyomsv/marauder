@@ -104,6 +104,29 @@ func (r *Deliveries) DeleteByInfohashes(ctx context.Context, topicID uuid.UUID, 
 	return ct.RowsAffected(), nil
 }
 
+// DeleteForTopic removes every delivery row for a topic. Used by the topic
+// reset endpoint: the (topic_id, infohash) unique index plus Record's
+// ON CONFLICT DO NOTHING means a surviving row would make the post-reset
+// re-delivery record a silent no-op, leaving the status view permanently
+// empty for that torrent. Returns the number of rows removed.
+//
+// The DELETE joins topics and keys on the owner, so ownership is enforced here
+// rather than resting on caller discipline: passing a topic id belonging to
+// another user deletes nothing. Callers still check ownership up front (the
+// reset handler does, via a user-scoped Topics.GetByID) so they can return 404
+// instead of a silent no-op — this is the second line of defence, not the first.
+func (r *Deliveries) DeleteForTopic(ctx context.Context, topicID, userID uuid.UUID) (int64, error) {
+	const q = `
+DELETE FROM topic_deliveries d
+USING topics t
+WHERE d.topic_id = t.id AND t.id = $1 AND t.user_id = $2`
+	ct, err := r.pool.Exec(ctx, q, topicID, userID)
+	if err != nil {
+		return 0, fmt.Errorf("deliveries: delete for topic: %w", err)
+	}
+	return ct.RowsAffected(), nil
+}
+
 // ListInFlight returns deliveries not yet marked complete, joined with their
 // topic's owner, notifier override, display name and tracker URL. Bounded to
 // the last 30 days and to deliveries with a known client, so rows that can

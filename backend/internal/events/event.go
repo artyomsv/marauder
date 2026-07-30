@@ -11,6 +11,7 @@ type Type string
 
 const (
 	TopicAdded        Type = "topic.added"
+	TopicReset        Type = "topic.reset"
 	CheckStarted      Type = "check.started"
 	CheckCompleted    Type = "check.completed"
 	ReleaseFound      Type = "release.found"
@@ -31,6 +32,7 @@ type Policy struct {
 // policies is read-only after package init; never mutate it at runtime.
 var policies = map[Type]Policy{
 	TopicAdded:        {Persist: true, Notifiable: false, SSE: true},
+	TopicReset:        {Persist: true, Notifiable: false, SSE: true},
 	CheckStarted:      {Persist: false, Notifiable: false, SSE: true},
 	CheckCompleted:    {Persist: false, Notifiable: false, SSE: true},
 	ReleaseFound:      {Persist: true, Notifiable: true, SSE: true},

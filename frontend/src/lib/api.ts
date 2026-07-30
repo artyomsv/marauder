@@ -172,6 +172,15 @@ export const api = {
   topicStatus: (id: string) =>
     request<TopicStatus>("GET", `/topics/${id}/status`),
 
+  // POST /topics/{id}/reset — discard the topic's check/download state so the
+  // next check re-delivers the current release from scratch. `deleteData` also
+  // deletes the old torrents' files. Removal failures come back as warnings in
+  // a 200, not as errors.
+  resetTopic: (id: string, deleteData: boolean) =>
+    request<TopicResetResult>("POST", `/topics/${id}/reset`, {
+      delete_data: deleteData,
+    }),
+
   // /topics/{id}/events — read-only per-topic history timeline.
   topicEvents: (id: string) =>
     request<{ events: TopicEvent[] }>("GET", `/topics/${id}/events`),
@@ -309,6 +318,16 @@ export interface DeliveryStatus {
 export interface TopicStatus {
   client_supports_status: boolean;
   deliveries: DeliveryStatus[];
+}
+
+// Result of POST /topics/{id}/reset. `removed` counts torrents confirmed
+// removed from a client, which is not the same as the number of delivery rows
+// deleted: rows are deleted regardless so the topic can re-record its
+// deliveries, while a removal can fail (client down, torrent already gone).
+// Every such failure arrives in `warnings` rather than as an error.
+export interface TopicResetResult {
+  removed: number;
+  warnings: string[];
 }
 
 // One event in the per-topic history timeline (GET /topics/{id}/events).

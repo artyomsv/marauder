@@ -85,6 +85,10 @@ type fakeTopicStore struct {
 	updateReplaceDeleteData bool
 	updateExtra             map[string]any
 	updateReturn            *domain.Topic
+
+	// Captured ResetCheckState arguments.
+	resetCalls [][2]uuid.UUID
+	resetErr   error
 }
 
 func (s *fakeTopicStore) Create(_ context.Context, t *domain.Topic) (*domain.Topic, error) {
@@ -102,6 +106,18 @@ func (s *fakeTopicStore) ListForUser(context.Context, uuid.UUID) ([]*domain.Topi
 func (s *fakeTopicStore) Delete(context.Context, uuid.UUID, uuid.UUID) error { return nil }
 func (s *fakeTopicStore) UpdateStatus(context.Context, uuid.UUID, uuid.UUID, domain.TopicStatus) error {
 	return nil
+}
+
+// ResetCheckState records (topicID, userID) per call so tests can assert the
+// handler reset the right topic for the right owner. It honours context
+// cancellation the way pgx does, so a test can prove the handler detached from
+// the request context before calling it.
+func (s *fakeTopicStore) ResetCheckState(ctx context.Context, id, userID uuid.UUID) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	s.resetCalls = append(s.resetCalls, [2]uuid.UUID{id, userID})
+	return s.resetErr
 }
 func (s *fakeTopicStore) Update(_ context.Context, _, _ uuid.UUID, displayName string, clientID, notifierID *uuid.UUID, downloadDir, category string, replaceOnUpdate, replaceDeleteData bool, extra map[string]any) (*domain.Topic, error) {
 	s.updateCalled = true

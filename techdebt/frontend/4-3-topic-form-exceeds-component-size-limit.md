@@ -20,8 +20,9 @@ shared add/edit form and owns several cohesive but separable blocks:
 - the credential-hint banners (requires / optional / satisfied)
 - the quality select and the preview card
 
-It is a sibling of the already-acknowledged `Topics.tsx` / `Clients.tsx`
-pre-existing size debt noted in `CLAUDE.md`.
+It is a sibling of the already-acknowledged `Clients.tsx` pre-existing size
+debt noted in `CLAUDE.md` (`Topics.tsx`, the third member of that group, was
+fixed by the 2026-07-30 topic-reset work — extracted down to 216 lines).
 
 ## Risks
 

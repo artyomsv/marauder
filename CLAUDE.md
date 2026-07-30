@@ -40,7 +40,9 @@ techdebt/       Debt-tracking files (one per issue, see global rule)
 .github/        Workflows: ci, docker, e2e, nightly-build, release,
                 auto-release, codeql (nightly-build builds all 3 images on
                 native amd64+arm64 runners nightly and runs them — guards
-                against arch regressions like #74)
+                against arch regressions like #74). ci.yml also carries the
+                `backend-integration` job: a `services: postgres` container
+                running the `//go:build integration` repo tests (see below)
                 + scripts/ (release-helpers.sh: tested bump/version/issue logic)
 ```
 
@@ -52,14 +54,15 @@ techdebt/       Debt-tracking files (one per issue, see global rule)
 | `audit` | append-only audit log writer |
 | `auth` | local password (Argon2id) + JWT issuance/refresh + OIDC (Keycloak) |
 | `cfsolver` | in-process client to the standalone `cfsolver/` service. **Unused** — its solve-then-hand-cookies-to-Go model cannot work: Cloudflare binds `cf_clearance` to the TLS fingerprint of the client that earned it, so a cookie a browser obtains is rejected when replayed from Go (verified 2026-07-28) |
+| **`clientremove`** | shared torrent removal: resolve client → plugin → decrypt config → bounded `registry.WithRemoval.Remove`, returning one `Result{OK, Reason, Err}` per client (`lookup`/`no_plugin`/`unsupported`/`decrypt`/`error`). Used by BOTH the scheduler's replace-on-update policy (issue #101) and the topic reset endpoint, so the sequence exists once. Deliberately does not log or meter — callers label their own metric (`marauder_scheduler_replaced_previous_total` vs `marauder_topic_reset_removed_total`). `GroupByClient` buckets deliveries by the client they actually went to, skipping rows with no client id (the reset handler diffs the grouped count against the delivery count and warns about the remainder, since those rows are deleted but their torrents are not); `ClientLabel(name)` is the shared `""`→`"unknown"` fallback both callers use to bound metric/log cardinality. `Timeout` is per-call and optional — zero inherits the caller's deadline rather than expiring instantly |
 | **`flaresolverr`** | `http.RoundTripper` that fetches pages **through** a FlareSolverr browser instead of dialling the tracker, installed process-wide via `registry.SetChallengeTransport` and opted into per plugin by declaring `WithCloudflare` (RuTracker). GET only — a deliberate scope limit, not a FlareSolverr one; binary `.torrent` bodies don't survive its string-typed response, so `login → dl.php` cannot complete and RuTracker runs anonymously off the page magnet. Holds **one long-lived solver session** (`sessions.create`, released by `Close` on shutdown) because a session-less request re-solves the challenge every call (10-20s) and FlareSolverr serialises, which queued concurrent checks past the scheduler's budget. `maxTimeout` tracks the caller's remaining deadline, since the scheduler grants only `TrackerHTTPTimeout` (+5s) |
 | `config` | env-driven config struct (caarlos0/env) — **add new env vars here** |
 | `crypto` | AES-256-GCM for tracker credentials and client config blobs |
-| `db` / `db/repo` | pgxpool wrapper + repository structs (`Topics`, `Clients`, `Notifiers`, `Users`, `TrackerCredentials`, `Deliveries`, `Audit`, `SonarrInstances`, `TrackerSettings`). `SonarrInstances` (issue #92) reads/writes the `sonarr_instances` table — one row per configured Sonarr instance (migration `0013` replaces the old singleton `settings.sonarr_*` columns from migration `0009`, carrying a configured singleton forward and preserving its cursor): `List`/`ListEnabled`/`Get`/`Create`/`Update`/`Delete` + `UpdateCursor` (per-instance history cursor). API key encrypted at rest like `oidc_client_secret_enc`; empty key on `Update` preserves the stored key. `Topics` adds `GetByURL(user,url)` for the poller's dedup pre-check; `Users` adds `GetInitialAdmin`. `Topics` also carries `display_name_is_placeholder` (migration `0010`): true while the title is a tracker-generated placeholder, set false once resolved (metadata, first self-heal, or a user rename). `UpdateDisplayName` clears it; `Update` clears it only when the submitted name changes. `Topics` also carries `last_error_code` (migration `0012`): a stable classification of `last_error` (`timeout`/`unreachable`/`auth`/`cloudflare`/`solver`/`parse`/`plugin_missing`/`unknown`) set by the scheduler's `classifyError` (note `cloudflare` **and** `solver` are matched **before** the HTTP-status and keyword passes, which would otherwise map their 403 / "login failed" / "context deadline exceeded" wording to `auth` or `timeout`; `solver` additionally exists so a slow FlareSolverr is **not** treated as a network fault and does **not** trigger domain rotation — that misclassification once rotated RuTracker onto a redirect-only mirror and rotation never migrates back), written by `RecordCheckResult` and cleared on success — the frontend `TopicError` component renders a localised message from it (raw `last_error` kept as a hover tooltip). `TrackerCredentials` carries encrypted `secret_enc` (password) **and** `session_enc`/`session_nonce` (cookie-session blob; migration `0002`), plus a nullable `session_expired_at` marker (migration `0003`) the scheduler uses to dedupe expiry notifications (atomic `MarkSessionExpired`, cleared by `SetSession` on re-auth). `Deliveries` (migration `0006`, `topic_deliveries`) records every torrent pushed to a client — `{topic_id, infohash, label, client_id, delivered_at, completed_at}` (migration `0011` adds `completed_at`); unique on `(topic_id, infohash)` so `Record` is idempotent (`ON CONFLICT DO NOTHING`); `MarkCompleted`/`ListInFlight` support completion tracking; `DeleteByInfohashes(topic,hashes)` prunes rows for the replace-on-update policy (issue #101). `Topics` also carries `replace_on_update`/`replace_delete_data` (migration `0014`): the per-topic "replace previous version on update" policy — when true, the scheduler removes the previously delivered torrent (deleting its data per the second flag, default true) instead of stacking duplicates; default keeps all versions, and the policy never applies to per-episode trackers. `Notifiers` gains `is_default bool` (migration `0008`, per-type unique partial index) + `Update(ctx, id, userID, name, displayName string, events []string, isDefault bool, configEnc, configNonce []byte) error`. `TrackerSettings` (migration `0015`, `tracker_settings`; issue #126) persists each tracker's admin-selected active domain (NULL = plugin default) and custom mirror hostnames — `List`/`Upsert`, the backing store for the `domains.Store` cache |
+| `db` / `db/repo` | pgxpool wrapper + repository structs (`Topics`, `Clients`, `Notifiers`, `Users`, `TrackerCredentials`, `Deliveries`, `Audit`, `SonarrInstances`, `TrackerSettings`). `SonarrInstances` (issue #92) reads/writes the `sonarr_instances` table — one row per configured Sonarr instance (migration `0013` replaces the old singleton `settings.sonarr_*` columns from migration `0009`, carrying a configured singleton forward and preserving its cursor): `List`/`ListEnabled`/`Get`/`Create`/`Update`/`Delete` + `UpdateCursor` (per-instance history cursor). API key encrypted at rest like `oidc_client_secret_enc`; empty key on `Update` preserves the stored key. `Topics` adds `GetByURL(user,url)` for the poller's dedup pre-check; `Users` adds `GetInitialAdmin`. `Topics` also carries `display_name_is_placeholder` (migration `0010`): true while the title is a tracker-generated placeholder, set false once resolved (metadata, first self-heal, or a user rename). `UpdateDisplayName` clears it; `Update` clears it only when the submitted name changes. `Topics` also carries `last_error_code` (migration `0012`): a stable classification of `last_error` (`timeout`/`unreachable`/`auth`/`cloudflare`/`solver`/`parse`/`plugin_missing`/`unknown`) set by the scheduler's `classifyError` (note `cloudflare` **and** `solver` are matched **before** the HTTP-status and keyword passes, which would otherwise map their 403 / "login failed" / "context deadline exceeded" wording to `auth` or `timeout`; `solver` additionally exists so a slow FlareSolverr is **not** treated as a network fault and does **not** trigger domain rotation — that misclassification once rotated RuTracker onto a redirect-only mirror and rotation never migrates back), written by `RecordCheckResult` and cleared on success — the frontend `TopicError` component renders a localised message from it (raw `last_error` kept as a hover tooltip). `TrackerCredentials` carries encrypted `secret_enc` (password) **and** `session_enc`/`session_nonce` (cookie-session blob; migration `0002`), plus a nullable `session_expired_at` marker (migration `0003`) the scheduler uses to dedupe expiry notifications (atomic `MarkSessionExpired`, cleared by `SetSession` on re-auth). `Deliveries` (migration `0006`, `topic_deliveries`) records every torrent pushed to a client — `{topic_id, infohash, label, client_id, delivered_at, completed_at}` (migration `0011` adds `completed_at`); unique on `(topic_id, infohash)` so `Record` is idempotent (`ON CONFLICT DO NOTHING`); `MarkCompleted`/`ListInFlight` support completion tracking; `DeleteByInfohashes(topic,hashes)` prunes rows for the replace-on-update policy (issue #101). `DeleteForTopic(topic,user)` drops every delivery row for a topic (topic reset) — mandatory there, since the `(topic_id, infohash)` unique index would otherwise make the re-delivery `Record` a silent no-op; it joins `topics` and keys on the owner so ownership is enforced by the statement, not by caller discipline. `Topics` also gains `ResetCheckState(id,user)`: the inverse of `RecordCheckResult` plus an `extra - 'downloaded_episodes'` JSONB key delete, with `next_check_at = now()` to queue an immediate re-check and a `status` CASE that leaves a `paused` topic paused. The two are the only writers of `last_checked_at` **and** `next_check_at`, which `RecordCheckResult` and `MarkEpisodeDownloaded` therefore use as a two-column optimistic-concurrency token (`RecordCheckResult(ctx, t *domain.Topic, …)` / `MarkEpisodeDownloaded(ctx, t *domain.Topic, packed)` → `repo.ErrStaleCheckResult`) so a reset landing mid-check is not silently undone — see the Topic reset section below. `VerifyCheckState(ctx, t)` is the read-only form of that same guard (`SELECT 1`, identical WHERE, same sentinel), consulted by the scheduler immediately before it hands a payload to a torrent client. `UpdateExtra` is now unused (its only caller, the scheduler's non-atomic episode fallback, was removed) and must not gain new callers: it overwrites the whole blob and carries no token. `Topics` also carries `replace_on_update`/`replace_delete_data` (migration `0014`): the per-topic "replace previous version on update" policy — when true, the scheduler removes the previously delivered torrent (deleting its data per the second flag, default true) instead of stacking duplicates; default keeps all versions, and the policy never applies to per-episode trackers. `Notifiers` gains `is_default bool` (migration `0008`, per-type unique partial index) + `Update(ctx, id, userID, name, displayName string, events []string, isDefault bool, configEnc, configNonce []byte) error`. `TrackerSettings` (migration `0015`, `tracker_settings`; issue #126) persists each tracker's admin-selected active domain (NULL = plugin default) and custom mirror hostnames — `List`/`Upsert`, the backing store for the `domains.Store` cache |
 | **`notify`** | reusable notification dispatcher — `Send(userID, domain.Message)` fans out to all of a user's configured notifiers (best-effort, metered); `SendVia(userID, notifierID, …)` scopes the same fan-out to one notifier when a topic overrides it (nil ⇒ the user's **default** notifiers only (strict; none set ⇒ no send)). Consumers: the `events.Bus` fan-out (per-event subscription, wired via `subscribed()` which maps typed `events.Type` to notifier event list; legacy `['updated','error']` rows kept working via dispatcher aliases). The single event→notifier fan-out point. Error events are deduped to fire once per error episode (on the first failure); session-expiry alerts are global one-shot. `domain.Message`/`events.Event` carry `SourceURL` (issue #109) — the topic's original tracker page, stamped by every topic-scoped notifiable emission (scheduler, topics handler, progress watcher via `InFlightDelivery.URL`) and rendered per notifier: Telegram a short-anchor footer (`Source · Marauder`, blank-line-spaced sections; dot-less hosts like `localhost` fall back to a labeled plain URL because Telegram 400s on such hrefs), email a labeled `Source:` line, webhook a `source_url` JSON field, Pushover appended to message text; empty ⇒ omitted. `notifyUpdated` collapses the body to plain "Sent to client" when the only delivery label equals the topic display name (no title repetition). They also carry `AuthorComment` (issue #110) — the release author's latest tracker comment, fetched once per detected update by the scheduler (`fetchAuthorComment`, fail-open, capped 300 runes via `capExcerpt`) from `WithAuthorComment` trackers (RuTracker, NNM-Club) and stamped on `release.found` + `download.submitted`; rendered as an `Author update:` block (Telegram italic/escaped, email/Pushover plain) and a webhook `author_comment` field, omitted when empty. Telegram sends `parse_mode: HTML` with `html.EscapeString` on all fields (legacy Markdown 400s on unbalanced `_`/`*` in URLs) |
 | `domain` | core types: `Topic` (incl. per-topic `ClientID`, **`NotifierID`** (per-topic notifier override, migration `0007`), `DownloadDir`, `Category`, `ImageURL`, **`ReplaceOnUpdate`/`ReplaceDeleteData`** (replace-on-update policy, migration `0014`)), `Check`, `Payload`, `TrackerCredential`, `TopicDelivery`, `AddOptions` (`DownloadDir` + `Category`) |
 | **`domains`** | in-memory per-tracker domain config store (issue #126), backed by `repo.TrackerSettings`: `Store.Resolve` implements `registry.DomainResolver` (wired via `SetDomainResolver` at boot); `ReportFailure(ctx, trackerName)` rotates the tracker's active domain to the next candidate in its ring (known `WithDomains` domains + admin custom domains) on network-class errors, gated to at most once per `RotateCooldown` (10 min) and metered via `marauder_tracker_domain_rotations_total{tracker}`; an optional `SetOnRotate` hook notifies the admin on rotation |
-| **`events`** | canonical event taxonomy (`Type` consts: topic.added, check.{started,completed,failed}, release.found, download.submitted, session.expired, download.{progress,completed}) + per-type `Policy` (persist/notifiable/sse) + `Bus.Emit` — the single event→sinks fan-out (history `topic_events`, notifier dispatcher, SSE hub). SSE publisher is the `sse.Hub` (Phase 3). `download.completed` is emitted by the `progress` watcher (Phase 2); `download.progress` is emitted by the watcher on change and pushed over SSE. `GET /api/v1/topics/{id}/events` endpoint reads the history. Frontend: `components/topics/TopicEventsTimeline`, `components/notifiers/EventPicker`, `lib/events.ts` |
+| **`events`** | canonical event taxonomy (`Type` consts: topic.added, check.{started,completed,failed}, release.found, download.submitted, session.expired, download.{progress,completed}, topic.reset) + per-type `Policy` (persist/notifiable/sse) + `Bus.Emit` — the single event→sinks fan-out (history `topic_events`, notifier dispatcher, SSE hub). SSE publisher is the `sse.Hub` (Phase 3). `download.completed` is emitted by the `progress` watcher (Phase 2); `download.progress` is emitted by the watcher on change and pushed over SSE. `topic.reset` is `Persist:true, Notifiable:false, SSE:true` — recorded to the timeline and pushed live, but never notified since the user performed the action themselves. `GET /api/v1/topics/{id}/events` endpoint reads the history. Frontend: `components/topics/TopicEventsTimeline`, `components/notifiers/EventPicker`, `lib/events.ts` |
 | **`topics`** | shared `BuildAndCreate(store, CreateInput)` — the one tracker-match → `Parse` → fail-open `ResolveMetadata` → build → persist sequence, used by BOTH the `POST /topics` handler and the Sonarr poller (no duplication). `CreateInput.Extra` lets trusted headless creators merge tracker metadata over `Parse` defaults before shared capability/source fields are applied. Idempotent: a `(user_id,url)` unique-violation returns `Result{Created:false}` instead of erroring. Sentinels `ErrNoTracker`/`ErrParse`/`ErrQualityUnsupported`. `CanonicalTopicURL(tr, rawURL)` (issue #126) rewrites a new topic's host to the tracker's canonical `WithDomains` domain at create time, so adding the same release via a different mirror still dedups against an existing topic; used by both the `POST /topics` handler and the Sonarr poller. **`TopicEvents`** sibling repo (history feed: `Record`/`ListForTopic`/`ListForUserSince`) |
 | **`sonarr`** | Sonarr integration (issues #86, #92): a typed read-only API `Client` (`SystemStatus` for the Test button; `GrabHistorySince` reads `eventType=grabbed` history, extracting `data.nzbInfoUrl` — the tracker topic URL, **not** `guid` — plus `sourceTitle`/`data.torrentInfoHash` for variant identity) + a `Poller` that mirrors the scheduler (ticker loop, ctx-cancel, fail-open). Multi-instance: a single manager loop ticks at the 60s floor, lists **enabled** `sonarr_instances`, and polls any instance due per its own interval (per-id `lastPolled` map, pruned when an instance is removed) — add/edit/enable/disable/delete take effect on the next tick. Per instance it resolves the owner (configured admin ⇒ first admin), dedups history by URL while retaining the newest grab's variant metadata, refreshes that metadata on later grabs of an existing Sonarr-owned topic independently of client/category/path realignment, filters by allowed trackers, and auto-creates topics via `topics.BuildAndCreate` with that instance's default client/category/dir, advancing **its** cursor. First enable per instance is go-forward only (cursor stamped, no historical import). Admin config UI: **Integrations** page (`pages/Integrations.tsx` → `components/integrations/SonarrInstanceList` → `SonarrInstanceCard`/`SonarrInstanceForm`); collection API `GET/POST /api/v1/system/sonarr/instances`, `GET/PUT/DELETE /api/v1/system/sonarr/instances/{id}`, `POST .../{id}/test`, ad-hoc `POST /api/v1/system/sonarr/test` |
 | **`sse`** | live Server-Sent-Events fan-out: in-memory per-user `Hub` (the `events.Publisher` impl, wired into the bus) + one-time 30s `TicketStore`. `POST /api/v1/events/ticket` (JWT-authed) exchanges the access token for a single-use ticket; `GET /api/v1/events?ticket=…` (ticket-gated, public route) streams `text/event-stream` with `Last-Event-ID` replay (persisted events) + 25s heartbeats. Drop-on-full per slow client. Single-process (Redis/NATS fan-out is the multi-replica escape hatch) |
@@ -149,6 +152,74 @@ would delete siblings. Best-effort / fail-open throughout: a removal failure is
 logged + metered (`marauder_scheduler_replaced_previous_total{client,result}`)
 and never fails the check or prunes a row that wasn't actually removed.
 
+**Topic reset:** `POST /api/v1/topics/{id}/reset` (body `{"delete_data": bool}`,
+default false) discards a topic's check/download state so the next tick
+re-delivers the current release from scratch: it removes the already-delivered
+torrents from the clients that hold them (via `clientremove`, optionally
+deleting data), deletes the topic's `topic_deliveries` rows, then calls
+`Topics.ResetCheckState`. Client removal is **fail-open** — the broken client is
+usually why the reset was requested — and every failure comes back in the 200
+body's `warnings` array; the row delete and the state reset are fail-closed, and
+the state reset runs last because it is the step that arms the scheduler.
+A reset that lands **mid-check** is protected by optimistic concurrency on the
+**pair** `(last_checked_at, next_check_at)` — written by exactly two statements,
+`RecordCheckResult` and `ResetCheckState`, which makes the pair a version token.
+Both columns are required: `ResetCheckState` nulls `last_checked_at`, so alone it
+cannot distinguish two consecutive resets, and a worker dispatched by the first
+would still match after the second and restore the pre-reset hash;
+`next_check_at = now()` at microsecond resolution is what makes each reset
+distinct. `RecordCheckResult` **and** `MarkEpisodeDownloaded` both carry the
+values their worker observed at dispatch and guard on
+`last_checked_at IS NOT DISTINCT FROM $n AND next_check_at = $n+1`
+(`IS NOT DISTINCT FROM`, not `=`, so the post-reset `NULL` still matches and the
+fresh check can write); a non-matching write affects zero rows and returns
+`repo.ErrStaleCheckResult`, which the scheduler logs at Info and drops —
+additionally stopping the episode loop, so a reset is not followed by further
+submissions. Without the guard the finishing check would restore the pre-reset
+hash and a backoff `next_check_at`, leaving a topic whose torrents are already
+gone from the client but which never re-downloads.
+A third caller carries the same token: `Topics.VerifyCheckState` (read-only,
+`SELECT 1` with the identical WHERE clause), which `sendViaClient` consults
+immediately **before** `clientPlugin.Add` — the one step of a tick a reset cannot
+undo afterwards. A stale token aborts before anything reaches the client;
+`downloadAllPending` handles it exactly like the episode-mark abort (stop
+draining, keep and report what was already delivered, not an error). A plain DB
+error there is **not** treated as staleness — it logs a Warn and submits anyway,
+since refusing on an unrelated blip would strand the release until the tracker's
+hash changed again.
+**This bounds the race; it does not fully close it.** A torrent submitted to the
+client *after* the reset's delivery snapshot but before its row is written is not
+in the removal set, so `delete_data` is not guaranteed to have wiped that one
+torrent's files (the topic still converges — the post-reset check re-delivers and
+re-tracks it). Note what the pre-submit check does **not** buy: `ResetCheckState`
+is the reset's **last** statement, so the token only changes once the reset is
+essentially over, and a worker reading it *during* the reset still sees a valid
+one. It removes the unbounded case (a worker submitting long after the reset
+finished — `tr.Download` alone can hold one for `TrackerHTTPTimeout`, 30s by
+default, per episode) and leaves a window the width of the reset's own execution,
+which is worst exactly when the client is unreachable. Closing that needs
+claim-on-dispatch. `Deliveries.Record` is deliberately **not** guarded: the row is
+written only after a successful `Add`, so it accurately mirrors client state, and
+`topic_deliveries` is the sole input to the status view, the progress watcher,
+and every removal snapshot — dropping the row would hide that torrent from all
+future removals instead. See the design doc's "Known limitation" section.
+The endpoint carries a **per-topic single-flight** gate (`Topics.resetInFlight`,
+same `sync.Map` pattern as `/trackers/search`'s per-user gate): a second reset of
+a topic that already has one running is refused with **429**. Keyed by topic, not
+by user, precisely so bulk reset — which fires one concurrent request per
+selected topic — is unaffected; what it stops is a double-click, an impatient
+retry after the "retry the reset" 500, and two tabs racing one topic. The gate
+sits *after* the ownership check so a non-owner (404 either way) cannot use the
+429 to probe someone else's topic, and is released by `defer` so no error path or
+panic can latch it shut.
+Emits `topic.reset`. There is no bulk endpoint: the frontend fans out N calls,
+matching bulk pause/resume/delete, but **bounded to 4 in flight** via
+`lib/concurrency.ts`'s `mapWithConcurrency` — an unbounded `Promise.all` over a
+large selection points the whole burst at the user's torrent client at once.
+Frontend: `components/topics/ResetTopicCard` (an inline card, not a modal — this
+project has no shadcn Dialog primitive), opened from a per-row `RotateCcw` button
+and from the Topics page bulk action bar.
+
 **Errored-topic retry:** `DueForCheck` selects `WHERE status IN
 ('active','error')`, so a topic that errors keeps retrying on its already-
 persisted backoff `next_check_at` (≤6h) instead of parking permanently. A
@@ -180,7 +251,10 @@ src/
 │   │   └── ResourceCard.tsx   Slot-based card chrome for list pages
 │   ├── topics/                Page-specific topic components
 │   │   ├── TopicEventsTimeline.tsx  Per-topic event history feed (read-only)
-│   │   └── TopicCheckStatus.tsx     Live checking/next-check chip (fed by check.* SSE events)
+│   │   ├── TopicCheckStatus.tsx     Live checking/next-check chip (fed by check.* SSE events)
+│   │   ├── ResetTopicCard.tsx      Reset confirm + result card (row + bulk)
+│   │   ├── TopicRow.tsx            One topic list row
+│   │   └── BulkActionBar.tsx       Multi-select action bar
 │   ├── notifiers/             Page-specific notifier components
 │   │   └── EventPicker.tsx    Event type checkbox list (for notifier subscription)
 │   └── ui/                    shadcn primitives — DO NOT hand-edit
@@ -247,8 +321,11 @@ The **status poll fallback** (in `DeliveryStatus`) is now gated by `useSseStatus
 - **Icons**: `lucide-react` exclusively.
 - **i18n**: `useT()` from `i18n/`. English + Russian dictionaries.
 - **Component size**: max 250 lines per file (currently breached by
-  `Topics.tsx`, `Clients.tsx`, and `TopicForm.tsx` — pre-existing tech debt,
-  tracked in `techdebt/frontend/`).
+  `Clients.tsx` and `TopicForm.tsx` — pre-existing tech debt, tracked in
+  `techdebt/frontend/`. `Topics.tsx` was fixed by the topic-reset work: it
+  dropped from 425 to 216 lines by extracting `TopicRow`, `BulkActionBar`,
+  `DensityToggle`, `TopicsEmptyState` and `StatusIndicator` into
+  `components/topics/`).
 - **Path alias**: `@/` maps to `src/`.
 - **Tests**: Vitest + `@testing-library/react` + `userEvent` + jsdom.
   Co-locate `*.test.tsx` next to the component. Run with `npm test`.
@@ -258,6 +335,20 @@ The **status poll fallback** (in `DeliveryStatus`) is now gated by `useSseStatus
 ```bash
 # Backend (Docker — never install Go locally)
 docker run --rm -v "E:/Projects/Stukans/Marauder/backend:/backend" -w //backend golang:1.25 sh -c "go build ./... && go vet ./... && go test -race ./..."
+
+# Backend repo integration tests (real Postgres, real migrations). Build-tagged
+# `integration` and self-skipping when MARAUDER_TEST_DB_URL is unset, so the
+# command above is unaffected. They exist because the repo layer's pgxmock tests
+# pin SQL text without executing it, leaving JSONB key deletes, status CASEs and
+# the `IS NOT DISTINCT FROM` check-state guard asserted only by regex. Harness:
+# internal/db/repo/integration_test.go (reuses db.Migrate, one throwaway user per
+# test so any order works). CI runs this as the `backend-integration` job.
+docker network create marauder-itest-net
+docker run --rm -d --name marauder-itest-pg --network marauder-itest-net \
+  -e POSTGRES_PASSWORD=test -e POSTGRES_DB=marauder_test postgres:17-alpine
+docker run --rm --network marauder-itest-net -v "E:/Projects/Stukans/Marauder/backend:/backend" -w //backend \
+  -e MARAUDER_TEST_DB_URL="postgres://postgres:test@marauder-itest-pg:5432/marauder_test?sslmode=disable" \
+  golang:1.25 sh -c "go test -tags=integration -race ./internal/db/repo/..."
 
 # Frontend — run from a container-local node_modules volume, NOT the bind mount.
 # node_modules is a linux-x64-musl install (alpine is correct; glibc node:22 and

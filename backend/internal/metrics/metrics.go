@@ -105,11 +105,30 @@ var (
 	// SchedulerReplacedPreviousTotal counts how many previously delivered
 	// torrents the "replace previous version" policy (issue #101) removed from
 	// a client when a single-release topic was updated, partitioned by client
-	// and result ("ok" / "error").
+	// and result ("ok", or one of the clientremove failure reasons: lookup /
+	// no_plugin / unsupported / decrypt / error). Alert on result != "ok", not
+	// on result == "error" alone — the latter misses decrypt and lookup
+	// failures, which are just as much "the old torrent is still there".
 	SchedulerReplacedPreviousTotal = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "marauder_scheduler_replaced_previous_total",
 			Help: "Number of previously delivered torrents removed by the replace-on-update policy, partitioned by client and result.",
+		},
+		[]string{"client", "result"},
+	)
+)
+
+// Topic reset metrics ------------------------------------------------------
+
+var (
+	// TopicResetRemovedTotal counts torrents the topic reset endpoint removed
+	// from a client, partitioned by client and result ("ok", or one of the
+	// clientremove failure reasons: lookup / no_plugin / unsupported /
+	// decrypt / error).
+	TopicResetRemovedTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "marauder_topic_reset_removed_total",
+			Help: "Number of torrents removed from a client by a topic reset, partitioned by client and result.",
 		},
 		[]string{"client", "result"},
 	)

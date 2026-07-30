@@ -16,11 +16,30 @@ import (
 // --- fakes for the status endpoint -------------------------------------
 
 type fakeDeliveriesStore struct {
-	items []*domain.TopicDelivery
+	items   []*domain.TopicDelivery
+	listErr error
+
+	deleted    bool
+	deletedFor [2]uuid.UUID // the (topic, user) pair DeleteForTopic was scoped to
+	deleteErr  error
 }
 
 func (f *fakeDeliveriesStore) ListForTopic(context.Context, uuid.UUID) ([]*domain.TopicDelivery, error) {
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
 	return f.items, nil
+}
+
+// DeleteForTopic honours context cancellation the way pgx does, so a test can
+// prove the handler detached from the request context before calling it.
+func (f *fakeDeliveriesStore) DeleteForTopic(ctx context.Context, topicID, userID uuid.UUID) (int64, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	f.deleted = true
+	f.deletedFor = [2]uuid.UUID{topicID, userID}
+	return int64(len(f.items)), f.deleteErr
 }
 
 type fakeClientsLookup struct{ client *domain.Client }

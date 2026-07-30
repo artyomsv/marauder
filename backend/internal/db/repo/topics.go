@@ -166,9 +166,61 @@ func (r *Topics) UpdateStatus(ctx context.Context, id uuid.UUID, userID uuid.UUI
 	return err
 }
 
+// ErrStaleCheckResult is returned by RecordCheckResult, MarkEpisodeDownloaded
+// and VerifyCheckState when the topic's check state changed between the worker
+// observing it and acting on it — in practice a reset landing mid-check, the
+// topic being deleted, or a long check being re-dispatched and the second
+// worker winning. For the two writes the write is discarded on purpose; for
+// VerifyCheckState the caller has not acted yet and should stop. Either way it
+// describes state that no longer exists: callers should log it and carry on,
+// not treat it as a persistence failure.
+var ErrStaleCheckResult = errors.New("stale check result")
+
+// The check-state version token
+// ─────────────────────────────
+//
+// RecordCheckResult and MarkEpisodeDownloaded both write back the result of a
+// check that may have been running for tens of seconds, so both guard on the
+// pair (last_checked_at, next_check_at) — the version token for "the check
+// state as this worker saw it when the topic was dispatched". Exactly two
+// statements write those columns: RecordCheckResult and ResetCheckState.
+//
+// Both columns are needed, because neither alone is a usable token:
+//
+//   - last_checked_at is not monotonic. ResetCheckState sets it to NULL, so two
+//     consecutive resets look identical. A worker dispatched by reset #1 (which
+//     sets next_check_at = now(), so a check is very likely already running)
+//     observes NULL; reset #2 lands, removing the torrents from the client and
+//     deleting their on-disk data; the worker then writes back and
+//     NULL IS NOT DISTINCT FROM NULL still matches, restoring the pre-reset
+//     hash. Reset #2 is silently undone after its irreversible half already ran.
+//   - next_check_at is never NULL, but on its own it does not distinguish a
+//     topic that was reset from one that simply came due again.
+//
+// Together they work: ResetCheckState writes next_check_at = now() at
+// Postgres' microsecond resolution, so each reset stamps a distinct value
+// while also clearing last_checked_at.
+//
+// The last_checked_at comparison is IS NOT DISTINCT FROM, not =, because a
+// reset sets it to NULL and `= NULL` is never true — the fresh post-reset
+// check, which observes NULL, could otherwise never persist its own result.
+// next_check_at is NOT NULL, so a plain = suffices there.
+
 // RecordCheckResult updates the state after a scheduler run.
+//
+// The write is guarded on the check-state version token described above: it
+// lands only while the topic's (last_checked_at, next_check_at) pair still
+// holds the values the worker observed at dispatch.
+//
+// Without the guard a reset that lands mid-check is silently undone: the
+// worker finishes, writes back the pre-reset hash and a backoff next_check_at,
+// and the topic looks like it was never reset — except its torrents are gone
+// from the client (and its files off disk, if the user ticked delete_data).
+// Nothing re-downloads until the tracker's own hash changes.
+//
+// Returns ErrStaleCheckResult when the guard rejected the write.
 func (r *Topics) RecordCheckResult(
-	ctx context.Context, id uuid.UUID, hash string, updated bool,
+	ctx context.Context, t *domain.Topic, hash string, updated bool,
 	nextCheckAt time.Time, errMsg, errCode string,
 ) error {
 	q := `
@@ -182,23 +234,63 @@ UPDATE topics SET
     consecutive_errors = CASE WHEN $5 = '' THEN 0 ELSE consecutive_errors + 1 END,
     status            = CASE WHEN $5 = '' THEN 'active' ELSE 'error' END,
     updated_at        = now()
-WHERE id = $1`
-	_, err := r.pool.Exec(ctx, q, id, hash, updated, nextCheckAt, errMsg, errCode)
-	return err
+WHERE id = $1 AND last_checked_at IS NOT DISTINCT FROM $7 AND next_check_at = $8`
+	ct, err := r.pool.Exec(ctx, q, t.ID, hash, updated, nextCheckAt, errMsg, errCode, t.LastCheckedAt, t.NextCheckAt)
+	if err != nil {
+		return fmt.Errorf("topics: record check result: %w", err)
+	}
+	if ct.RowsAffected() == 0 {
+		return ErrStaleCheckResult
+	}
+	return nil
 }
 
-// UpdateExtra overwrites the topic.extra JSONB blob with the supplied
-// map. Used by the scheduler's fallback path when a plugin reports
-// per-episode download progress (e.g. LostFilm tracks the list of
-// already-downloaded packed episode IDs in extra["downloaded_episodes"]
-// so the next check only fetches what's missing).
+// VerifyCheckState reports whether the topic's check-state version token still
+// holds the values the worker observed at dispatch. It is the read-only form of
+// the guard RecordCheckResult and MarkEpisodeDownloaded carry in their WHERE
+// clauses, for callers that need to know *before* doing something irreversible
+// rather than after.
 //
-// Deprecated: this method overwrites the entire JSONB blob and is
-// unsafe under concurrent updates — a partially populated map will
-// wipe server-side fields (quality, start_season, etc.). Prefer
-// MarkEpisodeDownloaded for the episode-tracking hot path. Kept in
-// place for backward compatibility with the scheduler's
-// non-atomic fallback branch.
+// Its caller is the scheduler, immediately before handing a payload to a
+// torrent client. A topic reset takes a snapshot of the topic's deliveries and
+// removes exactly those torrents, so a torrent added after that snapshot is
+// invisible to it: with delete_data set, the reset reports success while that
+// torrent's files stay on disk, and the re-delivered release then rechecks and
+// resumes against them.
+//
+// This narrows that window; it does not close it. ResetCheckState is the last
+// statement the reset runs, so the token does not change until the reset is
+// essentially finished — a worker that reads the token while the reset is still
+// removing torrents sees a valid one and proceeds. What it does remove is the
+// unbounded case: a worker that reaches the submit point at any point *after*
+// the reset completed. Closing the remainder needs a claim-on-dispatch marker.
+//
+// Returns nil when the token matches and ErrStaleCheckResult when it does not
+// (including when the topic no longer exists), so callers handle "the topic
+// moved on" in one shape regardless of which guard reported it.
+func (r *Topics) VerifyCheckState(ctx context.Context, t *domain.Topic) error {
+	const q = `SELECT 1 FROM topics
+WHERE id = $1 AND last_checked_at IS NOT DISTINCT FROM $2 AND next_check_at = $3`
+	var one int
+	err := r.pool.QueryRow(ctx, q, t.ID, t.LastCheckedAt, t.NextCheckAt).Scan(&one)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrStaleCheckResult
+	}
+	if err != nil {
+		return fmt.Errorf("topics: verify check state: %w", err)
+	}
+	return nil
+}
+
+// UpdateExtra overwrites the topic.extra JSONB blob with the supplied map.
+//
+// Deprecated: unused. Its only caller was the scheduler's non-atomic
+// episode-tracking fallback, which has been removed. It overwrites the entire
+// JSONB blob and is unsafe under concurrent updates — a partially populated
+// map wipes server-side fields (quality, start_season, downloaded_episodes) —
+// and it carries no check-state guard, so a write built from a worker's
+// in-memory copy would undo a reset wholesale. Use MarkEpisodeDownloaded for
+// episode progress and Update for user edits; do not add new callers.
 func (r *Topics) UpdateExtra(ctx context.Context, id uuid.UUID, extra map[string]any) error {
 	raw, err := json.Marshal(extra)
 	if err != nil {
@@ -227,13 +319,26 @@ func (r *Topics) UpdateExtra(ctx context.Context, id uuid.UUID, extra map[string
 //
 //   - cannot wipe other extras keys,
 //   - is safe under concurrent updates because the SQL is a single
-//     atomic statement,
-//   - returns ErrNotFound if the topic was deleted.
+//     atomic statement.
 //
 // The packed ID is appended exactly once per call; the scheduler is
 // responsible for de-duplication on its side (it works from a pending
 // list that's already filtered).
-func (r *Topics) MarkEpisodeDownloaded(ctx context.Context, id uuid.UUID, packed string) error {
+//
+// It carries the same check-state version-token guard as RecordCheckResult
+// (see above), because it fires earlier in the same check and appends to a
+// key ResetCheckState deletes. Unguarded, the losing interleaving strands an
+// episode permanently: the worker delivers episode E and records its delivery
+// row, a reset then removes E from the client, deletes its data and its
+// delivery row, and clears downloaded_episodes — and only then does the
+// worker's append land, re-marking E as downloaded. E is now absent from the
+// client, absent from disk, and skipped by every future check.
+//
+// Returns ErrStaleCheckResult when the guard rejected the write — the topic
+// was reset (or deleted) mid-check. Dropping the mark is the correct outcome:
+// the episode is simply re-downloaded on the next tick, which is exactly what
+// the reset asked for.
+func (r *Topics) MarkEpisodeDownloaded(ctx context.Context, t *domain.Topic, packed string) error {
 	// Atomic JSONB array append. jsonb_set requires the target path
 	// to exist so we COALESCE both the column (NULL -> '{}') and the
 	// inner downloaded_episodes key (missing -> '[]') before appending.
@@ -246,10 +351,63 @@ SET    extra = jsonb_set(
            true
        ),
        updated_at = now()
-WHERE  id = $1`
-	ct, err := r.pool.Exec(ctx, query, id, packed)
+WHERE  id = $1 AND last_checked_at IS NOT DISTINCT FROM $3 AND next_check_at = $4`
+	ct, err := r.pool.Exec(ctx, query, t.ID, packed, t.LastCheckedAt, t.NextCheckAt)
 	if err != nil {
 		return fmt.Errorf("topics: mark episode downloaded: %w", err)
+	}
+	if ct.RowsAffected() == 0 {
+		return ErrStaleCheckResult
+	}
+	return nil
+}
+
+// ResetCheckState discards a topic's check/download state so the next check
+// re-detects the current release as new and re-delivers it. It is the inverse
+// of RecordCheckResult, plus the per-episode progress MarkEpisodeDownloaded
+// accumulates in extra.
+//
+// Configuration is deliberately untouched: client, notifier, category,
+// download dir, interval, replace policy, display name, and the capability
+// keys in extra (quality, start_season, start_episode, source) all survive.
+// Only downloaded_episodes is dropped, via a targeted JSONB key delete rather
+// than the whole-blob overwrite UpdateExtra would do.
+//
+// A paused topic stays paused — only 'error' is normalised back to 'active'.
+// Resetting must not silently resume topics the user deliberately stopped,
+// which matters most under a bulk reset over a mixed selection.
+//
+// next_check_at = now() is what "check now" means here: DueForCheck selects on
+// it, and there is no separate manual-trigger path in the scheduler.
+//
+// Clearing last_checked_at and stamping a fresh next_check_at also invalidates
+// any check already in flight: RecordCheckResult and MarkEpisodeDownloaded
+// only write while BOTH columns still hold the values their worker observed,
+// so a check that started before this reset can no longer undo it. Writing
+// next_check_at = now() at microsecond resolution is what makes consecutive
+// resets distinguishable — clearing last_checked_at alone would leave reset #2
+// with the same NULL token reset #1 produced, and a worker dispatched by reset
+// #1 would happily overwrite reset #2. See the version-token comment above
+// RecordCheckResult for the full reasoning.
+//
+// Returns ErrNotFound when the topic does not exist or belongs to another user.
+func (r *Topics) ResetCheckState(ctx context.Context, id, userID uuid.UUID) error {
+	const q = `
+UPDATE topics SET
+    last_hash          = NULL,
+    last_checked_at    = NULL,
+    last_updated_at    = NULL,
+    consecutive_errors = 0,
+    last_error         = NULL,
+    last_error_code    = '',
+    next_check_at      = now(),
+    status             = CASE WHEN status = 'paused' THEN 'paused' ELSE 'active' END,
+    extra              = COALESCE(extra, '{}'::jsonb) - 'downloaded_episodes',
+    updated_at         = now()
+WHERE id = $1 AND user_id = $2`
+	ct, err := r.pool.Exec(ctx, q, id, userID)
+	if err != nil {
+		return fmt.Errorf("topics: reset check state: %w", err)
 	}
 	if ct.RowsAffected() == 0 {
 		return ErrNotFound

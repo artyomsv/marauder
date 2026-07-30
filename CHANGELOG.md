@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Reset a topic to re-download from scratch, per topic or over a multi-select.
+  Removes the already-delivered torrents from the client (optionally deleting
+  their files), clears the topic's check state and per-episode progress, and
+  queues an immediate re-check. Settings, event history and paused status are
+  kept (the delivery records themselves are cleared, by design);
+  torrents that could not be removed are reported as warnings rather than
+  blocking the reset. Overlapping resets of the same topic are refused, and a
+  multi-select reset is sent a few topics at a time rather than all at once.
+
 ## [1.15.1] - 2026-07-29
 
 ### Fixed

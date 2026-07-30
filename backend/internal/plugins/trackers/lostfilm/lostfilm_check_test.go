@@ -73,3 +73,75 @@ func TestCheck_ParsesSeasonsPageNotLanding(t *testing.T) {
 		t.Errorf("pending head = %v, want S05E01..E03 first", pending[:3])
 	}
 }
+
+// TestCheck_AfterTopicReset_EveryEpisodeIsPendingAgain joins the two halves of
+// the episodic reset promise, which were each sound but never tested together.
+//
+// repo.Topics.ResetCheckState drops downloaded_episodes with a JSONB key
+// delete (`extra - 'downloaded_episodes'`), so after a reset the key is
+// ABSENT — not an empty array. Every other LostFilm test hands Check an
+// explicit []string{}, so the shape a reset actually produces was never
+// exercised. extra.StringSlice returns nil for a missing key and Check builds
+// its already-downloaded set from that, so absent and empty must behave
+// identically; if they ever diverge, a reset silently re-downloads nothing and
+// the feature's headline promise for per-episode trackers is broken.
+func TestCheck_AfterTopicReset_EveryEpisodeIsPendingAgain(t *testing.T) {
+	seasons := `<div data-code="442-5-1"></div><div data-code="442-5-2"></div>` +
+		`<div data-code="442-5-3"></div><div data-code="442-5-4"></div>`
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(seasons))
+	}))
+	t.Cleanup(srv.Close)
+
+	host := strings.TrimPrefix(srv.URL, "http://")
+	p := &plugin{
+		sessions:          forumcommon.New(),
+		domain:            "www.lostfilm.tv",
+		transport:         &e2etest.HostRewriteTransport{From: "www.lostfilm.tv", To: host, Inner: &allHostsToTest{To: host}},
+		redirectValidator: permissiveRedirectValidator,
+	}
+
+	topic := &domain.Topic{
+		URL: "https://www.lostfilm.tv/series/The_Boys",
+		Extra: map[string]any{
+			"slug":         "The_Boys",
+			"start_season": 5,
+			// Three of the four released episodes have already been delivered.
+			"downloaded_episodes": []string{"442005001", "442005002", "442005003"},
+		},
+	}
+
+	before, err := p.Check(context.Background(), topic, nil)
+	if err != nil {
+		t.Fatalf("Check (pre-reset): %v", err)
+	}
+	if pending := extra.StringSlice(before.Extra, "pending_episodes"); len(pending) != 1 {
+		t.Fatalf("pre-reset pending = %v, want just the undelivered S05E04", pending)
+	}
+
+	// The reset shape: ResetCheckState deletes the key rather than blanking it,
+	// so model exactly that — delete, do not assign []string{}.
+	delete(topic.Extra, "downloaded_episodes")
+
+	after, err := p.Check(context.Background(), topic, nil)
+	if err != nil {
+		t.Fatalf("Check (post-reset): %v", err)
+	}
+	pending := extra.StringSlice(after.Extra, "pending_episodes")
+	want := []string{"442005001", "442005002", "442005003", "442005004"}
+	if len(pending) != len(want) {
+		t.Fatalf("post-reset pending = %v, want all %d episodes re-queued", pending, len(want))
+	}
+	for i, w := range want {
+		if pending[i] != w {
+			t.Errorf("post-reset pending[%d] = %q, want %q", i, pending[i], w)
+		}
+	}
+
+	// The hash must move too, or the scheduler never enters the download
+	// branch and the re-queued episodes are never fetched.
+	if after.Hash == before.Hash {
+		t.Errorf("check hash unchanged across the reset (%q) — the scheduler would skip the re-download", after.Hash)
+	}
+}
