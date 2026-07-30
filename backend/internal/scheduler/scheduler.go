@@ -51,21 +51,15 @@ import (
 // repo.TrackerCredentials types satisfy these interfaces structurally.
 
 // topicsRepo is the subset of *repo.Topics that the scheduler uses.
+//
+// RecordCheckResult and MarkEpisodeDownloaded both take the whole topic, not
+// just its id, because each write is guarded on the (last_checked_at,
+// next_check_at) version token the worker observed at dispatch — both return
+// repo.ErrStaleCheckResult when it no longer matches.
 type topicsRepo interface {
 	DueForCheck(ctx context.Context, limit int) ([]*domain.Topic, error)
-	// RecordCheckResult takes the whole topic, not just its id, because the
-	// write is guarded on the last_checked_at the worker observed at dispatch
-	// (repo.ErrStaleCheckResult when it no longer matches).
 	RecordCheckResult(ctx context.Context, t *domain.Topic, hash string, updated bool, nextCheckAt time.Time, errMsg, errCode string) error
-	UpdateExtra(ctx context.Context, id uuid.UUID, extra map[string]any) error
-}
-
-// markEpisodeDownloader is an optional capability of topicsRepo.
-// Track C is adding *repo.Topics.MarkEpisodeDownloaded as an atomic
-// JSONB append; if present, the scheduler uses it instead of the
-// non-atomic UpdateExtra(full map) round-trip.
-type markEpisodeDownloader interface {
-	MarkEpisodeDownloaded(ctx context.Context, id uuid.UUID, packed string) error
+	MarkEpisodeDownloaded(ctx context.Context, t *domain.Topic, packed string) error
 }
 
 // displayNamePersister is an optional capability of topicsRepo: it lets the
@@ -751,7 +745,17 @@ func (s *Scheduler) downloadAllPending(ctx context.Context, log zerolog.Logger, 
 			// Single-payload plugin (most trackers) — done.
 			return delivered, deliveredHashes, nil
 		}
-		if err := s.markDownloaded(ctx, t, pending[0]); err != nil {
+		if err := s.topics.MarkEpisodeDownloaded(ctx, t, pending[0]); err != nil {
+			if errors.Is(err, repo.ErrStaleCheckResult) {
+				// A reset (or a delete) landed mid-check, so the guard dropped
+				// the mark. Stop draining rather than keep delivering episodes
+				// into state that no longer exists: the fresh post-reset check
+				// re-downloads every episode, which is what the reset asked for.
+				log.Info().
+					Str("packed", pending[0]).
+					Msg("episode mark discarded: another write won the state guard")
+				return delivered, deliveredHashes, nil
+			}
 			return delivered, deliveredHashes, fmt.Errorf("persist downloaded: %w", err)
 		}
 		log.Info().Str("packed", pending[0]).Msg("marked episode downloaded")
@@ -774,25 +778,6 @@ func (s *Scheduler) downloadAllPending(ctx context.Context, log zerolog.Logger, 
 		metrics.SchedulerEpisodesPerTickCappedTotal.WithLabelValues(t.TrackerName).Inc()
 	}
 	return delivered, deliveredHashes, nil
-}
-
-// markDownloaded persists the fact that one packed episode id was
-// successfully handed to a torrent client. If the underlying topics
-// repo implements the atomic MarkEpisodeDownloaded method (Track C),
-// it is used; otherwise this falls back to a read-modify-write through
-// UpdateExtra. The fallback path mutates t.Extra in place.
-func (s *Scheduler) markDownloaded(ctx context.Context, t *domain.Topic, packed string) error {
-	if med, ok := s.topics.(markEpisodeDownloader); ok {
-		return med.MarkEpisodeDownloaded(ctx, t.ID, packed)
-	}
-	// TODO Track C: drop this fallback once *repo.Topics.MarkEpisodeDownloaded ships.
-	if t.Extra == nil {
-		t.Extra = map[string]any{}
-	}
-	already := extra.StringSlice(t.Extra, "downloaded_episodes")
-	already = append(already, packed)
-	t.Extra["downloaded_episodes"] = already
-	return s.topics.UpdateExtra(ctx, t.ID, t.Extra)
 }
 
 // isNoPendingError reports whether err signals that a per-episode

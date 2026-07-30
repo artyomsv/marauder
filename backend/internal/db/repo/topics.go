@@ -166,21 +166,23 @@ func (r *Topics) UpdateStatus(ctx context.Context, id uuid.UUID, userID uuid.UUI
 	return err
 }
 
-// ErrStaleCheckResult is returned by RecordCheckResult when the topic's check
-// state changed between the worker observing it and writing its result back —
-// in practice a reset landing mid-check, or the topic being deleted. The write
-// is discarded on purpose; it describes state that no longer exists. Callers
-// should log it and carry on, not treat it as a persistence failure.
+// ErrStaleCheckResult is returned by RecordCheckResult and
+// MarkEpisodeDownloaded when the topic's check state changed between the
+// worker observing it and writing its result back — in practice a reset
+// landing mid-check, the topic being deleted, or a long check being
+// re-dispatched and the second worker winning. The write is discarded on
+// purpose; it describes state that no longer exists. Callers should log it and
+// carry on, not treat it as a persistence failure.
 var ErrStaleCheckResult = errors.New("stale check result")
 
 // The check-state version token
 // ─────────────────────────────
 //
-// RecordCheckResult writes back the result of a check that may have been
-// running for tens of seconds, so it guards on the pair (last_checked_at,
-// next_check_at) — the version token for "the check state as this worker saw
-// it when the topic was dispatched". Exactly two statements write those
-// columns: RecordCheckResult and ResetCheckState.
+// RecordCheckResult and MarkEpisodeDownloaded both write back the result of a
+// check that may have been running for tens of seconds, so both guard on the
+// pair (last_checked_at, next_check_at) — the version token for "the check
+// state as this worker saw it when the topic was dispatched". Exactly two
+// statements write those columns: RecordCheckResult and ResetCheckState.
 //
 // Both columns are needed, because neither alone is a usable token:
 //
@@ -282,13 +284,26 @@ func (r *Topics) UpdateExtra(ctx context.Context, id uuid.UUID, extra map[string
 //
 //   - cannot wipe other extras keys,
 //   - is safe under concurrent updates because the SQL is a single
-//     atomic statement,
-//   - returns ErrNotFound if the topic was deleted.
+//     atomic statement.
 //
 // The packed ID is appended exactly once per call; the scheduler is
 // responsible for de-duplication on its side (it works from a pending
 // list that's already filtered).
-func (r *Topics) MarkEpisodeDownloaded(ctx context.Context, id uuid.UUID, packed string) error {
+//
+// It carries the same check-state version-token guard as RecordCheckResult
+// (see above), because it fires earlier in the same check and appends to a
+// key ResetCheckState deletes. Unguarded, the losing interleaving strands an
+// episode permanently: the worker delivers episode E and records its delivery
+// row, a reset then removes E from the client, deletes its data and its
+// delivery row, and clears downloaded_episodes — and only then does the
+// worker's append land, re-marking E as downloaded. E is now absent from the
+// client, absent from disk, and skipped by every future check.
+//
+// Returns ErrStaleCheckResult when the guard rejected the write — the topic
+// was reset (or deleted) mid-check. Dropping the mark is the correct outcome:
+// the episode is simply re-downloaded on the next tick, which is exactly what
+// the reset asked for.
+func (r *Topics) MarkEpisodeDownloaded(ctx context.Context, t *domain.Topic, packed string) error {
 	// Atomic JSONB array append. jsonb_set requires the target path
 	// to exist so we COALESCE both the column (NULL -> '{}') and the
 	// inner downloaded_episodes key (missing -> '[]') before appending.
@@ -301,13 +316,13 @@ SET    extra = jsonb_set(
            true
        ),
        updated_at = now()
-WHERE  id = $1`
-	ct, err := r.pool.Exec(ctx, query, id, packed)
+WHERE  id = $1 AND last_checked_at IS NOT DISTINCT FROM $3 AND next_check_at = $4`
+	ct, err := r.pool.Exec(ctx, query, t.ID, packed, t.LastCheckedAt, t.NextCheckAt)
 	if err != nil {
 		return fmt.Errorf("topics: mark episode downloaded: %w", err)
 	}
 	if ct.RowsAffected() == 0 {
-		return ErrNotFound
+		return ErrStaleCheckResult
 	}
 	return nil
 }
@@ -331,14 +346,14 @@ WHERE  id = $1`
 // it, and there is no separate manual-trigger path in the scheduler.
 //
 // Clearing last_checked_at and stamping a fresh next_check_at also invalidates
-// any check already in flight: RecordCheckResult only writes while BOTH
-// columns still hold the values its worker observed, so a check that started
-// before this reset can no longer undo it. Writing next_check_at = now() at
-// microsecond resolution is what makes consecutive resets distinguishable —
-// clearing last_checked_at alone would leave reset #2 with the same NULL token
-// reset #1 produced, and a worker dispatched by reset #1 would happily
-// overwrite reset #2. See the version-token comment above RecordCheckResult
-// for the full reasoning.
+// any check already in flight: RecordCheckResult and MarkEpisodeDownloaded
+// only write while BOTH columns still hold the values their worker observed,
+// so a check that started before this reset can no longer undo it. Writing
+// next_check_at = now() at microsecond resolution is what makes consecutive
+// resets distinguishable — clearing last_checked_at alone would leave reset #2
+// with the same NULL token reset #1 produced, and a worker dispatched by reset
+// #1 would happily overwrite reset #2. See the version-token comment above
+// RecordCheckResult for the full reasoning.
 //
 // Returns ErrNotFound when the topic does not exist or belongs to another user.
 func (r *Topics) ResetCheckState(ctx context.Context, id, userID uuid.UUID) error {

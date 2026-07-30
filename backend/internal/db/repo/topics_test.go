@@ -140,35 +140,67 @@ func TestTopics_UpdateExtra_NilMap_Serialization(t *testing.T) {
 
 // ---------- MarkEpisodeDownloaded ----------
 
+// TestTopics_MarkEpisodeDownloaded_HappyPath also pins the check-state guard.
+// The append fires earlier in a check than RecordCheckResult and writes the
+// very key ResetCheckState deletes, so without the same version token a reset
+// landing between the delivery and the mark strands the episode: removed from
+// the client, deleted from disk, yet flagged as already downloaded.
 func TestTopics_MarkEpisodeDownloaded_HappyPath(t *testing.T) {
 	repo, mock := newMockTopics(t)
 	t.Cleanup(func() { assertExpectationsMet(t, mock) })
 
-	id := uuid.New()
+	observed := time.Now().Add(-time.Minute)
+	next := time.Now().Add(time.Hour)
+	topic := &domain.Topic{ID: uuid.New(), LastCheckedAt: &observed, NextCheckAt: next}
 	packed := "S01E05"
 
-	// Regex-match the jsonb_set expression. Escape parens/dollar signs.
-	mock.ExpectExec(`UPDATE topics\s+SET\s+extra = jsonb_set\(`).
-		WithArgs(id, packed).
+	// Regex-match the jsonb_set expression and the guard. Escape parens/dollars.
+	mock.ExpectExec(`(?s)UPDATE topics\s+SET\s+extra = jsonb_set\(.*`+
+		`WHERE\s+id = \$1 AND last_checked_at IS NOT DISTINCT FROM \$3 AND next_check_at = \$4`).
+		WithArgs(topic.ID, packed, &observed, next).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 
-	if err := repo.MarkEpisodeDownloaded(context.Background(), id, packed); err != nil {
+	if err := repo.MarkEpisodeDownloaded(context.Background(), topic, packed); err != nil {
 		t.Fatalf("MarkEpisodeDownloaded: unexpected error: %v", err)
 	}
 }
 
-func TestTopics_MarkEpisodeDownloaded_NotFound(t *testing.T) {
+// TestTopics_MarkEpisodeDownloaded_StaleWriteIsDropped covers the guard
+// rejecting the append — the topic was reset (or deleted) mid-check. Dropping
+// the mark is correct: the episode is simply re-downloaded next tick, which is
+// what the reset asked for, so the scheduler must get the stale sentinel and
+// not a generic failure it would report as a persistence error.
+func TestTopics_MarkEpisodeDownloaded_StaleWriteIsDropped(t *testing.T) {
 	repo, mock := newMockTopics(t)
 	t.Cleanup(func() { assertExpectationsMet(t, mock) })
 
-	id := uuid.New()
+	stale := time.Now().Add(-time.Hour)
+	topic := &domain.Topic{ID: uuid.New(), LastCheckedAt: &stale, NextCheckAt: time.Now()}
 	mock.ExpectExec(`UPDATE topics\s+SET\s+extra = jsonb_set`).
-		WithArgs(id, "S02E03").
+		WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
 
-	err := repo.MarkEpisodeDownloaded(context.Background(), id, "S02E03")
-	if !errors.Is(err, ErrNotFound) {
-		t.Fatalf("MarkEpisodeDownloaded: want ErrNotFound, got %v", err)
+	err := repo.MarkEpisodeDownloaded(context.Background(), topic, "S02E03")
+	if !errors.Is(err, ErrStaleCheckResult) {
+		t.Fatalf("MarkEpisodeDownloaded: want ErrStaleCheckResult, got %v", err)
+	}
+}
+
+// TestTopics_MarkEpisodeDownloaded_FreshTopicBindsNullToken is the
+// post-reset case: the token is NULL, so it must be bound as such for
+// NULL IS NOT DISTINCT FROM NULL to match and the re-download to be recorded.
+func TestTopics_MarkEpisodeDownloaded_FreshTopicBindsNullToken(t *testing.T) {
+	repo, mock := newMockTopics(t)
+	t.Cleanup(func() { assertExpectationsMet(t, mock) })
+
+	next := time.Now().Add(time.Hour)
+	topic := &domain.Topic{ID: uuid.New(), NextCheckAt: next} // LastCheckedAt nil
+	mock.ExpectExec(`UPDATE topics\s+SET\s+extra = jsonb_set`).
+		WithArgs(topic.ID, "S01E01", (*time.Time)(nil), next).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+
+	if err := repo.MarkEpisodeDownloaded(context.Background(), topic, "S01E01"); err != nil {
+		t.Fatalf("MarkEpisodeDownloaded: unexpected error: %v", err)
 	}
 }
 
@@ -176,13 +208,13 @@ func TestTopics_MarkEpisodeDownloaded_DBError(t *testing.T) {
 	repo, mock := newMockTopics(t)
 	t.Cleanup(func() { assertExpectationsMet(t, mock) })
 
-	id := uuid.New()
+	topic := &domain.Topic{ID: uuid.New(), NextCheckAt: time.Now()}
 	dbErr := errors.New("deadlock detected")
 	mock.ExpectExec(`UPDATE topics\s+SET\s+extra = jsonb_set`).
-		WithArgs(id, "S03E01").
+		WithArgs(topic.ID, "S03E01", pgxmock.AnyArg(), pgxmock.AnyArg()).
 		WillReturnError(dbErr)
 
-	err := repo.MarkEpisodeDownloaded(context.Background(), id, "S03E01")
+	err := repo.MarkEpisodeDownloaded(context.Background(), topic, "S03E01")
 	if err == nil {
 		t.Fatalf("MarkEpisodeDownloaded: want error, got nil")
 	}
