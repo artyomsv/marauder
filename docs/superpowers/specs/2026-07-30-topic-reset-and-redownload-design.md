@@ -109,13 +109,19 @@ Notes:
   `WHERE status IN ('active','error') AND next_check_at <= now()`; there is no
   manual-trigger API and none is added.
 
-**`repo.Deliveries.DeleteForTopic(ctx, topicID uuid.UUID) (int64, error)`** —
-deletes every row for the topic.
+**`repo.Deliveries.DeleteForTopic(ctx, topicID, userID uuid.UUID) (int64, error)`**
+— deletes every row for the topic.
 
 This is mandatory, not cosmetic. `topic_deliveries` has a unique index on
 `(topic_id, infohash)` and `Record` uses `ON CONFLICT DO NOTHING`; a surviving
 row makes the re-delivery record silently vanish, leaving the status endpoint
 permanently empty for that torrent.
+
+The DELETE joins `topics` and keys on the owner (`d.topic_id = t.id AND
+t.id = $1 AND t.user_id = $2`), so ownership is enforced by the statement rather
+than resting on caller discipline. The handler still checks ownership up front
+via a user-scoped `Topics.GetByID` so it can return 404 instead of a silent
+no-op; the join is the second line of defence.
 
 ### `internal/clientremove`
 
@@ -247,6 +253,70 @@ Card contents:
 the delete mutation already does.
 
 All new strings added to both the `en` and `ru` dictionaries.
+
+## Concurrency: a reset landing mid-check
+
+A check can run for tens of seconds (10–20s for a Cloudflare-gated tracker going
+through FlareSolverr), and reset sets `next_check_at = now()`, so a worker being
+in flight while a reset lands is ordinary, not exotic.
+
+Writes that carry a finished check's result back to `topics` are guarded by
+optimistic concurrency on the **pair** `(last_checked_at, next_check_at)` — the
+version token for "the check state as this worker saw it at dispatch". Exactly
+two statements write those columns, `RecordCheckResult` and `ResetCheckState`.
+Both columns are needed: `ResetCheckState` sets `last_checked_at` to NULL, so on
+its own that column cannot tell two consecutive resets apart, and a worker
+dispatched by the first would still match after the second and restore the
+pre-reset hash. `next_check_at = now()` at microsecond resolution is what makes
+each reset distinct.
+
+`RecordCheckResult` and `MarkEpisodeDownloaded` both carry the token and both
+return `repo.ErrStaleCheckResult` when it no longer matches. The scheduler logs
+that at Info and drops the write; for the episode mark it also stops draining
+the batch, so a reset cannot be followed by further episode submissions.
+
+### Known limitation: the mid-check submission window
+
+**This is not fully closed, and deliberately so.**
+
+The reset's removal snapshot (`Deliveries.ListForTopic`, step 1) runs at one
+instant. A torrent that a worker hands to the client *after* that snapshot is
+taken is not in it, so the reset does not remove it. Concretely:
+
+1. worker calls `tr.Download`, then `clientPlugin.Add` — the torrent is now in
+   the client;
+2. reset snapshots the delivery rows (this torrent has no row yet), removes what
+   it found, deletes those rows, clears the check state;
+3. worker inserts the delivery row for the torrent from step 1.
+
+The topic still **converges**: the post-reset check re-detects the release,
+re-delivers it (the client dedups on infohash), and the row is already there or
+is written idempotently under the `(topic_id, infohash)` unique index. Status
+and progress tracking end up correct.
+
+What is **not** guaranteed is `delete_data`. That one torrent's files were never
+deleted, and because clients recheck-and-resume against existing files at the
+save path, a user who reset specifically to purge corrupt data may still have
+it. The torrent is already in the client by the time any database write happens,
+so no write-side guard can retract it.
+
+Note the delivery row itself is **not** the problem and is deliberately left
+unguarded. `recordDelivery` runs strictly after a successful `Add`, so the row
+accurately describes a torrent that is in the client. `topic_deliveries` is a
+mirror of client state, not check-scoped state — it has no "which check" column
+— and it is the sole input to the status view, the progress watcher's
+`ListInFlight`, the reset's own removal snapshot, and the replace-on-update
+snapshot. Rejecting the insert would leave that torrent in the client with no
+row, and therefore invisible to *every future removal* — including a later reset
+with `delete_data`, and including replace-on-update. That converts a one-time
+missed file into a permanently untracked torrent whenever no subsequent check
+succeeds (a paused topic, a deleted topic, a tracker that stays down). Guarding
+the insert would make this limitation worse, not better.
+
+Fully closing the window needs a claim-on-dispatch marker (the reset refusing to
+proceed, or waiting, while a check holds the topic) or a per-topic lock spanning
+submission and reset. Both add a blocking path to an endpoint that bulk reset
+calls N times concurrently. Judged out of scope for this change.
 
 ## Testing
 
