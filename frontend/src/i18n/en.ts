@@ -232,11 +232,10 @@ const en: Record<string, string> = {
   "topics.delivery.copied": "Copied",
 
   // Reset topic (discard deliveries/progress/error state, re-check from scratch)
-  "topics.reset.action": "Reset topic",
   "topics.reset.title": "Reset {name}",
   "topics.reset.titleBulk": "Reset {count} topics",
   "topics.reset.body":
-    "Discards delivery records, downloaded-episode progress and error state, then checks again immediately so everything is downloaded from scratch. Settings and history are kept. A paused topic stays paused.",
+    "Discards delivery records, downloaded-episode progress and error state, then checks again immediately so everything is downloaded from scratch. Settings and event history are kept. A paused topic stays paused.",
   "topics.reset.deleteData": "Also delete the downloaded files from the client",
   "topics.reset.confirm": "Reset",
   "topics.reset.cancel": "Cancel",
