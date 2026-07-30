@@ -259,7 +259,7 @@ const en: Record<string, string> = {
   "events.download_completed": "download finished",
   "events.check_failed": "error",
   "events.session_expired": "session expired",
-  "events.topic_reset": "Topic reset",
+  "events.topic_reset": "topic reset",
 
   // Topic history timeline
   "topics.history.empty": "No history yet",
