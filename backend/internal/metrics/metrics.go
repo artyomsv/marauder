@@ -115,6 +115,22 @@ var (
 	)
 )
 
+// Topic reset metrics ------------------------------------------------------
+
+var (
+	// TopicResetRemovedTotal counts torrents the topic reset endpoint removed
+	// from a client, partitioned by client and result ("ok", or one of the
+	// clientremove failure reasons: lookup / no_plugin / unsupported /
+	// decrypt / error).
+	TopicResetRemovedTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "marauder_topic_reset_removed_total",
+			Help: "Number of torrents removed from a client by a topic reset, partitioned by client and result.",
+		},
+		[]string{"client", "result"},
+	)
+)
+
 // Tracker domain metrics --------------------------------------------------
 
 var (

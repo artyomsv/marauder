@@ -12,9 +12,11 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/artyomsv/marauder/backend/internal/api/middleware"
+	"github.com/artyomsv/marauder/backend/internal/clientremove"
 	"github.com/artyomsv/marauder/backend/internal/db/repo"
 	"github.com/artyomsv/marauder/backend/internal/domain"
 	"github.com/artyomsv/marauder/backend/internal/events"
+	"github.com/artyomsv/marauder/backend/internal/metrics"
 	"github.com/artyomsv/marauder/backend/internal/plugins/registry"
 	"github.com/artyomsv/marauder/backend/internal/problem"
 	"github.com/artyomsv/marauder/backend/internal/topics"
@@ -31,6 +33,7 @@ type topicStore interface {
 	Delete(ctx context.Context, id, userID uuid.UUID) error
 	UpdateStatus(ctx context.Context, id, userID uuid.UUID, status domain.TopicStatus) error
 	Update(ctx context.Context, id, userID uuid.UUID, displayName string, clientID, notifierID *uuid.UUID, downloadDir, category string, replaceOnUpdate, replaceDeleteData bool, extra map[string]any) (*domain.Topic, error)
+	ResetCheckState(ctx context.Context, id, userID uuid.UUID) error
 }
 
 // deliveriesStore is the consumer seam over *repo.Deliveries for the
@@ -38,6 +41,7 @@ type topicStore interface {
 // deliveries rather than failing.
 type deliveriesStore interface {
 	ListForTopic(ctx context.Context, topicID uuid.UUID) ([]*domain.TopicDelivery, error)
+	DeleteForTopic(ctx context.Context, topicID uuid.UUID) (int64, error)
 }
 
 // clientsLookup is the consumer seam over *repo.Clients used to resolve a
@@ -60,6 +64,13 @@ type configDecryptor interface {
 	Decrypt(ct, nonce []byte) ([]byte, error)
 }
 
+// torrentRemover is the consumer seam over *clientremove.Remover so handler
+// tests can substitute a fake. Nil-safe: an unset remover skips client removal
+// and reports it as a warning rather than failing the reset.
+type torrentRemover interface {
+	Remove(ctx context.Context, userID uuid.UUID, byClient map[uuid.UUID][]string, deleteData bool) []clientremove.Result
+}
+
 // Topics is the handler group for /topics.
 type Topics struct {
 	Topics     topicStore
@@ -71,6 +82,9 @@ type Topics struct {
 	// Emit is an optional hook called after a topic is successfully created.
 	// Nil-safe: existing handler tests that don't set Emit continue to pass.
 	Emit func(ctx context.Context, ev events.Event)
+	// Remover removes already-delivered torrents from their client on reset.
+	// Nil-safe (see torrentRemover).
+	Remover torrentRemover
 }
 
 type createTopicReq struct {
@@ -509,6 +523,157 @@ func (h *Topics) setStatus(w http.ResponseWriter, r *http.Request, status domain
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// resetTopicReq is the POST /topics/{id}/reset body.
+type resetTopicReq struct {
+	// DeleteData also deletes the torrents' on-disk data. Defaults to false
+	// when omitted: deleting data is irreversible, so it is opt-in. It is a
+	// per-action choice, deliberately independent of the topic's stored
+	// replace_delete_data policy.
+	DeleteData bool `json:"delete_data"`
+}
+
+// resetTopicResp reports what the reset managed to do. Warnings is never null
+// so the frontend can iterate it unconditionally.
+type resetTopicResp struct {
+	// Removed counts torrents confirmed removed from a client — not delivery
+	// rows deleted. The two differ whenever a removal failed, because rows are
+	// deleted regardless.
+	Removed  int      `json:"removed"`
+	Warnings []string `json:"warnings"`
+}
+
+// Reset handles POST /topics/{id}/reset. It discards the topic's check and
+// download state so the next check re-detects the current release as new and
+// re-delivers it, after removing the already-delivered torrents from the
+// client(s) that hold them.
+//
+// Client removal is fail-open: the broken client is usually the reason the
+// user is resetting, so a removal failure becomes a warning rather than
+// blocking the reset. Everything after it is fail-closed, and the state reset
+// runs last because it is the step that arms the scheduler — if an earlier
+// step dies, the topic is simply not reset yet and the action can be retried.
+func (h *Topics) Reset(w http.ResponseWriter, r *http.Request) {
+	uid, perr := currentUserID(r)
+	if perr != nil {
+		problem.Write(w, r, h.BaseURL, perr)
+		return
+	}
+	id, ierr := uuid.Parse(chi.URLParam(r, "id"))
+	if ierr != nil {
+		problem.Write(w, r, h.BaseURL, problem.ErrBadRequest("invalid topic id"))
+		return
+	}
+	var req resetTopicReq
+	// An empty or malformed body means "reset with defaults" — delete_data
+	// false. The only field is a bool, so there is nothing to reject.
+	_ = json.NewDecoder(r.Body).Decode(&req)
+
+	topic, gerr := h.Topics.GetByID(r.Context(), id, &uid)
+	if gerr != nil {
+		if errors.Is(gerr, repo.ErrNotFound) {
+			problem.Write(w, r, h.BaseURL, problem.ErrNotFound("topic not found"))
+			return
+		}
+		problem.Write(w, r, h.BaseURL, problem.ErrInternal(gerr.Error()))
+		return
+	}
+
+	removed, warnings := h.removeDeliveredTorrents(r.Context(), topic, uid, req.DeleteData)
+
+	if h.Deliveries != nil {
+		if _, derr := h.Deliveries.DeleteForTopic(r.Context(), id); derr != nil {
+			// Fail-closed: a surviving row makes the re-delivery record a
+			// silent no-op (unique index + ON CONFLICT DO NOTHING), so the
+			// topic must not be armed for a re-check.
+			problem.Write(w, r, h.BaseURL, problem.ErrInternal(derr.Error()))
+			return
+		}
+	}
+
+	if rerr := h.Topics.ResetCheckState(r.Context(), id, uid); rerr != nil {
+		if errors.Is(rerr, repo.ErrNotFound) {
+			problem.Write(w, r, h.BaseURL, problem.ErrNotFound("topic not found"))
+			return
+		}
+		problem.Write(w, r, h.BaseURL, problem.ErrInternal(rerr.Error()))
+		return
+	}
+
+	if h.Emit != nil {
+		h.Emit(r.Context(), events.Event{
+			UserID:     topic.UserID,
+			TopicID:    &topic.ID,
+			NotifierID: topic.NotifierID,
+			Type:       events.TopicReset,
+			Severity:   "info",
+			Title:      topic.DisplayName,
+			Body:       "Topic reset — will re-download from scratch",
+			Link:       h.BaseURL + "/topics",
+			SourceURL:  topic.URL,
+		})
+	}
+
+	writeJSON(w, http.StatusOK, resetTopicResp{Removed: removed, Warnings: warnings})
+}
+
+// removeDeliveredTorrents removes every torrent the topic has delivered from
+// the client it was delivered to. Returns the number of torrents confirmed
+// removed and a human-readable warning per client that refused or could not be
+// reached. Never fails the reset.
+func (h *Topics) removeDeliveredTorrents(ctx context.Context, topic *domain.Topic, uid uuid.UUID, deleteData bool) (int, []string) {
+	warnings := []string{}
+	if h.Deliveries == nil {
+		return 0, warnings
+	}
+	deliveries, err := h.Deliveries.ListForTopic(ctx, topic.ID)
+	if err != nil {
+		return 0, append(warnings, "could not list delivered torrents: "+err.Error())
+	}
+	byClient := clientremove.GroupByClient(deliveries)
+	if len(byClient) == 0 {
+		return 0, warnings
+	}
+	if h.Remover == nil {
+		return 0, append(warnings, "torrent removal is not configured; the old torrents were left in the client")
+	}
+
+	removed := 0
+	for _, res := range h.Remover.Remove(ctx, uid, byClient, deleteData) {
+		n := float64(len(res.Hashes))
+		name := res.ClientName
+		if name == "" {
+			name = "unknown"
+		}
+		if res.OK {
+			removed += len(res.Hashes)
+			metrics.TopicResetRemovedTotal.WithLabelValues(name, "ok").Add(n)
+			continue
+		}
+		metrics.TopicResetRemovedTotal.WithLabelValues(name, res.Reason).Add(n)
+		warnings = append(warnings, name+": "+removalWarning(res))
+	}
+	return removed, warnings
+}
+
+// removalWarning renders one failed removal as a sentence the user can act on.
+func removalWarning(res clientremove.Result) string {
+	switch res.Reason {
+	case clientremove.ReasonLookup:
+		return "the client this torrent was sent to no longer exists; it was left in place"
+	case clientremove.ReasonNoPlugin:
+		return "this client's plugin is not installed; the torrent was left in place"
+	case clientremove.ReasonUnsupported:
+		return "this client cannot remove torrents; remove it there by hand"
+	case clientremove.ReasonDecrypt:
+		return "the stored client config could not be read; the torrent was left in place"
+	default:
+		if res.Err != nil {
+			return "removal failed: " + res.Err.Error()
+		}
+		return "removal failed"
+	}
 }
 
 // --- helpers ------------------------------------------------------------

@@ -17,10 +17,18 @@ import (
 
 type fakeDeliveriesStore struct {
 	items []*domain.TopicDelivery
+
+	deleted   bool
+	deleteErr error
 }
 
 func (f *fakeDeliveriesStore) ListForTopic(context.Context, uuid.UUID) ([]*domain.TopicDelivery, error) {
 	return f.items, nil
+}
+
+func (f *fakeDeliveriesStore) DeleteForTopic(context.Context, uuid.UUID) (int64, error) {
+	f.deleted = true
+	return int64(len(f.items)), f.deleteErr
 }
 
 type fakeClientsLookup struct{ client *domain.Client }
