@@ -53,7 +53,10 @@ import (
 // topicsRepo is the subset of *repo.Topics that the scheduler uses.
 type topicsRepo interface {
 	DueForCheck(ctx context.Context, limit int) ([]*domain.Topic, error)
-	RecordCheckResult(ctx context.Context, id uuid.UUID, hash string, updated bool, nextCheckAt time.Time, errMsg, errCode string) error
+	// RecordCheckResult takes the whole topic, not just its id, because the
+	// write is guarded on the last_checked_at the worker observed at dispatch
+	// (repo.ErrStaleCheckResult when it no longer matches).
+	RecordCheckResult(ctx context.Context, t *domain.Topic, hash string, updated bool, nextCheckAt time.Time, errMsg, errCode string) error
 	UpdateExtra(ctx context.Context, id uuid.UUID, extra map[string]any) error
 }
 
@@ -328,15 +331,27 @@ func (s *Scheduler) worker(ctx context.Context, id int) {
 // #126 Phase 2): a timeout or unreachable classification means the
 // tracker's current domain may be dead, so the store gets a chance to
 // rotate to a configured mirror (cooldown-gated on its side).
-func (s *Scheduler) recordResult(ctx context.Context, log zerolog.Logger, id uuid.UUID, trackerName string, hash string, updated bool, nextCheckAt time.Time, errMsg string) {
+func (s *Scheduler) recordResult(ctx context.Context, log zerolog.Logger, t *domain.Topic, hash string, updated bool, nextCheckAt time.Time, errMsg string) {
 	var errCode string
 	if errMsg != "" {
 		errCode = classifyError(errMsg)
 	}
 	if s.domains != nil && (errCode == errCodeTimeout || errCode == errCodeUnreachable) {
-		s.domains.ReportFailure(ctx, trackerName)
+		s.domains.ReportFailure(ctx, t.TrackerName)
 	}
-	if err := s.topics.RecordCheckResult(ctx, id, hash, updated, nextCheckAt, errMsg, errCode); err != nil {
+	err := s.topics.RecordCheckResult(ctx, t, hash, updated, nextCheckAt, errMsg, errCode)
+	switch {
+	case errors.Is(err, repo.ErrStaleCheckResult):
+		// The topic was reset (or deleted) while this check was running, so
+		// the result describes state that no longer exists and the guard threw
+		// it away. Info, not Warn: this is the designed outcome of a user
+		// action, and there is nothing for anyone to act on.
+		log.Info().
+			Str("hash", hash).
+			Bool("updated", updated).
+			Str("error_code", errCode).
+			Msg("check result discarded: topic state changed mid-check")
+	case err != nil:
 		log.Warn().Err(err).Msg("RecordCheckResult failed")
 	}
 }
@@ -362,7 +377,7 @@ func (s *Scheduler) runCheck(ctx context.Context, log zerolog.Logger, t *domain.
 	if tr == nil {
 		log.Error().Msg("no registered tracker")
 		metrics.SchedulerTopicChecksTotal.WithLabelValues(t.TrackerName, "no_plugin").Inc()
-		s.recordResult(ctx, log, t.ID, t.TrackerName, "", false, s.backoff(t, true, nil), "tracker plugin not installed")
+		s.recordResult(ctx, log, t, "", false, s.backoff(t, true, nil), "tracker plugin not installed")
 		s.notifyError(ctx, t, "tracker plugin not installed")
 		s.recordChecked(false, true)
 		return
@@ -390,7 +405,7 @@ func (s *Scheduler) runCheck(ctx context.Context, log zerolog.Logger, t *domain.
 	if err != nil {
 		log.Warn().Err(err).Msg("check failed")
 		metrics.SchedulerTopicChecksTotal.WithLabelValues(t.TrackerName, "error").Inc()
-		s.recordResult(ctx, log, t.ID, t.TrackerName, "", false, s.backoff(t, true, err), err.Error())
+		s.recordResult(ctx, log, t, "", false, s.backoff(t, true, err), err.Error())
 		s.notifyError(ctx, t, err.Error())
 		s.recordChecked(false, true)
 		return
@@ -462,7 +477,7 @@ func (s *Scheduler) runCheck(ctx context.Context, log zerolog.Logger, t *domain.
 				log.Warn().Err(dlErr).Msg("download failed")
 				metrics.SchedulerTopicChecksTotal.WithLabelValues(t.TrackerName, "download_error").Inc()
 			}
-			s.recordResult(ctx, log, t.ID, t.TrackerName, t.LastHash, anySubmitted, s.backoff(t, true, dlErr), dlErr.Error())
+			s.recordResult(ctx, log, t, t.LastHash, anySubmitted, s.backoff(t, true, dlErr), dlErr.Error())
 			s.notifyError(ctx, t, dlErr.Error())
 			s.recordChecked(true, true)
 			return
@@ -502,7 +517,7 @@ func (s *Scheduler) runCheck(ctx context.Context, log zerolog.Logger, t *domain.
 			Data: map[string]any{"next_check_at": nextCheckAt.UTC().Format(time.RFC3339)},
 		})
 	}
-	s.recordResult(ctx, log, t.ID, t.TrackerName, check.Hash, updated || anySubmitted, nextCheckAt, "")
+	s.recordResult(ctx, log, t, check.Hash, updated || anySubmitted, nextCheckAt, "")
 	s.recordChecked(updated || anySubmitted, false)
 }
 
@@ -648,7 +663,7 @@ func (s *Scheduler) loadCredentials(ctx context.Context, checkCtx context.Contex
 		}
 		log.Warn().Err(loginErr).Msg("tracker login failed")
 		metrics.SchedulerTopicChecksTotal.WithLabelValues(t.TrackerName, "auth_error").Inc()
-		s.recordResult(ctx, log, t.ID, t.TrackerName, "", false, s.backoff(t, true, loginErr), "auth failed: "+loginErr.Error())
+		s.recordResult(ctx, log, t, "", false, s.backoff(t, true, loginErr), "auth failed: "+loginErr.Error())
 		s.recordChecked(false, true)
 		return nil, false
 	}

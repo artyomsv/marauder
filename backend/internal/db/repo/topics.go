@@ -166,9 +166,34 @@ func (r *Topics) UpdateStatus(ctx context.Context, id uuid.UUID, userID uuid.UUI
 	return err
 }
 
+// ErrStaleCheckResult is returned by RecordCheckResult when the topic's check
+// state changed between the worker observing it and writing its result back —
+// in practice a reset landing mid-check, or the topic being deleted. The write
+// is discarded on purpose; it describes state that no longer exists. Callers
+// should log it and carry on, not treat it as a persistence failure.
+var ErrStaleCheckResult = errors.New("stale check result")
+
 // RecordCheckResult updates the state after a scheduler run.
+//
+// The write is guarded by optimistic concurrency on last_checked_at ($7): it
+// lands only while the column still holds the value the worker observed when
+// the topic was dispatched. last_checked_at is written by exactly two
+// statements — this one and ResetCheckState — which makes it a version token
+// for "the check state as this worker saw it".
+//
+// Without the guard a reset that lands mid-check is silently undone: the
+// worker finishes, writes back the pre-reset hash and a backoff next_check_at,
+// and the topic looks like it was never reset — except its torrents are gone
+// from the client (and its files off disk, if the user ticked delete_data).
+// Nothing re-downloads until the tracker's own hash changes.
+//
+// The comparison is IS NOT DISTINCT FROM, not =: ResetCheckState sets the
+// column to NULL, and `= NULL` is never true, so the fresh post-reset check —
+// which observes NULL — could otherwise never persist its own result.
+//
+// Returns ErrStaleCheckResult when the guard rejected the write.
 func (r *Topics) RecordCheckResult(
-	ctx context.Context, id uuid.UUID, hash string, updated bool,
+	ctx context.Context, t *domain.Topic, hash string, updated bool,
 	nextCheckAt time.Time, errMsg, errCode string,
 ) error {
 	q := `
@@ -182,9 +207,15 @@ UPDATE topics SET
     consecutive_errors = CASE WHEN $5 = '' THEN 0 ELSE consecutive_errors + 1 END,
     status            = CASE WHEN $5 = '' THEN 'active' ELSE 'error' END,
     updated_at        = now()
-WHERE id = $1`
-	_, err := r.pool.Exec(ctx, q, id, hash, updated, nextCheckAt, errMsg, errCode)
-	return err
+WHERE id = $1 AND last_checked_at IS NOT DISTINCT FROM $7`
+	ct, err := r.pool.Exec(ctx, q, t.ID, hash, updated, nextCheckAt, errMsg, errCode, t.LastCheckedAt)
+	if err != nil {
+		return fmt.Errorf("topics: record check result: %w", err)
+	}
+	if ct.RowsAffected() == 0 {
+		return ErrStaleCheckResult
+	}
+	return nil
 }
 
 // UpdateExtra overwrites the topic.extra JSONB blob with the supplied
@@ -274,6 +305,11 @@ WHERE  id = $1`
 //
 // next_check_at = now() is what "check now" means here: DueForCheck selects on
 // it, and there is no separate manual-trigger path in the scheduler.
+//
+// Clearing last_checked_at also invalidates any check already in flight:
+// RecordCheckResult only writes while that column still holds the value its
+// worker observed, so a check that started before this reset can no longer
+// undo it. See RecordCheckResult for the full reasoning.
 //
 // Returns ErrNotFound when the topic does not exist or belongs to another user.
 func (r *Topics) ResetCheckState(ctx context.Context, id, userID uuid.UUID) error {

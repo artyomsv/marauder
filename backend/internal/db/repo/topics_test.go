@@ -576,16 +576,82 @@ func TestTopics_RecordCheckResult_PersistsErrorCode(t *testing.T) {
 	repo, mock := newMockTopics(t)
 	t.Cleanup(func() { assertExpectationsMet(t, mock) })
 
-	id := uuid.New()
+	observed := time.Now().Add(-time.Minute)
+	topic := &domain.Topic{ID: uuid.New(), LastCheckedAt: &observed}
 	next := time.Now().Add(time.Hour)
 	mock.ExpectExec(`UPDATE topics SET[\s\S]*last_error_code\s+= CASE WHEN \$5 = '' THEN '' ELSE \$6 END[\s\S]*WHERE id = \$1`).
-		WithArgs(id, "", false, next, "kinozal GET: context deadline exceeded", "timeout").
+		WithArgs(topic.ID, "", false, next, "kinozal GET: context deadline exceeded", "timeout", &observed).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 
-	err := repo.RecordCheckResult(context.Background(), id, "", false, next,
+	err := repo.RecordCheckResult(context.Background(), topic, "", false, next,
 		"kinozal GET: context deadline exceeded", "timeout")
 	if err != nil {
 		t.Fatalf("RecordCheckResult: unexpected error: %v", err)
+	}
+}
+
+// TestTopics_RecordCheckResult_GuardsOnObservedLastCheckedAt pins the
+// optimistic-concurrency guard: the WHERE clause must compare last_checked_at
+// against the value the worker observed at dispatch, and it must use IS NOT
+// DISTINCT FROM rather than = so a post-reset NULL still matches. Losing
+// either half silently re-opens the race where a reset landing mid-check is
+// overwritten by the finishing check.
+func TestTopics_RecordCheckResult_GuardsOnObservedLastCheckedAt(t *testing.T) {
+	repo, mock := newMockTopics(t)
+	t.Cleanup(func() { assertExpectationsMet(t, mock) })
+
+	observed := time.Now().Add(-time.Minute)
+	topic := &domain.Topic{ID: uuid.New(), LastCheckedAt: &observed}
+	next := time.Now().Add(time.Hour)
+
+	mock.ExpectExec(`UPDATE topics SET[\s\S]*WHERE id = \$1 AND last_checked_at IS NOT DISTINCT FROM \$7`).
+		WithArgs(topic.ID, "new-hash", true, next, "", "", &observed).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+
+	if err := repo.RecordCheckResult(context.Background(), topic, "new-hash", true, next, "", ""); err != nil {
+		t.Fatalf("RecordCheckResult: unexpected error: %v", err)
+	}
+}
+
+// TestTopics_RecordCheckResult_FreshTopicBindsNullToken covers the topic that
+// has never been checked (and the topic just reset): the observed token is
+// NULL, which must be bound as such so NULL IS NOT DISTINCT FROM NULL matches
+// and the check's own result lands.
+func TestTopics_RecordCheckResult_FreshTopicBindsNullToken(t *testing.T) {
+	repo, mock := newMockTopics(t)
+	t.Cleanup(func() { assertExpectationsMet(t, mock) })
+
+	topic := &domain.Topic{ID: uuid.New()} // LastCheckedAt nil
+	next := time.Now().Add(time.Hour)
+
+	mock.ExpectExec(`UPDATE topics SET[\s\S]*last_checked_at IS NOT DISTINCT FROM \$7`).
+		WithArgs(topic.ID, "new-hash", true, next, "", "", (*time.Time)(nil)).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+
+	if err := repo.RecordCheckResult(context.Background(), topic, "new-hash", true, next, "", ""); err != nil {
+		t.Fatalf("RecordCheckResult: unexpected error: %v", err)
+	}
+}
+
+// TestTopics_RecordCheckResult_StaleWriteIsDropped asserts that zero rows
+// affected — the guard rejecting a write whose topic moved on — reports
+// ErrStaleCheckResult rather than a generic failure or a panic. Dropping the
+// write is the correct outcome; the scheduler logs it and carries on.
+func TestTopics_RecordCheckResult_StaleWriteIsDropped(t *testing.T) {
+	repo, mock := newMockTopics(t)
+	t.Cleanup(func() { assertExpectationsMet(t, mock) })
+
+	stale := time.Now().Add(-time.Hour)
+	topic := &domain.Topic{ID: uuid.New(), LastCheckedAt: &stale}
+
+	mock.ExpectExec(`UPDATE topics SET`).
+		WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
+			pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
+
+	err := repo.RecordCheckResult(context.Background(), topic, "new-hash", true, time.Now(), "", "")
+	if !errors.Is(err, ErrStaleCheckResult) {
+		t.Fatalf("RecordCheckResult: want ErrStaleCheckResult, got %v", err)
 	}
 }
 
@@ -596,13 +662,14 @@ func TestTopics_RecordCheckResult_SuccessClearsCode(t *testing.T) {
 	repo, mock := newMockTopics(t)
 	t.Cleanup(func() { assertExpectationsMet(t, mock) })
 
-	id := uuid.New()
+	observed := time.Now().Add(-time.Minute)
+	topic := &domain.Topic{ID: uuid.New(), LastCheckedAt: &observed}
 	next := time.Now().Add(time.Hour)
 	mock.ExpectExec(`UPDATE topics SET[\s\S]*last_error_code\s+= CASE WHEN \$5 = '' THEN '' ELSE \$6 END`).
-		WithArgs(id, "new-hash", true, next, "", "").
+		WithArgs(topic.ID, "new-hash", true, next, "", "", &observed).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 
-	err := repo.RecordCheckResult(context.Background(), id, "new-hash", true, next, "", "")
+	err := repo.RecordCheckResult(context.Background(), topic, "new-hash", true, next, "", "")
 	if err != nil {
 		t.Fatalf("RecordCheckResult: unexpected error: %v", err)
 	}

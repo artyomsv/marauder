@@ -14,6 +14,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/artyomsv/marauder/backend/internal/config"
+	"github.com/artyomsv/marauder/backend/internal/db/repo"
 	"github.com/artyomsv/marauder/backend/internal/domain"
 	"github.com/artyomsv/marauder/backend/internal/events"
 	"github.com/artyomsv/marauder/backend/internal/plugins/registry"
@@ -33,6 +34,10 @@ type fakeTracker struct {
 	// scheduler treats it as a per-episode tracker (replace-on-update is then
 	// skipped to protect sibling episodes — issue #101).
 	episodic bool
+	// onCheck runs at the top of Check, before the configured result is
+	// returned. It is the seam for simulating something happening to the topic
+	// while the worker is out at the tracker — a reset, say.
+	onCheck func()
 
 	callsCheck    int
 	callsDownload int
@@ -56,6 +61,9 @@ func (f *fakeTracker) Parse(_ context.Context, _ string) (*domain.Topic, error) 
 }
 
 func (f *fakeTracker) Check(_ context.Context, _ *domain.Topic, _ *domain.TrackerCredential) (*domain.Check, error) {
+	if f.onCheck != nil {
+		f.onCheck()
+	}
 	idx := f.callsCheck
 	if idx >= len(f.checks) {
 		idx = len(f.checks) - 1
@@ -93,6 +101,7 @@ type fakeTopics struct {
 
 type recordCall struct {
 	id          uuid.UUID
+	observed    *time.Time // the last_checked_at the worker carried in
 	hash        string
 	updated     bool
 	nextCheckAt time.Time
@@ -119,8 +128,8 @@ func (f *fakeTopics) DueForCheck(_ context.Context, _ int) ([]*domain.Topic, err
 	return nil, nil
 }
 
-func (f *fakeTopics) RecordCheckResult(_ context.Context, id uuid.UUID, hash string, updated bool, nextCheckAt time.Time, errMsg, errCode string) error {
-	f.recordCalls = append(f.recordCalls, recordCall{id, hash, updated, nextCheckAt, errMsg, errCode})
+func (f *fakeTopics) RecordCheckResult(_ context.Context, t *domain.Topic, hash string, updated bool, nextCheckAt time.Time, errMsg, errCode string) error {
+	f.recordCalls = append(f.recordCalls, recordCall{t.ID, t.LastCheckedAt, hash, updated, nextCheckAt, errMsg, errCode})
 	return nil
 }
 
@@ -1899,9 +1908,9 @@ func TestClassifyError_MapsKnownPatternsToCodes(t *testing.T) {
 
 func TestRecordResult_ClassifiesAndPersistsErrorCode(t *testing.T) {
 	f := newFixture(t, &fakeTracker{}, false)
-	id := uuid.New()
+	topic := &domain.Topic{ID: uuid.New(), TrackerName: "kinozal"}
 	f.s.recordResult(
-		context.Background(), zerolog.Nop(), id, "kinozal", "", false,
+		context.Background(), zerolog.Nop(), topic, "", false,
 		time.Now(), `kinozal GET: Get "https://kinozal.tv/details.php?id=1": context deadline exceeded`,
 	)
 	if len(f.topics.recordCalls) != 1 {
@@ -1914,8 +1923,8 @@ func TestRecordResult_ClassifiesAndPersistsErrorCode(t *testing.T) {
 
 func TestRecordResult_SuccessLeavesErrorCodeEmpty(t *testing.T) {
 	f := newFixture(t, &fakeTracker{}, false)
-	id := uuid.New()
-	f.s.recordResult(context.Background(), zerolog.Nop(), id, "faketracker", "abc", true, time.Now(), "")
+	topic := &domain.Topic{ID: uuid.New(), TrackerName: "faketracker"}
+	f.s.recordResult(context.Background(), zerolog.Nop(), topic, "abc", true, time.Now(), "")
 	if len(f.topics.recordCalls) != 1 {
 		t.Fatalf("want 1 record call, got %d", len(f.topics.recordCalls))
 	}
@@ -1964,7 +1973,8 @@ func TestRecordResult_NetworkError_ReportsDomainFailure(t *testing.T) {
 			rot := &fakeRotator{}
 			f := newFixture(t, &fakeTracker{}, false)
 			f.s.domains = rot
-			f.s.recordResult(context.Background(), zerolog.Nop(), uuid.New(), "kinozal",
+			topic := &domain.Topic{ID: uuid.New(), TrackerName: "kinozal"}
+			f.s.recordResult(context.Background(), zerolog.Nop(), topic,
 				"", false, time.Now(), tt.errMsg)
 			if len(rot.calls) != tt.wantCalls {
 				t.Errorf("ReportFailure calls = %d, want %d", len(rot.calls), tt.wantCalls)
@@ -1973,5 +1983,129 @@ func TestRecordResult_NetworkError_ReportsDomainFailure(t *testing.T) {
 				t.Errorf("ReportFailure tracker = %q, want kinozal", rot.calls[0])
 			}
 		})
+	}
+}
+
+// --- Stale-write guard: a reset landing mid-check ------------------------
+
+// fakeTopicsGuarded models repo.Topics' optimistic-concurrency guard on
+// last_checked_at in memory: it holds the persisted state and accepts a
+// RecordCheckResult only while the token the caller observed still matches.
+//
+// The guard itself is SQL (`WHERE ... last_checked_at IS NOT DISTINCT FROM $7`)
+// and is pinned by repo's pgxmock tests. This fake exists to prove the other
+// half — that the scheduler carries the observed token through to the write and
+// survives a rejection without undoing the reset.
+type fakeTopicsGuarded struct {
+	fakeTopics
+
+	lastCheckedAt *time.Time // the version token, as persisted
+	lastHash      string
+	accepted      int
+	rejected      int
+}
+
+func (f *fakeTopicsGuarded) RecordCheckResult(_ context.Context, t *domain.Topic, hash string, updated bool, nextCheckAt time.Time, errMsg, errCode string) error {
+	f.recordCalls = append(f.recordCalls, recordCall{t.ID, t.LastCheckedAt, hash, updated, nextCheckAt, errMsg, errCode})
+	if !sameInstant(f.lastCheckedAt, t.LastCheckedAt) {
+		f.rejected++
+		return repo.ErrStaleCheckResult
+	}
+	f.accepted++
+	now := time.Now()
+	f.lastCheckedAt = &now
+	if hash != "" {
+		f.lastHash = hash
+	}
+	return nil
+}
+
+// reset mirrors what repo.Topics.ResetCheckState does to the guard's inputs.
+func (f *fakeTopicsGuarded) reset() {
+	f.lastCheckedAt = nil
+	f.lastHash = ""
+}
+
+// sameInstant is the Go equivalent of SQL's IS NOT DISTINCT FROM over a
+// nullable timestamp: two NULLs match, a NULL and a value do not.
+func sameInstant(a, b *time.Time) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return a.Equal(*b)
+}
+
+// TestRunCheck_ResetMidCheck_DoesNotClobberReset reproduces the race the
+// last_checked_at guard exists for. A worker is out at the tracker when the
+// user resets the topic; the reset removes the delivered torrents, drops the
+// hash and queues an immediate re-check. Without the guard the worker's write
+// lands afterwards and restores the pre-reset hash plus a backoff
+// next_check_at — the topic then looks like it was never reset, except its
+// torrents are gone from the client, and nothing re-downloads until the
+// tracker's own hash changes.
+func TestRunCheck_ResetMidCheck_DoesNotClobberReset(t *testing.T) {
+	observed := time.Now().Add(-time.Hour)
+	guarded := &fakeTopicsGuarded{lastCheckedAt: &observed, lastHash: "old-hash"}
+
+	tr := &fakeTracker{
+		name:      "faketracker",
+		checks:    []checkResult{{check: &domain.Check{Hash: "new-hash"}}},
+		downloads: []downloadResult{{payload: &domain.Payload{MagnetURI: "magnet:?xt=urn:btih:abc"}}},
+	}
+	f := newFixture(t, tr, false)
+	f.s.topics = guarded
+	f.topic.LastCheckedAt = &observed
+	// The reset lands while the worker is inside tr.Check.
+	tr.onCheck = guarded.reset
+
+	f.s.runCheck(context.Background(), f.s.log, f.topic)
+
+	// f.topics is the fixture's default fake; the guarded one replaced it on
+	// s.topics, so its own call log is the authoritative record here.
+	if len(guarded.recordCalls) != 1 {
+		t.Fatalf("want 1 RecordCheckResult call, got %d", len(guarded.recordCalls))
+	}
+	rec := guarded.recordCalls[0]
+	if rec.observed == nil || !rec.observed.Equal(observed) {
+		t.Fatalf("worker carried observed last_checked_at %v, want %v", rec.observed, observed)
+	}
+	if guarded.accepted != 0 || guarded.rejected != 1 {
+		t.Fatalf("stale write not rejected: accepted=%d rejected=%d", guarded.accepted, guarded.rejected)
+	}
+	if guarded.lastHash != "" {
+		t.Errorf("reset clobbered: last_hash = %q, want empty", guarded.lastHash)
+	}
+	if guarded.lastCheckedAt != nil {
+		t.Errorf("reset clobbered: last_checked_at = %v, want nil", guarded.lastCheckedAt)
+	}
+}
+
+// TestRunCheck_AfterReset_WritesResult is the other half of the guard. The
+// fresh check that a reset queues observes last_checked_at = NULL, and NULL IS
+// NOT DISTINCT FROM NULL is true, so its result must land — a `= $7` guard
+// would silently drop every post-reset check instead.
+func TestRunCheck_AfterReset_WritesResult(t *testing.T) {
+	guarded := &fakeTopicsGuarded{} // freshly reset: no token, no hash
+
+	tr := &fakeTracker{
+		name:      "faketracker",
+		checks:    []checkResult{{check: &domain.Check{Hash: "new-hash"}}},
+		downloads: []downloadResult{{payload: &domain.Payload{MagnetURI: "magnet:?xt=urn:btih:abc"}}},
+	}
+	f := newFixture(t, tr, false)
+	f.s.topics = guarded
+	f.topic.LastCheckedAt = nil
+	f.topic.LastHash = ""
+
+	f.s.runCheck(context.Background(), f.s.log, f.topic)
+
+	if guarded.accepted != 1 || guarded.rejected != 0 {
+		t.Fatalf("post-reset write not accepted: accepted=%d rejected=%d", guarded.accepted, guarded.rejected)
+	}
+	if guarded.lastHash != "new-hash" {
+		t.Errorf("last_hash = %q, want new-hash", guarded.lastHash)
+	}
+	if f.clientPlugin.addCalls != 1 {
+		t.Errorf("client Add calls = %d, want 1 (the re-download)", f.clientPlugin.addCalls)
 	}
 }
