@@ -87,4 +87,34 @@ describe("ResetTopicCard", () => {
     expect(await screen.findByText(/A: boom/)).toBeInTheDocument();
     expect(screen.getByText(/removed 1 torrent/i)).toBeInTheDocument();
   });
+
+  it("suppresses the success headline when every topic failed", async () => {
+    vi.mocked(api.resetTopic)
+      .mockRejectedValueOnce(new Error("boom"))
+      .mockRejectedValueOnce(new Error("bang"));
+    renderCard([topic("t1", "A"), topic("t2", "B")]);
+
+    await userEvent.click(screen.getByRole("button", { name: /^reset$/i }));
+
+    expect(await screen.findByText(/A: boom/)).toBeInTheDocument();
+    expect(screen.getByText(/B: bang/)).toBeInTheDocument();
+    // "Removed 0 torrent(s). Queued for a fresh check." directly above two
+    // warnings saying nothing was reset is a flat contradiction.
+    expect(screen.queryByText(/queued for a fresh check/i)).not.toBeInTheDocument();
+  });
+
+  it("keeps the success headline when a topic succeeded with warnings only", async () => {
+    vi.mocked(api.resetTopic).mockResolvedValue({
+      removed: 0,
+      warnings: ["qbittorrent: this client cannot remove torrents"],
+    });
+    renderCard([topic("t1", "A")]);
+
+    await userEvent.click(screen.getByRole("button", { name: /^reset$/i }));
+
+    // Client removal is fail-open — the topic was still queued for a re-check,
+    // so the headline is accurate even at removed=0.
+    expect(await screen.findByText(/queued for a fresh check/i)).toBeInTheDocument();
+    expect(screen.getByText(/cannot remove torrents/i)).toBeInTheDocument();
+  });
 });

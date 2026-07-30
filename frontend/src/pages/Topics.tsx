@@ -149,7 +149,10 @@ export function TopicsPage() {
             }}
           />
         )}
-        {resetting && (
+        {/* An empty array is truthy — topics.filter() can yield one if the
+            selected topics vanished from a concurrent refetch — and would
+            render a card titled "Reset " with an empty key. */}
+        {resetting && resetting.length > 0 && (
           <ResetTopicCard
             key={resetting.map((t) => t.ID).join(",")}
             topics={resetting}

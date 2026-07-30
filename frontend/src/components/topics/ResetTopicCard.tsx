@@ -22,6 +22,10 @@ interface ResetTopicCardProps {
 interface ResetOutcome {
   removed: number;
   warnings: string[];
+  // Topics whose request failed outright, so nothing was reset for them. A 200
+  // carrying warnings is not counted here: client removal is fail-open, and the
+  // topic was still queued for a fresh check.
+  failed: number;
 }
 
 export function ResetTopicCard({ topics, onClose, onDone }: ResetTopicCardProps) {
@@ -40,16 +44,18 @@ export function ResetTopicCard({ topics, onClose, onDone }: ResetTopicCardProps)
             return {
               removed: res.removed,
               warnings: res.warnings.map((w) => `${topic.DisplayName}: ${w}`),
+              failed: 0,
             };
           } catch (err) {
             const message = err instanceof Error ? err.message : "reset failed";
-            return { removed: 0, warnings: [`${topic.DisplayName}: ${message}`] };
+            return { removed: 0, warnings: [`${topic.DisplayName}: ${message}`], failed: 1 };
           }
         }),
       );
       return {
         removed: results.reduce((sum, r) => sum + r.removed, 0),
         warnings: results.flatMap((r) => r.warnings),
+        failed: results.reduce((sum, r) => sum + r.failed, 0),
       };
     },
     onSuccess: (res) => {
@@ -77,7 +83,7 @@ export function ResetTopicCard({ topics, onClose, onDone }: ResetTopicCardProps)
         </div>
 
         {outcome ? (
-          <ResetResult outcome={outcome} onClose={onClose} />
+          <ResetResult outcome={outcome} total={topics.length} onClose={onClose} />
         ) : (
           <>
             <p className="mt-2 text-sm text-muted-foreground">{t("topics.reset.body")}</p>
@@ -110,11 +116,24 @@ export function ResetTopicCard({ topics, onClose, onDone }: ResetTopicCardProps)
   );
 }
 
-function ResetResult({ outcome, onClose }: { outcome: ResetOutcome; onClose: () => void }) {
+interface ResetResultProps {
+  outcome: ResetOutcome;
+  // How many topics the reset was attempted on, so the result can tell
+  // "everything failed" apart from "some of it failed".
+  total: number;
+  onClose: () => void;
+}
+
+function ResetResult({ outcome, total, onClose }: ResetResultProps) {
   const t = useT();
+  // Nothing was reset, so "Queued for a fresh check" would be a flat
+  // contradiction of the warnings printed directly beneath it.
+  const everythingFailed = outcome.failed === total;
   return (
     <>
-      <p className="mt-2 text-sm">{t("topics.reset.done", { count: outcome.removed })}</p>
+      {!everythingFailed && (
+        <p className="mt-2 text-sm">{t("topics.reset.done", { count: outcome.removed })}</p>
+      )}
       {outcome.warnings.length > 0 && (
         <div className="mt-3 rounded-md border border-warning/40 bg-warning/10 p-3 text-sm">
           <div className="flex items-center gap-2 font-medium">

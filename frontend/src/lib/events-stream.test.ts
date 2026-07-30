@@ -67,4 +67,24 @@ describe("applyEvent", () => {
     applyEvent(qc, { id: 12, type: "release.found", topic_id: "t3" });
     expect(spy).toHaveBeenCalledWith({ queryKey: QK.topicEvents("t3") });
   });
+
+  it("clears the check store on topic.reset", () => {
+    const qc = new QueryClient();
+    // A tab that did not perform the reset only learns about it over SSE, so
+    // without this its check chip keeps showing the pre-reset error.
+    applyEvent(qc, { id: 13, type: "check.failed", topic_id: "t4", body: "timeout" });
+    expect(useCheckStatus.getState().byTopic["t4"].phase).toBe("error");
+
+    applyEvent(qc, { id: 14, type: "topic.reset", topic_id: "t4" });
+    expect(useCheckStatus.getState().byTopic["t4"]).toBeUndefined();
+  });
+
+  it("still invalidates the topic caches on topic.reset", () => {
+    const qc = new QueryClient();
+    const spy = vi.spyOn(qc, "invalidateQueries");
+    applyEvent(qc, { id: 15, type: "topic.reset", topic_id: "t5" });
+    expect(spy).toHaveBeenCalledWith({ queryKey: QK.topicStatus("t5") });
+    expect(spy).toHaveBeenCalledWith({ queryKey: QK.topics });
+    expect(spy).toHaveBeenCalledWith({ queryKey: QK.topicEvents("t5") });
+  });
 });
