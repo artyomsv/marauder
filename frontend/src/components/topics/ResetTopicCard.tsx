@@ -141,8 +141,10 @@ function ResetResult({ outcome, total, onClose }: ResetResultProps) {
             {t("topics.reset.warnings")}
           </div>
           <ul className="mt-2 list-disc space-y-1 pl-5 text-muted-foreground">
-            {outcome.warnings.map((w) => (
-              <li key={w}>{w}</li>
+            {/* Index-qualified: two clients of the same plugin type failing
+                identically under one topic produce byte-identical strings. */}
+            {outcome.warnings.map((w, i) => (
+              <li key={`${i}-${w}`}>{w}</li>
             ))}
           </ul>
         </div>

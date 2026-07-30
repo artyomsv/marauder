@@ -3,6 +3,7 @@ import { Pause, Play, RotateCcw, Trash2, Check, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { useArmedConfirm } from "@/lib/hooks/useArmedConfirm";
+import { useT } from "@/i18n";
 
 export interface BulkActionBarProps {
   count: number;
@@ -21,6 +22,7 @@ export function BulkActionBar({
   onDelete,
   onClear,
 }: BulkActionBarProps) {
+  const t = useT();
   const { armed, arm, disarm, confirmAndDisarm } = useArmedConfirm({ timeoutMs: 4000 });
 
   return (
@@ -29,19 +31,19 @@ export function BulkActionBar({
       animate={{ opacity: 1, y: 0 }}
       className="flex items-center gap-3 rounded-lg border border-primary/30 bg-primary/10 px-4 py-3 text-sm"
     >
-      <span className="font-medium">{count} selected</span>
+      <span className="font-medium">{t("topics.bulk.selected", { count })}</span>
       <span className="ml-auto flex items-center gap-2">
         <Button variant="outline" size="sm" onClick={onPause}>
           <Pause className="size-4" />
-          Pause
+          {t("topics.bulk.pause")}
         </Button>
         <Button variant="outline" size="sm" onClick={onResume}>
           <Play className="size-4" />
-          Resume
+          {t("topics.bulk.resume")}
         </Button>
         <Button variant="outline" size="sm" onClick={onReset}>
           <RotateCcw className="size-4" />
-          Reset
+          {t("topics.bulk.reset")}
         </Button>
         {armed ? (
           <span
@@ -49,7 +51,7 @@ export function BulkActionBar({
             aria-label="Confirm bulk delete"
             className="inline-flex items-center gap-1 rounded-md border border-destructive/40 bg-destructive/15 px-2 py-1 text-xs font-medium text-destructive"
           >
-            <span>Delete {count}?</span>
+            <span>{t("topics.bulk.confirmDelete", { count })}</span>
             <Button
               variant="ghost"
               size="sm"
@@ -57,7 +59,7 @@ export function BulkActionBar({
               onClick={() => confirmAndDisarm(onDelete)}
             >
               <Check className="size-3.5" />
-              Yes
+              {t("topics.bulk.yes")}
             </Button>
             <Button
               variant="ghost"
@@ -66,17 +68,17 @@ export function BulkActionBar({
               onClick={disarm}
             >
               <X className="size-3.5" />
-              No
+              {t("topics.bulk.no")}
             </Button>
           </span>
         ) : (
           <Button variant="destructive" size="sm" onClick={arm}>
             <Trash2 className="size-4" />
-            Delete
+            {t("topics.bulk.delete")}
           </Button>
         )}
         <Button variant="ghost" size="sm" onClick={onClear}>
-          Clear
+          {t("topics.bulk.clear")}
         </Button>
       </span>
     </motion.div>

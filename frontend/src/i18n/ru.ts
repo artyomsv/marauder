@@ -233,6 +233,17 @@ const ru: Record<string, string> = {
   "topics.delivery.copy": "Скопировать метку",
   "topics.delivery.copied": "Скопировано",
 
+  // Панель массовых действий (появляется при выборе одной или нескольких тем)
+  "topics.bulk.selected": "Выбрано: {count}",
+  "topics.bulk.pause": "Приостановить",
+  "topics.bulk.resume": "Возобновить",
+  "topics.bulk.reset": "Сбросить",
+  "topics.bulk.delete": "Удалить",
+  "topics.bulk.confirmDelete": "Удалить тем: {count}?",
+  "topics.bulk.yes": "Да",
+  "topics.bulk.no": "Нет",
+  "topics.bulk.clear": "Снять выбор",
+
   // Сброс темы (сброс доставок/прогресса/ошибок, повторная проверка с нуля)
   "topics.reset.title": "Сбросить «{name}»",
   "topics.reset.titleBulk": "Сбросить тем: {count}",

@@ -231,6 +231,17 @@ const en: Record<string, string> = {
   "topics.delivery.copy": "Copy label",
   "topics.delivery.copied": "Copied",
 
+  // Bulk action bar (shown once one or more topics are selected)
+  "topics.bulk.selected": "{count} selected",
+  "topics.bulk.pause": "Pause",
+  "topics.bulk.resume": "Resume",
+  "topics.bulk.reset": "Reset",
+  "topics.bulk.delete": "Delete",
+  "topics.bulk.confirmDelete": "Delete {count}?",
+  "topics.bulk.yes": "Yes",
+  "topics.bulk.no": "No",
+  "topics.bulk.clear": "Clear",
+
   // Reset topic (discard deliveries/progress/error state, re-check from scratch)
   "topics.reset.title": "Reset {name}",
   "topics.reset.titleBulk": "Reset {count} topics",
