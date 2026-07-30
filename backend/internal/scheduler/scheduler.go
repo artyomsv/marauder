@@ -31,6 +31,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 
+	"github.com/artyomsv/marauder/backend/internal/clientremove"
 	"github.com/artyomsv/marauder/backend/internal/config"
 	"github.com/artyomsv/marauder/backend/internal/crypto"
 	"github.com/artyomsv/marauder/backend/internal/db/repo"
@@ -886,9 +887,8 @@ func (s *Scheduler) listPriorDeliveries(ctx context.Context, log zerolog.Logger,
 //
 // Best-effort / fail-open throughout: the new release was already delivered
 // successfully, so every failure here is logged and metered but never affects
-// the check result. Each prior delivery is removed from the client it was
-// actually sent to (grouped by client_id), which may differ from the topic's
-// current client if the user reassigned it.
+// the check result. Only rows whose client confirmed the removal are pruned —
+// an unremoved torrent keeps its delivery record rather than being orphaned.
 func (s *Scheduler) replacePrevious(ctx context.Context, log zerolog.Logger, t *domain.Topic, prior []*domain.TopicDelivery, keepHashes []string) {
 	// Never remove a torrent that was just (re)delivered this tick: if a tracker
 	// bumped its opaque check hash while the torrent itself is unchanged, the
@@ -898,25 +898,37 @@ func (s *Scheduler) replacePrevious(ctx context.Context, log zerolog.Logger, t *
 	for _, h := range keepHashes {
 		keep[strings.ToLower(h)] = struct{}{}
 	}
-	byClient := map[uuid.UUID][]string{}
+	candidates := make([]*domain.TopicDelivery, 0, len(prior))
 	for _, d := range prior {
-		if d.ClientID == nil {
-			// Orphan row with no client (legacy/edge — recordDelivery always
-			// sets one): we can't address a client to remove it, so leave it.
-			continue
-		}
 		if _, ok := keep[strings.ToLower(d.Infohash)]; ok {
 			continue // still the current delivery — never remove it
 		}
-		byClient[*d.ClientID] = append(byClient[*d.ClientID], d.Infohash)
+		candidates = append(candidates, d)
+	}
+
+	byClient := clientremove.GroupByClient(candidates)
+	if len(byClient) == 0 {
+		return
 	}
 
 	var removed []string
-	for clientID, hashes := range byClient {
-		if s.removeFromClient(ctx, log, t, clientID, hashes) {
-			removed = append(removed, hashes...)
+	for _, res := range s.remover().Remove(ctx, t.UserID, byClient, t.ReplaceDeleteData) {
+		// The metric counts torrents (not calls) uniformly across every result
+		// label, matching its Help text.
+		n := float64(len(res.Hashes))
+		if res.OK {
+			metrics.SchedulerReplacedPreviousTotal.WithLabelValues(res.ClientName, "ok").Add(n)
+			removed = append(removed, res.Hashes...)
+			continue
 		}
+		metrics.SchedulerReplacedPreviousTotal.
+			WithLabelValues(clientLabel(res.ClientName), res.Reason).Add(n)
+		log.Warn().Err(res.Err).
+			Str("client", clientLabel(res.ClientName)).
+			Str("reason", res.Reason).
+			Msg("replace-on-update: keeping previous version")
 	}
+
 	if len(removed) == 0 {
 		return
 	}
@@ -929,50 +941,24 @@ func (s *Scheduler) replacePrevious(ctx context.Context, log zerolog.Logger, t *
 		Msg("replaced previous version")
 }
 
-// removeFromClient removes the given infohashes from one client. Returns true
-// only when the client confirmed the removal, so the caller knows it is safe to
-// drop the corresponding delivery rows. A client that can't remove (no
-// WithRemoval capability — e.g. downloadfolder) is logged and skipped, leaving
-// the old torrent in place rather than orphaning its delivery record.
-func (s *Scheduler) removeFromClient(ctx context.Context, log zerolog.Logger, t *domain.Topic, clientID uuid.UUID, hashes []string) bool {
-	cfg, err := s.clients.GetByID(ctx, clientID, t.UserID)
-	if err != nil {
-		log.Warn().Err(err).Msg("replace-on-update: load client failed")
-		return false
+// remover builds a clientremove.Remover from the scheduler's own dependencies,
+// so the lookupClient test seam stays in force for unit tests.
+func (s *Scheduler) remover() *clientremove.Remover {
+	return &clientremove.Remover{
+		Clients: s.clients,
+		Master:  s.master,
+		Lookup:  clientremove.PluginLookup(s.lookupClient),
+		Timeout: s.cfg.TrackerHTTPTimeout,
 	}
-	// The metric counts torrents (not calls) uniformly across every result
-	// label, matching its Help text; n is the number of torrents this call
-	// would have removed.
-	n := float64(len(hashes))
-	plugin := s.lookupClient(cfg.ClientName)
-	if plugin == nil {
-		log.Warn().Str("client", cfg.ClientName).
-			Msg("replace-on-update: client plugin not installed; keeping previous version")
-		metrics.SchedulerReplacedPreviousTotal.WithLabelValues(cfg.ClientName, "no_plugin").Add(n)
-		return false
+}
+
+// clientLabel keeps metric and log cardinality bounded when the client row
+// could not be loaded and its name is therefore unknown.
+func clientLabel(name string) string {
+	if name == "" {
+		return "unknown"
 	}
-	remover, ok := plugin.(registry.WithRemoval)
-	if !ok {
-		log.Warn().Str("client", cfg.ClientName).
-			Msg("replace-on-update: client cannot remove torrents; keeping previous version")
-		metrics.SchedulerReplacedPreviousTotal.WithLabelValues(cfg.ClientName, "unsupported").Add(n)
-		return false
-	}
-	rawConfig, err := s.master.Decrypt(cfg.ConfigEnc, cfg.ConfigNonce)
-	if err != nil {
-		log.Warn().Err(err).Msg("replace-on-update: decrypt client config failed")
-		metrics.SchedulerReplacedPreviousTotal.WithLabelValues(cfg.ClientName, "error").Add(n)
-		return false
-	}
-	rctx, cancel := context.WithTimeout(ctx, s.cfg.TrackerHTTPTimeout)
-	defer cancel()
-	if err := remover.Remove(rctx, rawConfig, hashes, t.ReplaceDeleteData); err != nil {
-		log.Warn().Err(err).Msg("replace-on-update: remove from client failed")
-		metrics.SchedulerReplacedPreviousTotal.WithLabelValues(cfg.ClientName, "error").Add(n)
-		return false
-	}
-	metrics.SchedulerReplacedPreviousTotal.WithLabelValues(cfg.ClientName, "ok").Add(n)
-	return true
+	return name
 }
 
 // transientRetryDelay is how soon a topic is re-checked after a transient
