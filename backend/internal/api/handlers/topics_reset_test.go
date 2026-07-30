@@ -234,6 +234,46 @@ func TestTopicsReset_OnlyClientlessDeliveries_WarnsRatherThanSilentZero(t *testi
 	}
 }
 
+// TestTopicsReset_DisconnectedClientStillFinishesFailClosedSteps covers the
+// user closing the tab mid-reset. Go cancels r.Context() the moment the
+// connection drops, so running the fail-closed steps on it would abandon the
+// reset exactly half-done: torrents already removed and their files already
+// deleted (step 1), but delivery rows intact, hash unchanged, scheduler not
+// armed, nothing re-downloaded — and the 500 explaining it written into a
+// socket nobody is reading. That is the precise state those steps exist to
+// prevent, so they must run on a context detached from the request.
+func TestTopicsReset_DisconnectedClientStillFinishesFailClosedSteps(t *testing.T) {
+	topicID, userID, clientID := uuid.New(), uuid.New(), uuid.New()
+	store := &fakeTopicStore{getByID: &domain.Topic{ID: topicID, UserID: userID}}
+	deliveries := &fakeDeliveriesStore{items: []*domain.TopicDelivery{
+		{Infohash: "aaa", ClientID: &clientID},
+	}}
+	remover := &fakeRemover{results: []clientremove.Result{
+		{ClientID: clientID, ClientName: "transmission", Hashes: []string{"aaa"}, OK: true},
+	}}
+	h := &Topics{Topics: store, Deliveries: deliveries, Remover: remover}
+
+	req := resetRequest(t, topicID, userID, `{"delete_data":true}`)
+	// The client is already gone by the time the handler runs — the same state
+	// net/http leaves the request in once the connection closes.
+	ctx, cancel := context.WithCancel(req.Context())
+	cancel()
+	req = req.WithContext(ctx)
+
+	rec := httptest.NewRecorder()
+	h.Reset(rec, req)
+
+	if !deliveries.deleted {
+		t.Error("delivery rows must still be deleted after the client disconnects")
+	}
+	if len(store.resetCalls) != 1 {
+		t.Errorf("check state must still be reset after the client disconnects, got %d calls", len(store.resetCalls))
+	}
+	if rec.Code != http.StatusOK {
+		t.Errorf("want 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestTopicsReset_ForeignTopicIsNotFound(t *testing.T) {
 	topicID, intruder := uuid.New(), uuid.New()
 	// GetByID is user-scoped in the real repo, so a foreign topic surfaces as

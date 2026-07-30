@@ -526,6 +526,11 @@ func (h *Topics) setStatus(w http.ResponseWriter, r *http.Request, status domain
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// resetFinishTimeout bounds the reset's two fail-closed steps once they have
+// been detached from the request context. Long enough for a DB round-trip on a
+// loaded instance, short enough that a wedged pool cannot leak the goroutine.
+const resetFinishTimeout = 10 * time.Second
+
 // resetTopicReq is the POST /topics/{id}/reset body.
 type resetTopicReq struct {
 	// DeleteData also deletes the torrents' on-disk data. Defaults to false
@@ -583,8 +588,18 @@ func (h *Topics) Reset(w http.ResponseWriter, r *http.Request) {
 
 	removed, warnings := h.removeDeliveredTorrents(r.Context(), topic, uid, req.DeleteData)
 
+	// Steps 2 and 3 are past the point of no return — torrents may already be
+	// gone from the client and their data off disk. r.Context() is cancelled
+	// the moment the client connection closes, which would abandon them
+	// half-done: rows intact, hash unchanged, scheduler not armed, nothing
+	// re-downloaded, and the 500 explaining it written into a socket nobody is
+	// reading. Detach so a disconnecting browser cannot cause exactly the state
+	// these fail-closed steps exist to prevent.
+	finish, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), resetFinishTimeout)
+	defer cancel()
+
 	if h.Deliveries != nil {
-		if _, derr := h.Deliveries.DeleteForTopic(r.Context(), id); derr != nil {
+		if _, derr := h.Deliveries.DeleteForTopic(finish, id); derr != nil {
 			// Fail-closed: a surviving row makes the re-delivery record a
 			// silent no-op (unique index + ON CONFLICT DO NOTHING), so the
 			// topic must not be armed for a re-check. removed may already be
@@ -600,7 +615,7 @@ func (h *Topics) Reset(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if rerr := h.Topics.ResetCheckState(r.Context(), id, uid); rerr != nil {
+	if rerr := h.Topics.ResetCheckState(finish, id, uid); rerr != nil {
 		if errors.Is(rerr, repo.ErrNotFound) {
 			problem.Write(w, r, h.BaseURL, problem.ErrNotFound("topic not found"))
 			return
@@ -615,7 +630,7 @@ func (h *Topics) Reset(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if h.Emit != nil {
-		h.Emit(r.Context(), events.Event{
+		h.Emit(finish, events.Event{
 			UserID:     topic.UserID,
 			TopicID:    &topic.ID,
 			NotifierID: topic.NotifierID,

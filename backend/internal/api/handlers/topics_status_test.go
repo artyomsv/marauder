@@ -26,7 +26,12 @@ func (f *fakeDeliveriesStore) ListForTopic(context.Context, uuid.UUID) ([]*domai
 	return f.items, nil
 }
 
-func (f *fakeDeliveriesStore) DeleteForTopic(context.Context, uuid.UUID) (int64, error) {
+// DeleteForTopic honours context cancellation the way pgx does, so a test can
+// prove the handler detached from the request context before calling it.
+func (f *fakeDeliveriesStore) DeleteForTopic(ctx context.Context, _ uuid.UUID) (int64, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
 	f.deleted = true
 	return int64(len(f.items)), f.deleteErr
 }

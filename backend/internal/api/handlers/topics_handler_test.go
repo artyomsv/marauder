@@ -109,8 +109,13 @@ func (s *fakeTopicStore) UpdateStatus(context.Context, uuid.UUID, uuid.UUID, dom
 }
 
 // ResetCheckState records (topicID, userID) per call so tests can assert the
-// handler reset the right topic for the right owner.
-func (s *fakeTopicStore) ResetCheckState(_ context.Context, id, userID uuid.UUID) error {
+// handler reset the right topic for the right owner. It honours context
+// cancellation the way pgx does, so a test can prove the handler detached from
+// the request context before calling it.
+func (s *fakeTopicStore) ResetCheckState(ctx context.Context, id, userID uuid.UUID) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	s.resetCalls = append(s.resetCalls, [2]uuid.UUID{id, userID})
 	return s.resetErr
 }
