@@ -17,6 +17,7 @@ import (
 	"github.com/artyomsv/marauder/backend/internal/api/middleware"
 	"github.com/artyomsv/marauder/backend/internal/audit"
 	"github.com/artyomsv/marauder/backend/internal/auth"
+	"github.com/artyomsv/marauder/backend/internal/clientremove"
 	"github.com/artyomsv/marauder/backend/internal/config"
 	"github.com/artyomsv/marauder/backend/internal/crypto"
 	"github.com/artyomsv/marauder/backend/internal/db/repo"
@@ -100,6 +101,7 @@ func NewRouter(d Deps) http.Handler {
 		Clients:    d.Clients,
 		Notifiers:  d.Notifiers,
 		Master:     d.Master,
+		Remover:    clientremove.New(d.Clients, d.Master, d.Cfg.TrackerHTTPTimeout),
 		BaseURL:    d.Cfg.PublicBaseURL,
 		Emit:       d.Emit,
 	}
@@ -181,6 +183,7 @@ func NewRouter(d Deps) http.Handler {
 			r.Get("/topics/{id}/events", topicEventsH.List)
 			r.Post("/topics/{id}/pause", topicsH.Pause)
 			r.Post("/topics/{id}/resume", topicsH.Resume)
+			r.Post("/topics/{id}/reset", topicsH.Reset)
 
 			r.Get("/clients", clientsH.List)
 			r.Post("/clients", clientsH.Create)
