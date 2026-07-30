@@ -185,11 +185,22 @@ written only after a successful `Add`, so it accurately mirrors client state, an
 `topic_deliveries` is the sole input to the status view, the progress watcher,
 and every removal snapshot — dropping the row would hide that torrent from all
 future removals instead. See the design doc's "Known limitation" section.
+The endpoint carries a **per-topic single-flight** gate (`Topics.resetInFlight`,
+same `sync.Map` pattern as `/trackers/search`'s per-user gate): a second reset of
+a topic that already has one running is refused with **429**. Keyed by topic, not
+by user, precisely so bulk reset — which fires one concurrent request per
+selected topic — is unaffected; what it stops is a double-click, an impatient
+retry after the "retry the reset" 500, and two tabs racing one topic. The gate
+sits *after* the ownership check so a non-owner (404 either way) cannot use the
+429 to probe someone else's topic, and is released by `defer` so no error path or
+panic can latch it shut.
 Emits `topic.reset`. There is no bulk endpoint: the frontend fans out N calls,
-matching bulk pause/resume/delete. Frontend:
-`components/topics/ResetTopicCard` (an inline card, not a modal — this project
-has no shadcn Dialog primitive), opened from a per-row `RotateCcw` button and
-from the Topics page bulk action bar.
+matching bulk pause/resume/delete, but **bounded to 4 in flight** via
+`lib/concurrency.ts`'s `mapWithConcurrency` — an unbounded `Promise.all` over a
+large selection points the whole burst at the user's torrent client at once.
+Frontend: `components/topics/ResetTopicCard` (an inline card, not a modal — this
+project has no shadcn Dialog primitive), opened from a per-row `RotateCcw` button
+and from the Topics page bulk action bar.
 
 **Errored-topic retry:** `DueForCheck` selects `WHERE status IN
 ('active','error')`, so a topic that errors keeps retrying on its already-

@@ -76,6 +76,44 @@ describe("ResetTopicCard", () => {
     expect(onDone).toHaveBeenCalled();
   });
 
+  it("caps the bulk fan-out at 4 in flight yet resets every topic", async () => {
+    let inFlight = 0;
+    let peak = 0;
+    // Each call parks until the test releases it, so the number of unresolved
+    // resolvers *is* the number of requests in flight.
+    const pending: Array<() => void> = [];
+    vi.mocked(api.resetTopic).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          inFlight++;
+          peak = Math.max(peak, inFlight);
+          pending.push(() => {
+            inFlight--;
+            resolve({ removed: 1, warnings: ["late"] });
+          });
+        }),
+    );
+    const topics = Array.from({ length: 7 }, (_, i) => topic(`t${i}`, `Show ${i}`));
+    renderCard(topics);
+
+    await userEvent.click(screen.getByRole("button", { name: /^reset$/i }));
+
+    await waitFor(() => expect(pending).toHaveLength(4));
+    expect(api.resetTopic).toHaveBeenCalledTimes(4);
+
+    // Drain one at a time; each completion admits exactly one more request.
+    for (let done = 0; done < topics.length; done++) {
+      await waitFor(() => expect(pending.length).toBeGreaterThan(0));
+      pending.shift()!();
+    }
+
+    await waitFor(() => expect(api.resetTopic).toHaveBeenCalledTimes(topics.length));
+    expect(peak).toBe(4);
+    // Every result still lands: 7 removals summed, 7 warnings aggregated.
+    expect(await screen.findByText(/removed 7 torrent/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/: late$/)).toHaveLength(topics.length);
+  });
+
   it("turns a failed topic into a warning instead of losing the others", async () => {
     vi.mocked(api.resetTopic)
       .mockRejectedValueOnce(new Error("boom"))

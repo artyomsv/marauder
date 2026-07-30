@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -88,6 +89,13 @@ type Topics struct {
 	// Remover removes already-delivered torrents from their client on reset.
 	// Nil-safe (see torrentRemover).
 	Remover torrentRemover
+
+	// resetInFlight gates POST /topics/{id}/reset to one running reset per
+	// topic (topicID -> struct{}). Deliberately keyed by topic, not by user:
+	// a bulk reset fires one concurrent request per selected topic and must
+	// keep working, while a double-click, an impatient retry after the
+	// "retry the reset" 500, or two tabs racing the same topic must not.
+	resetInFlight sync.Map
 }
 
 type createTopicReq struct {
@@ -562,6 +570,9 @@ type resetTopicResp struct {
 // blocking the reset. Everything after it is fail-closed, and the state reset
 // runs last because it is the step that arms the scheduler — if an earlier
 // step dies, the topic is simply not reset yet and the action can be retried.
+//
+// Concurrent resets of the same topic are rejected with 429 (see the
+// per-topic single-flight gate below).
 func (h *Topics) Reset(w http.ResponseWriter, r *http.Request) {
 	uid, perr := currentUserID(r)
 	if perr != nil {
@@ -587,6 +598,23 @@ func (h *Topics) Reset(w http.ResponseWriter, r *http.Request) {
 		problem.Write(w, r, h.BaseURL, problem.ErrInternal(gerr.Error()))
 		return
 	}
+
+	// Per-topic single-flight. This endpoint can delete a user's files from
+	// disk and forces immediate outbound work against their torrent client,
+	// so overlapping resets of one topic are refused rather than serialised:
+	// the second caller's removal snapshot would be the first one's leftovers,
+	// and both would race the same delivery rows.
+	//
+	// Placed after the ownership check on purpose — a caller who does not own
+	// the topic gets 404 either way and cannot use the 429 to probe whether
+	// somebody else's topic is being reset. Released by defer, which also
+	// runs while a panic unwinds, so the gate can never latch shut.
+	if _, busy := h.resetInFlight.LoadOrStore(id, struct{}{}); busy {
+		problem.Write(w, r, h.BaseURL, problem.ErrTooManyRequests(
+			"a reset is already running for this topic; wait for it to finish"))
+		return
+	}
+	defer h.resetInFlight.Delete(id)
 
 	removed, warnings := h.removeDeliveredTorrents(r.Context(), topic, uid, req.DeleteData)
 

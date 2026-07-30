@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/google/uuid"
@@ -489,5 +491,180 @@ func TestTopicsReset_CheckStateResetNotFound_404(t *testing.T) {
 
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("want 404, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// ---------- per-topic single-flight ----------
+
+// concurrentResetStore is a topicStore that is safe under concurrent use and
+// whose GetByID echoes back the requested id, so one handler can serve resets
+// of two different topics at the same time.
+type concurrentResetStore struct {
+	userID uuid.UUID
+
+	mu    sync.Mutex
+	reset []uuid.UUID
+	err   error // returned by ResetCheckState
+}
+
+func (s *concurrentResetStore) Create(context.Context, *domain.Topic) (*domain.Topic, error) {
+	return nil, nil
+}
+func (s *concurrentResetStore) GetByID(_ context.Context, id uuid.UUID, _ *uuid.UUID) (*domain.Topic, error) {
+	return &domain.Topic{ID: id, UserID: s.userID, DisplayName: "Show", URL: "https://tracker/x"}, nil
+}
+func (s *concurrentResetStore) ListForUser(context.Context, uuid.UUID) ([]*domain.Topic, error) {
+	return nil, nil
+}
+func (s *concurrentResetStore) Delete(context.Context, uuid.UUID, uuid.UUID) error { return nil }
+func (s *concurrentResetStore) UpdateStatus(context.Context, uuid.UUID, uuid.UUID, domain.TopicStatus) error {
+	return nil
+}
+func (s *concurrentResetStore) Update(context.Context, uuid.UUID, uuid.UUID, string, *uuid.UUID, *uuid.UUID, string, string, bool, bool, map[string]any) (*domain.Topic, error) {
+	return nil, nil
+}
+func (s *concurrentResetStore) ResetCheckState(_ context.Context, id, _ uuid.UUID) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.err != nil {
+		return s.err
+	}
+	s.reset = append(s.reset, id)
+	return nil
+}
+
+func (s *concurrentResetStore) resetIDs() []uuid.UUID {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]uuid.UUID(nil), s.reset...)
+}
+
+// concurrentDeliveries is a deliveriesStore safe under concurrent use. Every
+// topic reports one delivery carrying a client id, so the reset always reaches
+// the remover — removeDeliveredTorrents short-circuits before it otherwise.
+type concurrentDeliveries struct {
+	clientID uuid.UUID
+	mu       sync.Mutex
+}
+
+func (d *concurrentDeliveries) ListForTopic(_ context.Context, topicID uuid.UUID) ([]*domain.TopicDelivery, error) {
+	return []*domain.TopicDelivery{{TopicID: topicID, Infohash: "aaa", ClientID: &d.clientID}}, nil
+}
+
+func (d *concurrentDeliveries) DeleteForTopic(context.Context, uuid.UUID, uuid.UUID) (int64, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return 1, nil
+}
+
+// blockingRemover parks its FIRST Remove call until the test releases it, so a
+// reset can be held open mid-flight while later resets still run to
+// completion. A sync.Once would not do: it blocks every other caller inside
+// Do until the first returns, which is the thing under test.
+type blockingRemover struct {
+	calls   atomic.Int32
+	entered chan struct{}
+	release chan struct{}
+}
+
+func newBlockingRemover() *blockingRemover {
+	return &blockingRemover{entered: make(chan struct{}, 8), release: make(chan struct{})}
+}
+
+func (b *blockingRemover) Remove(context.Context, uuid.UUID, map[uuid.UUID][]string, bool) []clientremove.Result {
+	if b.calls.Add(1) == 1 {
+		b.entered <- struct{}{}
+		<-b.release
+	}
+	return nil
+}
+
+// TestTopicsReset_ConcurrentSameTopicRejectedOtherTopicRuns is the throttle on
+// this destructive endpoint: a second reset of a topic that already has one in
+// flight is refused with 429, while a reset of a *different* topic is
+// untouched — bulk reset deliberately fires one concurrent request per
+// selected topic and must keep working.
+func TestTopicsReset_ConcurrentSameTopicRejectedOtherTopicRuns(t *testing.T) {
+	userID := uuid.New()
+	held, other := uuid.New(), uuid.New()
+	store := &concurrentResetStore{userID: userID}
+	remover := newBlockingRemover()
+	h := &Topics{
+		Topics:     store,
+		Deliveries: &concurrentDeliveries{clientID: uuid.New()},
+		Remover:    remover,
+	}
+
+	firstRec := httptest.NewRecorder()
+	firstDone := make(chan struct{})
+	go func() {
+		defer close(firstDone)
+		h.Reset(firstRec, resetRequest(t, held, userID, `{}`))
+	}()
+	// Park until the first reset is inside the remover — i.e. past the gate
+	// and mid-way through its destructive work.
+	<-remover.entered
+
+	sameRec := httptest.NewRecorder()
+	h.Reset(sameRec, resetRequest(t, held, userID, `{}`))
+	if sameRec.Code != http.StatusTooManyRequests {
+		t.Fatalf("want 429 for a concurrent reset of the same topic, got %d: %s",
+			sameRec.Code, sameRec.Body.String())
+	}
+
+	otherRec := httptest.NewRecorder()
+	h.Reset(otherRec, resetRequest(t, other, userID, `{}`))
+	if otherRec.Code != http.StatusOK {
+		t.Fatalf("a concurrent reset of a different topic must succeed, got %d: %s",
+			otherRec.Code, otherRec.Body.String())
+	}
+
+	close(remover.release)
+	<-firstDone
+	if firstRec.Code != http.StatusOK {
+		t.Fatalf("held reset should have finished 200, got %d: %s", firstRec.Code, firstRec.Body.String())
+	}
+
+	// The rejected attempt must not have reset anything, and the gate must
+	// have been released once the held reset finished.
+	got := store.resetIDs()
+	if len(got) != 2 {
+		t.Fatalf("want exactly 2 state resets (held + other), got %v", got)
+	}
+	againRec := httptest.NewRecorder()
+	h.Reset(againRec, resetRequest(t, held, userID, `{}`))
+	if againRec.Code != http.StatusOK {
+		t.Fatalf("gate not released after the first reset finished, got %d: %s",
+			againRec.Code, againRec.Body.String())
+	}
+}
+
+// TestTopicsReset_GateReleasedOnErrorPath proves the in-flight entry is
+// released when the reset fails, not just when it succeeds. Without this the
+// 500's own advice — "retry the reset" — would be impossible to follow: every
+// retry would come back 429 for the life of the process.
+func TestTopicsReset_GateReleasedOnErrorPath(t *testing.T) {
+	userID, topicID := uuid.New(), uuid.New()
+	store := &concurrentResetStore{userID: userID, err: errors.New("db down")}
+	h := &Topics{
+		Topics:     store,
+		Deliveries: &concurrentDeliveries{clientID: uuid.New()},
+		Remover:    &fakeRemover{},
+	}
+
+	first := httptest.NewRecorder()
+	h.Reset(first, resetRequest(t, topicID, userID, `{}`))
+	if first.Code != http.StatusInternalServerError {
+		t.Fatalf("want 500, got %d: %s", first.Code, first.Body.String())
+	}
+
+	store.mu.Lock()
+	store.err = nil
+	store.mu.Unlock()
+
+	retry := httptest.NewRecorder()
+	h.Reset(retry, resetRequest(t, topicID, userID, `{}`))
+	if retry.Code != http.StatusOK {
+		t.Fatalf("retry after a failed reset must be admitted, got %d: %s", retry.Code, retry.Body.String())
 	}
 }

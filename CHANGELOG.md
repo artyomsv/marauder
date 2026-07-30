@@ -15,7 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   queues an immediate re-check. Settings, event history and paused status are
   kept (the delivery records themselves are cleared, by design);
   torrents that could not be removed are reported as warnings rather than
-  blocking the reset.
+  blocking the reset. Overlapping resets of the same topic are refused, and a
+  multi-select reset is sent a few topics at a time rather than all at once.
 
 ## [1.15.1] - 2026-07-29
 

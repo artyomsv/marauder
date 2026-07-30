@@ -4,9 +4,16 @@ import { motion } from "framer-motion";
 import { AlertTriangle, RotateCcw } from "lucide-react";
 
 import { api, type Topic } from "@/lib/api";
+import { mapWithConcurrency } from "@/lib/concurrency";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { useT } from "@/i18n";
+
+// A reset is the heaviest thing one click can trigger: per topic it removes
+// torrents from the user's client, may delete their data, and arms an
+// immediate re-check. Bulk-resetting a large selection unbounded would fire
+// all of that at the client at once, so the fan-out is capped.
+const RESET_CONCURRENCY = 4;
 
 interface ResetTopicCardProps {
   // One entry for a row reset, many for a bulk reset.
@@ -37,21 +44,19 @@ export function ResetTopicCard({ topics, onClose, onDone }: ResetTopicCardProps)
     mutationFn: async (): Promise<ResetOutcome> => {
       // Each topic is caught individually: one unreachable client must not
       // discard the results of every other topic in a bulk reset.
-      const results = await Promise.all(
-        topics.map(async (topic) => {
-          try {
-            const res = await api.resetTopic(topic.ID, deleteData);
-            return {
-              removed: res.removed,
-              warnings: res.warnings.map((w) => `${topic.DisplayName}: ${w}`),
-              failed: 0,
-            };
-          } catch (err) {
-            const message = err instanceof Error ? err.message : "reset failed";
-            return { removed: 0, warnings: [`${topic.DisplayName}: ${message}`], failed: 1 };
-          }
-        }),
-      );
+      const results = await mapWithConcurrency(topics, RESET_CONCURRENCY, async (topic) => {
+        try {
+          const res = await api.resetTopic(topic.ID, deleteData);
+          return {
+            removed: res.removed,
+            warnings: res.warnings.map((w) => `${topic.DisplayName}: ${w}`),
+            failed: 0,
+          };
+        } catch (err) {
+          const message = err instanceof Error ? err.message : "reset failed";
+          return { removed: 0, warnings: [`${topic.DisplayName}: ${message}`], failed: 1 };
+        }
+      });
       return {
         removed: results.reduce((sum, r) => sum + r.removed, 0),
         warnings: results.flatMap((r) => r.warnings),
