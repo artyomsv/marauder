@@ -30,6 +30,17 @@ const (
 	ReasonError       = "error"       // the client rejected or failed the call
 )
 
+// ClientLabel keeps metric and log cardinality bounded when the client row
+// could not be loaded and its name is therefore unknown. Both callers label
+// their own metrics from Result.ClientName, so the fallback lives here rather
+// than being spelled out once per caller.
+func ClientLabel(name string) string {
+	if name == "" {
+		return "unknown"
+	}
+	return name
+}
+
 // ClientsLookup resolves a client row scoped to its owner.
 type ClientsLookup interface {
 	GetByID(ctx context.Context, id uuid.UUID, userID uuid.UUID) (*domain.Client, error)
@@ -59,6 +70,9 @@ type Remover struct {
 	Clients ClientsLookup
 	Master  Decryptor
 	Lookup  PluginLookup
+	// Timeout bounds each per-client Remove call. Zero means "inherit the
+	// caller's context deadline" — context.WithTimeout(ctx, 0) yields an
+	// already-expired context, which would fail every removal instantly.
 	Timeout time.Duration
 }
 
@@ -111,8 +125,12 @@ func (r *Remover) removeOne(ctx context.Context, userID, clientID uuid.UUID, has
 		return res
 	}
 
-	rctx, cancel := context.WithTimeout(ctx, r.Timeout)
-	defer cancel()
+	rctx := ctx
+	if r.Timeout > 0 {
+		var cancel context.CancelFunc
+		rctx, cancel = context.WithTimeout(ctx, r.Timeout)
+		defer cancel()
+	}
 	if err := remover.Remove(rctx, rawConfig, hashes, deleteData); err != nil {
 		res.Reason, res.Err = ReasonError, err
 		return res

@@ -32,11 +32,13 @@ type fakeRemovalClient struct {
 	gotHashes []string
 	gotDelete bool
 	gotRawCfg []byte
+	gotCtx    context.Context
 	callCount int
 }
 
-func (f *fakeRemovalClient) Remove(_ context.Context, rawConfig []byte, hashes []string, deleteData bool) error {
+func (f *fakeRemovalClient) Remove(ctx context.Context, rawConfig []byte, hashes []string, deleteData bool) error {
 	f.callCount++
+	f.gotCtx = ctx
 	f.gotRawCfg, f.gotHashes, f.gotDelete = rawConfig, hashes, deleteData
 	return f.err
 }
@@ -95,6 +97,47 @@ func TestRemover_Remove_Success(t *testing.T) {
 	}
 	if string(plugin.gotRawCfg) != `{"url":"http://qb:6611"}` {
 		t.Fatalf("decrypted config not forwarded: %s", plugin.gotRawCfg)
+	}
+}
+
+// TestRemover_Remove_TimeoutValues pins what a zero Timeout means. The field is
+// exported and the package now has two construction sites, so a caller that
+// leaves it unset must inherit the caller's deadline rather than hit an
+// already-expired context — context.WithTimeout(ctx, 0) fires immediately and
+// would fail every removal without ever reaching the client.
+func TestRemover_Remove_TimeoutValues(t *testing.T) {
+	tests := []struct {
+		name         string
+		timeout      time.Duration
+		wantDeadline bool
+	}{
+		{"zero inherits the caller's context", 0, false},
+		{"positive bounds the call", time.Second, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			plugin := &fakeRemovalClient{fakeClient: fakeClient{name: "qbittorrent"}}
+			r := &Remover{
+				Clients: &fakeClients{client: &domain.Client{ClientName: "qbittorrent"}},
+				Master:  &fakeDecryptor{plain: []byte("{}")},
+				Lookup:  func(string) registry.Client { return plugin },
+				Timeout: tt.timeout,
+			}
+
+			got := r.Remove(context.Background(), uuid.New(),
+				map[uuid.UUID][]string{uuid.New(): {"aaa"}}, false)
+
+			if len(got) != 1 || !got[0].OK {
+				t.Fatalf("removal failed with Timeout=%v: %+v", tt.timeout, got)
+			}
+			if plugin.callCount != 1 {
+				t.Fatalf("plugin Remove calls = %d, want 1", plugin.callCount)
+			}
+			if _, hasDeadline := plugin.gotCtx.Deadline(); hasDeadline != tt.wantDeadline {
+				t.Errorf("ctx has deadline = %v, want %v", hasDeadline, tt.wantDeadline)
+			}
+		})
 	}
 }
 

@@ -162,6 +162,78 @@ func TestTopicsReset_RemovalFailureStillWipesStateAndWarns(t *testing.T) {
 	}
 }
 
+// TestTopicsReset_DeliveriesWithoutAClientAreWarnedAbout covers the rows
+// GroupByClient drops: a delivery with no client id cannot be addressed, but
+// the reset deletes its row anyway, so the torrent survives in whatever client
+// holds it — now untracked. Silence there reads as "Removed 0 torrent(s)" with
+// nothing to explain it.
+func TestTopicsReset_DeliveriesWithoutAClientAreWarnedAbout(t *testing.T) {
+	topicID, userID, clientID := uuid.New(), uuid.New(), uuid.New()
+	store := &fakeTopicStore{getByID: &domain.Topic{ID: topicID, UserID: userID}}
+	deliveries := &fakeDeliveriesStore{items: []*domain.TopicDelivery{
+		{Infohash: "aaa", ClientID: &clientID},
+		{Infohash: "bbb", ClientID: nil},
+		{Infohash: "ccc", ClientID: nil},
+	}}
+	remover := &fakeRemover{results: []clientremove.Result{
+		{ClientID: clientID, ClientName: "qbittorrent", Hashes: []string{"aaa"}, OK: true},
+	}}
+	h := &Topics{Topics: store, Deliveries: deliveries, Remover: remover}
+
+	rec := httptest.NewRecorder()
+	h.Reset(rec, resetRequest(t, topicID, userID, `{"delete_data":false}`))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var got struct {
+		Removed  int      `json:"removed"`
+		Warnings []string `json:"warnings"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if got.Removed != 1 {
+		t.Errorf("want 1 removed (the addressable row), got %d", got.Removed)
+	}
+	if len(got.Warnings) != 1 || !strings.Contains(got.Warnings[0], "2 torrent(s) had no recorded client") {
+		t.Fatalf("want one warning naming the 2 unaddressable rows, got %v", got.Warnings)
+	}
+}
+
+// TestTopicsReset_OnlyClientlessDeliveries_WarnsRatherThanSilentZero is the
+// degenerate case of the above: nothing is addressable, so the remover is never
+// called and the early return must still carry the warning out.
+func TestTopicsReset_OnlyClientlessDeliveries_WarnsRatherThanSilentZero(t *testing.T) {
+	topicID, userID := uuid.New(), uuid.New()
+	store := &fakeTopicStore{getByID: &domain.Topic{ID: topicID, UserID: userID}}
+	deliveries := &fakeDeliveriesStore{items: []*domain.TopicDelivery{
+		{Infohash: "aaa", ClientID: nil},
+	}}
+	remover := &fakeRemover{}
+	h := &Topics{Topics: store, Deliveries: deliveries, Remover: remover}
+
+	rec := httptest.NewRecorder()
+	h.Reset(rec, resetRequest(t, topicID, userID, ``))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if remover.called {
+		t.Error("remover must not be called when nothing is addressable")
+	}
+	var got struct {
+		Removed  int      `json:"removed"`
+		Warnings []string `json:"warnings"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(got.Warnings) != 1 || !strings.Contains(got.Warnings[0], "1 torrent(s) had no recorded client") {
+		t.Fatalf("want one warning, got %v", got.Warnings)
+	}
+}
+
 func TestTopicsReset_ForeignTopicIsNotFound(t *testing.T) {
 	topicID, intruder := uuid.New(), uuid.New()
 	// GetByID is user-scoped in the real repo, so a foreign topic surfaces as

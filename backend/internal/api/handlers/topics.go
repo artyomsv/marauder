@@ -645,6 +645,20 @@ func (h *Topics) removeDeliveredTorrents(ctx context.Context, topic *domain.Topi
 		return 0, append(warnings, "could not list delivered torrents: "+err.Error())
 	}
 	byClient := clientremove.GroupByClient(deliveries)
+
+	// GroupByClient drops rows with no client id — there is nothing to address
+	// the removal to. The reset deletes those rows anyway, so the torrent stays
+	// in whatever client holds it, now untracked. Say so, or the user is told
+	// "Removed 0 torrent(s)" with no explanation at all.
+	grouped := 0
+	for _, hashes := range byClient {
+		grouped += len(hashes)
+	}
+	if orphaned := len(deliveries) - grouped; orphaned > 0 {
+		warnings = append(warnings, fmt.Sprintf(
+			"%d torrent(s) had no recorded client and were left in place", orphaned))
+	}
+
 	if len(byClient) == 0 {
 		return 0, warnings
 	}
@@ -655,10 +669,7 @@ func (h *Topics) removeDeliveredTorrents(ctx context.Context, topic *domain.Topi
 	removed := 0
 	for _, res := range h.Remover.Remove(ctx, uid, byClient, deleteData) {
 		n := float64(len(res.Hashes))
-		name := res.ClientName
-		if name == "" {
-			name = "unknown"
-		}
+		name := clientremove.ClientLabel(res.ClientName)
 		if res.OK {
 			removed += len(res.Hashes)
 			metrics.TopicResetRemovedTotal.WithLabelValues(name, "ok").Add(n)

@@ -109,6 +109,11 @@ func (r *Deliveries) DeleteByInfohashes(ctx context.Context, topicID uuid.UUID, 
 // ON CONFLICT DO NOTHING means a surviving row would make the post-reset
 // re-delivery record a silent no-op, leaving the status view permanently
 // empty for that torrent. Returns the number of rows removed.
+//
+// Not user-scoped: the DELETE keys on topic_id alone, so the caller must have
+// already established that the topic belongs to the requesting user (the reset
+// handler does, via a user-scoped Topics.GetByID). Calling this with an
+// unverified id deletes another user's delivery history.
 func (r *Deliveries) DeleteForTopic(ctx context.Context, topicID uuid.UUID) (int64, error) {
 	const q = `DELETE FROM topic_deliveries WHERE topic_id = $1`
 	ct, err := r.pool.Exec(ctx, q, topicID)

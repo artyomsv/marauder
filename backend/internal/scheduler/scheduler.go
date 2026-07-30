@@ -937,9 +937,9 @@ func (s *Scheduler) replacePrevious(ctx context.Context, log zerolog.Logger, t *
 			continue
 		}
 		metrics.SchedulerReplacedPreviousTotal.
-			WithLabelValues(clientLabel(res.ClientName), res.Reason).Add(n)
+			WithLabelValues(clientremove.ClientLabel(res.ClientName), res.Reason).Add(n)
 		log.Warn().Err(res.Err).
-			Str("client", clientLabel(res.ClientName)).
+			Str("client", clientremove.ClientLabel(res.ClientName)).
 			Str("reason", res.Reason).
 			Msg("replace-on-update: keeping previous version")
 	}
@@ -965,15 +965,6 @@ func (s *Scheduler) remover() *clientremove.Remover {
 		Lookup:  clientremove.PluginLookup(s.lookupClient),
 		Timeout: s.cfg.TrackerHTTPTimeout,
 	}
-}
-
-// clientLabel keeps metric and log cardinality bounded when the client row
-// could not be loaded and its name is therefore unknown.
-func clientLabel(name string) string {
-	if name == "" {
-		return "unknown"
-	}
-	return name
 }
 
 // transientRetryDelay is how soon a topic is re-checked after a transient
