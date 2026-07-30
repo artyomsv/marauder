@@ -669,13 +669,21 @@ describe("TopicsPage reset", () => {
     });
   });
 
-  it("opens the reset card for a single topic from the row action", async () => {
+  it("opens the reset card for the topic whose row was clicked", async () => {
     renderTopicsPage();
     await screen.findByText("Alpha");
 
-    await userEvent.click(screen.getAllByRole("button", { name: /reset topic/i })[0]);
+    // Two fixture topics, two reset buttons. Exercise both indices so this
+    // proves each row's action closes over its own topic — clicking index 0
+    // and only ever checking "Reset Alpha" would pass identically if every
+    // row's button were (incorrectly) bound to topics[0].
+    const resetButtons = screen.getAllByRole("button", { name: /reset topic/i });
 
+    await userEvent.click(resetButtons[0]);
     expect(await screen.findByText(/Reset Alpha/)).toBeInTheDocument();
+
+    await userEvent.click(resetButtons[1]);
+    expect(await screen.findByText(/Reset Beta/)).toBeInTheDocument();
   });
 
   it("resets every selected topic from the bulk bar", async () => {
