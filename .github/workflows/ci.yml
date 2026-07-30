@@ -100,6 +100,70 @@ jobs:
           working-directory: backend
           args: --timeout=5m
 
+  # -------------------------------------------------- backend integration
+  # The repo layer's SQL semantics are invisible to its pgxmock unit tests:
+  # those pin statement text and bound arguments but never execute anything,
+  # so a JSONB key delete, a status CASE, or `IS NOT DISTINCT FROM` vs `=`
+  # are asserted only by regex. These tests run the same statements against a
+  # real Postgres with the real (embedded, goose) migrations applied.
+  #
+  # Its own job rather than a service container bolted onto `backend`, so the
+  # fast-feedback job keeps starting instantly; this one runs in parallel and
+  # a Postgres service container costs ~10s, so the under-3-minutes promise in
+  # the header still holds. Scoped to internal/db/repo — the only package with
+  # integration-tagged tests today.
+  backend-integration:
+    name: Backend integration (Postgres)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: marauder_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: '1.25'
+          cache: true
+          cache-dependency-path: backend/go.sum
+
+      - name: go mod download
+        run: go mod download
+
+      - name: go vet (integration tag)
+        # The default `backend` job's vet does not see build-tagged files.
+        run: go vet -tags=integration ./internal/db/repo/...
+
+      - name: go test (integration)
+        shell: bash
+        env:
+          MARAUDER_TEST_DB_URL: postgres://postgres:postgres@localhost:5432/marauder_test?sslmode=disable
+        # The suite skips itself when MARAUDER_TEST_DB_URL is unset, which is
+        # what keeps a plain `go test ./...` working for contributors without a
+        # database — but it also means a typo in the URL above would turn this
+        # job green without running a single assertion. Fail on any skip.
+        run: |
+          go test -tags=integration -race -v ./internal/db/repo/... 2>&1 | tee "$RUNNER_TEMP/integration.log"
+          if grep -q -- '--- SKIP' "$RUNNER_TEMP/integration.log"; then
+            echo "::error::integration tests skipped - MARAUDER_TEST_DB_URL did not reach the Postgres service"
+            exit 1
+          fi
+
   # ---------------------------------------------------------------- cfsolver
   cfsolver:
     name: cfsolver build

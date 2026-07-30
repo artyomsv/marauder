@@ -40,7 +40,9 @@ techdebt/       Debt-tracking files (one per issue, see global rule)
 .github/        Workflows: ci, docker, e2e, nightly-build, release,
                 auto-release, codeql (nightly-build builds all 3 images on
                 native amd64+arm64 runners nightly and runs them — guards
-                against arch regressions like #74)
+                against arch regressions like #74). ci.yml also carries the
+                `backend-integration` job: a `services: postgres` container
+                running the `//go:build integration` repo tests (see below)
                 + scripts/ (release-helpers.sh: tested bump/version/issue logic)
 ```
 
@@ -317,6 +319,20 @@ The **status poll fallback** (in `DeliveryStatus`) is now gated by `useSseStatus
 ```bash
 # Backend (Docker — never install Go locally)
 docker run --rm -v "E:/Projects/Stukans/Marauder/backend:/backend" -w //backend golang:1.25 sh -c "go build ./... && go vet ./... && go test -race ./..."
+
+# Backend repo integration tests (real Postgres, real migrations). Build-tagged
+# `integration` and self-skipping when MARAUDER_TEST_DB_URL is unset, so the
+# command above is unaffected. They exist because the repo layer's pgxmock tests
+# pin SQL text without executing it, leaving JSONB key deletes, status CASEs and
+# the `IS NOT DISTINCT FROM` check-state guard asserted only by regex. Harness:
+# internal/db/repo/integration_test.go (reuses db.Migrate, one throwaway user per
+# test so any order works). CI runs this as the `backend-integration` job.
+docker network create marauder-itest-net
+docker run --rm -d --name marauder-itest-pg --network marauder-itest-net \
+  -e POSTGRES_PASSWORD=test -e POSTGRES_DB=marauder_test postgres:17-alpine
+docker run --rm --network marauder-itest-net -v "E:/Projects/Stukans/Marauder/backend:/backend" -w //backend \
+  -e MARAUDER_TEST_DB_URL="postgres://postgres:test@marauder-itest-pg:5432/marauder_test?sslmode=disable" \
+  golang:1.25 sh -c "go test -tags=integration -race ./internal/db/repo/..."
 
 # Frontend — run from a container-local node_modules volume, NOT the bind mount.
 # node_modules is a linux-x64-musl install (alpine is correct; glibc node:22 and
