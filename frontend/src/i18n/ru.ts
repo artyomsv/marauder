@@ -238,11 +238,15 @@ const ru: Record<string, string> = {
   "topics.bulk.pause": "Приостановить",
   "topics.bulk.resume": "Возобновить",
   "topics.bulk.reset": "Сбросить",
+  "topics.bulk.recheck": "Проверить сейчас",
   "topics.bulk.delete": "Удалить",
   "topics.bulk.confirmDelete": "Удалить тем: {count}?",
   "topics.bulk.yes": "Да",
   "topics.bulk.no": "Нет",
   "topics.bulk.clear": "Снять выбор",
+
+  // Действие строки: немедленная проверка вне расписания темы
+  "topics.recheck": "Проверить сейчас",
 
   // Сброс темы (сброс доставок/прогресса/ошибок, повторная проверка с нуля)
   "topics.reset.title": "Сбросить «{name}»",

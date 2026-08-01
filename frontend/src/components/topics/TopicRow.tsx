@@ -1,10 +1,11 @@
 import { motion } from "framer-motion";
-import { Pencil, RotateCcw } from "lucide-react";
+import { Pencil, RefreshCw, RotateCcw } from "lucide-react";
 
 import type { Topic } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { cn, formatRelative } from "@/lib/utils";
+import { useT } from "@/i18n";
 import { DeleteConfirm } from "@/components/shared/DeleteConfirm";
 import { PosterImage } from "@/components/topics/PosterImage";
 import { TopicUrl } from "@/components/topics/TopicUrl";
@@ -26,6 +27,7 @@ export interface TopicRowLookups {
 export interface TopicRowActions {
   onToggleSelect: () => void;
   onEdit: () => void;
+  onRecheck: () => void;
   onReset: () => void;
   onDelete: () => void;
 }
@@ -47,6 +49,7 @@ export function TopicRow({
   lookups,
   actions,
 }: TopicRowProps) {
+  const t = useT();
   return (
     <motion.div
       initial={{ opacity: 0 }}
@@ -122,6 +125,17 @@ export function TopicRow({
         >
           <Pencil className="size-4" />
         </Button>
+        {topic.Status !== "paused" && (
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label={t("topics.recheck")}
+            title={t("topics.recheck")}
+            onClick={actions.onRecheck}
+          >
+            <RefreshCw className="size-4" />
+          </Button>
+        )}
         <Button
           variant="ghost"
           size="icon"
