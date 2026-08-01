@@ -415,6 +415,39 @@ WHERE id = $1 AND user_id = $2`
 	return nil
 }
 
+// QueueRecheck brings a topic's next check forward to now, so the scheduler
+// picks it up on its next tick. It is the non-destructive counterpart to
+// ResetCheckState: a topic parked on a backoff after a tracker outage can be
+// retried the moment the cause is fixed, without removing anything from the
+// download client.
+//
+// It writes next_check_at and NOTHING else. status, last_error and
+// last_error_code belong to the scheduler, which clears them on the next
+// successful check — reporting the topic healthy before anything has verified
+// that would be a lie. last_checked_at is left alone too: it has not checked
+// anything yet, and it is half of the (last_checked_at, next_check_at)
+// optimistic-concurrency token, so disturbing it needlessly would widen the
+// window in which an in-flight check discards its own result.
+//
+// Paused topics are excluded because DueForCheck ignores them; moving their
+// next_check_at would be a silent no-op that the API would have to report as
+// success. Ownership is enforced by the statement, matching ResetCheckState.
+//
+// Returns whether a row was updated. False means the topic does not exist, is
+// not this user's, or is paused — the handler tells those apart.
+func (r *Topics) QueueRecheck(ctx context.Context, id, userID uuid.UUID) (bool, error) {
+	const q = `
+UPDATE topics SET
+    next_check_at = now(),
+    updated_at    = now()
+WHERE id = $1 AND user_id = $2 AND status <> 'paused'`
+	ct, err := r.pool.Exec(ctx, q, id, userID)
+	if err != nil {
+		return false, fmt.Errorf("topics: queue recheck: %w", err)
+	}
+	return ct.RowsAffected() > 0, nil
+}
+
 // Update edits a topic's user-editable fields (display name, client, notifier,
 // download dir, category, and the capability Extra map). It does NOT
 // touch url/tracker/status/hash/scheduling. Returns ErrNotFound when the
