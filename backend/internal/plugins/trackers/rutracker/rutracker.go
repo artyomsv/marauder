@@ -79,9 +79,11 @@ type plugin struct {
 
 	// engine backs the interactive captcha login (see interactive.go). Built
 	// lazily because captchaConfig resolves the active domain, which is not
-	// known at init() time.
-	engineOnce sync.Once
-	engine     *captchalogin.Engine
+	// known at init() time, and rebuilt when that domain changes — engineDomain
+	// records which one the cached engine was built for.
+	engineMu     sync.Mutex
+	engine       *captchalogin.Engine
+	engineDomain string
 }
 
 func init() {
@@ -110,11 +112,10 @@ func (p *plugin) UsesCloudflare() bool { return true }
 // effectiveTransport returns the plugin-local transport used by tests to reach
 // an httptest server.
 //
-// It deliberately no longer consults registry.ChallengeTransport: RuTracker is
-// not fetched through a browser any more. It replays a minted Cloudflare
-// clearance from ordinary Go requests, which is faster, does not serialise,
-// carries binary bodies (so dl.php works) and permits a login (so search
-// works).
+// RuTracker is not fetched through a browser any more: it replays a minted
+// Cloudflare clearance from ordinary Go requests, which is faster, does not
+// serialise, carries binary bodies (so dl.php works) and permits a login (so
+// search works).
 func (p *plugin) effectiveTransport() http.RoundTripper { return p.transport }
 
 // requestUA picks the User-Agent for an outbound request.

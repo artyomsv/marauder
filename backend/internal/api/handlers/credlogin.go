@@ -35,13 +35,34 @@ func explainLoginFailure(err error) string {
 		return "blocked by Cloudflare — the challenge solver is unavailable or its clearance was rejected"
 	case errors.Is(err, registry.ErrSessionExpired):
 		return "the stored session has expired — sign in again to refresh it"
+	// Order is load-bearing: a timeout is also a *net.OpError and so satisfies
+	// isUnreachable. Matching it first keeps "timed out" from being reported as
+	// "could not be reached", which would send the user after the wrong problem.
 	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, context.Canceled),
 		isTimeout(err):
 		return "the tracker did not respond in time — it may be down or rate-limiting; try again shortly"
 	case isUnreachable(err):
-		return "the tracker could not be reached — check your network or the tracker's status"
+		// Keep the cause. This is a self-hosted app, so the user IS the
+		// operator: "connection refused" on their own box and "no route to
+		// host" call for opposite actions, and collapsing both into one
+		// sentence is the vagueness this function exists to avoid.
+		return "the tracker could not be reached (" + unreachableCause(err) + ") — check your network or the tracker's status"
 	}
 	return err.Error()
+}
+
+// unreachableCause extracts the underlying socket error for display, without
+// the address and syscall noise the full *net.OpError carries.
+func unreachableCause(err error) string {
+	var dns *net.DNSError
+	if errors.As(err, &dns) {
+		return "DNS: " + dns.Err
+	}
+	var op *net.OpError
+	if errors.As(err, &op) && op.Err != nil {
+		return op.Err.Error()
+	}
+	return "network error"
 }
 
 func isTimeout(err error) bool {

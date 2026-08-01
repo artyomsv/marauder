@@ -192,3 +192,22 @@ func TestPlugin_ImplementsWithInteractiveLogin(t *testing.T) {
 		t.Fatal("rutracker must implement registry.WithInteractiveLogin")
 	}
 }
+
+// TestEng_RebuildsWhenActiveDomainChanges guards a rotation hazard: the engine
+// bakes LoginURL from the active domain, so a cached engine built for the old
+// host would POST there while the session was cleared for the new one.
+func TestEng_RebuildsWhenActiveDomainChanges(t *testing.T) {
+	p := &plugin{sessions: forumcommon.New(), domain: defaultDomain}
+
+	first := p.eng()
+	if same := p.eng(); same != first {
+		t.Fatal("eng() must cache while the domain is unchanged")
+	}
+
+	// Simulate a rotation / admin change of the active domain.
+	p.domain = "rutracker.net"
+	rebuilt := p.eng()
+	if rebuilt == first {
+		t.Fatal("eng() must rebuild after the active domain changes, or it keeps POSTing to the old host")
+	}
+}

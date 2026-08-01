@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -141,6 +142,49 @@ func TestClearance_WaiterHonoursItsOwnDeadline(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("waiter blocked past its own deadline — the gate is not cancellable")
+	}
+}
+
+// TestClearance_RecoversFromForgottenSession guards against a solver restart
+// wedging every clearance-gated tracker until Marauder itself restarts.
+//
+// Transport caches the session name and nothing clears it on its own, so once
+// FlareSolverr forgets the session (a restart, an image update, an OOM kill)
+// every later mint would keep quoting the dead name. The recovery used to live
+// only inside RoundTrip; minting has to share it.
+func TestClearance_RecoversFromForgottenSession(t *testing.T) {
+	var gets int32
+	f := newFakeSolver(t, func(w http.ResponseWriter, cmd, target string) {
+		if cmd != "request.get" {
+			return
+		}
+		if atomic.AddInt32(&gets, 1) == 1 {
+			// FlareSolverr's shape for a session it no longer holds.
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"status":  "error",
+				"message": "Error: This session does not exist.",
+			})
+			return
+		}
+		clearanceResponder("CLEAR")(w, cmd, target)
+	})
+	defer f.srv.Close()
+	tr := New(f.srv.URL, 30*time.Second)
+
+	got, err := tr.Clearance(context.Background(), "https://rutracker.org/forum/login.php")
+	if err != nil {
+		t.Fatalf("Clearance: %v, want recovery from a forgotten session", err)
+	}
+	if got.Cookies["cf_clearance"] != "CLEAR" {
+		t.Fatalf("cookies = %v", got.Cookies)
+	}
+	if n := atomic.LoadInt32(&gets); n != 2 {
+		t.Errorf("request.get calls = %d, want 2 (one failed, one retried)", n)
+	}
+	// A replacement session must actually have been created, not the dead name
+	// reused.
+	if n := f.cmdCount("sessions.create"); n != 2 {
+		t.Errorf("sessions.create = %d, want 2 (initial + replacement)", n)
 	}
 }
 

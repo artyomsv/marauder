@@ -60,11 +60,11 @@ type Engine struct {
 	cfg   Config
 	store *pendingStore
 	// newSess MUST return a fresh, independent session (its own cookie jar) on every call. The engine holds one session per pending challenge for that challenge's lifetime and never shares a session across challenges; a newSess that returns a shared/cached session would let concurrent logins cross-contaminate captcha cookies.
-	newSess func() *forumcommon.Session // injects a jar (+ test transport)
+	newSess func(context.Context) *forumcommon.Session // injects a jar (+ test transport)
 }
 
 // New builds an Engine. newSess MUST return a fresh, independent session (its own cookie jar) on every call. The engine holds one session per pending challenge for that challenge's lifetime and never shares a session across challenges; a newSess that returns a shared/cached session would let concurrent logins cross-contaminate captcha cookies.
-func New(cfg Config, newSess func() *forumcommon.Session) *Engine {
+func New(cfg Config, newSess func(context.Context) *forumcommon.Session) *Engine {
 	return &Engine{cfg: cfg, store: newPendingStore(), newSess: newSess}
 }
 
@@ -128,7 +128,7 @@ func (e *Engine) fetchCaptcha(ctx context.Context, sess *forumcommon.Session, im
 // Begin starts a login. Returns (challenge, nil) when a captcha is needed,
 // or (nil, cookies) when login succeeded outright.
 func (e *Engine) Begin(ctx context.Context, creds *domain.TrackerCredential) (*registry.LoginChallenge, registry.SessionCookies, error) {
-	sess := e.newSess()
+	sess := e.newSess(ctx)
 	if e.cfg.SeedURL != "" {
 		if req, rerr := http.NewRequestWithContext(ctx, http.MethodGet, e.cfg.SeedURL, nil); rerr == nil {
 			req.Header.Set("User-Agent", sess.UserAgent)

@@ -8,7 +8,6 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
-	"time"
 
 	"github.com/artyomsv/marauder/backend/internal/domain"
 	"github.com/artyomsv/marauder/backend/internal/plugins/captchalogin"
@@ -44,11 +43,6 @@ func classifyLogin(body []byte) captchalogin.Outcome {
 	}
 	return captchalogin.OutcomeFailed
 }
-
-// interactiveClearanceTimeout bounds the clearance mint performed while
-// building an interactive-login session. A cold solve was measured at 10-55s
-// against RuTracker.
-const interactiveClearanceTimeout = 60 * time.Second
 
 // captchaHosts are the extra hosts RuTracker serves captcha images from.
 // The tracker's own domains (known + admin-configured) are allowed too; this
@@ -137,7 +131,7 @@ func (p *plugin) captchaConfig() captchalogin.Config {
 // Each one is seeded with the Cloudflare clearance: without it login.php
 // answers with a 403 challenge page rather than a form, and the captcha parse
 // would fail with a confusing "no parseable captcha" error.
-func (p *plugin) newInteractiveSession() *forumcommon.Session {
+func (p *plugin) newInteractiveSession(ctx context.Context) *forumcommon.Session {
 	sess := forumcommon.New().GetOrCreate(
 		forumcommon.SessionKey(pluginName, "interactive"), userAgent)
 	if tr := p.effectiveTransport(); tr != nil {
@@ -147,12 +141,13 @@ func (p *plugin) newInteractiveSession() *forumcommon.Session {
 	if err != nil {
 		return sess
 	}
-	// The engine's session factory takes no context, so this cannot inherit the
-	// caller's deadline — give it an explicit one of its own rather than let an
-	// outbound call run unbounded. Sized for a cold Cloudflare solve, which the
-	// boot-time warm-up usually means we are not paying for here.
-	ctx, cancel := context.WithTimeout(context.Background(), interactiveClearanceTimeout)
-	defer cancel()
+	// Mint under the CALLER's context. This ran on context.Background() at
+	// first, which defeated two guards at once: the clearance gate selects on
+	// ctx.Done() so a waiter can abandon another caller's solve, and solveBudget
+	// tightens FlareSolverr's maxTimeout from the caller's deadline. With no
+	// deadline it could block for the full configured ceiling — longer than the
+	// handler's own budget, which is exactly how a request ends up exceeding the
+	// server's write deadline and returning no valid response at all.
 	if c := p.applyClearance(ctx, sess, u); c.Valid() {
 		// The engine sends sess.UserAgent on both the login POST and the
 		// captcha fetch; it must match the UA the clearance was minted with.
@@ -161,10 +156,27 @@ func (p *plugin) newInteractiveSession() *forumcommon.Session {
 	return sess
 }
 
+// eng returns the interactive-login engine for the CURRENT active domain,
+// rebuilding it when that domain changes.
+//
+// captchaConfig bakes LoginURL from effectiveDomain(), which an admin can
+// change and which domain rotation (#126) changes on its own. A sync.Once
+// froze it at first use, so after a rotation the engine POSTed to the old host
+// while the session was cleared for the new one — the POST went out
+// unclearanced, got a 403, and surfaced as "login rejected".
+//
+// Rebuilding drops the engine's pending challenges, which is why this is keyed
+// on the domain rather than rebuilt per call: an outstanding captcha must
+// survive an ordinary login, and losing one on an actual rotation is both rare
+// and preferable to answering a puzzle the tracker will reject.
 func (p *plugin) eng() *captchalogin.Engine {
-	p.engineOnce.Do(func() {
+	domain := p.effectiveDomain()
+	p.engineMu.Lock()
+	defer p.engineMu.Unlock()
+	if p.engine == nil || p.engineDomain != domain {
 		p.engine = captchalogin.New(p.captchaConfig(), p.newInteractiveSession)
-	})
+		p.engineDomain = domain
+	}
 	return p.engine
 }
 

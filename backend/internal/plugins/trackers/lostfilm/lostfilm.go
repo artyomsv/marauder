@@ -108,7 +108,7 @@ type plugin struct {
 // on so concurrent interactive logins never cross-contaminate captcha
 // cookies. The uuid suffix guarantees the underlying store never hands
 // back a cached session.
-func (p *plugin) newInteractiveSession() *forumcommon.Session {
+func (p *plugin) newInteractiveSession(_ context.Context) *forumcommon.Session {
 	sess := forumcommon.New().GetOrCreate(pluginName+":pending:"+uuid.NewString(), userAgent)
 	if p.transport != nil {
 		sess.Client.Transport = p.transport

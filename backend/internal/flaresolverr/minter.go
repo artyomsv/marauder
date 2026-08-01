@@ -149,22 +149,20 @@ func (t *Transport) InvalidateClearance(probeURL string) {
 // /forum/login.php (measured 2026-08-01). Only a genuinely challenged URL
 // yields a clearance that works.
 func (t *Transport) mint(ctx context.Context, probeURL string) (registry.Clearance, error) {
-	session, serr := t.ensureSession(ctx)
-	if serr != nil && t.OnDegraded != nil {
-		// Session-less minting still works, just slower. Report it for the
-		// same reason RoundTrip does.
-		t.OnDegraded(serr)
-	}
 	budget, err := t.solveBudget(ctx)
 	if err != nil {
 		return registry.Clearance{}, err
 	}
+	// Session-less minting still works, just slower, and a session the solver
+	// has forgotten is replaced rather than fatal — see solveWithSession.
 	var sr solveResponse
-	if err := t.solve(ctx, solveRequest{
-		Cmd:        "request.get",
-		URL:        probeURL,
-		MaxTimeout: int(budget / time.Millisecond),
-		Session:    session,
+	if err := t.solveWithSession(ctx, func(session string) solveRequest {
+		return solveRequest{
+			Cmd:        "request.get",
+			URL:        probeURL,
+			MaxTimeout: int(budget / time.Millisecond),
+			Session:    session,
+		}
 	}, &sr); err != nil {
 		return registry.Clearance{}, err
 	}

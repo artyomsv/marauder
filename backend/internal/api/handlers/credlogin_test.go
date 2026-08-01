@@ -47,7 +47,26 @@ func TestExplainLoginFailure(t *testing.T) {
 		{
 			name:        "dns failure",
 			err:         fmt.Errorf("login: %w", &net.DNSError{Err: "no such host", Name: "rutracker.org"}),
-			wantContain: "could not be reached",
+			wantContain: "no such host",
+		},
+		{
+			// A self-hosted operator needs the cause: "connection refused" on
+			// their own box and "no route to host" call for opposite actions.
+			name: "connection refused keeps its cause",
+			err: fmt.Errorf("login: %w", &net.OpError{
+				Op: "dial", Net: "tcp", Err: errors.New("connection refused"),
+			}),
+			wantContain: "connection refused",
+		},
+		{
+			// Ordering guard: an OpError that is ALSO a timeout must classify as
+			// a timeout, not as unreachable.
+			name: "timeout wins over unreachable",
+			err: fmt.Errorf("login: %w", &net.OpError{
+				Op: "read", Net: "tcp", Err: timeoutErr{},
+			}),
+			wantContain: "did not respond in time",
+			wantAbsent:  "could not be reached",
 		},
 		{
 			name:        "wrong password is passed through unchanged",
@@ -73,3 +92,10 @@ func TestExplainLoginFailure_NilIsEmpty(t *testing.T) {
 		t.Errorf("explainLoginFailure(nil) = %q, want empty", got)
 	}
 }
+
+// timeoutErr is a net.Error that reports a timeout, used to prove the
+// classification order in explainLoginFailure.
+type timeoutErr struct{}
+
+func (timeoutErr) Error() string { return "i/o timeout" }
+func (timeoutErr) Timeout() bool { return true }

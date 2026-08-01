@@ -368,3 +368,62 @@ func TestVerify_UsesClearanceAndTransport(t *testing.T) {
 		t.Errorf("UA = %q, want the clearance UA", gotUA)
 	}
 }
+
+// TestLogin_ValidStoredSession_SkipsThePasswordPost covers the fast path added
+// for the interactive flow. It matters beyond saving a round-trip: RuTracker's
+// captcha is adaptive to repeated login attempts, so re-POSTing credentials on
+// every check is what eventually trips it.
+func TestLogin_ValidStoredSession_SkipsThePasswordPost(t *testing.T) {
+	var posts int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			atomic.AddInt32(&posts, 1)
+		}
+		// index.php (what Verify hits) reports the session as live.
+		_, _ = w.Write([]byte(`<div id="logged-in-username">alice</div>`))
+	}))
+	defer srv.Close()
+	installClearance(t)
+
+	p := pluginFor(t, srv)
+	if err := p.Login(context.Background(), &domain.TrackerCredential{
+		UserID:     uuid.New(),
+		Username:   "bob",
+		SecretEnc:  []byte("pw"),
+		SessionEnc: []byte(`{"bb_session":"SESS"}`),
+	}); err != nil {
+		t.Fatalf("Login: %v", err)
+	}
+	if n := atomic.LoadInt32(&posts); n != 0 {
+		t.Errorf("credential POSTs = %d, want 0 — a live stored session must not re-authenticate", n)
+	}
+}
+
+// TestLogin_CorruptStoredSession_FallsBackToCredentials proves the stored
+// session is an optimisation, not a trap: an unusable one must not strand the
+// account, it must fall through to a normal login.
+func TestLogin_CorruptStoredSession_FallsBackToCredentials(t *testing.T) {
+	var posted url.Values
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			_ = r.ParseForm()
+			posted = r.PostForm
+		}
+		_, _ = w.Write([]byte(`<html><span id="logged-in-username">bob</span></html>`))
+	}))
+	defer srv.Close()
+	installClearance(t)
+
+	p := pluginFor(t, srv)
+	if err := p.Login(context.Background(), &domain.TrackerCredential{
+		UserID:     uuid.New(),
+		Username:   "bob",
+		SecretEnc:  []byte("hunter2"),
+		SessionEnc: []byte("not json at all"),
+	}); err != nil {
+		t.Fatalf("Login: %v", err)
+	}
+	if posted.Get("login_username") != "bob" {
+		t.Fatalf("a corrupt stored session must fall back to a credential POST, got %v", posted)
+	}
+}

@@ -14,7 +14,7 @@ import (
 	"github.com/artyomsv/marauder/backend/internal/plugins/trackers/forumcommon"
 )
 
-func freshSession() *forumcommon.Session {
+func freshSession(context.Context) *forumcommon.Session {
 	// A distinct store per call guarantees an independent cookie jar, the
 	// invariant the engine relies on to keep concurrent logins apart.
 	return forumcommon.New().GetOrCreate("interactive", "ua")
@@ -229,6 +229,54 @@ func TestComplete_StillAsksForCaptcha_IsRetryableAndKeepsPending(t *testing.T) {
 	// The pending challenge must survive so Refresh can offer a new picture.
 	if _, err := e.Refresh(context.Background(), ch.ChallengeID); err != nil {
 		t.Fatalf("Refresh after a wrong answer: %v", err)
+	}
+}
+
+// TestFetchCaptcha_RefusesOffHostRedirect is the second half of the SSRF fix.
+// The plugin allowlists the captcha URL's host, but that check covers only the
+// FIRST hop — a 302 from an allowlisted host to an internal address would
+// otherwise be followed, and the body handed to the browser as a data: URL.
+func TestFetchCaptcha_RefusesOffHostRedirect(t *testing.T) {
+	var internalHits int32
+	internal := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&internalHits, 1)
+		w.Header().Set("Content-Type", "text/plain")
+		_, _ = w.Write([]byte("SECRET-INTERNAL-RESPONSE"))
+	}))
+	defer internal.Close()
+
+	// The "allowlisted" captcha host redirects off-site.
+	redirector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/captcha") {
+			http.Redirect(w, r, internal.URL+"/latest/meta-data", http.StatusFound)
+			return
+		}
+		_, _ = w.Write([]byte(`<input name="cap_sid" value="SID">`))
+	}))
+	defer redirector.Close()
+
+	e := New(Config{
+		LoginURL:    redirector.URL + "/login",
+		CookieNames: []string{"bb_session"},
+		BuildForm: func(c *domain.TrackerCredential, _ string, _ bool) url.Values {
+			return url.Values{"login_username": {c.Username}}
+		},
+		Classify: func([]byte) Outcome { return OutcomeNeedCaptcha },
+		ChallengeFrom: func([]byte) (ChallengeSpec, error) {
+			return ChallengeSpec{
+				ImageURL:    redirector.URL + "/captcha/x.jpg",
+				Fields:      url.Values{"cap_sid": {"SID"}},
+				AnswerField: "cap_code_x",
+			}, nil
+		},
+	}, freshSession)
+
+	_, _, err := e.Begin(context.Background(), &domain.TrackerCredential{Username: "bob"})
+	if err == nil {
+		t.Fatal("Begin succeeded; the off-host redirect must not be followed")
+	}
+	if n := atomic.LoadInt32(&internalHits); n != 0 {
+		t.Errorf("internal host was fetched %d times — the redirect guard did not hold", n)
 	}
 }
 

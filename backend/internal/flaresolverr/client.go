@@ -479,6 +479,36 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	return out, err
 }
 
+// solveWithSession runs one solve on the shared session, replacing a session
+// FlareSolverr no longer recognises exactly once.
+//
+// A restarted, updated or OOM-killed solver forgets its sessions while
+// Transport still holds the name; nothing else ever clears it, so without this
+// recovery a single solver restart wedges EVERY challenge-gated tracker until
+// Marauder itself restarts. build receives the session name because the retry
+// has to rebuild the request around a different one.
+//
+// It lives here, shared, because it did not used to: the recovery existed only
+// inside RoundTrip, and moving the live path to clearance minting left it
+// behind — the happy path worked, so the loss was invisible.
+func (t *Transport) solveWithSession(ctx context.Context, build func(session string) solveRequest, out *solveResponse) error {
+	session, serr := t.ensureSession(ctx)
+	if serr != nil {
+		metrics.FlareSolverrSessionsTotal.WithLabelValues("degraded").Inc()
+		if t.OnDegraded != nil {
+			t.OnDegraded(serr)
+		}
+	}
+	err := t.solve(ctx, build(session), out)
+	if err != nil && session != "" && isSessionGone(err) {
+		t.dropSession(session)
+		if fresh, ferr := t.ensureSession(ctx); ferr == nil {
+			return t.solve(ctx, build(fresh), out)
+		}
+	}
+	return err
+}
+
 // solve performs one request.* round-trip against FlareSolverr and decodes the
 // envelope. FlareSolverr answers HTTP 200 even for a command that failed,
 // reporting the real outcome in the envelope, so the status is checked here
