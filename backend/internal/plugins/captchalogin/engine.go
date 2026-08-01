@@ -92,7 +92,24 @@ func (e *Engine) fetchCaptcha(ctx context.Context, sess *forumcommon.Session, im
 		return nil, err
 	}
 	req.Header.Set("User-Agent", sess.UserAgent)
-	resp, err := sess.Client.Do(req)
+	// Fetch through a client that refuses to follow a redirect off the host we
+	// were pointed at. When ChallengeFrom supplies the URL it comes from
+	// tracker-controlled HTML; the plugin allowlists the host, but a redirect
+	// would sidestep that check and let the response body — returned to the
+	// browser as a data: URL — come from an internal address instead. Same jar
+	// and transport, so cookies and any test transport still apply.
+	client := &http.Client{
+		Jar:       sess.Client.Jar,
+		Transport: sess.Client.Transport,
+		Timeout:   sess.Client.Timeout,
+		CheckRedirect: func(r *http.Request, via []*http.Request) error {
+			if len(via) > 0 && r.URL.Host != via[0].URL.Host {
+				return fmt.Errorf("captcha redirected off-host to %q", r.URL.Host)
+			}
+			return nil
+		},
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
 	}

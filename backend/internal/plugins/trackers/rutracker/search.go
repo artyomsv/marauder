@@ -42,8 +42,8 @@ func (p *plugin) Search(ctx context.Context, query string, creds *domain.Tracker
 	if creds == nil {
 		return nil, registry.ErrSearchRequiresCredentials
 	}
-	target := fmt.Sprintf("https://%s/forum/tracker.php?nm=%s",
-		p.effectiveDomain(), forumcommon.EncodeWindows1251Query(q))
+	encoded := forumcommon.EncodeWindows1251Query(q)
+	target := fmt.Sprintf("https://%s/forum/tracker.php?nm=%s", p.effectiveDomain(), encoded)
 	body, err := p.fetchBytes(ctx, nil, creds, target)
 	if err != nil {
 		return nil, fmt.Errorf("rutracker search: %w", err)
@@ -59,14 +59,15 @@ func (p *plugin) Search(ctx context.Context, query string, creds *domain.Tracker
 	// it got here. Record enough to tell those apart without dumping the page,
 	// which carries session-bearing markup.
 	//
-	// The logged URL is what caught a mangled query in testing — a caller that
-	// hands non-UTF-8 text to the cp1251 encoder gets "?" per rune, and
-	// `nm=%3F%3F%3F` searching for question marks looks exactly like "no
-	// results" from the outside.
+	// query_mangled is the signal that caught a real bug: a caller handing
+	// non-UTF-8 text to the cp1251 encoder gets "?" per rune, so the tracker
+	// searches for question marks and answers with a perfectly valid
+	// zero-result page. The flag is logged rather than the query itself —
+	// search terms are the user's business and do not belong in logs.
 	log.Debug().Str("plugin", pluginName).Str("step", "search").
 		Int("page_bytes", len(body)).Int("rows", len(rows)).
 		Bool("markup_ok", strings.Contains(page, "data-topic_id")).
-		Str("url", target).
+		Bool("query_mangled", strings.Contains(encoded, "%3F")).
 		Msg("search page parsed")
 	var out []registry.SearchResult
 	for _, row := range rows {

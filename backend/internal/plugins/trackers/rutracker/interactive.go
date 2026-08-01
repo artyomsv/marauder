@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/url"
 	"regexp"
+	"strings"
 
 	"github.com/artyomsv/marauder/backend/internal/domain"
 	"github.com/artyomsv/marauder/backend/internal/plugins/captchalogin"
@@ -43,13 +44,46 @@ func classifyLogin(body []byte) captchalogin.Outcome {
 	return captchalogin.OutcomeFailed
 }
 
+// captchaHosts are the extra hosts RuTracker serves captcha images from.
+// The tracker's own domains (known + admin-configured) are allowed too; this
+// covers the separate static CDN the image actually lives on.
+var captchaHosts = []string{"static.rutracker.cc"}
+
+// allowedCaptchaHost reports whether a scraped captcha image may be fetched.
+//
+// The URL comes out of tracker-controlled HTML and is then fetched by the
+// BACKEND, which typically sits on a private network the tracker cannot reach,
+// with the response handed to the browser as a data: URL. Trusting it would
+// make Marauder a read primitive for loopback, link-local and cloud-metadata
+// addresses, so the host is allowlisted rather than merely pattern-matched.
+//
+// Mirrors the allowlist fetchOnce applies to page fetches: the tracker's own
+// effective domain, its known/admin-configured mirrors, plus the static CDN
+// the captcha image actually lives on.
+func (p *plugin) allowedCaptchaHost(raw string) bool {
+	u, err := url.Parse(raw)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
+		return false
+	}
+	if u.Host == p.effectiveDomain() {
+		return true
+	}
+	host := u.Hostname()
+	for _, h := range captchaHosts {
+		if strings.EqualFold(host, h) {
+			return true
+		}
+	}
+	return registry.DomainAllowed(pluginName, host, knownDomains)
+}
+
 // parseChallenge extracts one captcha instance from a login response.
 //
 // All three parts are per-attempt: the image lives on static.rutracker.cc
 // under a content hash, cap_sid pairs the answer with that image, and the
 // answer field is named cap_code_<md5>. None can be hard-coded in the config,
 // which is why the engine grew ChallengeFrom.
-func parseChallenge(body []byte) (captchalogin.ChallengeSpec, error) {
+func (p *plugin) parseChallenge(body []byte) (captchalogin.ChallengeSpec, error) {
 	sid := capSidRe.FindSubmatch(body)
 	field := capFieldRe.FindSubmatch(body)
 	img := capImgRe.FindSubmatch(body)
@@ -57,8 +91,13 @@ func parseChallenge(body []byte) (captchalogin.ChallengeSpec, error) {
 		return captchalogin.ChallengeSpec{},
 			errors.New("rutracker: login page has no parseable captcha challenge")
 	}
+	imageURL := string(img[1])
+	if !p.allowedCaptchaHost(imageURL) {
+		return captchalogin.ChallengeSpec{},
+			fmt.Errorf("rutracker: refusing off-site captcha host in %q", imageURL)
+	}
 	return captchalogin.ChallengeSpec{
-		ImageURL:    string(img[1]),
+		ImageURL:    imageURL,
 		Fields:      url.Values{"cap_sid": {string(sid[1])}},
 		AnswerField: string(field[1]),
 	}, nil
@@ -70,7 +109,7 @@ func (p *plugin) captchaConfig() captchalogin.Config {
 	return captchalogin.Config{
 		LoginURL:      "https://" + p.effectiveDomain() + "/forum/login.php",
 		CookieNames:   []string{"bb_session"},
-		ChallengeFrom: parseChallenge,
+		ChallengeFrom: p.parseChallenge,
 		Classify:      classifyLogin,
 		BuildForm: func(c *domain.TrackerCredential, _ string, _ bool) url.Values {
 			// The answer is placed by the engine under the per-challenge

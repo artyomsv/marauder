@@ -195,7 +195,7 @@ func TestClearance_NoCookieInSolution_ReturnsErrNoClearance(t *testing.T) {
 
 func TestClearance_Unconfigured_ReturnsErrDisabled(t *testing.T) {
 	tr := New("", 30*time.Second)
-	if _, err := tr.Clearance(context.Background(), "https://rutracker.org/forum/login.php"); err != ErrDisabled {
+	if _, err := tr.Clearance(context.Background(), "https://rutracker.org/forum/login.php"); !errors.Is(err, ErrDisabled) {
 		t.Fatalf("err = %v, want ErrDisabled", err)
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -11,6 +12,7 @@ import (
 	"github.com/artyomsv/marauder/backend/internal/domain"
 	"github.com/artyomsv/marauder/backend/internal/plugins/captchalogin"
 	"github.com/artyomsv/marauder/backend/internal/plugins/registry"
+	"github.com/artyomsv/marauder/backend/internal/plugins/trackers/forumcommon"
 )
 
 func TestClassifyLogin(t *testing.T) {
@@ -37,11 +39,15 @@ func TestClassifyLogin(t *testing.T) {
 	}
 }
 
+// prodPlugin is a plugin pinned to the real domain, so host allowlisting is
+// exercised as it behaves in production rather than against a test server.
+func prodPlugin() *plugin { return &plugin{sessions: forumcommon.New(), domain: defaultDomain} }
+
 func TestParseChallenge_ExtractsSidFieldAndImage(t *testing.T) {
 	body := []byte(`<input type="hidden" name="cap_sid" value="SID123">` +
 		`<img src="https://static.rutracker.cc/captcha/abc.jpg?9" width="120">` +
 		`<input class="reg-input" type="text" name="cap_code_deadbeef" value="">`)
-	spec, err := parseChallenge(body)
+	spec, err := prodPlugin().parseChallenge(body)
 	if err != nil {
 		t.Fatalf("parseChallenge: %v", err)
 	}
@@ -57,8 +63,55 @@ func TestParseChallenge_ExtractsSidFieldAndImage(t *testing.T) {
 }
 
 func TestParseChallenge_MissingSid_Errors(t *testing.T) {
-	if _, err := parseChallenge([]byte(`<html>no captcha here</html>`)); err == nil {
+	if _, err := prodPlugin().parseChallenge([]byte(`<html>no captcha here</html>`)); err == nil {
 		t.Fatal("want an error when the page carries no captcha")
+	}
+}
+
+// TestParseChallenge_RejectsOffsiteCaptchaHost is the SSRF guard. The captcha
+// URL is scraped out of tracker-controlled HTML and then fetched by the
+// backend, which may sit on a network the tracker cannot reach; the response is
+// handed back to the browser as a data: URL. A page that pointed it at cloud
+// metadata or a loopback admin port would turn Marauder into a read primitive
+// for the internal network, so the host is allowlisted rather than trusted.
+func TestParseChallenge_RejectsOffsiteCaptchaHost(t *testing.T) {
+	offsite := []string{
+		"http://169.254.169.254/latest/meta-data/captcha",
+		"http://127.0.0.1:8679/api/v1/captcha",
+		"https://evil.example.com/captcha/x.jpg",
+		"https://static.rutracker.cc.evil.com/captcha/x.jpg",
+		"file:///etc/captcha",
+	}
+	for _, bad := range offsite {
+		t.Run(bad, func(t *testing.T) {
+			body := []byte(`<input name="cap_sid" value="SID">` +
+				`<img src="` + bad + `">` +
+				`<input name="cap_code_deadbeef" value="">`)
+			if _, err := prodPlugin().parseChallenge(body); err == nil {
+				t.Errorf("parseChallenge accepted off-site captcha host %q", bad)
+			}
+		})
+	}
+}
+
+func TestParseChallenge_AcceptsKnownCaptchaHosts(t *testing.T) {
+	ok := []string{
+		"https://static.rutracker.cc/captcha/abc.jpg?9",
+		"https://rutracker.org/forum/captcha/abc.jpg",
+	}
+	for _, good := range ok {
+		t.Run(good, func(t *testing.T) {
+			body := []byte(`<input name="cap_sid" value="SID">` +
+				`<img src="` + good + `">` +
+				`<input name="cap_code_deadbeef" value="">`)
+			spec, err := prodPlugin().parseChallenge(body)
+			if err != nil {
+				t.Fatalf("parseChallenge(%q) = %v, want accepted", good, err)
+			}
+			if spec.ImageURL != good {
+				t.Errorf("ImageURL = %q, want %q", spec.ImageURL, good)
+			}
+		})
 	}
 }
 
@@ -93,15 +146,18 @@ func TestBeginLogin_NoCaptchaDemanded_ReturnsSessionDirectly(t *testing.T) {
 // pins that the per-challenge image is fetched from the separate static host
 // RuTracker serves captchas from.
 func TestBeginLogin_CaptchaDemanded_ReturnsChallenge(t *testing.T) {
-	imgSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "image/jpeg")
-		_, _ = w.Write([]byte{0xFF, 0xD8, 0xFF})
-	}))
-	defer imgSrv.Close()
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	// One server for both the login form and the image: the captcha host is
+	// allowlisted, so a second httptest server on a different port is (rightly)
+	// rejected as off-site.
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/captcha/") {
+			w.Header().Set("Content-Type", "image/jpeg")
+			_, _ = w.Write([]byte{0xFF, 0xD8, 0xFF})
+			return
+		}
 		_, _ = w.Write([]byte(`<input type="hidden" name="cap_sid" value="SID123">` +
-			`<img src="` + imgSrv.URL + `/captcha/abc.jpg">` +
+			`<img src="` + srv.URL + `/captcha/abc.jpg">` +
 			`<input type="text" name="cap_code_deadbeef" value="">`))
 	}))
 	defer srv.Close()
