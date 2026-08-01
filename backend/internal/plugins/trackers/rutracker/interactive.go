@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/artyomsv/marauder/backend/internal/domain"
 	"github.com/artyomsv/marauder/backend/internal/plugins/captchalogin"
@@ -43,6 +44,11 @@ func classifyLogin(body []byte) captchalogin.Outcome {
 	}
 	return captchalogin.OutcomeFailed
 }
+
+// interactiveClearanceTimeout bounds the clearance mint performed while
+// building an interactive-login session. A cold solve was measured at 10-55s
+// against RuTracker.
+const interactiveClearanceTimeout = 60 * time.Second
 
 // captchaHosts are the extra hosts RuTracker serves captcha images from.
 // The tracker's own domains (known + admin-configured) are allowed too; this
@@ -141,7 +147,13 @@ func (p *plugin) newInteractiveSession() *forumcommon.Session {
 	if err != nil {
 		return sess
 	}
-	if c := p.applyClearance(context.Background(), sess, u); c.Valid() {
+	// The engine's session factory takes no context, so this cannot inherit the
+	// caller's deadline — give it an explicit one of its own rather than let an
+	// outbound call run unbounded. Sized for a cold Cloudflare solve, which the
+	// boot-time warm-up usually means we are not paying for here.
+	ctx, cancel := context.WithTimeout(context.Background(), interactiveClearanceTimeout)
+	defer cancel()
+	if c := p.applyClearance(ctx, sess, u); c.Valid() {
 		// The engine sends sess.UserAgent on both the login POST and the
 		// captcha fetch; it must match the UA the clearance was minted with.
 		sess.UserAgent = c.UserAgent
