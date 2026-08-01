@@ -163,9 +163,11 @@ func (h *Credentials) BeginInteractive(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	transient := &domain.TrackerCredential{UserID: uid, TrackerName: req.TrackerName, Username: req.Username, SecretEnc: []byte(req.Password)}
-	challenge, cookies, err := wi.BeginLogin(r.Context(), transient)
+	ctx, cancel := slowOperation(w, r, slowOperationBudget)
+	defer cancel()
+	challenge, cookies, err := wi.BeginLogin(ctx, transient)
 	if err != nil {
-		problem.Write(w, r, h.BaseURL, problem.ErrUnprocessable(err.Error()))
+		problem.Write(w, r, h.BaseURL, problem.ErrUnprocessable(explainLoginFailure(err)))
 		return
 	}
 	if cookies != nil { // trusted IP, no captcha required
@@ -210,14 +212,16 @@ func (h *Credentials) CompleteInteractive(w http.ResponseWriter, r *http.Request
 		problem.Write(w, r, h.BaseURL, perr)
 		return
 	}
-	cookies, err := wi.CompleteLogin(r.Context(), req.ChallengeID, req.Answer)
+	ctx, cancel := slowOperation(w, r, slowOperationBudget)
+	defer cancel()
+	cookies, err := wi.CompleteLogin(ctx, req.ChallengeID, req.Answer)
 	if err != nil {
 		if errors.Is(err, captchalogin.ErrWrongCaptcha) {
 			// Keep the pending challenge so the client can refresh + retry.
 			problem.Write(w, r, h.BaseURL, problem.ErrUnprocessable("captcha_incorrect"))
 			return
 		}
-		problem.Write(w, r, h.BaseURL, problem.ErrUnprocessable(err.Error()))
+		problem.Write(w, r, h.BaseURL, problem.ErrUnprocessable(explainLoginFailure(err)))
 		return
 	}
 	created, cerr := h.persistSession(r.Context(), uid, p.trackerName, p.username, p.password, cookies)
@@ -257,9 +261,11 @@ func (h *Credentials) RefreshInteractive(w http.ResponseWriter, r *http.Request)
 		problem.Write(w, r, h.BaseURL, perr)
 		return
 	}
-	challenge, err := wi.RefreshChallenge(r.Context(), req.ChallengeID)
+	ctx, cancel := slowOperation(w, r, slowOperationBudget)
+	defer cancel()
+	challenge, err := wi.RefreshChallenge(ctx, req.ChallengeID)
 	if err != nil {
-		problem.Write(w, r, h.BaseURL, problem.ErrUnprocessable(err.Error()))
+		problem.Write(w, r, h.BaseURL, problem.ErrUnprocessable(explainLoginFailure(err)))
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -301,9 +307,11 @@ func (h *Credentials) ReauthBegin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	transient := &domain.TrackerCredential{UserID: uid, TrackerName: cred.TrackerName, Username: cred.Username, SecretEnc: pw}
-	challenge, cookies, berr := wi.BeginLogin(r.Context(), transient)
+	ctx, cancel := slowOperation(w, r, slowOperationBudget)
+	defer cancel()
+	challenge, cookies, berr := wi.BeginLogin(ctx, transient)
 	if berr != nil {
-		problem.Write(w, r, h.BaseURL, problem.ErrUnprocessable(berr.Error()))
+		problem.Write(w, r, h.BaseURL, problem.ErrUnprocessable(explainLoginFailure(berr)))
 		return
 	}
 	if cookies != nil { // trusted IP, no captcha
@@ -359,13 +367,15 @@ func (h *Credentials) ReauthComplete(w http.ResponseWriter, r *http.Request) {
 		problem.Write(w, r, h.BaseURL, perr)
 		return
 	}
-	cookies, cerr := wi.CompleteLogin(r.Context(), body.ChallengeID, body.Answer)
+	ctx, cancel := slowOperation(w, r, slowOperationBudget)
+	defer cancel()
+	cookies, cerr := wi.CompleteLogin(ctx, body.ChallengeID, body.Answer)
 	if cerr != nil {
 		if errors.Is(cerr, captchalogin.ErrWrongCaptcha) {
 			problem.Write(w, r, h.BaseURL, problem.ErrUnprocessable("captcha_incorrect"))
 			return
 		}
-		problem.Write(w, r, h.BaseURL, problem.ErrUnprocessable(cerr.Error()))
+		problem.Write(w, r, h.BaseURL, problem.ErrUnprocessable(explainLoginFailure(cerr)))
 		return
 	}
 	if perr := h.storeReauthSession(r.Context(), id, uid, cookies); perr != nil {

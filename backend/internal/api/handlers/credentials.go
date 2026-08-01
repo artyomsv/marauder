@@ -173,8 +173,10 @@ func (h *Credentials) Create(w http.ResponseWriter, r *http.Request) {
 		Username:    req.Username,
 		SecretEnc:   []byte(req.Password),
 	}
-	if err := loginAndVerify(r.Context(), wc, transient); err != nil {
-		problem.Write(w, r, h.BaseURL, problem.ErrUnprocessable(err.Error()))
+	ctx, cancel := slowOperation(w, r, slowOperationBudget)
+	defer cancel()
+	if err := loginAndVerify(ctx, wc, transient); err != nil {
+		problem.Write(w, r, h.BaseURL, problem.ErrUnprocessable(explainLoginFailure(err)))
 		return
 	}
 
@@ -251,8 +253,11 @@ func (h *Credentials) Update(w http.ResponseWriter, r *http.Request) {
 				Username:    req.Username,
 				SecretEnc:   []byte(req.Password),
 			}
-			if err := loginAndVerify(r.Context(), wc, transient); err != nil {
-				problem.Write(w, r, h.BaseURL, problem.ErrUnprocessable(err.Error()))
+			ctx, cancel := slowOperation(w, r, slowOperationBudget)
+			err := loginAndVerify(ctx, wc, transient)
+			cancel()
+			if err != nil {
+				problem.Write(w, r, h.BaseURL, problem.ErrUnprocessable(explainLoginFailure(err)))
 				return
 			}
 		}
@@ -338,8 +343,10 @@ func (h *Credentials) Test(w http.ResponseWriter, r *http.Request) {
 		}
 		transient.SessionEnc = sess
 	}
-	if err := loginAndVerify(r.Context(), wc, transient); err != nil {
-		problem.Write(w, r, h.BaseURL, problem.ErrUnprocessable(err.Error()))
+	ctx, cancel := slowOperation(w, r, slowOperationBudget)
+	defer cancel()
+	if err := loginAndVerify(ctx, wc, transient); err != nil {
+		problem.Write(w, r, h.BaseURL, problem.ErrUnprocessable(explainLoginFailure(err)))
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
