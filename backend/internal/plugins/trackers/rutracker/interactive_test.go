@@ -1,0 +1,138 @@
+package rutracker
+
+import (
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+
+	"github.com/google/uuid"
+
+	"github.com/artyomsv/marauder/backend/internal/domain"
+	"github.com/artyomsv/marauder/backend/internal/plugins/captchalogin"
+	"github.com/artyomsv/marauder/backend/internal/plugins/registry"
+)
+
+func TestClassifyLogin(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want captchalogin.Outcome
+	}{
+		{"success", `<span id="logged-in-username">bob</span>`, captchalogin.OutcomeSuccess},
+		{"captcha demanded", `<input name="cap_sid" value="X">`, captchalogin.OutcomeNeedCaptcha},
+		{
+			"wrong captcha re-renders the form with a fresh sid",
+			`<h2>Введите код подтверждения</h2><input name="cap_sid" value="X">`,
+			captchalogin.OutcomeNeedCaptcha,
+		},
+		{"bad credentials", `<h1>Вход</h1>no marker here`, captchalogin.OutcomeFailed},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := classifyLogin([]byte(tt.body)); got != tt.want {
+				t.Errorf("classifyLogin() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestParseChallenge_ExtractsSidFieldAndImage(t *testing.T) {
+	body := []byte(`<input type="hidden" name="cap_sid" value="SID123">` +
+		`<img src="https://static.rutracker.cc/captcha/abc.jpg?9" width="120">` +
+		`<input class="reg-input" type="text" name="cap_code_deadbeef" value="">`)
+	spec, err := parseChallenge(body)
+	if err != nil {
+		t.Fatalf("parseChallenge: %v", err)
+	}
+	if spec.Fields.Get("cap_sid") != "SID123" {
+		t.Errorf("cap_sid = %q", spec.Fields.Get("cap_sid"))
+	}
+	if spec.AnswerField != "cap_code_deadbeef" {
+		t.Errorf("AnswerField = %q", spec.AnswerField)
+	}
+	if spec.ImageURL != "https://static.rutracker.cc/captcha/abc.jpg?9" {
+		t.Errorf("ImageURL = %q", spec.ImageURL)
+	}
+}
+
+func TestParseChallenge_MissingSid_Errors(t *testing.T) {
+	if _, err := parseChallenge([]byte(`<html>no captcha here</html>`)); err == nil {
+		t.Fatal("want an error when the page carries no captcha")
+	}
+}
+
+// TestBeginLogin_NoCaptchaDemanded_ReturnsSessionDirectly is the common case:
+// RuTracker's captcha is adaptive, so an untrusted-client challenge is the
+// exception. The user must not be shown a picture when the tracker did not
+// ask for one.
+func TestBeginLogin_NoCaptchaDemanded_ReturnsSessionDirectly(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.SetCookie(w, &http.Cookie{Name: "bb_session", Value: "SESS", Path: "/forum/"})
+		_, _ = w.Write([]byte(`<span id="logged-in-username">bob</span>`))
+	}))
+	defer srv.Close()
+	installClearance(t)
+
+	p := pluginFor(t, srv)
+	challenge, cookies, err := p.BeginLogin(context.Background(), &domain.TrackerCredential{
+		UserID: uuid.New(), Username: "bob", SecretEnc: []byte("pw"),
+	})
+	if err != nil {
+		t.Fatalf("BeginLogin: %v", err)
+	}
+	if challenge != nil {
+		t.Fatal("no captcha should be shown when the tracker did not ask for one")
+	}
+	if cookies["bb_session"] != "SESS" {
+		t.Fatalf("cookies = %v, want bb_session=SESS", cookies)
+	}
+}
+
+// TestBeginLogin_CaptchaDemanded_ReturnsChallenge covers the escalation, and
+// pins that the per-challenge image is fetched from the separate static host
+// RuTracker serves captchas from.
+func TestBeginLogin_CaptchaDemanded_ReturnsChallenge(t *testing.T) {
+	imgSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/jpeg")
+		_, _ = w.Write([]byte{0xFF, 0xD8, 0xFF})
+	}))
+	defer imgSrv.Close()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`<input type="hidden" name="cap_sid" value="SID123">` +
+			`<img src="` + imgSrv.URL + `/captcha/abc.jpg">` +
+			`<input type="text" name="cap_code_deadbeef" value="">`))
+	}))
+	defer srv.Close()
+	installClearance(t)
+
+	p := pluginFor(t, srv)
+	challenge, cookies, err := p.BeginLogin(context.Background(), &domain.TrackerCredential{
+		UserID: uuid.New(), Username: "bob", SecretEnc: []byte("pw"),
+	})
+	if err != nil {
+		t.Fatalf("BeginLogin: %v", err)
+	}
+	if cookies != nil {
+		t.Fatal("cookies must be nil while a captcha is outstanding")
+	}
+	if challenge == nil || len(challenge.Image) == 0 {
+		t.Fatal("want a challenge carrying the captcha image")
+	}
+	if challenge.MIMEType != "image/jpeg" {
+		t.Errorf("MIMEType = %q, want image/jpeg", challenge.MIMEType)
+	}
+}
+
+// TestPlugin_ImplementsWithInteractiveLogin pins the capability: /system/info
+// reports supports_interactive_login by type-asserting this interface, and the
+// credential UI shows the captcha dialog off that flag. A plugin that silently
+// stopped implementing it would leave a captcha-flagged account with no way to
+// re-authenticate.
+func TestPlugin_ImplementsWithInteractiveLogin(t *testing.T) {
+	var p any = &plugin{}
+	if _, ok := p.(registry.WithInteractiveLogin); !ok {
+		t.Fatal("rutracker must implement registry.WithInteractiveLogin")
+	}
+}
