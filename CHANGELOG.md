@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **RuTracker was stuck in anonymous mode: tracker search reported "needs a
+  tracker account" and downloads delivered a magnet with no announce URL.**
+  Marauder now logs in again. FlareSolverr is used to solve the Cloudflare
+  challenge once and Marauder replays the resulting clearance on its own
+  requests, instead of proxying every fetch through the browser — which could
+  not carry a `.torrent` and could not sign in, so login had been disabled
+  outright. Searches return results again, and downloads deliver the real
+  `.torrent` with its announce list, so torrents connect to peers instead of
+  sitting on "Downloading metadata".
+- RuTracker session checks no longer report a healthy login as expired when the
+  site is challenging requests.
+
+### Added
+
+- RuTracker: solve-the-captcha login, used when the tracker asks for one.
+  RuTracker imposes a captcha on a client it distrusts and drops it again after
+  a successful sign-in, so this appears only when needed; a mistyped code can be
+  retried with a fresh image instead of restarting.
+- `marauder_flaresolverr_clearance_total` metric (minted/cached/error). A
+  healthy install mints rarely — a sustained rate points at a changing egress
+  IP, which the clearance is bound to.
+
 ## [1.16.0] - 2026-07-30
 
 ### Added
