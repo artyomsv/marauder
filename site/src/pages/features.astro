@@ -52,15 +52,15 @@ const sections = [
     ],
   },
   {
-    title: "Cloudflare bypass — without bundling chromium in the main binary",
+    title: "Cloudflare-gated trackers — solved once, not once per request",
     intro:
-      "NNM-Club and other Cloudflare-protected trackers go through a separate sidecar service. The main backend binary stays small.",
+      "RuTracker sits behind a Cloudflare challenge. A FlareSolverr instance solves it once; Marauder replays the resulting clearance on its own requests, so monitoring stays fast and still logs in.",
     bullets: [
-      "Standalone cfsolver Go service using chromedp + Debian-slim chromium",
-      "Exposes POST /solve {url} → { user_agent, cookies[] }",
-      "Built as a separate Docker image, started via the cfsolver compose profile only when needed",
+      "The solver is a separate container you point Marauder at — the backend binary stays small and ships no browser",
+      "One solve per tracker, cached for the life of the clearance; a rejected clearance is re-minted automatically",
+      "Because the requests are Marauder's own, they can carry a login and a binary .torrent — a browser-proxied fetch can do neither",
       "Tracker plugins opt in via the WithCloudflare capability — no global flag, no surprises",
-      "Trivial to swap for FlareSolverr later if chromedp falls behind",
+      "Prometheus counter for clearance mints, so you can see when something is forcing re-solves",
     ],
   },
   {

@@ -1,7 +1,42 @@
 # RuTracker Cloudflare: honest classification + a working solver path
 
 **Date:** 2026-07-28
-**Status:** approved design, not yet implemented
+**Status:** SUPERSEDED (2026-08-01) — implemented, then partly reversed.
+See `docs/superpowers/plans/2026-08-01-rutracker-clearance-minter-and-login.md`.
+
+> ## Correction (2026-08-01)
+>
+> **The central conclusion below is wrong, and it cost a working login.**
+>
+> This document reasons that a Go HTTP client "is never issued a cookie, and
+> is challenged forever", so the only way through is to route every fetch
+> through a browser. The implementation that followed did exactly that, and
+> because a browser-proxied request cannot carry a binary `.torrent` or submit
+> a login, RuTracker was reduced to anonymous operation: tracker search broke
+> with *"needs a tracker account"* and downloads fell back to a hash-only
+> magnet with no announce URL.
+>
+> Measured against the live site on 2026-08-01, a `cf_clearance` earned by a
+> browser **can** be replayed from plain `net/http` and returns 200 on every
+> gated path, including `dl.php`. The binding is to the **User-Agent** (and
+> the requesting IP), not to the TLS fingerprint. The elimination table below
+> rules out the UA on the basis of a Chrome UA sent *without* a clearance
+> cookie — which is challenged whatever the UA — and never tested the pairing
+> that actually matters: the browser's clearance **plus** the browser's UA.
+>
+> Two further properties, neither known when this was written:
+>
+> - A clearance is scoped to the Cloudflare **rule** that issued it, not to
+>   the host. Solving RuTracker's root (which redirects to the unchallenged
+>   `/forum/index.php`) yields a cookie still rejected on `/forum/login.php`.
+> - The login captcha is **adaptive** — imposed on a distrusted client and
+>   dropped again after one success — so it is an escalation, not a permanent
+>   gate.
+>
+> What survives from this document: the error-classification work, the
+> `solver`/`cloudflare` error codes, and the observation that a plain client
+> is challenged on every `/forum/` path. What does not: the "browser must
+> issue every request" architecture.
 
 ## Problem
 
@@ -82,6 +117,10 @@ This rules out, with evidence, every cheap explanation:
 - **Not the credentials.** The stored account is live and logged in.
 - **Not the IP.** The same residential IP passes in Chrome.
 - **Not the User-Agent.** A Chrome UA from the container still 403s.
+  <br>**[Refuted 2026-08-01]** True but irrelevant: that probe sent a Chrome
+  UA with *no* clearance cookie, which is challenged regardless. With a
+  browser-earned `cf_clearance` attached, the UA is decisive — the same
+  cookie returns 200 with the browser's UA and 403 with `Marauder/0.3`.
 - **Not the TLS/JA3 fingerprint.** The *same* Chrome, with cookies omitted,
   is challenged identically — so the differentiator cannot be the handshake.
 - **Not retryable.** The challenge response issues no cookie, so a client
@@ -92,6 +131,14 @@ This rules out, with evidence, every cheap explanation:
 A browser executes it, earns a clearance cookie, and passes thereafter. Go's
 HTTP client cannot execute JS, is never issued a cookie, and is challenged
 forever.
+
+> **[Refuted 2026-08-01]** Only the first two sentences hold. Go cannot *earn*
+> a clearance, but it can be *handed* one: a cookie a browser earned is
+> accepted from plain `net/http` on every gated path, provided the request
+> repeats that browser's User-Agent and comes from the same IP. The leap from
+> "cannot execute JS" to "must therefore issue every request from a browser"
+> is what this correction undoes — the browser is needed once per clearance,
+> not once per request.
 
 This is exactly the problem the cfsolver was built for. The architecture was
 right; the implementation never worked. Note also that the relevant cookies
