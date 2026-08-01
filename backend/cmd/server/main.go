@@ -126,25 +126,34 @@ func run() error {
 	}
 	registry.SetDomainResolver(domainStore.Resolve)
 
-	// Challenge transport: trackers that declare WithCloudflare fetch through
-	// a real browser instead of dialling directly. Required for RuTracker,
-	// whose Cloudflare clearance cookie is bound to the TLS fingerprint of the
-	// client that earned it and so cannot be replayed from Go. Unset leaves
-	// those trackers dialling directly, which is the previous behaviour.
+	// Cloudflare clearance: RuTracker sits behind a managed challenge on every
+	// /forum/ path. FlareSolverr solves it once and we replay the resulting
+	// cf_clearance + User-Agent from ordinary Go requests.
+	//
+	// This deliberately does NOT install the solver as a fetch transport. An
+	// earlier revision did, on the belief that cf_clearance was bound to the
+	// TLS fingerprint of the client that earned it and so could not leave the
+	// browser. Measured against live RuTracker on 2026-08-01, the binding is to
+	// the User-Agent, not the fingerprint: replayed with the browser's own UA
+	// the cookie is accepted from plain net/http on every gated path. Proxying
+	// each fetch through the browser therefore bought nothing and cost a great
+	// deal — a browser round-trip per request, serialised solves, no binary
+	// bodies (so no .torrent), and no login (so no search).
 	if cfg.FlareSolverrURL != "" {
 		solver := flaresolverr.New(cfg.FlareSolverrURL, cfg.FlareSolverrTimeout)
-		// Session-less fetches silently reinstate the per-request challenge
+		// Session-less solves silently reinstate the per-request challenge
 		// re-solve that caused the 2026-07-30 outage, and that was invisible
 		// because nothing reported it. Log it (the metric counterpart is
 		// marauder_flaresolverr_sessions_total{result="degraded"}).
 		solver.OnDegraded = func(err error) {
 			logger.Warn().Err(err).
-				Msg("flaresolverr session unavailable; fetching without one (checks will be much slower)")
+				Msg("flaresolverr session unavailable; solving without one (slower)")
 		}
-		registry.SetChallengeTransport(solver)
-		// The transport keeps one long-lived browser session on the solver so
-		// the Cloudflare challenge is cleared once rather than per request.
-		// Release it on shutdown so restarts don't accumulate orphans.
+		registry.SetClearanceProvider(solver)
+		// The minter keeps one long-lived browser session on the solver so a
+		// re-mint reuses an already-cleared context rather than starting a
+		// fresh challenge. Release it on shutdown so restarts don't accumulate
+		// orphaned browsers.
 		defer func() {
 			shCtx, shCancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer shCancel()
@@ -155,7 +164,39 @@ func run() error {
 		logger.Info().
 			Str("url", cfg.FlareSolverrURL).
 			Dur("timeout", cfg.FlareSolverrTimeout).
-			Msg("flaresolverr challenge transport enabled")
+			Msg("flaresolverr clearance provider enabled")
+
+		// Warm the clearance in the background.
+		//
+		// A cold solve takes ~10s, which exceeds the tracker-search handler's
+		// per-tracker budget — so without this the FIRST search after every
+		// restart fails with "tracker login failed" and only the second
+		// succeeds. Warming costs one solve per challenge-gated tracker at
+		// boot; the cookie then lasts about a year.
+		//
+		// Detached from any request: it gets its own generous deadline and
+		// failures are logged, never fatal. A tracker whose warm-up fails still
+		// mints lazily on first use, exactly as before.
+		go func() {
+			for _, t := range registry.ListTrackers() {
+				probe, ok := t.(registry.WithChallengeProbe)
+				if !ok {
+					continue
+				}
+				ctx, cancel := context.WithTimeout(rootCtx, cfg.FlareSolverrTimeout+15*time.Second)
+				start := time.Now()
+				_, err := registry.ClearanceFor(ctx, probe.ChallengeProbeURL())
+				cancel()
+				if err != nil {
+					logger.Warn().Str("tracker", t.Name()).Err(err).
+						Msg("cloudflare clearance warm-up failed; will retry on first use")
+					continue
+				}
+				logger.Info().Str("tracker", t.Name()).
+					Dur("took", time.Since(start)).
+					Msg("cloudflare clearance warmed")
+			}
+		}()
 	}
 
 	// Optional OIDC provider (nil when MARAUDER_OIDC_ENABLED=false)
