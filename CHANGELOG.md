@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.17.0] - 2026-08-01
+
 ### Fixed
 
 - **RuTracker was stuck in anonymous mode: tracker search reported "needs a
