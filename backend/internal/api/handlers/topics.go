@@ -576,6 +576,25 @@ func (h *Topics) Recheck(w http.ResponseWriter, r *http.Request) {
 		problem.Write(w, r, h.BaseURL, problem.ErrNotFound("topic not found"))
 		return
 	}
+	if t.Status != domain.TopicStatusPaused {
+		// It was ineligible when the UPDATE ran but is not paused now — it was
+		// resumed in between. Reporting "paused" here would describe a state
+		// that no longer holds and tell the user to resume an active topic, so
+		// retry the queue instead. Exactly once: the topic is eligible now, and
+		// a loop here would be a spin on a moving row.
+		requeued, rerr := h.Topics.QueueRecheck(r.Context(), id, uid)
+		if rerr != nil {
+			problem.Write(w, r, h.BaseURL, problem.ErrInternal(rerr.Error()))
+			return
+		}
+		if requeued {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		// Still nothing: the row went away between the two statements.
+		problem.Write(w, r, h.BaseURL, problem.ErrNotFound("topic not found"))
+		return
+	}
 	problem.Write(w, r, h.BaseURL, problem.ErrConflict("topic is paused; resume it first"))
 }
 
