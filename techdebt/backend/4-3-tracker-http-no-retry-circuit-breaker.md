@@ -4,9 +4,9 @@
 |-------|-------|
 | Criticality | Low |
 | Complexity | Medium |
-| Location | all tracker plugins (`backend/internal/plugins/trackers/*`) — every `Check`/`Download`/`ResolveMetadata`/`AuthorComment` HTTP fetch — **and** `backend/internal/flaresolverr` (`command`, `fetch`) |
+| Location | all tracker plugins (`backend/internal/plugins/trackers/*`) — every `Check`/`Download`/`ResolveMetadata`/`AuthorComment` HTTP fetch — **and** `backend/internal/flaresolverr` (`command`, `fetch`, `solve`, `solveWithSession`, `mint`/`Clearance`) |
 | Found during | Code review of issue #110 (author comment in notifications), rules-compliance agent |
-| Date | 2026-07-04 (scope widened 2026-07-30) |
+| Date | 2026-07-04 (scope widened 2026-07-30, again 2026-08-02 for the clearance minter) |
 
 ## Issue
 

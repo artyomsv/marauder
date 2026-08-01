@@ -19,7 +19,9 @@
 package rutracker
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -28,11 +30,13 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/rs/zerolog/log"
 
 	"github.com/artyomsv/marauder/backend/internal/domain"
 	"github.com/artyomsv/marauder/backend/internal/infohash"
+	"github.com/artyomsv/marauder/backend/internal/plugins/captchalogin"
 	"github.com/artyomsv/marauder/backend/internal/plugins/registry"
 	"github.com/artyomsv/marauder/backend/internal/plugins/trackers/forumcommon"
 )
@@ -41,7 +45,10 @@ const (
 	pluginName    = "rutracker"
 	displayName   = "RuTracker.org"
 	defaultDomain = "rutracker.org"
-	userAgent     = "Marauder/0.3 (+https://marauder.cc)"
+	// userAgent identifies Marauder honestly and is used only when NO
+	// Cloudflare clearance is configured. A clearance carries its own
+	// User-Agent which MUST be sent verbatim — see requestUA.
+	userAgent = "Marauder/0.3 (+https://marauder.cc)"
 )
 
 // knownDomains lists the mirrors the rotation ring may try, canonical first.
@@ -69,6 +76,14 @@ type plugin struct {
 	sessions  *forumcommon.SessionStore
 	domain    string // overridable for tests
 	transport http.RoundTripper
+
+	// engine backs the interactive captcha login (see interactive.go). Built
+	// lazily because captchaConfig resolves the active domain, which is not
+	// known at init() time, and rebuilt when that domain changes — engineDomain
+	// records which one the cached engine was built for.
+	engineMu     sync.Mutex
+	engine       *captchalogin.Engine
+	engineDomain string
 }
 
 func init() {
@@ -83,23 +98,95 @@ func (p *plugin) DisplayName() string { return displayName }
 
 var _ registry.WithCloudflare = (*plugin)(nil)
 
-// UsesCloudflare implements registry.WithCloudflare. Verified against the
-// live site on 2026-07-28: every request — login form and topic page alike —
-// is answered with a 403 Cf-Mitigated interstitial, and a clearance cookie
-// earned by a browser is rejected when replayed from Go. Declaring this opts
-// the plugin into the challenge transport, which fetches through a browser.
+// UsesCloudflare implements registry.WithCloudflare. Verified against the live
+// site on 2026-08-01: every /forum/ path is answered with a 403 Cf-Mitigated
+// interstitial (/forum/index.php is the sole exception).
+//
+// Declaring this marks the tracker as needing a Cloudflare clearance, which
+// fetchBytes mints via the configured provider and replays together with the
+// browser User-Agent that earned it. It no longer routes fetches through a
+// browser: the earlier claim that a clearance could not be replayed from Go
+// was a User-Agent mismatch, not a TLS-fingerprint binding.
 func (p *plugin) UsesCloudflare() bool { return true }
 
-// effectiveTransport picks the RoundTripper this plugin's sessions use.
-// A plugin-local transport wins (tests inject one to reach an httptest
-// server); otherwise the process-wide challenge transport is used when one is
-// configured. Nil means "dial directly", preserving the previous behaviour
-// for deployments that have not configured a solver.
-func (p *plugin) effectiveTransport() http.RoundTripper {
-	if p.transport != nil {
-		return p.transport
+// effectiveTransport returns the plugin-local transport used by tests to reach
+// an httptest server.
+//
+// RuTracker is not fetched through a browser any more: it replays a minted
+// Cloudflare clearance from ordinary Go requests, which is faster, does not
+// serialise, carries binary bodies (so dl.php works) and permits a login (so
+// search works).
+func (p *plugin) effectiveTransport() http.RoundTripper { return p.transport }
+
+// requestUA picks the User-Agent for an outbound request.
+//
+// A clearance is only honoured by Cloudflare when the request repeats the
+// exact User-Agent the browser used to earn it; sending Marauder's own UA with
+// a valid cf_clearance returns 403 (measured 2026-08-01). Without a clearance
+// there is nothing to match, so we identify ourselves honestly.
+func (p *plugin) requestUA(c registry.Clearance) string {
+	if c.Valid() {
+		return c.UserAgent
 	}
-	return registry.ChallengeTransport()
+	return userAgent
+}
+
+// session returns the per-user (or anonymous) session with the test transport
+// applied.
+//
+// Centralised so Login, Verify and the fetch path cannot drift apart: Verify
+// previously built its own session and forgot the transport, which made it
+// dial the live site and misreport a healthy session as dead.
+func (p *plugin) session(creds *domain.TrackerCredential) *forumcommon.Session {
+	key := pluginName + ":nocreds"
+	if creds != nil {
+		key = forumcommon.SessionKey(pluginName, creds.UserID.String())
+	}
+	sess := p.sessions.GetOrCreate(key, userAgent)
+	if tr := p.effectiveTransport(); tr != nil {
+		sess.Client.Transport = tr
+	}
+	return sess
+}
+
+var _ registry.WithChallengeProbe = (*plugin)(nil)
+
+// ChallengeProbeURL implements registry.WithChallengeProbe: the page the solver
+// is pointed at to earn a clearance.
+//
+// It must be a page Cloudflare actually challenges. A clearance is scoped to
+// the rule that issued it, not to the whole host: minting from the site root
+// returns a cf_clearance — the root 301s to /forum/index.php, which carries no
+// challenge — but that cookie is still rejected with 403 on /forum/login.php
+// and /forum/tracker.php (measured 2026-08-01). login.php is challenged, cheap
+// to render and has no side effects on GET, so it is the probe.
+func (p *plugin) ChallengeProbeURL() string {
+	return "https://" + p.effectiveDomain() + "/forum/login.php"
+}
+
+// applyClearance seeds the session jar with the Cloudflare clearance cookie
+// for u's host and returns it so the caller can match the User-Agent.
+//
+// A solver failure is not fatal: the request proceeds without a clearance and
+// the tracker's own 403 surfaces as ErrCloudflareChallenge, which is a far
+// clearer diagnosis than a solver-internal error.
+func (p *plugin) applyClearance(ctx context.Context, sess *forumcommon.Session, u *url.URL) registry.Clearance {
+	c, err := registry.ClearanceFor(ctx, p.ChallengeProbeURL())
+	if err != nil {
+		log.Warn().Str("plugin", pluginName).Err(err).
+			Msg("cloudflare clearance unavailable; requesting without one")
+		return registry.Clearance{}
+	}
+	if !c.Valid() {
+		return registry.Clearance{}
+	}
+	jarCookies := make([]*http.Cookie, 0, len(c.Cookies))
+	for name, val := range c.Cookies {
+		jarCookies = append(jarCookies, &http.Cookie{Name: name, Value: val, Path: "/"})
+	}
+	root := &url.URL{Scheme: u.Scheme, Host: u.Host, Path: "/"}
+	sess.Client.Jar.SetCookies(root, jarCookies)
+	return c
 }
 
 // SupportsAnonymousDownload implements registry.WithAnonymousDownload: the
@@ -174,50 +261,59 @@ func isCloudflareChallenge(resp *http.Response) bool {
 
 // Login posts the login form. The cookie jar attached to the session
 // captures bb_session for subsequent calls.
+//
+// This runs even when a solver is configured. An earlier revision skipped the
+// POST entirely in that case, on the belief that a login could not survive the
+// browser hop and unlocked only dl.php anyway. Both halves were wrong:
+// tracker.php search is login-gated too, and a clearance replayed with its own
+// User-Agent lets an ordinary Go POST reach the login form (measured
+// 2026-08-01). Skipping it left every session anonymous, which is what made
+// search report "needs a tracker account".
 func (p *plugin) Login(ctx context.Context, creds *domain.TrackerCredential) error {
 	if creds == nil || creds.Username == "" {
 		return errors.New("rutracker credentials are required")
 	}
-	// When routing through the challenge transport we deliberately skip the
-	// login POST and run anonymously.
-	//
-	// Not because logging in is impossible — FlareSolverr does support
-	// request.post and persistent cookie sessions. It is skipped because the
-	// only thing a RuTracker login unlocks is dl.php, whose binary .torrent
-	// cannot survive FlareSolverr's string-typed response (verified
-	// 2026-07-28). So login would add a round-trip, a stored-credential
-	// dependency and a failure mode, and unlock nothing.
-	//
-	// Returning success rather than an error is deliberate too: the scheduler
-	// treats a Login failure as fatal for the whole check, so erroring here
-	// would break checks for exactly the users who have credentials stored —
-	// the group this path exists to unblock.
-	//
-	// Anonymous is a complete answer here: the topic page is public and
-	// carries a magnet with an announce URL, and Download already prefers
-	// that fallback whenever dl.php is unauthorised.
-	if p.transport == nil && registry.ChallengeTransport() != nil {
-		log.Debug().Str("plugin", pluginName).
-			Msg("challenge transport active: skipping login, RuTracker runs anonymously")
-		return nil
+	// A stored session from the interactive captcha flow wins: rehydrating it
+	// avoids a login POST entirely, and RuTracker imposes a captcha on clients
+	// it sees logging in repeatedly. A dead stored session falls through to a
+	// fresh credential login rather than failing outright.
+	if len(creds.SessionEnc) > 0 {
+		if err := p.restoreSession(ctx, creds); err == nil {
+			return nil
+		}
 	}
+	_, err := retryOnChallenge(p, func() (struct{}, error) {
+		return struct{}{}, p.loginOnce(ctx, creds)
+	})
+	return err
+}
 
-	sess := p.sessions.GetOrCreate(forumcommon.SessionKey(pluginName, creds.UserID.String()), userAgent)
-	if tr := p.effectiveTransport(); tr != nil {
-		sess.Client.Transport = tr
+// loginOnce performs a single credential POST. Wrapped by Login's
+// retryOnChallenge so a rejected clearance is re-minted rather than reported as
+// a permanent block.
+func (p *plugin) loginOnce(ctx context.Context, creds *domain.TrackerCredential) error {
+	endpoint := "https://" + p.effectiveDomain() + "/forum/login.php"
+	u, err := url.Parse(endpoint)
+	if err != nil {
+		return err
 	}
+	sess := p.session(creds)
+	clearance := p.applyClearance(ctx, sess, u)
+
 	form := url.Values{
 		"login_username": {creds.Username},
 		"login_password": {string(creds.SecretEnc)}, // secret already decrypted by caller in v0.4
-		"login":          {"Вход"},
+		"login":          {"вход"},
+		"redirect":       {"index.php"},
 	}
-	endpoint := "https://" + p.effectiveDomain() + "/forum/login.php"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(form.Encode()))
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("User-Agent", userAgent)
+	req.Header.Set("User-Agent", p.requestUA(clearance))
+	req.Header.Set("Origin", "https://"+p.effectiveDomain())
+	req.Header.Set("Referer", endpoint)
 	resp, err := sess.Client.Do(req)
 	if err != nil {
 		return fmt.Errorf("rutracker login: %w", err)
@@ -229,6 +325,14 @@ func (p *plugin) Login(ctx context.Context, creds *domain.TrackerCredential) err
 	if isCloudflareChallenge(resp) {
 		return fmt.Errorf("rutracker login: %w", registry.ErrCloudflareChallenge)
 	}
+	// Same reasoning as the guard above, for a different failure: an error page
+	// has no logged-in marker either, so falling through to the marker check
+	// would report a healthy account as "invalid credentials". Observed live
+	// while RuTracker's origin was serving 520s — the UI told the user their
+	// password was wrong when nothing was wrong with it.
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("rutracker login: tracker responded %d", resp.StatusCode)
+	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
 	if err != nil {
 		return fmt.Errorf("rutracker login: read body: %w", err)
@@ -237,32 +341,64 @@ func (p *plugin) Login(ctx context.Context, creds *domain.TrackerCredential) err
 	// span ONLY on authenticated pages. The old `|| resp.StatusCode == 200`
 	// escape hatch was a bug — the login form also returns 200 with an
 	// error panel, so Login always succeeded regardless of credentials.
-	if !strings.Contains(string(body), `id="logged-in-username"`) {
-		return errors.New("rutracker login failed: invalid credentials (no logged-in marker in response)")
+	if bytes.Contains(body, []byte(`id="logged-in-username"`)) {
+		sess.LoggedIn = true
+		return nil
+	}
+	// RuTracker's login captcha is adaptive: imposed on a client it distrusts
+	// (a run of failed attempts is enough) and dropped again after a success.
+	// Report it distinctly so the caller can run the interactive flow instead
+	// of telling the user their password is wrong.
+	if bytes.Contains(body, []byte("cap_sid")) {
+		return fmt.Errorf("rutracker login: %w", registry.ErrCaptchaRequired)
+	}
+	return errors.New("rutracker login failed: invalid credentials (no logged-in marker in response)")
+}
+
+// restoreSession rehydrates cookies harvested by the interactive login and
+// confirms they still work. Mirrors the LostFilm pattern.
+func (p *plugin) restoreSession(ctx context.Context, creds *domain.TrackerCredential) error {
+	var cookies map[string]string
+	if err := json.Unmarshal(creds.SessionEnc, &cookies); err != nil {
+		return fmt.Errorf("rutracker: corrupt stored session: %w", registry.ErrSessionExpired)
+	}
+	sess := p.session(creds)
+	// bb_session is scoped to /forum/, so it must be set against that path —
+	// setting it on the origin root would leave it out of every forum request.
+	u, err := url.Parse("https://" + p.effectiveDomain() + "/forum/")
+	if err != nil {
+		return err
+	}
+	jarCookies := make([]*http.Cookie, 0, len(cookies))
+	for name, val := range cookies {
+		jarCookies = append(jarCookies, &http.Cookie{Name: name, Value: val, Path: "/forum/"})
+	}
+	sess.Client.Jar.SetCookies(u, jarCookies)
+	ok, err := p.Verify(ctx, creds)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return registry.ErrSessionExpired
 	}
 	sess.LoggedIn = true
 	return nil
 }
 
-// Verify quickly checks whether the cached session is still valid by
-// hitting a known authenticated page.
+// Verify quickly checks whether the cached session is still valid by hitting a
+// page that renders the logged-in marker.
+//
+// It goes through fetchBytes rather than dialling directly so it picks up the
+// Cloudflare clearance, the matching User-Agent and the test transport. The
+// direct dial it used before ignored all three, which made it report "session
+// invalid" for a perfectly good session whenever the site was challenged.
 func (p *plugin) Verify(ctx context.Context, creds *domain.TrackerCredential) (bool, error) {
-	sess := p.sessions.GetOrCreate(forumcommon.SessionKey(pluginName, creds.UserID.String()), userAgent)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://"+p.effectiveDomain()+"/forum/index.php", nil)
+	body, err := p.fetchBytes(ctx, nil, creds,
+		"https://"+p.effectiveDomain()+"/forum/index.php")
 	if err != nil {
 		return false, err
 	}
-	req.Header.Set("User-Agent", userAgent)
-	resp, err := sess.Client.Do(req)
-	if err != nil {
-		return false, err
-	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 16*1024))
-	if err != nil {
-		return false, fmt.Errorf("rutracker verify: read body: %w", err)
-	}
-	return strings.Contains(string(body), `id="logged-in-username"`), nil
+	return bytes.Contains(body, []byte(`id="logged-in-username"`)), nil
 }
 
 // --- Check / Download --------------------------------------------------
@@ -461,9 +597,36 @@ func (p *plugin) fetchTopicPage(ctx context.Context, topic *domain.Topic, creds 
 	return p.fetchBytes(ctx, topic, creds, canonical)
 }
 
+// retryOnChallenge runs attempt; if it reports a Cloudflare challenge, the
+// cached clearance is dropped and attempt runs exactly once more.
+//
+// A challenge despite an attached clearance means the clearance died — the
+// egress IP moved, or Cloudflare rotated it. Retrying exactly once is
+// deliberate: if the second attempt is challenged too, something else is wrong
+// and looping would spin up a browser on every check.
+//
+// This lives in one place because it originally did not. The fetch path had the
+// retry and Login did not, so a rotated clearance healed itself for checks
+// while wedging every login permanently behind "blocked by Cloudflare".
+func retryOnChallenge[T any](p *plugin, attempt func() (T, error)) (T, error) {
+	out, err := attempt()
+	if !errors.Is(err, registry.ErrCloudflareChallenge) {
+		return out, err
+	}
+	registry.InvalidateClearance(p.ChallengeProbeURL())
+	return attempt()
+}
+
+// fetchBytes GETs target, re-minting once if the clearance turns out to be dead.
 func (p *plugin) fetchBytes(ctx context.Context, _ *domain.Topic, creds *domain.TrackerCredential, target string) ([]byte, error) {
+	return retryOnChallenge(p, func() ([]byte, error) {
+		return p.fetchOnce(ctx, creds, target)
+	})
+}
+
+func (p *plugin) fetchOnce(ctx context.Context, creds *domain.TrackerCredential, target string) ([]byte, error) {
 	// SSRF guard: every caller builds target from p.effectiveDomain(), but
-	// fetchBytes is the last line of defense before dialing — refuse any
+	// this is the last line of defense before dialing — refuse any
 	// host that isn't the resolved effective domain (covers the test-
 	// injected p.domain) or a known/admin-configured rutracker domain, and
 	// any non-HTTP scheme (mirrors the rutor fetch guard).
@@ -478,19 +641,15 @@ func (p *plugin) fetchBytes(ctx context.Context, _ *domain.Topic, creds *domain.
 		return nil, fmt.Errorf("rutracker: refusing to fetch off-site host %q", u.Hostname())
 	}
 
-	key := pluginName + ":nocreds"
-	if creds != nil {
-		key = forumcommon.SessionKey(pluginName, creds.UserID.String())
-	}
-	sess := p.sessions.GetOrCreate(key, userAgent)
-	if tr := p.effectiveTransport(); tr != nil {
-		sess.Client.Transport = tr
-	}
+	sess := p.session(creds)
+	clearance := p.applyClearance(ctx, sess, u)
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", userAgent)
+	req.Header.Set("User-Agent", p.requestUA(clearance))
+	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
 	resp, err := sess.Client.Do(req)
 	if err != nil {
 		return nil, err

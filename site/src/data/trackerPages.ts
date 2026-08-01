@@ -39,12 +39,14 @@ export const trackerPages: TrackerPageContent[] = [
     intro:
       "RuTracker.org is the largest Russian-language forum tracker, and its content lives in phpBB topic threads — not in a Torznab API. That's exactly the case the *arr stack can't handle. Marauder logs in with your RuTracker account, watches the specific topic you point it at, and downloads the new .torrent the moment the uploader swaps it in.",
     howItWorks: [
-      "Authenticates with your RuTracker account via the HTML login form and keeps the session cookie (encrypted at rest).",
+      "RuTracker is behind a Cloudflare challenge. A FlareSolverr container solves it once and Marauder replays the resulting clearance on its own requests — so it can still log in and still download a real .torrent.",
+      "Authenticates with your RuTracker account via the HTML login form and keeps the session cookie (encrypted at rest). If RuTracker asks for a captcha, Marauder shows it to you in-app instead of failing.",
       "Scrapes the topic page on a schedule and hashes the attached .torrent to detect in-place replacements.",
       "When the file changes, hands the torrent straight to qBittorrent, Transmission, Deluge, µTorrent, or a watch folder.",
       "This is Marauder's reference plugin — verified end-to-end against a live RuTracker account.",
     ],
     setup: [
+      "Point Marauder at a FlareSolverr instance (MARAUDER_FLARESOLVERR_URL); the bundled compose stack can start one for you. It must reach the internet from the same address as Marauder.",
       "Add your RuTracker login under Credentials (stored AES-256-GCM encrypted).",
       "Paste the topic URL (e.g. a series or release thread) as a new topic.",
       "Pick the torrent client and category; Marauder resolves the title and poster automatically.",
@@ -69,6 +71,11 @@ export const trackerPages: TrackerPageContent[] = [
         question: "What happens when my RuTracker login session expires?",
         answer:
           "Marauder stores the RuTracker session cookie encrypted and re-authenticates with your saved account when the session goes stale, so monitoring keeps running without a manual re-login. If a credential genuinely needs attention, it raises a notification rather than silently failing.",
+      },
+      {
+        question: "Why does RuTracker need FlareSolverr?",
+        answer:
+          "RuTracker serves a Cloudflare challenge to every plain HTTP client, so Marauder cannot reach the forum on its own. FlareSolverr runs a real browser that solves the challenge once and returns a clearance cookie; Marauder then makes its own requests carrying that cookie. Because the requests are Marauder's own rather than proxied through the browser, they can submit your login and carry the binary .torrent — which is why search and full-quality downloads work rather than falling back to a magnet. The solver must reach the internet from the same address as Marauder, since the clearance is tied to the requesting IP.",
       },
     ],
   },

@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/rs/zerolog/log"
+
 	"github.com/artyomsv/marauder/backend/internal/domain"
 	"github.com/artyomsv/marauder/backend/internal/plugins/registry"
 	"github.com/artyomsv/marauder/backend/internal/plugins/trackers/forumcommon"
@@ -40,8 +42,8 @@ func (p *plugin) Search(ctx context.Context, query string, creds *domain.Tracker
 	if creds == nil {
 		return nil, registry.ErrSearchRequiresCredentials
 	}
-	target := fmt.Sprintf("https://%s/forum/tracker.php?nm=%s",
-		p.effectiveDomain(), forumcommon.EncodeWindows1251Query(q))
+	encoded := forumcommon.EncodeWindows1251Query(q)
+	target := fmt.Sprintf("https://%s/forum/tracker.php?nm=%s", p.effectiveDomain(), encoded)
 	body, err := p.fetchBytes(ctx, nil, creds, target)
 	if err != nil {
 		return nil, fmt.Errorf("rutracker search: %w", err)
@@ -51,8 +53,24 @@ func (p *plugin) Search(ctx context.Context, query string, creds *domain.Tracker
 		// tracker.php served the anonymous login shell — session is dead.
 		return nil, registry.ErrSearchRequiresCredentials
 	}
+	rows := searchRowRe.FindAllStringSubmatch(page, -1)
+	// A zero-row authenticated page is ambiguous: genuinely no matches, markup
+	// that stopped matching the row regex, or a query that was mangled before
+	// it got here. Record enough to tell those apart without dumping the page,
+	// which carries session-bearing markup.
+	//
+	// query_mangled is the signal that caught a real bug: a caller handing
+	// non-UTF-8 text to the cp1251 encoder gets "?" per rune, so the tracker
+	// searches for question marks and answers with a perfectly valid
+	// zero-result page. The flag is logged rather than the query itself —
+	// search terms are the user's business and do not belong in logs.
+	log.Debug().Str("plugin", pluginName).Str("step", "search").
+		Int("page_bytes", len(body)).Int("rows", len(rows)).
+		Bool("markup_ok", strings.Contains(page, "data-topic_id")).
+		Bool("query_mangled", strings.Contains(encoded, "%3F")).
+		Msg("search page parsed")
 	var out []registry.SearchResult
-	for _, row := range searchRowRe.FindAllStringSubmatch(page, -1) {
+	for _, row := range rows {
 		cell := row[1]
 		linkM := searchLinkRe.FindStringSubmatchIndex(cell)
 		if linkM == nil {

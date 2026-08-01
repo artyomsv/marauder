@@ -630,50 +630,23 @@ func (r *recordingRT) RoundTrip(req *http.Request) (*http.Response, error) {
 	}, nil
 }
 
-// TestUsesCloudflare_OptsIntoTheChallengeTransport pins the marker's meaning.
+// TestUsesCloudflare_MarksTrackerAsChallengeGated pins the marker's meaning.
 // WithCloudflare used to be inert — surfaced as a JSON flag and consulted by
-// nothing — so declaring it changed no behaviour. It is now the opt-in that
-// routes a tracker through the browser transport.
-func TestUsesCloudflare_OptsIntoTheChallengeTransport(t *testing.T) {
+// nothing. It now records that the tracker needs a Cloudflare clearance, which
+// the fetch path mints and replays.
+func TestUsesCloudflare_MarksTrackerAsChallengeGated(t *testing.T) {
 	p := &plugin{}
 	var cf registry.WithCloudflare = p
 	if !cf.UsesCloudflare() {
-		t.Error("rutracker must declare UsesCloudflare: it is challenge-gated (verified live 2026-07-28)")
+		t.Error("rutracker must declare UsesCloudflare: it is challenge-gated (verified live 2026-08-01)")
 	}
 }
 
-// TestCheck_RoutesThroughChallengeTransport proves the wiring end to end: a
-// plugin with no test transport of its own (i.e. shaped like production) must
-// fetch via the installed challenge transport rather than dialling the
-// tracker, because dialling directly is exactly what Cloudflare blocks.
-func TestCheck_RoutesThroughChallengeTransport(t *testing.T) {
-	rt := &recordingRT{body: fixtureTopicHTML}
-	registry.SetChallengeTransport(rt)
-	t.Cleanup(func() { registry.SetChallengeTransport(nil) })
-
-	p := &plugin{sessions: forumcommon.New(), domain: defaultDomain}
-	topic := &domain.Topic{
-		TrackerName: "rutracker",
-		URL:         "https://rutracker.org/forum/viewtopic.php?t=987654",
-		Extra:       map[string]any{"topic_id": 987654},
-	}
-
-	if _, err := p.Check(context.Background(), topic, nil); err != nil {
-		t.Fatalf("Check: %v", err)
-	}
-	if len(rt.calls) == 0 {
-		t.Fatal("Check did not use the challenge transport; it would have been blocked by Cloudflare")
-	}
-	if !strings.Contains(rt.calls[0], "viewtopic.php?t=987654") {
-		t.Errorf("challenge transport asked for %q, want the topic page", rt.calls[0])
-	}
-}
-
-// Without a configured transport the plugin must behave exactly as before —
-// the feature is opt-in, and an unconfigured deployment keeps dialling
-// directly rather than failing closed.
-func TestCheck_NoChallengeTransport_StillUsesPluginTransport(t *testing.T) {
-	registry.SetChallengeTransport(nil)
+// Without a configured clearance provider the plugin must behave exactly as
+// before — the feature is opt-in, and an unconfigured deployment keeps
+// dialling directly rather than failing closed.
+func TestCheck_NoClearanceProvider_StillFetches(t *testing.T) {
+	registry.SetClearanceProvider(nil)
 	p, _ := newTestPlugin(t)
 	topic := &domain.Topic{
 		TrackerName: "rutracker",
@@ -681,38 +654,6 @@ func TestCheck_NoChallengeTransport_StillUsesPluginTransport(t *testing.T) {
 		Extra:       map[string]any{"topic_id": 987654},
 	}
 	if _, err := p.Check(context.Background(), topic, nil); err != nil {
-		t.Fatalf("Check with no challenge transport: %v", err)
-	}
-}
-
-// TestLogin_ViaChallengeTransport_FallsBackToAnonymous covers the interaction
-// that would otherwise make things worse rather than better. The transport is
-// GET-only by choice (FlareSolverr itself can POST; the binary .torrent that
-// a login unlocks is what cannot be transported), so the login form is not
-// submitted. The scheduler treats a Login error as fatal for the whole check
-// (loadCredentials returns ok=false), so returning an error here would break
-// checks for any user WITH stored credentials — precisely the users we are
-// trying to unblock.
-//
-// RuTracker declares SupportsAnonymousDownload and its topic page carries a
-// magnet, so anonymous operation is fully functional. Login therefore becomes
-// a no-op in this mode instead of an error.
-func TestLogin_ViaChallengeTransport_FallsBackToAnonymous(t *testing.T) {
-	rt := &recordingRT{body: `<html></html>`}
-	registry.SetChallengeTransport(rt)
-	t.Cleanup(func() { registry.SetChallengeTransport(nil) })
-
-	p := &plugin{sessions: forumcommon.New(), domain: defaultDomain}
-	creds := &domain.TrackerCredential{
-		UserID:    uuid.New(),
-		Username:  "Nossp",
-		SecretEnc: []byte("password123"),
-	}
-
-	if err := p.Login(context.Background(), creds); err != nil {
-		t.Fatalf("Login must not fail the check when routing through the challenge transport: %v", err)
-	}
-	if len(rt.calls) != 0 {
-		t.Errorf("Login must not attempt a POST through a GET-only transport, got calls %v", rt.calls)
+		t.Fatalf("Check with no clearance provider: %v", err)
 	}
 }

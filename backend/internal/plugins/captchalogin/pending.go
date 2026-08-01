@@ -17,8 +17,12 @@ import (
 const pendingTTL = 5 * time.Minute
 
 type pending struct {
-	sess    *forumcommon.Session
-	creds   *domain.TrackerCredential
+	sess  *forumcommon.Session
+	creds *domain.TrackerCredential
+	// spec carries the per-challenge captcha details (image URL, hidden
+	// fields, answer field name) so Complete can submit an answer that the
+	// tracker still associates with the picture the user was shown.
+	spec    ChallengeSpec
 	expires time.Time
 }
 
@@ -32,7 +36,7 @@ func newPendingStore() *pendingStore {
 	return &pendingStore{m: map[string]*pending{}, now: time.Now}
 }
 
-func (p *pendingStore) put(sess *forumcommon.Session, creds *domain.TrackerCredential) (string, error) {
+func (p *pendingStore) put(sess *forumcommon.Session, creds *domain.TrackerCredential, spec ChallengeSpec) (string, error) {
 	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {
 		return "", err
@@ -41,8 +45,19 @@ func (p *pendingStore) put(sess *forumcommon.Session, creds *domain.TrackerCrede
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.evictLocked()
-	p.m[id] = &pending{sess: sess, creds: creds, expires: p.now().Add(pendingTTL)}
+	p.m[id] = &pending{sess: sess, creds: creds, spec: spec, expires: p.now().Add(pendingTTL)}
 	return id, nil
+}
+
+// updateSpec replaces the stored challenge details after a Refresh minted a
+// new captcha, so Complete submits the cap_sid that matches the picture the
+// user is actually looking at.
+func (p *pendingStore) updateSpec(id string, spec ChallengeSpec) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if e, ok := p.m[id]; ok {
+		e.spec = spec
+	}
 }
 
 func (p *pendingStore) get(id string) (*pending, bool) {

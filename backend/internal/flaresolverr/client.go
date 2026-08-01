@@ -1,42 +1,44 @@
-// Package flaresolverr provides an http.RoundTripper that fetches pages
-// through a FlareSolverr instance instead of dialling the tracker directly.
+// Package flaresolverr talks to a FlareSolverr instance on behalf of trackers
+// that sit behind a Cloudflare managed challenge.
 //
-// # Why a RoundTripper
+// # Clearance minting is the primary mode
 //
-// Cloudflare binds its clearance cookie to the TLS fingerprint of the client
-// that earned it. Verified against live RuTracker on 2026-07-28: a valid
-// cf_clearance minted by a real browser is still rejected with 403 when
-// replayed from Go, even from the same IP with the same User-Agent and a full
-// set of browser headers. So the "solve once, hand the cookie to Go" model
-// cannot work — the request itself has to be issued by a browser.
+// Cloudflare answers a challenged request with 403 and a Cf-Mitigated header;
+// solving the challenge yields a cf_clearance cookie. That cookie CAN be
+// replayed from ordinary Go requests — measured against live RuTracker on
+// 2026-08-01, a minted clearance returned 200 on every gated path (viewtopic,
+// login.php, tracker.php and the binary dl.php) from a plain net/http client.
 //
-// Expressing that as a RoundTripper means the browser hop is invisible to
-// callers: a plugin keeps using its ordinary *http.Client, and only the
-// Transport changes. No call site has to know.
+// The binding is to the User-Agent, not to the TLS fingerprint. Replaying the
+// cookie with Marauder's own UA, an empty UA, or a different browser UA all
+// return 403; replaying it with the UA FlareSolverr reports returns 200. An
+// earlier revision of this package concluded the opposite — that the cookie was
+// bound to the TLS fingerprint and so could never leave the browser — and built
+// the RoundTripper below as a result. That conclusion came from a test which
+// replayed the cookie while sending the RuTracker plugin's hardcoded
+// "Marauder/0.3" UA, which cannot work whatever the transport.
 //
-// # Scope: GET only, and why
+// Two further properties, both measured the same day:
 //
-// This transport implements GET only. That is a deliberate scope decision,
-// NOT a FlareSolverr limitation — verified against 3.5.0 on 2026-07-28,
-// `request.post` submits form-urlencoded bodies correctly and
-// `sessions.create` keeps cookies alive across calls, so a login POST is
-// entirely possible.
+//   - A clearance is scoped to the Cloudflare RULE that issued it, not to the
+//     host. Solving RuTracker's root (which redirects to the unchallenged
+//     /forum/index.php) returns a cf_clearance that is still rejected on
+//     /forum/login.php. Mint from a URL that is genuinely challenged.
+//   - It is bound to the requesting IP, so the solver must egress from the same
+//     public address as Marauder. True for the bundled compose stacks; worth
+//     checking for a split deployment.
 //
-// It is not implemented because it would buy nothing yet. The only thing a
-// RuTracker login unlocks is dl.php, which serves a binary .torrent — and
-// binary is where FlareSolverr genuinely stops: it returns the page as a JSON
-// string, so Chrome renders the .torrent as HTML and the bytes do not
-// survive (tested against a known-good public .torrent: the response came
-// back wrapped in <html><body>, with no bencode).
+// So Clearance/InvalidateClearance (minter.go) are what plugins should use: one
+// solve per host, then ordinary Go requests. That is faster, does not
+// serialise, carries binary bodies, and permits a login.
 //
-// So the sequence login -> dl.php cannot complete regardless of POST support.
-// Meanwhile the topic page is public and carries a magnet with an announce
-// URL, and Download already prefers that fallback. Anonymous operation is
-// therefore complete for RuTracker today.
+// # The RoundTripper is a legacy fallback
 //
-// If binary transport is ever solved (a FlareSolverr /download endpoint, or
-// an in-page fetch returning base64), adding POST here is the natural next
-// step and the reason above no longer applies.
+// RoundTrip fetches a page THROUGH the browser instead of dialling it. It is
+// GET only, and it returns the page as a JSON string, so binary bodies do not
+// survive it — a .torrent comes back wrapped in <html><body> with no bencode.
+// Nothing uses it today; it is retained for a tracker that turns out to need
+// in-browser rendering rather than mere clearance.
 package flaresolverr
 
 import (
@@ -120,6 +122,9 @@ type Transport struct {
 	// that cannot make sessions is asked once per cooldown instead of once
 	// per request.
 	nextCreateAttempt time.Time
+	// clearances caches one Cloudflare clearance per host. cf_clearance is
+	// host-bound: a rutracker.org cookie is rejected on rutracker.net.
+	clearances map[string]*clearanceEntry
 
 	// sem is a one-slot semaphore serialising session creation.
 	sem chan struct{}
@@ -360,6 +365,12 @@ type solution struct {
 	Status    int    `json:"status"`
 	Response  string `json:"response"`
 	UserAgent string `json:"userAgent"`
+	// Cookies is the browser's cookie jar after the solve. cf_clearance lives
+	// here; it is what makes the clearance-minter model possible.
+	Cookies []struct {
+		Name  string `json:"name"`
+		Value string `json:"value"`
+	} `json:"cookies"`
 }
 
 type solveResponse struct {
@@ -468,6 +479,67 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	return out, err
 }
 
+// solveWithSession runs one solve on the shared session, replacing a session
+// FlareSolverr no longer recognises exactly once.
+//
+// A restarted, updated or OOM-killed solver forgets its sessions while
+// Transport still holds the name; nothing else ever clears it, so without this
+// recovery a single solver restart wedges EVERY challenge-gated tracker until
+// Marauder itself restarts. build receives the session name because the retry
+// has to rebuild the request around a different one.
+//
+// It lives here, shared, because it did not used to: the recovery existed only
+// inside RoundTrip, and moving the live path to clearance minting left it
+// behind — the happy path worked, so the loss was invisible.
+func (t *Transport) solveWithSession(ctx context.Context, build func(session string) solveRequest, out *solveResponse) error {
+	session, serr := t.ensureSession(ctx)
+	if serr != nil {
+		metrics.FlareSolverrSessionsTotal.WithLabelValues("degraded").Inc()
+		if t.OnDegraded != nil {
+			t.OnDegraded(serr)
+		}
+	}
+	err := t.solve(ctx, build(session), out)
+	if err != nil && session != "" && isSessionGone(err) {
+		t.dropSession(session)
+		if fresh, ferr := t.ensureSession(ctx); ferr == nil {
+			return t.solve(ctx, build(fresh), out)
+		}
+	}
+	return err
+}
+
+// solve performs one request.* round-trip against FlareSolverr and decodes the
+// envelope. FlareSolverr answers HTTP 200 even for a command that failed,
+// reporting the real outcome in the envelope, so the status is checked here
+// rather than at each call site.
+func (t *Transport) solve(ctx context.Context, body solveRequest, out *solveResponse) error {
+	payload, err := json.Marshal(body)
+	if err != nil {
+		return fmt.Errorf("flaresolverr: encode request: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, t.URL+"/v1", bytes.NewReader(payload))
+	if err != nil {
+		return fmt.Errorf("flaresolverr: build request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := t.HTTP.Do(req)
+	if err != nil {
+		return fmt.Errorf("flaresolverr: call: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("flaresolverr: status %d", resp.StatusCode)
+	}
+	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+		return fmt.Errorf("flaresolverr: decode: %w", err)
+	}
+	if out.Status != "ok" {
+		return fmt.Errorf("flaresolverr: %s", out.Message)
+	}
+	return nil
+}
+
 // fetch performs one request.get against FlareSolverr. An empty session omits
 // the field, which makes FlareSolverr use a throwaway browser.
 func (t *Transport) fetch(ctx context.Context, req *http.Request, session string) (*http.Response, error) {
@@ -475,36 +547,14 @@ func (t *Transport) fetch(ctx context.Context, req *http.Request, session string
 	if err != nil {
 		return nil, err
 	}
-	payload, err := json.Marshal(solveRequest{
+	var sr solveResponse
+	if err := t.solve(ctx, solveRequest{
 		Cmd:        "request.get",
 		URL:        req.URL.String(),
 		MaxTimeout: int(budget / time.Millisecond),
 		Session:    session,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("flaresolverr: encode request: %w", err)
-	}
-	solveReq, err := http.NewRequestWithContext(ctx, http.MethodPost, t.URL+"/v1", bytes.NewReader(payload))
-	if err != nil {
-		return nil, fmt.Errorf("flaresolverr: build request: %w", err)
-	}
-	solveReq.Header.Set("Content-Type", "application/json")
-
-	resp, err := t.HTTP.Do(solveReq)
-	if err != nil {
-		return nil, fmt.Errorf("flaresolverr: call: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("flaresolverr: status %d", resp.StatusCode)
-	}
-
-	var sr solveResponse
-	if err := json.NewDecoder(resp.Body).Decode(&sr); err != nil {
-		return nil, fmt.Errorf("flaresolverr: decode: %w", err)
-	}
-	if sr.Status != "ok" {
-		return nil, fmt.Errorf("flaresolverr: %s", sr.Message)
+	}, &sr); err != nil {
+		return nil, err
 	}
 
 	body := []byte(sr.Solution.Response)

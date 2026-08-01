@@ -166,6 +166,22 @@ var (
 		},
 		[]string{"result"},
 	)
+
+	// FlareSolverrClearanceTotal counts Cloudflare clearance acquisitions by
+	// result: "minted" (a challenge was actually solved), "cached" (an
+	// in-memory clearance was reused) and "error".
+	//
+	// A healthy install mints rarely — the observed cf_clearance lifetime is
+	// about a year — so a sustained "minted" rate means clearances are being
+	// rejected and re-solved, usually because the egress IP is changing or the
+	// User-Agent is not being replayed verbatim.
+	FlareSolverrClearanceTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "marauder_flaresolverr_clearance_total",
+			Help: "Cloudflare clearance acquisitions, partitioned by result (minted/cached/error).",
+		},
+		[]string{"result"},
+	)
 )
 
 // Notifier metrics --------------------------------------------------------

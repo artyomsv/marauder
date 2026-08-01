@@ -105,8 +105,10 @@ attach-to-existing flow.
   Search** and grab one manually (Sonarr will ask to override the rejection).
   Marauder picks up the resulting grab the same way.
 - **Credentials.** Auto-created topics for trackers that need a login (e.g.
-  Kinozal) won't be able to download until you add that tracker account under
-  **Accounts**; the topic is still created and the scheduler surfaces the
-  missing-credential state. RuTracker downloads work anonymously.
+  Kinozal, RuTracker) won't be able to download until you add that tracker
+  account under **Accounts**; the topic is still created and the scheduler
+  surfaces the missing-credential state. RuTracker can fall back to the
+  public topic magnet without an account, but that magnet carries no announce
+  URL, so add the account to get the real `.torrent`.
 - **Owner.** Auto-created topics are owned by the admin who saved the instance
   (falling back to the first admin), since the poller runs headless.

@@ -28,10 +28,14 @@ var ErrCaptchaRequired = errors.New("tracker requires a captcha")
 // never reached the site at all", and defaulting to the former sends users
 // chasing a credential problem that does not exist.
 //
-// Verified against live RuTracker on 2026-07-28: the block is a JS challenge,
-// and a clearance cookie earned by a browser is rejected when replayed by a
-// plain HTTP client (Cloudflare binds it to the client's TLS fingerprint).
-// So this error means "this tracker is unreachable without a browser", not
+// Verified against live RuTracker on 2026-08-01: the block is a managed JS
+// challenge, and solving it yields a cf_clearance cookie that CAN be replayed
+// by a plain HTTP client provided the request repeats the User-Agent the
+// browser used (see the flaresolverr package doc — an earlier note here blamed
+// the TLS fingerprint, which was a User-Agent mismatch).
+//
+// So this error means "no usable clearance for this tracker" — the solver is
+// unconfigured, unreachable, or the cached clearance just died. It is not
 // "retry later" and not "fix your credentials".
 //
 // Plugins wrap it with %w so callers can match via errors.Is.

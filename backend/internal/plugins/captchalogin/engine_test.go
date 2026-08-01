@@ -42,7 +42,7 @@ func testEngine(t *testing.T, handler http.HandlerFunc) *Engine {
 			}
 		},
 	}
-	return New(cfg, func() *forumcommon.Session { return forumcommon.New().GetOrCreate("t", "ua") })
+	return New(cfg, func(context.Context) *forumcommon.Session { return forumcommon.New().GetOrCreate("t", "ua") })
 }
 
 func TestBegin_SuccessNoCaptcha(t *testing.T) {

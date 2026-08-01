@@ -73,8 +73,11 @@ interval shows no memory growth and no unhandled errors.
 multi-user / SSO story. This is the milestone that turns Marauder from a
 scaffold into a usable product.
 
-- [x] `rutracker` tracker plugin (login + topic page scraping) — alpha,
-      structurally complete with fixture-based tests
+- [x] `rutracker` tracker plugin (login + topic page scraping) — validated
+      end-to-end against a live account: credential login, authenticated
+      search, and the real `.torrent` from `dl.php`. Cloudflare-gated, so it
+      needs a FlareSolverr instance to mint a clearance (see
+      `MARAUDER_FLARESOLVERR_URL`)
 - [x] `kinozal` tracker plugin — alpha, fixture-tested
 - [x] `nnmclub` tracker plugin — alpha, fixture-tested, opts into
       `WithCloudflare`
