@@ -220,6 +220,24 @@ Frontend: `components/topics/ResetTopicCard` (an inline card, not a modal — th
 project has no shadcn Dialog primitive), opened from a per-row `RotateCcw` button
 and from the Topics page bulk action bar.
 
+**Topic recheck:** `POST /api/v1/topics/{id}/recheck` is the non-destructive
+counterpart to reset — `Topics.QueueRecheck` writes `next_check_at = now()` and
+nothing else, so a topic parked on a backoff (capped at 6h) after a tracker
+outage can be retried the moment the cause is fixed. `status`, `last_error` and
+`last_checked_at` are deliberately untouched: the scheduler clears them on the
+next successful check, and reporting the topic healthy before anything verified
+that would be a lie. Paused topics are excluded in the SQL because
+`DueForCheck` ignores them, so the endpoint answers **409** rather than a 204
+that promises a check which never runs (**404** for unknown/not-owned, which is
+also what a paused topic belonging to someone else returns). Writing
+`next_check_at` moves half of the `(last_checked_at, next_check_at)`
+check-state token, so a recheck landing mid-check discards that worker's result
+exactly as a reset does — bounded, self-correcting, and documented in the reset
+design's "Known limitation". No audit row and no `topic_events` entry (it
+matches pause/resume, not reset); the `check.*` events that follow are the
+record. Frontend: a `RefreshCw` row action hidden for paused topics, plus a
+bulk entry that fans out through `mapWithConcurrency`.
+
 **Errored-topic retry:** `DueForCheck` selects `WHERE status IN
 ('active','error')`, so a topic that errors keeps retrying on its already-
 persisted backoff `next_check_at` (≤6h) instead of parking permanently. A
