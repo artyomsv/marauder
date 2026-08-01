@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/rs/zerolog/log"
+
 	"github.com/artyomsv/marauder/backend/internal/domain"
 	"github.com/artyomsv/marauder/backend/internal/plugins/registry"
 	"github.com/artyomsv/marauder/backend/internal/plugins/trackers/forumcommon"
@@ -51,8 +53,23 @@ func (p *plugin) Search(ctx context.Context, query string, creds *domain.Tracker
 		// tracker.php served the anonymous login shell — session is dead.
 		return nil, registry.ErrSearchRequiresCredentials
 	}
+	rows := searchRowRe.FindAllStringSubmatch(page, -1)
+	// A zero-row authenticated page is ambiguous: genuinely no matches, markup
+	// that stopped matching the row regex, or a query that was mangled before
+	// it got here. Record enough to tell those apart without dumping the page,
+	// which carries session-bearing markup.
+	//
+	// The logged URL is what caught a mangled query in testing — a caller that
+	// hands non-UTF-8 text to the cp1251 encoder gets "?" per rune, and
+	// `nm=%3F%3F%3F` searching for question marks looks exactly like "no
+	// results" from the outside.
+	log.Debug().Str("plugin", pluginName).Str("step", "search").
+		Int("page_bytes", len(body)).Int("rows", len(rows)).
+		Bool("markup_ok", strings.Contains(page, "data-topic_id")).
+		Str("url", target).
+		Msg("search page parsed")
 	var out []registry.SearchResult
-	for _, row := range searchRowRe.FindAllStringSubmatch(page, -1) {
+	for _, row := range rows {
 		cell := row[1]
 		linkM := searchLinkRe.FindStringSubmatchIndex(cell)
 		if linkM == nil {
