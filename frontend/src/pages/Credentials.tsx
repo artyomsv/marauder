@@ -2,9 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { motion, AnimatePresence } from "framer-motion";
 import {
-  AlertCircle,
   AlertTriangle,
-  CheckCircle2,
   KeyRound,
   Loader2,
   Pencil,
@@ -18,6 +16,8 @@ import { useT } from "@/i18n";
 import { QK } from "@/lib/queryKeys";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { VerificationNotice } from "@/components/credentials/VerificationNotice";
+import { TestLoginIcon, type TestLoginPhase } from "@/components/credentials/TestLoginIcon";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
@@ -46,6 +46,10 @@ export function CredentialsPage() {
   const [showAdd, setShowAdd] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [reauthId, setReauthId] = useState<string | null>(null);
+  // Set when the credential just added was accepted without its session
+  // being confirmed — the add form closes on success, so the warning has to
+  // outlive it.
+  const [unverified, setUnverified] = useState(false);
   const credentials = credsData?.credentials ?? [];
   const trackers = systemInfo?.trackers ?? [];
 
@@ -54,9 +58,23 @@ export function CredentialsPage() {
     onSuccess: () => qc.invalidateQueries({ queryKey: QK.credentials }),
   });
 
+  // `ok` only means the sign-in attempt did not fail. `verified` reports
+  // whether anything actually confirmed the session — a plugin with no
+  // reliable logged-in marker returns ok:true, verified:false.
   const test = useMutation({
-    mutationFn: (id: string) => api.post<{ ok: boolean }>(`/credentials/${id}/test`),
+    mutationFn: (id: string) =>
+      api.post<{ ok: boolean; verified: boolean; detail?: string }>(`/credentials/${id}/test`),
   });
+
+  // A test result belongs to exactly one row — the one whose id was passed to
+  // the mutation. Everything else stays idle.
+  const testPhase = (id: string): TestLoginPhase => {
+    if (test.variables !== id) return "idle";
+    if (test.isPending) return "pending";
+    if (test.isError) return "failed";
+    if (test.isSuccess) return test.data.verified ? "verified" : "unverified";
+    return "idle";
+  };
 
   return (
     <div className="space-y-8">
@@ -80,14 +98,17 @@ export function CredentialsPage() {
         </Button>
       </header>
 
+      {unverified && <VerificationNotice verified={false} />}
+
       <AnimatePresence>
         {showAdd && (
           <AddCredentialCard
             trackers={trackers}
             existing={credentials}
             onClose={() => setShowAdd(false)}
-            onCreated={() => {
+            onCreated={(created) => {
               setShowAdd(false);
+              setUnverified(created?.verified === false);
               qc.invalidateQueries({ queryKey: QK.credentials });
             }}
           />
@@ -177,15 +198,7 @@ export function CredentialsPage() {
                   onClick={() => test.mutate(c.id)}
                   disabled={test.isPending && test.variables === c.id}
                 >
-                  {test.isPending && test.variables === c.id ? (
-                    <Loader2 className="size-4 animate-spin" />
-                  ) : test.isSuccess && test.variables === c.id ? (
-                    <CheckCircle2 className="size-4 text-success" />
-                  ) : test.isError && test.variables === c.id ? (
-                    <AlertCircle className="size-4 text-destructive" />
-                  ) : (
-                    <CheckCircle2 className="size-4" />
-                  )}
+                  <TestLoginIcon phase={testPhase(c.id)} />
                   Test login
                 </Button>
                 {c.session_expired && reauthId !== c.id && (
@@ -203,6 +216,9 @@ export function CredentialsPage() {
                 <div className="mt-2 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
                   {(test.error as Error)?.message}
                 </div>
+              )}
+              {test.isSuccess && test.variables === c.id && (
+                <VerificationNotice verified={test.data.verified} detail={test.data.detail} />
               )}
               <AnimatePresence>
                 {reauthId === c.id && (
@@ -251,7 +267,10 @@ function AddCredentialCard({
   trackers: Tracker[];
   existing: CredentialView[];
   onClose: () => void;
-  onCreated: () => void;
+  // The created view is passed back so the page can report an unverified
+  // sign-in; the interactive paths pass nothing (they end in a confirmed
+  // session by construction).
+  onCreated: (created?: CredentialView) => void;
 }) {
   const t = useT();
   // Surface only trackers that don't already have a credential. The
@@ -286,7 +305,7 @@ function AddCredentialCard({
         username,
         password,
       }),
-    onSuccess: () => onCreated(),
+    onSuccess: (created) => onCreated(created),
     onError: (err) => setError(problemDetail(err)),
   });
 

@@ -115,6 +115,12 @@ const en: Record<string, string> = {
   "credentials.captchaCancel": "Cancel",
   "credentials.sessionExpired": "Session expired",
   "credentials.reauthenticate": "Re-authenticate",
+  "credentials.unverified":
+    "Saved, but the sign-in could not be verified — this tracker plugin cannot confirm the session.",
+  "credentials.unverifiedShort": "Unverified sign-in",
+  "credentials.testPending": "Testing sign-in",
+  "credentials.testVerified": "Sign-in verified",
+  "credentials.testFailed": "Sign-in failed",
 
   // Settings
   "integrations.kicker": "connections",

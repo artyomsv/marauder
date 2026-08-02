@@ -78,15 +78,35 @@ func (f *fakeCredPlugin) Verify(context.Context, *domain.TrackerCredential) (boo
 // login button said success" — this test pins that path closed.
 func TestLoginAndVerify(t *testing.T) {
 	tests := []struct {
-		name      string
-		plugin    *fakeCredPlugin
-		wantErr   bool
-		wantInErr string // substring that must appear in the error message
+		name         string
+		plugin       *fakeCredPlugin
+		wantErr      bool
+		wantInErr    string // substring that must appear in the error message
+		wantVerified bool   // only checked when wantErr is false
 	}{
 		{
-			name:    "happy path: Login ok + Verify (true, nil)",
-			plugin:  &fakeCredPlugin{loginErr: nil, verifyOK: true, verifyErr: nil},
-			wantErr: false,
+			name:         "happy path: Login ok + Verify (true, nil)",
+			plugin:       &fakeCredPlugin{loginErr: nil, verifyOK: true, verifyErr: nil},
+			wantErr:      false,
+			wantVerified: true,
+		},
+		{
+			// A plugin that cannot check session state must NOT be able to
+			// claim it did. The credential is still usable (Login succeeded),
+			// so this is not an error — but it reports verified=false so the
+			// caller can say "saved, could not be verified" instead of green.
+			name:         "verify unsupported: usable but unverified",
+			plugin:       &fakeCredPlugin{loginErr: nil, verifyErr: registry.ErrVerifyUnsupported},
+			wantErr:      false,
+			wantVerified: false,
+		},
+		{
+			// Login failing still fails, even when verification is unsupported —
+			// the sentinel must not become a way to swallow a real rejection.
+			name:      "verify unsupported but login failed",
+			plugin:    &fakeCredPlugin{loginErr: errors.New("wrong password"), verifyErr: registry.ErrVerifyUnsupported},
+			wantErr:   true,
+			wantInErr: "login: wrong password",
 		},
 		{
 			name:      "login returns error",
@@ -112,15 +132,16 @@ func TestLoginAndVerify(t *testing.T) {
 			wantInErr: "session is not logged in",
 		},
 		{
-			name:    "verify returns (true, nil)",
-			plugin:  &fakeCredPlugin{loginErr: nil, verifyOK: true, verifyErr: nil},
-			wantErr: false,
+			name:         "verify returns (true, nil)",
+			plugin:       &fakeCredPlugin{loginErr: nil, verifyOK: true, verifyErr: nil},
+			wantErr:      false,
+			wantVerified: true,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			creds := &domain.TrackerCredential{Username: "alice", SecretEnc: []byte("pw")}
-			err := loginAndVerify(context.Background(), tt.plugin, creds)
+			verified, err := loginAndVerify(context.Background(), tt.plugin, creds)
 			if tt.wantErr {
 				if err == nil {
 					t.Fatalf("loginAndVerify: got nil, want error containing %q", tt.wantInErr)
@@ -132,6 +153,9 @@ func TestLoginAndVerify(t *testing.T) {
 			}
 			if err != nil {
 				t.Fatalf("loginAndVerify: unexpected error: %v", err)
+			}
+			if verified != tt.wantVerified {
+				t.Errorf("verified = %v, want %v", verified, tt.wantVerified)
 			}
 		})
 	}

@@ -117,6 +117,12 @@ const ru: Record<string, string> = {
   "credentials.captchaCancel": "Отмена",
   "credentials.sessionExpired": "Сессия истекла",
   "credentials.reauthenticate": "Повторная авторизация",
+  "credentials.unverified":
+    "Сохранено, но вход не подтверждён — плагин этого трекера не умеет проверять сессию.",
+  "credentials.unverifiedShort": "Вход не подтверждён",
+  "credentials.testPending": "Проверка входа",
+  "credentials.testVerified": "Вход подтверждён",
+  "credentials.testFailed": "Ошибка входа",
 
   // Settings
   "integrations.kicker": "подключения",

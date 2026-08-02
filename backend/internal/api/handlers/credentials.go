@@ -62,8 +62,14 @@ type credentialView struct {
 	DisplayName    string `json:"display_name"`
 	Username       string `json:"username"`
 	SessionExpired bool   `json:"session_expired"`
-	CreatedAt      string `json:"created_at"`
-	UpdatedAt      string `json:"updated_at"`
+	// Verified reports the outcome of the login round-trip this response
+	// performed. Absent on list responses, where nothing was checked.
+	// False means "credential saved, but the plugin could not confirm the
+	// session is authenticated" — deliberately distinct from both success
+	// and failure, so the UI never shows a green tick for an unchecked login.
+	Verified  *bool  `json:"verified,omitempty"`
+	CreatedAt string `json:"created_at"`
+	UpdatedAt string `json:"updated_at"`
 }
 
 // loginAndVerify runs the plugin's Login + Verify sequence and fails if
@@ -80,18 +86,35 @@ type credentialView struct {
 // be treated as failure. Discarding the bool is a bug — the test login
 // endpoint used to do exactly that until a user reported entering a
 // wrong username and seeing "login succeeded".
-func loginAndVerify(ctx context.Context, wc registry.WithCredentials, creds *domain.TrackerCredential) error {
+//
+// The returned verified flag distinguishes the two non-error outcomes.
+// A plugin that returns registry.ErrVerifyUnsupported is declaring it has no
+// way to check the session; the credential is still usable (Login succeeded),
+// so this is not a failure, but callers MUST NOT present it as a verified
+// login. Everything else keeps the strict behaviour above.
+func loginAndVerify(ctx context.Context, wc registry.WithCredentials, creds *domain.TrackerCredential) (verified bool, err error) {
 	if err := wc.Login(ctx, creds); err != nil {
-		return fmt.Errorf("login: %w", err)
+		return false, fmt.Errorf("login: %w", err)
 	}
 	ok, err := wc.Verify(ctx, creds)
+	if errors.Is(err, registry.ErrVerifyUnsupported) {
+		return false, nil
+	}
 	if err != nil {
-		return fmt.Errorf("verify: %w", err)
+		return false, fmt.Errorf("verify: %w", err)
 	}
 	if !ok {
-		return errors.New("verify: session is not logged in (credentials likely wrong)")
+		return false, errors.New("verify: session is not logged in (credentials likely wrong)")
 	}
-	return nil
+	return true, nil
+}
+
+// withVerified stamps the per-call verification outcome onto a view. Kept
+// separate from toCredView because verification is not persisted state: it is
+// the result of the round-trip this one request made.
+func withVerified(v credentialView, verified bool) credentialView {
+	v.Verified = &verified
+	return v
 }
 
 func toCredView(c *domain.TrackerCredential) credentialView {
@@ -175,8 +198,9 @@ func (h *Credentials) Create(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := slowOperation(w, r, slowOperationBudget)
 	defer cancel()
-	if err := loginAndVerify(ctx, wc, transient); err != nil {
-		problem.Write(w, r, h.BaseURL, problem.ErrUnprocessable(explainLoginFailure(err)))
+	verified, lerr := loginAndVerify(ctx, wc, transient)
+	if lerr != nil {
+		problem.Write(w, r, h.BaseURL, problem.ErrUnprocessable(explainLoginFailure(lerr)))
 		return
 	}
 
@@ -201,7 +225,7 @@ func (h *Credentials) Create(w http.ResponseWriter, r *http.Request) {
 		h.Audit.Generic(&uid, "credential_create", "tracker_credential", created.ID.String(), "success",
 			map[string]any{"tracker_name": req.TrackerName, "ip": ip, "ua": ua})
 	}
-	writeJSON(w, http.StatusCreated, toCredView(created))
+	writeJSON(w, http.StatusCreated, withVerified(toCredView(created), verified))
 }
 
 type updateCredentialReq struct {
@@ -243,6 +267,7 @@ func (h *Credentials) Update(w http.ResponseWriter, r *http.Request) {
 	}
 
 	encBlob, encNonce := existing.SecretEnc, existing.SecretNonce
+	var verified *bool
 	if req.Password != "" {
 		// Validate the new password by attempting Login + Verify first.
 		plugin := registry.GetTracker(existing.TrackerName)
@@ -254,12 +279,16 @@ func (h *Credentials) Update(w http.ResponseWriter, r *http.Request) {
 				SecretEnc:   []byte(req.Password),
 			}
 			ctx, cancel := slowOperation(w, r, slowOperationBudget)
-			err := loginAndVerify(ctx, wc, transient)
+			ok, err := loginAndVerify(ctx, wc, transient)
 			cancel()
 			if err != nil {
 				problem.Write(w, r, h.BaseURL, problem.ErrUnprocessable(explainLoginFailure(err)))
 				return
 			}
+			// Only set when a login round-trip actually ran: an update that
+			// keeps the current password checks nothing, and must not report
+			// a verification it did not perform.
+			verified = &ok
 		}
 		newEnc, newNonce, err := h.Master.Encrypt([]byte(req.Password))
 		if err != nil {
@@ -287,7 +316,9 @@ func (h *Credentials) Update(w http.ResponseWriter, r *http.Request) {
 		problem.Write(w, r, h.BaseURL, problem.ErrInternal(err.Error()))
 		return
 	}
-	writeJSON(w, http.StatusOK, toCredView(updated))
+	view := toCredView(updated)
+	view.Verified = verified
+	writeJSON(w, http.StatusOK, view)
 }
 
 // Test handles POST /credentials/{id}/test — re-runs Login + Verify
@@ -345,11 +376,19 @@ func (h *Credentials) Test(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := slowOperation(w, r, slowOperationBudget)
 	defer cancel()
-	if err := loginAndVerify(ctx, wc, transient); err != nil {
-		problem.Write(w, r, h.BaseURL, problem.ErrUnprocessable(explainLoginFailure(err)))
+	verified, lerr := loginAndVerify(ctx, wc, transient)
+	if lerr != nil {
+		problem.Write(w, r, h.BaseURL, problem.ErrUnprocessable(explainLoginFailure(lerr)))
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	// ok reports "the sign-in attempt did not fail"; verified reports whether
+	// anything actually confirmed the session. They differ for plugins that
+	// return registry.ErrVerifyUnsupported, and the UI must not collapse them.
+	resp := map[string]any{"ok": true, "verified": verified}
+	if !verified {
+		resp["detail"] = "signed in, but this tracker plugin cannot confirm the session — treat the result as unverified"
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // Delete handles DELETE /credentials/{id}.

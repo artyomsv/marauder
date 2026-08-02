@@ -134,8 +134,12 @@ func (p *plugin) Login(ctx context.Context, creds *domain.TrackerCredential) err
 	return nil
 }
 
+// Verify reports that this plugin cannot confirm a session. Nobody has
+// identified a reliable logged-in marker on Toloka yet, and returning
+// (true, nil) would let an unchecked login be presented as a verified one —
+// see registry.ErrVerifyUnsupported.
 func (p *plugin) Verify(_ context.Context, _ *domain.TrackerCredential) (bool, error) {
-	return true, nil
+	return false, registry.ErrVerifyUnsupported
 }
 
 var (
