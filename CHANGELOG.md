@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **"Test login" reported success for credentials the tracker had rejected.**
+  On Anidub a wrong password came back as HTTP 200 with the login form
+  re-rendered, and the plugin only looked for two error phrases — neither of
+  which the site actually emits (it says "неверное", the plugin matched
+  "не верный"). Its `Verify` was a stub returning "logged in" without making a
+  request, so nothing caught the miss. Anidub now checks the response status,
+  matches the wording the site really sends, and confirms the session by
+  fetching an authenticated page.
+
+- **Anidub topics could never be checked.** The plugin looked for a
+  `data-hash` attribute that the site does not emit anywhere — not on film
+  pages, not on series pages — so every check failed with "no infohash found".
+  Anidub publishes no infohash on the page at all, so the change token is now
+  derived from the torrent block (id, filename, size). Seeder and leecher
+  counts are deliberately excluded: they move constantly and would make every
+  check look like a new release.
+- **Anidub topics showed "Anidub: 12412-opasnost-…" instead of a title.** The
+  title sits inside `<h1><span id="news-title">`, and the plugin's pattern
+  required text directly inside the `<h1>` — so it matched nothing, which also
+  meant the scheduler's placeholder self-heal could never repair the name.
+
+### Added
+
+- **Anidub resolves a real title and poster** when adding a topic
+  (`WithMetadata`), so the Add form preview is populated instead of blank. The
+  poster lookup is scoped to the topic's own art — unrelated sidebar posters
+  appear earlier in the page and would otherwise be picked.
+
+### Changed
+
+- **Tracker plugins that cannot verify a session now say so** instead of
+  claiming success. Toloka and Unionpeer have no known logged-in marker; adding
+  or testing an account for them now reports "saved, but the sign-in could not
+  be verified" rather than a green tick. The credential still works — the
+  difference is that Marauder no longer implies it checked something it did
+  not.
+
 ## [1.18.0] - 2026-08-02
 
 ### Added

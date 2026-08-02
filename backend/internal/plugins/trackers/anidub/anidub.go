@@ -4,14 +4,24 @@
 // many users in 2019-2020. It runs on a phpBB-like forum at
 // `tr.anidub.com/<category>/<slug>.html`.
 //
-// **Validation status:** structurally complete; needs live-account
-// validation. Selectors mirror the public HTML as of 2026-04.
+// **Validation status:** structurally complete. The login path was measured
+// against the live site on 2026-08-02: a rejected sign-in returns HTTP 200
+// with the login form re-rendered and the banner "вход на сайт не был
+// произведен", and an anonymous page carries `login_name` twice and
+// `action=logout` zero times. The remaining assumption is that a *signed-in*
+// page does carry `action=logout` (DLE's standard logout link) — that half
+// still wants confirmation from a real account. Topic-page selectors mirror
+// the public HTML as of 2026-04.
 package anidub
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"html"
 	"io"
 	"net/http"
 	"net/url"
@@ -136,22 +146,165 @@ func (p *plugin) Login(ctx context.Context, creds *domain.TrackerCredential) err
 	if err != nil {
 		return fmt.Errorf("anidub login: read body: %w", err)
 	}
-	if strings.Contains(string(body), "Доступ запрещён") || strings.Contains(string(body), "не верный") {
-		return errors.New("anidub login failed")
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("anidub login: unexpected status %d", resp.StatusCode)
+	}
+	if loginRejected(body) {
+		return errors.New("anidub login failed: check the username and password")
 	}
 	sess.LoggedIn = true
 	return nil
 }
 
-func (p *plugin) Verify(_ context.Context, _ *domain.TrackerCredential) (bool, error) {
-	return true, nil
+// loginFailureMarkers are the phrases the tracker emits when it refuses a
+// sign-in. The first two are the verbatim DLE rejection banner captured from
+// the live site on 2026-08-02 by posting a nonexistent account; the third
+// covers a banned/forbidden account.
+//
+// The rejection arrives as **HTTP 200 with the login form re-rendered**, so
+// the status check above cannot catch it — this list is the only thing
+// standing between a wrong password and a reported success.
+//
+// The plugin previously looked for "не верный", which never matched: the site
+// writes "неверное" (one word, neuter). That single mismatch is what made
+// every failed anidub login report as green.
+var loginFailureMarkers = [][]byte{
+	[]byte("вход на сайт не был произведен"),
+	[]byte("неверное имя пользователя или пароль"),
+	[]byte("Доступ запрещён"),
+}
+
+func loginRejected(body []byte) bool {
+	for _, m := range loginFailureMarkers {
+		if bytes.Contains(body, m) {
+			return true
+		}
+	}
+	return false
+}
+
+// logoutMarker is DLE's logout link. Measured on the live site 2026-08-02:
+// an anonymous page carries `login_name` twice and `action=logout` zero
+// times, so its absence reliably means "not signed in".
+var logoutMarker = []byte("action=logout")
+
+// Verify implements the positive-marker half of the credential check: it
+// fetches the site root on the session Login established and reports whether
+// that session is actually authenticated.
+//
+// This is the signal credentials.loginAndVerify depends on. It used to be a
+// stub returning (true, nil), which silently defeated the handler's two-signal
+// design — Login's negative check was then the only thing between a wrong
+// password and a green badge, and it was matching the wrong string.
+func (p *plugin) Verify(ctx context.Context, creds *domain.TrackerCredential) (bool, error) {
+	body, err := p.fetch(ctx, "https://"+p.effectiveDomain()+"/", creds)
+	if err != nil {
+		return false, err
+	}
+	return bytes.Contains(body, logoutMarker), nil
+}
+
+var _ registry.WithMetadata = (*plugin)(nil)
+
+// ResolveMetadata implements registry.WithMetadata — the AddTopic preview and
+// the real display name at create time. Without it a new anidub topic showed
+// the "Anidub: <slug>" placeholder and no poster.
+func (p *plugin) ResolveMetadata(ctx context.Context, rawURL string, creds *domain.TrackerCredential) (*registry.Metadata, error) {
+	target, err := p.canonicalURL(rawURL)
+	if err != nil {
+		return nil, err
+	}
+	body, err := p.fetch(ctx, target, creds)
+	if err != nil {
+		return nil, err
+	}
+	return &registry.Metadata{
+		Title:    pageTitle(body),
+		ImageURL: p.absoluteURL(posterURL(body)),
+	}, nil
 }
 
 var (
-	titleRe  = regexp.MustCompile(`(?s)<h1[^>]*>([^<]+)</h1>`)
-	hashRe   = regexp.MustCompile(`(?i)data-hash="([A-Fa-f0-9]{40})"`)
+	// The title sits inside <h1><span id="news-title">…</span></h1>. The
+	// original pattern required text directly between the <h1> tags, so the
+	// nested span left it matching nothing — which also disabled the
+	// scheduler's placeholder self-heal.
+	titleRe   = regexp.MustCompile(`(?s)<h1[^>]*>\s*(?:<span[^>]*>)?(.*?)(?:</span>)?\s*</h1>`)
+	ogTitleRe = regexp.MustCompile(`<meta\s+property="og:title"\s+content="([^"]*)"`)
+	// The topic's own poster. Scoping to span.poster is load-bearing: sidebar
+	// posters for unrelated titles appear EARLIER in the document, so an
+	// unscoped "first poster image" match returns the wrong show's art.
+	posterRe = regexp.MustCompile(`<span class="poster">\s*<img[^>]+src="([^"]+)"`)
 	dlHrefRe = regexp.MustCompile(`href="(/engine/download\.php\?id=\d+)"`)
+
+	// Change-token inputs. One torrent block per quality variant, each with a
+	// stable id, filename and size. Seeder/leecher counts are deliberately
+	// excluded — they move constantly, and feeding them in would make every
+	// check look like a new release.
+	blockIDRe  = regexp.MustCompile(`torrent_(\d+)_info`)
+	fileNameRe = regexp.MustCompile(`Имя файла:</span>\s*<span class="red" title="([^"]*)"`)
+	sizeRe     = regexp.MustCompile(`Размер:\s*<span class="red">([^<]*)</span>`)
 )
+
+// pageTitle prefers og:title (clean, single-line) and falls back to the h1.
+func pageTitle(body []byte) string {
+	if m := ogTitleRe.FindSubmatch(body); m != nil {
+		if s := strings.TrimSpace(html.UnescapeString(string(m[1]))); s != "" {
+			return s
+		}
+	}
+	if m := titleRe.FindSubmatch(body); m != nil {
+		return strings.TrimSpace(html.UnescapeString(string(m[1])))
+	}
+	return ""
+}
+
+func posterURL(body []byte) string {
+	if m := posterRe.FindSubmatch(body); m != nil {
+		return strings.TrimSpace(string(m[1]))
+	}
+	return ""
+}
+
+// absoluteURL resolves a possibly-relative asset path against the active
+// domain. Posters are served from a separate CDN host today, but the site also
+// emits site-relative /uploads/... paths.
+func (p *plugin) absoluteURL(ref string) string {
+	if ref == "" || strings.HasPrefix(ref, "http://") || strings.HasPrefix(ref, "https://") {
+		return ref
+	}
+	return "https://" + p.effectiveDomain() + "/" + strings.TrimPrefix(ref, "/")
+}
+
+// pageFingerprint derives the change token for a topic.
+//
+// anidub publishes no infohash on the page — not on movie pages, not on series
+// pages (verified against the live site 2026-08-02). The plugin previously
+// looked for a data-hash attribute that does not exist anywhere on the site, so
+// every check failed with "no infohash found" and no anidub topic could work.
+//
+// domain.Check.Hash is a change token, not an infohash: the scheduler only
+// compares it to the previous value to decide whether something was published.
+// The real infohash used for delivery tracking is computed downstream from the
+// .torrent by the infohash package, so nothing needs one here. Torrent id +
+// filename + size covers exactly the re-upload case that means "new release".
+func pageFingerprint(body []byte) string {
+	var parts []string
+	for _, m := range blockIDRe.FindAllSubmatch(body, -1) {
+		parts = append(parts, "id="+string(m[1]))
+	}
+	for _, m := range fileNameRe.FindAllSubmatch(body, -1) {
+		parts = append(parts, "name="+string(m[1]))
+	}
+	for _, m := range sizeRe.FindAllSubmatch(body, -1) {
+		parts = append(parts, "size="+string(m[1]))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(strings.Join(parts, "|")))
+	return hex.EncodeToString(sum[:])
+}
 
 func (p *plugin) Check(ctx context.Context, topic *domain.Topic, creds *domain.TrackerCredential) (*domain.Check, error) {
 	target, err := p.canonicalURL(topic.URL)
@@ -162,15 +315,12 @@ func (p *plugin) Check(ctx context.Context, topic *domain.Topic, creds *domain.T
 	if err != nil {
 		return nil, err
 	}
-	check := &domain.Check{}
-	if m := titleRe.FindSubmatch(body); m != nil {
-		check.DisplayName = strings.TrimSpace(string(m[1]))
-	}
-	if m := hashRe.FindSubmatch(body); m != nil {
-		check.Hash = strings.ToLower(string(m[1]))
+	check := &domain.Check{DisplayName: pageTitle(body)}
+	if fp := pageFingerprint(body); fp != "" {
+		check.Hash = fp
 		return check, nil
 	}
-	return nil, errors.New("anidub: no infohash found")
+	return nil, errors.New("anidub: no torrent block found on the topic page")
 }
 
 func (p *plugin) Download(ctx context.Context, topic *domain.Topic, _ *domain.Check, creds *domain.TrackerCredential) (*domain.Payload, error) {
