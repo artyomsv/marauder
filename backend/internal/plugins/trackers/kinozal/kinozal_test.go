@@ -129,6 +129,48 @@ func TestCleanTitle_DecodesWindows1251(t *testing.T) {
 	}
 }
 
+// TestCleanTitle_StripsAnyMirrorBrandSuffix pins that the site-suffix strip is
+// not tied to one mirror's branding. Each Kinozal mirror brands its <title>
+// tail after its own domain — measured live on 2026-08-03, kinozal.me serves
+// "Кинозал.МЕ" and kinozal.guru serves "Кинозал.GURU" where kinozal.tv served
+// "Кинозал.ТВ". A hardcoded single-suffix TrimSuffix leaves the other mirrors'
+// tails glued to every topic display name, which is exactly what users see
+// after a domain rotation.
+func TestCleanTitle_StripsAnyMirrorBrandSuffix(t *testing.T) {
+	const want = "Извне (4 сезон) / From"
+	tests := []struct {
+		name string
+		raw  string
+	}{
+		{"tv brand", want + " :: Кинозал.ТВ"},
+		{"me brand", want + " :: Кинозал.МЕ"},
+		{"guru brand", want + " :: Кинозал.GURU"},
+		{"no suffix", want},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cp1251, err := charmap.Windows1251.NewEncoder().String(tt.raw)
+			if err != nil {
+				t.Fatalf("encode cp1251: %v", err)
+			}
+			if got := cleanTitle(cp1251); got != want {
+				t.Errorf("cleanTitle(%q) = %q, want %q", tt.raw, got, want)
+			}
+		})
+	}
+}
+
+// TestCleanTitle_KeepsUnrelatedDoubleColon guards the strip against eating a
+// legitimate release title that happens to contain " :: " — only a trailing
+// Kinozal brand tail may be removed.
+func TestCleanTitle_KeepsUnrelatedDoubleColon(t *testing.T) {
+	const raw = "Sherlock :: The Game Is On (2026) :: Кинозал.МЕ"
+	const want = "Sherlock :: The Game Is On (2026)"
+	if got := cleanTitle(raw); got != want {
+		t.Errorf("cleanTitle(%q) = %q, want %q", raw, got, want)
+	}
+}
+
 // TestResolveMetadata_TitleAndAbsoluteImage serves a cp1251 details page with a
 // relative og:image (exactly how kinozal.tv emits posters) and asserts the
 // title is decoded + de-suffixed and the image URL is made absolute against the
@@ -408,7 +450,10 @@ func TestEffectiveDomain_ResolverOverride(t *testing.T) {
 
 func TestDomains_CanonicalFirst(t *testing.T) {
 	p := &plugin{}
-	want := []string{"kinozal.tv", "kinozal.me", "kinozal.guru"}
+	// kinozal.me leads: kinozal.tv stopped resolving (SERVFAIL) on 2026-08-03
+	// and was demoted from canonical to a trailing legacy entry, kept only so
+	// already-stored topic URLs continue to parse.
+	want := []string{"kinozal.me", "kinozal.guru", "kinozal.tv"}
 	if !reflect.DeepEqual(p.Domains(), want) {
 		t.Errorf("Domains() = %v, want %v", p.Domains(), want)
 	}

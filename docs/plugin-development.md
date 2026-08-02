@@ -176,8 +176,8 @@ func (p *plugin) Verify(_ context.Context, _ *domain.TrackerCredential) (bool, e
 
 The handler maps that sentinel to "saved, but unverified": the
 credential is still stored and usable, and the UI shows an amber notice
-instead of a green tick. `toloka` and `unionpeer` are in this state
-today — supplying a real marker for either is a welcome contribution.
+instead of a green tick. `toloka` is in this state today — supplying a
+real marker for it is a welcome contribution.
 
 When you add a marker, verify **both** directions against the live site:
 confirm it is present when signed in *and* absent when anonymous. A

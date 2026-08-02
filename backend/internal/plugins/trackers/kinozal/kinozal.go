@@ -25,17 +25,25 @@ import (
 	"github.com/artyomsv/marauder/backend/internal/plugins/trackers/forumcommon"
 )
 
-// siteSuffix is the " :: Кинозал.ТВ" tail Kinozal appends to every <title>.
-const siteSuffix = " :: Кинозал.ТВ"
+// siteSuffixRe matches the " :: Кинозал.<BRAND>" tail Kinozal appends to every
+// <title>, where <BRAND> tracks the mirror being served (.ТВ / .МЕ / .GURU).
+// Anchored to the end so a release title that legitimately contains " :: " is
+// left intact.
+var siteSuffixRe = regexp.MustCompile(` :: Кинозал\.[^\s:]+$`)
 
 const (
-	pluginName    = "kinozal"
-	displayName   = "Kinozal.tv"
-	defaultDomain = "kinozal.tv"
+	pluginName  = "kinozal"
+	displayName = "Kinozal"
+	// defaultDomain is kinozal.me, not the original kinozal.tv: as of
+	// 2026-08-03 kinozal.tv no longer resolves — both 8.8.8.8 and 1.1.1.1
+	// return SERVFAIL (broken authoritative NS), so a fresh install starting
+	// there could never reach the tracker. kinozal.tv stays in knownDomains
+	// so topic URLs already stored against it still parse.
+	defaultDomain = "kinozal.me"
 	userAgent     = "Marauder/0.3 (+https://marauder.cc)"
 )
 
-var knownDomains = []string{"kinozal.tv", "kinozal.me", "kinozal.guru"}
+var knownDomains = []string{"kinozal.me", "kinozal.guru", "kinozal.tv"}
 
 // urlPattern is host-agnostic; CanParse gates the captured host against the
 // known + admin-configured domain allowlist (the SSRF barrier — see
@@ -172,11 +180,19 @@ var (
 )
 
 // cleanTitle decodes a raw <title> match from cp1251 and strips the site
-// suffix. Thin wrapper over the shared forumcommon helper so Check and
-// ResolveMetadata stay consistent. Decoding is mandatory: undecoded cp1251
-// Cyrillic is invalid UTF-8 and Postgres rejects it (SQLSTATE 22021) on write.
+// suffix, so Check and ResolveMetadata stay consistent. Decoding is mandatory:
+// undecoded cp1251 Cyrillic is invalid UTF-8 and Postgres rejects it
+// (SQLSTATE 22021) on write.
+//
+// The suffix is matched by pattern rather than by the shared
+// forumcommon.CleanTitle's fixed-string trim because each mirror brands the
+// tail after its own domain — measured 2026-08-03: kinozal.me serves
+// "Кинозал.МЕ" and kinozal.guru "Кинозал.GURU" where kinozal.tv served
+// "Кинозал.ТВ". Trimming one literal would leave the other mirrors' tails on
+// every topic name after a domain rotation.
 func cleanTitle(raw string) string {
-	return forumcommon.CleanTitle(raw, siteSuffix)
+	t := strings.TrimSpace(forumcommon.DecodeWindows1251(raw))
+	return strings.TrimSpace(siteSuffixRe.ReplaceAllString(t, ""))
 }
 
 // extractImageURL returns the og:image poster from a topic page body, made

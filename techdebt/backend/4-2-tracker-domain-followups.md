@@ -4,7 +4,7 @@
 |-------|-------|
 | Criticality | Low |
 | Complexity | Small |
-| Location | `backend/internal/api/handlers/tracker_domains.go`, `backend/internal/plugins/trackers/{anidub,freetorrents,hdclub,tapochek,toloka,unionpeer}`, `backend/internal/plugins/trackers/lostfilm/lostfilm_redirector.go`, `backend/internal/plugins/e2etest`, `backend/internal/scheduler/scheduler.go` |
+| Location | `backend/internal/api/handlers/tracker_domains.go`, `backend/internal/plugins/trackers/{anidub,tapochek,toloka}`, `backend/internal/plugins/trackers/lostfilm/lostfilm_redirector.go`, `backend/internal/plugins/e2etest`, `backend/internal/scheduler/scheduler.go` |
 | Found during | Final review of branch `126-allow-configurable-tracker-domains-and-automatic-mirror-fallback`, issue #126 |
 | Date | 2026-07-22 |
 
@@ -27,7 +27,7 @@ inconsistent with the sibling endpoint and worth aligning.
 ### (b) Missing Download-path domain rewrite tests + `vettedDialContext` direct test
 
 Of the eight Task-7 "remaining fixed-domain" plugins, six
-(`anidub`, `freetorrents`, `hdclub`, `tapochek`, `toloka`, `unionpeer`)
+(`anidub`, `tapochek`, `toloka`)
 build their `Download()` URL via `"https://" + p.effectiveDomain() + ...`
 but have no test that exercises `Download()` under a non-default active
 domain — only `Check()`-path domain-rewrite tests exist. `rutor`
@@ -121,7 +121,7 @@ after a tracker's transient rate-limiting or maintenance window.
   already does at the top of `Test`, returning the same 404 shape on an
   unknown/non-`WithDomains` tracker before probing.
 - (b): add one `Download()`-path domain-rewrite test per remaining
-  plugin (anidub, freetorrents, hdclub, tapochek, toloka, unionpeer),
+  plugin (anidub, tapochek, toloka),
   mirroring `rutor`'s/`anilibria`'s existing tests; add a focused
   `vettedDialContext` test using an injectable resolver/dialer seam.
 - (c): extract a single `isRoutableIP` (plus multicast rejection) into a

@@ -47,10 +47,8 @@ import (
 	_ "github.com/artyomsv/marauder/backend/internal/plugins/notifiers/webhook"
 	_ "github.com/artyomsv/marauder/backend/internal/plugins/trackers/anidub"
 	_ "github.com/artyomsv/marauder/backend/internal/plugins/trackers/anilibria"
-	_ "github.com/artyomsv/marauder/backend/internal/plugins/trackers/freetorrents"
 	_ "github.com/artyomsv/marauder/backend/internal/plugins/trackers/genericmagnet"
 	_ "github.com/artyomsv/marauder/backend/internal/plugins/trackers/generictorrentfile"
-	_ "github.com/artyomsv/marauder/backend/internal/plugins/trackers/hdclub"
 	_ "github.com/artyomsv/marauder/backend/internal/plugins/trackers/kinozal"
 	_ "github.com/artyomsv/marauder/backend/internal/plugins/trackers/lostfilm"
 	_ "github.com/artyomsv/marauder/backend/internal/plugins/trackers/newznab"
@@ -60,7 +58,6 @@ import (
 	_ "github.com/artyomsv/marauder/backend/internal/plugins/trackers/tapochek"
 	_ "github.com/artyomsv/marauder/backend/internal/plugins/trackers/toloka"
 	_ "github.com/artyomsv/marauder/backend/internal/plugins/trackers/torznab"
-	_ "github.com/artyomsv/marauder/backend/internal/plugins/trackers/unionpeer"
 )
 
 func main() {

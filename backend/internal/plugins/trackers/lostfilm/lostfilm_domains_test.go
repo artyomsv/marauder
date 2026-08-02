@@ -27,12 +27,12 @@ func TestCanParse_CustomDomain_AllowedViaResolver(t *testing.T) {
 
 func TestEffectiveDomain_ResolverOverride(t *testing.T) {
 	registry.SetDomainResolver(func(string) registry.DomainConfig {
-		return registry.DomainConfig{Active: "lostfilm.win"}
+		return registry.DomainConfig{Active: "lostfilm.run"}
 	})
 	t.Cleanup(func() { registry.SetDomainResolver(nil) })
 	p := &plugin{domain: defaultDomain}
-	if got := p.effectiveDomain(); got != "lostfilm.win" {
-		t.Errorf("effectiveDomain = %q, want lostfilm.win", got)
+	if got := p.effectiveDomain(); got != "lostfilm.run" {
+		t.Errorf("effectiveDomain = %q, want lostfilm.run", got)
 	}
 	// A test-injected p.domain (≠ defaultDomain) must win over the resolver —
 	// this is what keeps every httptest-based e2e test working.
@@ -44,7 +44,7 @@ func TestEffectiveDomain_ResolverOverride(t *testing.T) {
 
 func TestDomains_CanonicalFirst(t *testing.T) {
 	p := &plugin{}
-	want := []string{"www.lostfilm.tv", "lostfilm.tv", "lostfilm.win", "lostfilm.run"}
+	want := []string{"www.lostfilm.tv", "lostfilm.tv", "lostfilm.run"}
 	if !reflect.DeepEqual(p.Domains(), want) {
 		t.Errorf("Domains() = %v, want %v", p.Domains(), want)
 	}

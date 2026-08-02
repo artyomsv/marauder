@@ -12,8 +12,8 @@ mirror automatically when the current one starts failing.
 ## What it does
 
 - **Pick the active domain per tracker** — choose the plugin default or any
-  known mirror from a dropdown (e.g. Kinozal ships `kinozal.tv`, `kinozal.me`,
-  `kinozal.guru`; RuTracker ships `.org`, `.net`, `.nl`, `.cr`).
+  known mirror from a dropdown (e.g. Kinozal ships `kinozal.me`,
+  `kinozal.guru`, `kinozal.tv`; RuTracker ships `.org` and `.net`).
 - **Add your own mirrors** — enter a custom hostname if the one you need isn't
   in the built-in list.
 - **Existing topics follow automatically** — Marauder identifies topics by

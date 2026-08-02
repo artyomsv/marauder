@@ -1,5 +1,11 @@
-// The 16 tracker plugins bundled with Marauder. Used to render the
+// The tracker plugins bundled with Marauder. Used to render the
 // trackers page table and the home-page summary grid.
+//
+// Entries are removed when the tracker itself stops existing, not merely
+// when it has a bad day. Removed 2026-08-03 after probing every domain:
+// HD-Club (shut down in 2017; hdclub.org now redirects to an unrelated
+// file-hosting affiliate site), Unionpeer (all three domains parked or
+// NXDOMAIN) and Free-Torrents (no A record on any resolver).
 
 export type TrackerStatus = "validated" | "alpha";
 
@@ -47,7 +53,7 @@ export const trackers: Tracker[] = [
   },
   {
     slug: "kinozal",
-    name: "Kinozal.tv",
+    name: "Kinozal.me",
     description: "Russian-language tracker for movies and TV.",
     category: "forum-cis",
     region: "RU",
@@ -114,37 +120,9 @@ export const trackers: Tracker[] = [
     status: "alpha",
   },
   {
-    slug: "unionpeer",
-    name: "Unionpeer.org",
-    description:
-      "Russian-language phpBB tracker. Sign-in is saved but cannot be confirmed automatically.",
-    category: "forum-cis",
-    region: "RU",
-    auth: "account",
-    status: "alpha",
-  },
-  {
     slug: "tapochek",
     name: "Tapochek.net",
     description: "Russian-language tracker for kids' content.",
-    category: "forum-cis",
-    region: "RU",
-    auth: "account",
-    status: "alpha",
-  },
-  {
-    slug: "freetorrents",
-    name: "Free-Torrents.org",
-    description: "Russian-language phpBB tracker.",
-    category: "forum-cis",
-    region: "RU",
-    auth: "account",
-    status: "alpha",
-  },
-  {
-    slug: "hdclub",
-    name: "HD-Club.org",
-    description: "TBDev/Gazelle-style HD-only private tracker.",
     category: "forum-cis",
     region: "RU",
     auth: "account",

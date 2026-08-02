@@ -19,7 +19,7 @@
 [![Go](https://img.shields.io/badge/backend-Go%201.25-00ADD8.svg)](backend/)
 [![React 19](https://img.shields.io/badge/frontend-React%2019.2-61DAFB.svg)](frontend/)
 [![Postgres 18](https://img.shields.io/badge/database-Postgres%2018-336791.svg)](deploy/)
-[![16 trackers](https://img.shields.io/badge/trackers-16-blue.svg)](docs/plugin-development.md)
+[![13 trackers](https://img.shields.io/badge/trackers-13-blue.svg)](docs/plugin-development.md)
 [![5 clients](https://img.shields.io/badge/clients-5-blue.svg)](docs/plugin-development.md)
 [![4 notifiers](https://img.shields.io/badge/notifiers-4-blue.svg)](docs/plugin-development.md)
 [![Torznab+Newznab](https://img.shields.io/badge/Torznab%2BNewznab-supported-success.svg)](docs/torznab-newznab.md)
@@ -95,7 +95,7 @@ What works **today**:
   rotation, master-key-encrypted secrets at rest.
 - OIDC sign-in via Keycloak (or any OIDC provider). Bring up the
   bundled Keycloak realm with the `sso` compose profile.
-- 16 tracker plugins, 5 torrent-client plugins, 4 notifier plugins.
+- 13 tracker plugins, 5 torrent-client plugins, 4 notifier plugins.
 - In-app cross-tracker search: type a title in the Add-topic form,
   pick a result, monitor it — no browser trip to find the topic URL
   (Rutor, Kinozal, LostFilm, Anilibria public; RuTracker with a
@@ -116,18 +116,24 @@ the Torznab/Newznab indexer adapters, the **RuTracker**, **LostFilm**
 (anonymous-only — its login is Cloudflare-Turnstile-gated, so accounts
 aren't supported), each against a live target.
 
-What's still **alpha**: the other 6 CIS forum-tracker plugins
-(Rutor, Toloka, Unionpeer, Tapochek, Free-Torrents, HD-Club) are
-structurally complete with fixture-based tests but have not been
-validated against live sites — that requires real account credentials
-and is the first thing community contributors will help with.
+What's still **alpha**: the other 3 CIS forum-tracker plugins
+(Rutor, Toloka, Tapochek) are structurally complete with fixture-based
+tests but have not been validated against live sites — that requires
+real account credentials and is the first thing community contributors
+will help with.
 
-Two of them, **Toloka** and **Unionpeer**, can log in but cannot
-*confirm* a login: no reliable signed-in marker has been identified for
-either, so Marauder saves the credential and reports it as unverified
-rather than showing a green tick it has not earned. Identifying that
-marker is a good first contribution — see
+One of them, **Toloka**, can log in but cannot *confirm* a login: no
+reliable signed-in marker has been identified for it, so Marauder saves
+the credential and reports it as unverified rather than showing a green
+tick it has not earned. Identifying that marker is a good first
+contribution — see
 [`docs/plugin-development.md`](docs/plugin-development.md).
+
+**Removed 2026-08-03** after every advertised domain was probed:
+**HD-Club** (the site shut down in 2017; `hdclub.org` now redirects to
+an unrelated file-hosting affiliate site), **Unionpeer** (all three
+domains parked or NXDOMAIN) and **Free-Torrents** (no DNS A record).
+Existing topics on those trackers will report a missing plugin.
 
 See [CHANGELOG.md](CHANGELOG.md) for the per-plugin status table.
 

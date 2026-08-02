@@ -269,7 +269,7 @@ func TestAuthorComment_RewritesToActiveDomain(t *testing.T) {
 
 	registry.SetDomainResolver(func(name string) registry.DomainConfig {
 		if name == "nnmclub" {
-			return registry.DomainConfig{Active: "nnmclub.me"}
+			return registry.DomainConfig{Active: "nnmclub.mirror", Custom: []string{"nnmclub.mirror"}}
 		}
 		return registry.DomainConfig{}
 	})
@@ -289,8 +289,8 @@ func TestAuthorComment_RewritesToActiveDomain(t *testing.T) {
 		t.Fatalf("expected at least 2 requests (page 1 + paginated), got %d: %v", len(rec.hosts), rec.hosts)
 	}
 	for i, h := range rec.hosts {
-		if h != "nnmclub.me" {
-			t.Errorf("request %d host = %q, want active domain nnmclub.me (pagination URLs must derive from the canonicalized host)", i, h)
+		if h != "nnmclub.mirror" {
+			t.Errorf("request %d host = %q, want active domain nnmclub.mirror (pagination URLs must derive from the canonicalized host)", i, h)
 		}
 	}
 }
