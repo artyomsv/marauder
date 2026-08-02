@@ -43,7 +43,22 @@ const (
 	userAgent     = "Marauder/0.3 (+https://marauder.cc)"
 )
 
-var knownDomains = []string{"kinozal.me", "kinozal.guru", "kinozal.tv"}
+// knownDomains are the hosts Marauder is willing to *fetch from*. Returned by
+// Domains(), which feeds the admin's active-domain picker, the automatic
+// rotation ring, and the boot-time re-validation that drops a persisted active
+// domain a plugin no longer lists. The dead kinozal.tv is deliberately absent:
+// listing it would let rotation land back on a host that cannot resolve, and
+// would preserve it across an upgrade for anyone who had selected it
+// explicitly.
+var knownDomains = []string{"kinozal.me", "kinozal.guru"}
+
+// parseDomains are the hosts a stored topic URL may legitimately carry. It is
+// knownDomains plus retired hosts, and is used by CanParse only — never to
+// build a request. kinozal.tv was the default for most of the project's life,
+// so dropping it outright would orphan every topic added before 2026-08-03;
+// keeping it here is safe because canonicalDetailsURL rebuilds every request
+// from effectiveDomain(), so a stored kinozal.tv URL is never fetched as-is.
+var parseDomains = []string{"kinozal.me", "kinozal.guru", "kinozal.tv"}
 
 // urlPattern is host-agnostic; CanParse gates the captured host against the
 // known + admin-configured domain allowlist (the SSRF barrier — see
@@ -86,7 +101,7 @@ func (p *plugin) effectiveDomain() string {
 
 func (p *plugin) CanParse(rawURL string) bool {
 	m := urlPattern.FindStringSubmatch(strings.TrimSpace(rawURL))
-	return m != nil && registry.DomainAllowed(pluginName, m[1], knownDomains)
+	return m != nil && registry.DomainAllowed(pluginName, m[1], parseDomains)
 }
 
 func (p *plugin) Parse(_ context.Context, rawURL string) (*domain.Topic, error) {

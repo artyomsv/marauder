@@ -35,6 +35,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   by pattern, and a release title that legitimately contains `" :: "` is
   left intact.
 
+- **A retired tracker domain could still be picked as a live one.** A
+  plugin's `Domains()` list does three jobs at once: it decides which topic
+  URLs parse, which hosts the admin can select, and which hosts automatic
+  rotation may rotate onto. Kinozal keeps the SERVFAIL'd `kinozal.tv` for
+  the first job, which silently made it eligible for the other two — so
+  rotation could land back on it, and an install with it explicitly
+  selected would keep it across the upgrade instead of falling back to the
+  working default. URL recognition is now a separate list from the
+  fetch/rotation candidates.
+
+- **NNM-Club's documented setup was obsolete.** `docs/trackers.md` told
+  users to start a `cfsolver` sidecar profile for it. That service was
+  superseded by the FlareSolverr clearance minter, and NNM-Club serves
+  Marauder the real page over an ordinary request anyway — verified
+  end-to-end against a live release topic with no credentials and no
+  solver. Its catalogue status moves from alpha to validated.
+
 - **Two dead mirrors removed from the domain allowlists, so automatic
   rotation can no longer strand a working install on them.** `nnmclub.me`
   is a parked domain, and `lostfilm.win` answers `200 OK` with a zero-byte

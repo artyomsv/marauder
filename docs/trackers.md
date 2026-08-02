@@ -222,16 +222,26 @@ delivery all confirmed.
 | **Account required** | No (anonymous) |
 | **Quality selection** | No |
 | **Episode filter** | No |
-| **Cloudflare** | **Yes** — requires the cfsolver sidecar |
+| **Cloudflare** | Site is behind Cloudflare, but no solver is needed in practice |
 | **URL format** | `https://nnmclub.to/forum/viewtopic.php?t=<id>` |
 
-phpBB tracker wrapped in Cloudflare. Works anonymously — account
-login is not supported because Cloudflare Turnstile blocks automated
-login flows. Marauder routes through the `cfsolver` sidecar profile
-(start it with `docker compose --profile cfsolver up -d`) which uses
-headless Chromium via chromedp to solve the Cloudflare interstitial
-and hand the cookies back. No credentials needed; do **not** add an
-NNM-Club account entry on `/accounts`.
+phpBB tracker behind Cloudflare. Works anonymously — account login is
+not supported because Cloudflare Turnstile blocks automated login
+flows. No credentials needed; do **not** add an NNM-Club account entry
+on `/accounts`.
+
+**No sidecar required.** Earlier revisions of this page told you to start
+a `cfsolver` profile. That is obsolete twice over: the `cfsolver` service
+was superseded by the FlareSolverr clearance minter, and NNM-Club does
+not currently serve an interstitial to Marauder at all — topic pages
+return the real HTML to an ordinary Go request. Cloudflare policy is
+dynamic and per-IP, so the clearance path remains available if your
+egress does get challenged, but it is not part of normal setup.
+
+**Validation status:** verified end-to-end against the live site on
+2026-08-03 with no credentials and no solver — `Check` resolved a real
+infohash and title from a public release topic, `Download` produced a
+magnet, and `ResolveMetadata` returned the title and poster.
 
 ---
 

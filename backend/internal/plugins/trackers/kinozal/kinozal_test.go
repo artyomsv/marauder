@@ -450,11 +450,36 @@ func TestEffectiveDomain_ResolverOverride(t *testing.T) {
 
 func TestDomains_CanonicalFirst(t *testing.T) {
 	p := &plugin{}
-	// kinozal.me leads: kinozal.tv stopped resolving (SERVFAIL) on 2026-08-03
-	// and was demoted from canonical to a trailing legacy entry, kept only so
-	// already-stored topic URLs continue to parse.
-	want := []string{"kinozal.me", "kinozal.guru", "kinozal.tv"}
+	// Only live hosts: kinozal.tv stopped resolving (SERVFAIL) on 2026-08-03
+	// and is deliberately absent here — see TestDomains_ExcludesDeadLegacyHost.
+	want := []string{"kinozal.me", "kinozal.guru"}
 	if !reflect.DeepEqual(p.Domains(), want) {
 		t.Errorf("Domains() = %v, want %v", p.Domains(), want)
+	}
+}
+
+// TestDomains_ExcludesDeadLegacyHost pins the split between the hosts we still
+// *recognise* and the hosts we are willing to *fetch from*.
+//
+// Domains() feeds three consumers: the admin's active-domain choice, the
+// automatic rotation ring in domains.Store.ReportFailure, and the boot-time
+// re-validation in domains.Store.Load that drops a persisted active domain the
+// plugin no longer lists. Listing the SERVFAIL'd kinozal.tv there would make
+// rotation able to pick it, and would let an install that had it explicitly
+// selected keep it across the upgrade instead of falling back to the default.
+//
+// CanParse is the one place it must still appear, so topic URLs stored while
+// kinozal.tv was the default keep resolving to this plugin. That is safe
+// because every request is rebuilt by canonicalDetailsURL from
+// effectiveDomain() — a stored kinozal.tv URL is never fetched as-is.
+func TestDomains_ExcludesDeadLegacyHost(t *testing.T) {
+	p := &plugin{}
+	for _, d := range p.Domains() {
+		if d == "kinozal.tv" {
+			t.Errorf("Domains() must not offer the dead kinozal.tv as a fetch/rotation candidate, got %v", p.Domains())
+		}
+	}
+	if !p.CanParse("https://kinozal.tv/details.php?id=12345") {
+		t.Error("a topic URL stored against the legacy kinozal.tv host must still parse")
 	}
 }
