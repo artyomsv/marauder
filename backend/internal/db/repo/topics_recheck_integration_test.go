@@ -27,12 +27,12 @@ func TestIntegration_QueueRecheck_BringsAnErroredTopicForward(t *testing.T) {
 	}
 
 	topics := NewTopics(pool)
-	ok, err := topics.QueueRecheck(ctx, topic.ID, userID)
+	out, err := topics.QueueRecheck(ctx, topic.ID, userID)
 	if err != nil {
 		t.Fatalf("QueueRecheck: %v", err)
 	}
-	if !ok {
-		t.Fatal("QueueRecheck reported no row updated")
+	if !out.Exists || !out.Queued {
+		t.Fatalf("QueueRecheck = %+v, want {Exists:true Queued:true}", out)
 	}
 
 	got := reload(t, pool, topic.ID)
@@ -93,8 +93,10 @@ WHERE id = $1`, topic.ID); err != nil {
 }
 
 // TestIntegration_QueueRecheck_IgnoresPausedTopics — DueForCheck skips paused
-// rows, so moving next_check_at would be a silent no-op. Reporting false lets
-// the handler answer 409 instead of a misleading 204.
+// rows, so moving next_check_at would be a silent no-op. Reporting
+// Exists=true, Queued=false lets the handler answer 409 instead of a
+// misleading 204 — and distinguishes this case from an unknown topic, which
+// is the entire point of the atomic outcome.
 func TestIntegration_QueueRecheck_IgnoresPausedTopics(t *testing.T) {
 	pool := integrationPool(t)
 	ctx := context.Background()
@@ -102,11 +104,14 @@ func TestIntegration_QueueRecheck_IgnoresPausedTopics(t *testing.T) {
 	topic := seedTopic(t, pool, userID, domain.TopicStatusPaused, nil)
 	before := reload(t, pool, topic.ID)
 
-	ok, err := NewTopics(pool).QueueRecheck(ctx, topic.ID, userID)
+	out, err := NewTopics(pool).QueueRecheck(ctx, topic.ID, userID)
 	if err != nil {
 		t.Fatalf("QueueRecheck: %v", err)
 	}
-	if ok {
+	if !out.Exists {
+		t.Fatal("QueueRecheck reported a paused topic as not existing")
+	}
+	if out.Queued {
 		t.Fatal("QueueRecheck reported an update for a paused topic")
 	}
 
@@ -127,12 +132,12 @@ func TestIntegration_QueueRecheck_IsScopedToTheOwner(t *testing.T) {
 	topic := seedTopic(t, pool, owner, domain.TopicStatusActive, nil)
 	before := reload(t, pool, topic.ID)
 
-	ok, err := NewTopics(pool).QueueRecheck(ctx, topic.ID, stranger)
+	out, err := NewTopics(pool).QueueRecheck(ctx, topic.ID, stranger)
 	if err != nil {
 		t.Fatalf("QueueRecheck: %v", err)
 	}
-	if ok {
-		t.Fatal("another user's topic was rechecked")
+	if out.Exists || out.Queued {
+		t.Fatalf("QueueRecheck = %+v, want {Exists:false Queued:false} for another user's topic", out)
 	}
 
 	got := reload(t, pool, topic.ID)
@@ -141,16 +146,18 @@ func TestIntegration_QueueRecheck_IsScopedToTheOwner(t *testing.T) {
 	}
 }
 
-// TestIntegration_QueueRecheck_UnknownTopic reports false rather than erroring,
-// so the handler can turn it into a 404.
+// TestIntegration_QueueRecheck_UnknownTopic reports Exists=false rather than
+// erroring, so the handler can turn it into a 404 — and, crucially, it is
+// distinguishable from a paused topic (Exists=true, Queued=false), which is
+// the whole reason RecheckOutcome carries both fields.
 func TestIntegration_QueueRecheck_UnknownTopic(t *testing.T) {
 	pool := integrationPool(t)
 	userID := seedUser(t, pool)
-	ok, err := NewTopics(pool).QueueRecheck(context.Background(), uuid.New(), userID)
+	out, err := NewTopics(pool).QueueRecheck(context.Background(), uuid.New(), userID)
 	if err != nil {
 		t.Fatalf("QueueRecheck: %v", err)
 	}
-	if ok {
-		t.Fatal("QueueRecheck reported an update for an unknown topic")
+	if out.Exists || out.Queued {
+		t.Fatalf("QueueRecheck = %+v, want {Exists:false Queued:false} for an unknown topic", out)
 	}
 }

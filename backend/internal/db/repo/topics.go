@@ -415,6 +415,19 @@ WHERE id = $1 AND user_id = $2`
 	return nil
 }
 
+// RecheckOutcome is the atomic result of QueueRecheck: whether the topic
+// exists for this user, and whether its next check was actually brought
+// forward. Both facts come from ONE statement, deliberately.
+//
+// Classifying by combining separate statements does not work here: the handler
+// needs to tell "paused" from "not found", and any interleaving of a pause or
+// resume between two queries makes that inference wrong. A single snapshot
+// cannot disagree with itself.
+type RecheckOutcome struct {
+	Exists bool
+	Queued bool
+}
+
 // QueueRecheck brings a topic's next check forward to now, so the scheduler
 // picks it up on its next tick. It is the non-destructive counterpart to
 // ResetCheckState: a topic parked on a backoff after a tracker outage can be
@@ -429,23 +442,30 @@ WHERE id = $1 AND user_id = $2`
 // optimistic-concurrency token, so disturbing it needlessly would widen the
 // window in which an in-flight check discards its own result.
 //
-// Paused topics are excluded because DueForCheck ignores them; moving their
-// next_check_at would be a silent no-op that the API would have to report as
+// Paused topics are not queued because DueForCheck ignores them; moving their
+// next_check_at would be a silent no-op the API would have to report as
 // success. Ownership is enforced by the statement, matching ResetCheckState.
 //
-// Returns whether a row was updated. False means the topic does not exist, is
-// not this user's, or is paused — the handler tells those apart.
-func (r *Topics) QueueRecheck(ctx context.Context, id, userID uuid.UUID) (bool, error) {
+// Exists and Queued are read from the same CTE snapshot, so there is no gap
+// between "does it exist" and "was it updated" for a concurrent pause/resume
+// to fall into — see the RecheckOutcome doc comment for why that matters.
+func (r *Topics) QueueRecheck(ctx context.Context, id, userID uuid.UUID) (RecheckOutcome, error) {
 	const q = `
-UPDATE topics SET
-    next_check_at = now(),
-    updated_at    = now()
-WHERE id = $1 AND user_id = $2 AND status <> 'paused'`
-	ct, err := r.pool.Exec(ctx, q, id, userID)
-	if err != nil {
-		return false, fmt.Errorf("topics: queue recheck: %w", err)
+WITH target AS (
+    SELECT id, status FROM topics WHERE id = $1 AND user_id = $2
+), updated AS (
+    UPDATE topics SET
+        next_check_at = now(),
+        updated_at    = now()
+    WHERE id = (SELECT id FROM target WHERE status <> 'paused')
+    RETURNING 1
+)
+SELECT EXISTS (SELECT 1 FROM target), EXISTS (SELECT 1 FROM updated)`
+	var out RecheckOutcome
+	if err := r.pool.QueryRow(ctx, q, id, userID).Scan(&out.Exists, &out.Queued); err != nil {
+		return RecheckOutcome{}, fmt.Errorf("topics: queue recheck: %w", err)
 	}
-	return ct.RowsAffected() > 0, nil
+	return out, nil
 }
 
 // Update edits a topic's user-editable fields (display name, client, notifier,

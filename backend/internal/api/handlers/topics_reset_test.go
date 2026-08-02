@@ -532,8 +532,8 @@ func (s *concurrentResetStore) ResetCheckState(_ context.Context, id, _ uuid.UUI
 	s.reset = append(s.reset, id)
 	return nil
 }
-func (s *concurrentResetStore) QueueRecheck(context.Context, uuid.UUID, uuid.UUID) (bool, error) {
-	return false, nil
+func (s *concurrentResetStore) QueueRecheck(context.Context, uuid.UUID, uuid.UUID) (repo.RecheckOutcome, error) {
+	return repo.RecheckOutcome{}, nil
 }
 
 func (s *concurrentResetStore) resetIDs() []uuid.UUID {

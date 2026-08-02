@@ -8,11 +8,11 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/artyomsv/marauder/backend/internal/domain"
+	"github.com/artyomsv/marauder/backend/internal/db/repo"
 )
 
 func TestRecheck_QueuesTheTopicAndReturns204(t *testing.T) {
-	store := &fakeTopicStore{recheckOK: true}
+	store := &fakeTopicStore{recheckOutcome: repo.RecheckOutcome{Exists: true, Queued: true}}
 	h := &Topics{Topics: store, BaseURL: "http://test"}
 
 	uid := uuid.New()
@@ -34,14 +34,11 @@ func TestRecheck_QueuesTheTopicAndReturns204(t *testing.T) {
 }
 
 // A paused topic must NOT be reported as success: the scheduler ignores paused
-// rows, so a 204 would promise a check that never happens. It must also not
-// retry the queue — the topic is genuinely paused, so a second QueueRecheck
-// call would just observe the same ineligible row again.
+// rows, so a 204 would promise a check that never happens. Exists=true,
+// Queued=false is the single-statement outcome for exactly this case — there
+// is no follow-up lookup or retry to assert on.
 func TestRecheck_PausedTopic_Returns409(t *testing.T) {
-	store := &fakeTopicStore{
-		recheckOK: false,
-		getByID:   &domain.Topic{ID: uuid.New(), Status: domain.TopicStatusPaused},
-	}
+	store := &fakeTopicStore{recheckOutcome: repo.RecheckOutcome{Exists: true, Queued: false}}
 	h := &Topics{Topics: store, BaseURL: "http://test"}
 
 	w := httptest.NewRecorder()
@@ -52,46 +49,15 @@ func TestRecheck_PausedTopic_Returns409(t *testing.T) {
 		t.Fatalf("status %d, want 409; body %s", w.Code, w.Body.String())
 	}
 	if len(store.recheckCalls) != 1 {
-		t.Fatalf("QueueRecheck called %d times, want 1 (must not retry a genuinely paused topic)", len(store.recheckCalls))
-	}
-}
-
-// TestRecheck_ResumedBetweenQueueAndLookup_Returns204 covers the TOCTOU race:
-// QueueRecheck's UPDATE matches nothing (topic was paused at that instant),
-// but by the time GetByID runs, the topic has been resumed by another
-// request. Reporting "paused" here would describe a state that no longer
-// holds and send the user to resume an already-active topic, so the handler
-// must retry the queue instead — and that retry must succeed (204), not 409.
-func TestRecheck_ResumedBetweenQueueAndLookup_Returns204(t *testing.T) {
-	store := &fakeTopicStore{
-		recheckResults: []bool{false, true},
-		getByID:        &domain.Topic{ID: uuid.New(), Status: domain.TopicStatusActive},
-	}
-	h := &Topics{Topics: store, BaseURL: "http://test"}
-
-	uid := uuid.New()
-	id := uuid.New()
-	w := httptest.NewRecorder()
-	req := withURLParam(authedReq(t, uid, nil), "id", id.String())
-	h.Recheck(w, req)
-
-	if w.Code != http.StatusNoContent {
-		t.Fatalf("status %d, want 204; body %s", w.Code, w.Body.String())
-	}
-	if len(store.recheckCalls) != 2 {
-		t.Fatalf("QueueRecheck called %d times, want 2 (initial + retry)", len(store.recheckCalls))
-	}
-	for i, call := range store.recheckCalls {
-		if call != [2]uuid.UUID{id, uid} {
-			t.Errorf("QueueRecheck call %d got %v, want {topicID, userID} = {%s, %s}", i, call, id, uid)
-		}
+		t.Fatalf("QueueRecheck called %d times, want 1", len(store.recheckCalls))
 	}
 }
 
 // Not found and not-yours are the same answer, so the response cannot be used
-// to probe for another user's topics.
+// to probe for another user's topics. Exists=false is the single-statement
+// outcome for both.
 func TestRecheck_UnknownTopic_Returns404(t *testing.T) {
-	store := &fakeTopicStore{recheckOK: false, getByID: nil}
+	store := &fakeTopicStore{recheckOutcome: repo.RecheckOutcome{Exists: false, Queued: false}}
 	h := &Topics{Topics: store, BaseURL: "http://test"}
 
 	w := httptest.NewRecorder()

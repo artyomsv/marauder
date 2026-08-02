@@ -37,7 +37,7 @@ type topicStore interface {
 	UpdateStatus(ctx context.Context, id, userID uuid.UUID, status domain.TopicStatus) error
 	Update(ctx context.Context, id, userID uuid.UUID, displayName string, clientID, notifierID *uuid.UUID, downloadDir, category string, replaceOnUpdate, replaceDeleteData bool, extra map[string]any) (*domain.Topic, error)
 	ResetCheckState(ctx context.Context, id, userID uuid.UUID) error
-	QueueRecheck(ctx context.Context, id, userID uuid.UUID) (bool, error)
+	QueueRecheck(ctx context.Context, id, userID uuid.UUID) (repo.RecheckOutcome, error)
 }
 
 // deliveriesStore is the consumer seam over *repo.Deliveries for the
@@ -547,6 +547,13 @@ func (h *Topics) setStatus(w http.ResponseWriter, r *http.Request, status domain
 //
 // Nothing but next_check_at changes, so the stale error stays on screen until
 // the check that follows actually says otherwise.
+//
+// The outcome is classified from repo.RecheckOutcome, a single statement's
+// result — not by combining QueueRecheck with a follow-up GetByID. Two
+// separate statements can each see a different database snapshot, so a
+// pause/resume landing between them makes any such inference wrong (a
+// resumed topic misreported as "paused", or a retry that misreports an
+// existing topic as 404). One snapshot cannot disagree with itself.
 func (h *Topics) Recheck(w http.ResponseWriter, r *http.Request) {
 	uid, perr := currentUserID(r)
 	if perr != nil {
@@ -558,44 +565,23 @@ func (h *Topics) Recheck(w http.ResponseWriter, r *http.Request) {
 		problem.Write(w, r, h.BaseURL, problem.ErrBadRequest("invalid id"))
 		return
 	}
-	queued, qerr := h.Topics.QueueRecheck(r.Context(), id, uid)
+	outcome, qerr := h.Topics.QueueRecheck(r.Context(), id, uid)
 	if qerr != nil {
 		problem.Write(w, r, h.BaseURL, problem.ErrInternal(qerr.Error()))
 		return
 	}
-	if queued {
+	switch {
+	case outcome.Queued:
 		w.WriteHeader(http.StatusNoContent)
-		return
-	}
-	// No row matched: the topic is paused, or it is not this user's. Only the
-	// rare failing path pays for the extra lookup, and it buys an honest
-	// answer — a 404 for a paused topic would be a lie, and a 204 would
-	// promise a check the scheduler is never going to run.
-	t, gerr := h.Topics.GetByID(r.Context(), id, &uid)
-	if gerr != nil || t == nil {
+	case !outcome.Exists:
+		// Unknown and not-this-user's are the same answer, so the response
+		// cannot be used to probe for another user's topics.
 		problem.Write(w, r, h.BaseURL, problem.ErrNotFound("topic not found"))
-		return
+	default:
+		// Exists but was not queued: it is paused. The scheduler ignores
+		// paused topics, so a 204 would promise a check that never runs.
+		problem.Write(w, r, h.BaseURL, problem.ErrConflict("topic is paused; resume it first"))
 	}
-	if t.Status != domain.TopicStatusPaused {
-		// It was ineligible when the UPDATE ran but is not paused now — it was
-		// resumed in between. Reporting "paused" here would describe a state
-		// that no longer holds and tell the user to resume an active topic, so
-		// retry the queue instead. Exactly once: the topic is eligible now, and
-		// a loop here would be a spin on a moving row.
-		requeued, rerr := h.Topics.QueueRecheck(r.Context(), id, uid)
-		if rerr != nil {
-			problem.Write(w, r, h.BaseURL, problem.ErrInternal(rerr.Error()))
-			return
-		}
-		if requeued {
-			w.WriteHeader(http.StatusNoContent)
-			return
-		}
-		// Still nothing: the row went away between the two statements.
-		problem.Write(w, r, h.BaseURL, problem.ErrNotFound("topic not found"))
-		return
-	}
-	problem.Write(w, r, h.BaseURL, problem.ErrConflict("topic is paused; resume it first"))
 }
 
 // resetFinishTimeout bounds the reset's two fail-closed steps once they have
