@@ -140,6 +140,51 @@ func TestLogin_Accepted_ReturnsNil(t *testing.T) {
 	}
 }
 
+// TestLogin_DoesNotReuseAnEstablishedSession is the regression test for a
+// false-green that survives the rest of this file's fixes.
+//
+// The session store keys jars by tracker:userID and hands the SAME jar back for
+// two hours, and the scheduler calls Login on every check — so a user with
+// working credentials always has a warm, authenticated jar. A credential
+// re-test or a password rotation would then POST the new (possibly wrong)
+// password onto that already-authenticated jar: the tracker renders the
+// signed-in page, no rejection marker matches, and Verify confirms a session
+// that the credential under test never established.
+//
+// Login must therefore validate against a fresh jar, so the cookies it sends
+// are only ones this attempt earned.
+func TestLogin_DoesNotReuseAnEstablishedSession(t *testing.T) {
+	var loginCookies []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			loginCookies = append(loginCookies, r.Header.Get("Cookie"))
+			http.SetCookie(w, &http.Cookie{Name: "dle_user_id", Value: "42", Path: "/"})
+		}
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(loggedInHTML))
+	}))
+	t.Cleanup(srv.Close)
+	rec := &hostRecordingRewrite{target: strings.TrimPrefix(srv.URL, "http://")}
+	p := &plugin{sessions: forumcommon.New(), domain: defaultDomain, transport: rec}
+
+	creds := testCreds()
+	if err := p.Login(context.Background(), creds); err != nil {
+		t.Fatalf("first Login: %v", err)
+	}
+	if err := p.Login(context.Background(), creds); err != nil {
+		t.Fatalf("second Login: %v", err)
+	}
+
+	if len(loginCookies) != 2 {
+		t.Fatalf("expected 2 login POSTs, got %d", len(loginCookies))
+	}
+	if loginCookies[1] != "" {
+		t.Errorf("second Login carried cookies from the first session (%q); "+
+			"credential validation must start from a fresh jar or Verify is not independent",
+			loginCookies[1])
+	}
+}
+
 // TestVerify_AnonymousPage_ReturnsFalse pins the half of Verify that is
 // measured rather than assumed: the live anonymous page carries login_name
 // twice and action=logout zero times (captured 2026-08-02).
@@ -265,6 +310,62 @@ func TestCheck_HashChangesWhenTorrentReuploaded(t *testing.T) {
 	}
 }
 
+// TestCheck_NoTorrentBlocks_ReturnsError covers the remaining failure path:
+// a page that parses but carries no torrent block at all (a deleted topic, or
+// selector drift after a redesign) must error rather than report an empty
+// change token, which would otherwise read as "nothing new" forever.
+func TestCheck_NoTorrentBlocks_ReturnsError(t *testing.T) {
+	p := newTestPlugin(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(`<html><body><h1><span id="news-title">Gone</span></h1></body></html>`))
+	})
+	_, err := p.Check(context.Background(), &domain.Topic{URL: "https://tr.anidub.com/anime_tv/x/1-a.html"}, nil)
+	if err == nil {
+		t.Fatal("Check must fail when the page carries no torrent block")
+	}
+}
+
+// TestResolveMetadata_RelativePoster exercises absoluteURL's relative branch —
+// the site serves posters from a CDN today, but also emits site-relative
+// /uploads/... paths, and a relative src stored raw would not render.
+func TestResolveMetadata_RelativePoster(t *testing.T) {
+	body := strings.Replace(realTopicHTML,
+		`https://static2.statics.life/tracker/poster/6fe93608f3.jpg`,
+		`/uploads/posts/local.jpg`, 1)
+	if body == realTopicHTML {
+		t.Fatal("fixture guard: poster substitution did not apply")
+	}
+	p := newTestPlugin(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(body))
+	})
+	meta, err := p.ResolveMetadata(context.Background(), "https://tr.anidub.com/anime_tv/x/1-a.html", nil)
+	if err != nil {
+		t.Fatalf("ResolveMetadata: %v", err)
+	}
+	if want := "https://tr.anidub.com/uploads/posts/local.jpg"; meta.ImageURL != want {
+		t.Errorf("ImageURL = %q, want %q", meta.ImageURL, want)
+	}
+}
+
+// TestFetch_RefusesOffSiteHost pins the dial-site SSRF guard: fetch takes an
+// arbitrary string, so the allowlist must hold even when a caller forgets to
+// route the URL through canonicalURL.
+func TestFetch_RefusesOffSiteHost(t *testing.T) {
+	p := newTestPlugin(t, func(w http.ResponseWriter, r *http.Request) {
+		t.Error("off-site host must never be dialed")
+		w.WriteHeader(200)
+	})
+	for _, target := range []string{
+		"http://169.254.169.254/latest/meta-data/",
+		"file:///etc/passwd",
+	} {
+		if _, err := p.fetch(context.Background(), target, nil); err == nil {
+			t.Errorf("fetch(%q) must be refused", target)
+		}
+	}
+}
+
 // TestResolveMetadata_TitleAndOwnPoster covers the reported symptom: the
 // AddTopic preview came back empty because the plugin had no WithMetadata.
 func TestResolveMetadata_TitleAndOwnPoster(t *testing.T) {
@@ -298,11 +399,17 @@ type hostRecordingRewrite struct {
 	hosts  []string
 }
 
+// RoundTrip clones before rewriting. http.RoundTripper's contract forbids
+// modifying the request, and mutating req.URL in place breaks cookie handling
+// in particular: http.Client calls Jar.SetCookies with the same URL object
+// after RoundTrip returns, so an in-place rewrite files the tracker's cookies
+// under the test server's host and the jar silently never replays them.
 func (h *hostRecordingRewrite) RoundTrip(req *http.Request) (*http.Response, error) {
 	h.hosts = append(h.hosts, req.URL.Host)
-	req.URL.Scheme = "http"
-	req.URL.Host = h.target
-	return http.DefaultTransport.RoundTrip(req)
+	out := req.Clone(req.Context())
+	out.URL.Scheme = "http"
+	out.URL.Host = h.target
+	return http.DefaultTransport.RoundTrip(out)
 }
 
 // fixtureAnidubHTML used to carry a `data-hash` attribute that the live site
@@ -323,9 +430,14 @@ func TestCheck_RewritesToActiveDomain(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
+	// Active must also appear in Custom: PUT /system/trackers/{name}/domains
+	// rejects an active_domain that is not a known or custom domain (422), and
+	// domains.Store.Load drops one that no longer qualifies. An Active that is
+	// absent from both cannot exist in production, and fetch's allowlist
+	// (known ∪ custom) correctly refuses it.
 	registry.SetDomainResolver(func(name string) registry.DomainConfig {
 		if name == "anidub" {
-			return registry.DomainConfig{Active: "anidub.mirror"}
+			return registry.DomainConfig{Active: "anidub.mirror", Custom: []string{"anidub.mirror"}}
 		}
 		return registry.DomainConfig{}
 	})

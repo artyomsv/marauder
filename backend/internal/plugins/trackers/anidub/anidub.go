@@ -38,6 +38,14 @@ const (
 	displayName   = "Anidub"
 	defaultDomain = "tr.anidub.com"
 	userAgent     = "Marauder/0.4 (+https://marauder.cc)"
+
+	// bodyReadLimit caps every response the plugin reads.
+	bodyReadLimit = 4 << 20
+	// maxTorrentBlocks bounds how many matches the fingerprint accumulates.
+	// Real pages carry one block per quality — a handful. The cap keeps a
+	// hostile or broken page from turning a 4 MB body into a large slice of
+	// substrings on every check, across every scheduler worker.
+	maxTorrentBlocks = 512
 )
 
 // urlPattern is host-agnostic; CanParse gates the captured host against the
@@ -122,7 +130,16 @@ func (p *plugin) Login(ctx context.Context, creds *domain.TrackerCredential) err
 	if creds == nil || creds.Username == "" {
 		return errors.New("anidub credentials are required")
 	}
-	sess := p.sessions.GetOrCreate(forumcommon.SessionKey(pluginName, creds.UserID.String()), userAgent)
+	// Validate against a FRESH jar. The store hands the same jar back for two
+	// hours and the scheduler calls Login on every check, so a user with
+	// working credentials always has a warm, authenticated session. Posting a
+	// new password onto that jar proves nothing: the tracker renders the
+	// signed-in page, no rejection marker matches, and Verify then confirms a
+	// session this attempt never established — a false green on exactly the
+	// paths that exist to catch a bad password (credential test, rotation).
+	key := forumcommon.SessionKey(pluginName, creds.UserID.String())
+	p.sessions.Invalidate(key)
+	sess := p.sessions.GetOrCreate(key, userAgent)
 	if p.transport != nil {
 		sess.Client.Transport = p.transport
 	}
@@ -142,7 +159,10 @@ func (p *plugin) Login(ctx context.Context, creds *domain.TrackerCredential) err
 		return fmt.Errorf("anidub login: %w", err)
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+	// Read the whole page, not a 64 KB prefix: loginRejected scans this body,
+	// so a rejection banner past the cut-off would be missed and the login
+	// would be reported as successful. Same ceiling as fetch.
+	body, err := io.ReadAll(io.LimitReader(resp.Body, bodyReadLimit))
 	if err != nil {
 		return fmt.Errorf("anidub login: read body: %w", err)
 	}
@@ -290,13 +310,13 @@ func (p *plugin) absoluteURL(ref string) string {
 // filename + size covers exactly the re-upload case that means "new release".
 func pageFingerprint(body []byte) string {
 	var parts []string
-	for _, m := range blockIDRe.FindAllSubmatch(body, -1) {
+	for _, m := range blockIDRe.FindAllSubmatch(body, maxTorrentBlocks) {
 		parts = append(parts, "id="+string(m[1]))
 	}
-	for _, m := range fileNameRe.FindAllSubmatch(body, -1) {
+	for _, m := range fileNameRe.FindAllSubmatch(body, maxTorrentBlocks) {
 		parts = append(parts, "name="+string(m[1]))
 	}
-	for _, m := range sizeRe.FindAllSubmatch(body, -1) {
+	for _, m := range sizeRe.FindAllSubmatch(body, maxTorrentBlocks) {
 		parts = append(parts, "size="+string(m[1]))
 	}
 	if len(parts) == 0 {
@@ -353,7 +373,23 @@ func (p *plugin) fetch(ctx context.Context, target string, creds *domain.Tracker
 	if p.transport != nil {
 		sess.Client.Transport = p.transport
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+	// SSRF guard: `target` originates from a user-supplied topic URL. Callers
+	// launder it through canonicalURL, but the barrier belongs at the dial
+	// site — fetch takes an arbitrary string, and ResolveMetadata is reachable
+	// straight from a query parameter. Mirrors nnmclub.fetch; the request is
+	// built from the parsed, host-checked URL so what is dialed is what passed
+	// the guard.
+	u, perr := url.Parse(strings.TrimSpace(target))
+	if perr != nil {
+		return nil, fmt.Errorf("anidub: invalid URL: %w", perr)
+	}
+	if u.Scheme != "https" && u.Scheme != "http" {
+		return nil, fmt.Errorf("anidub: refusing URL scheme %q", u.Scheme)
+	}
+	if !registry.DomainAllowed(pluginName, u.Hostname(), knownDomains) {
+		return nil, fmt.Errorf("anidub: refusing to fetch off-site host %q", u.Hostname())
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -366,5 +402,5 @@ func (p *plugin) fetch(ctx context.Context, target string, creds *domain.Tracker
 	if resp.StatusCode != 200 {
 		return nil, fmt.Errorf("anidub GET %s -> %d", target, resp.StatusCode)
 	}
-	return io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	return io.ReadAll(io.LimitReader(resp.Body, bodyReadLimit))
 }
