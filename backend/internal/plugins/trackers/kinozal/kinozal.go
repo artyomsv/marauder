@@ -37,8 +37,9 @@ const (
 	// defaultDomain is kinozal.me, not the original kinozal.tv: as of
 	// 2026-08-03 kinozal.tv no longer resolves — both 8.8.8.8 and 1.1.1.1
 	// return SERVFAIL (broken authoritative NS), so a fresh install starting
-	// there could never reach the tracker. kinozal.tv stays in knownDomains
-	// so topic URLs already stored against it still parse.
+	// there could never reach the tracker. kinozal.tv survives in parseDomains
+	// (not knownDomains) so topic URLs already stored against it still parse
+	// without the dead host becoming a fetch or rotation candidate again.
 	defaultDomain = "kinozal.me"
 	userAgent     = "Marauder/0.3 (+https://marauder.cc)"
 )
