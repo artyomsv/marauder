@@ -89,6 +89,11 @@ type fakeTopicStore struct {
 	// Captured ResetCheckState arguments.
 	resetCalls [][2]uuid.UUID
 	resetErr   error
+
+	// Captured QueueRecheck arguments.
+	recheckCalls   [][2]uuid.UUID
+	recheckOutcome repo.RecheckOutcome
+	recheckErr     error
 }
 
 func (s *fakeTopicStore) Create(_ context.Context, t *domain.Topic) (*domain.Topic, error) {
@@ -118,6 +123,13 @@ func (s *fakeTopicStore) ResetCheckState(ctx context.Context, id, userID uuid.UU
 	}
 	s.resetCalls = append(s.resetCalls, [2]uuid.UUID{id, userID})
 	return s.resetErr
+}
+
+// QueueRecheck records (topicID, userID) per call so tests can assert the
+// handler passed the right topic for the right owner.
+func (s *fakeTopicStore) QueueRecheck(_ context.Context, id, userID uuid.UUID) (repo.RecheckOutcome, error) {
+	s.recheckCalls = append(s.recheckCalls, [2]uuid.UUID{id, userID})
+	return s.recheckOutcome, s.recheckErr
 }
 func (s *fakeTopicStore) Update(_ context.Context, _, _ uuid.UUID, displayName string, clientID, notifierID *uuid.UUID, downloadDir, category string, replaceOnUpdate, replaceDeleteData bool, extra map[string]any) (*domain.Topic, error) {
 	s.updateCalled = true

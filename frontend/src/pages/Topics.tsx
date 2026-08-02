@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { usePrefs } from "@/lib/prefs";
 import { QK } from "@/lib/queryKeys";
+import { mapWithConcurrency } from "@/lib/concurrency";
 import { AddTopicCard } from "@/components/topics/AddTopicCard";
 import { EditTopicCard } from "@/components/topics/EditTopicCard";
 import { ResetTopicCard } from "@/components/topics/ResetTopicCard";
@@ -26,6 +27,10 @@ export { AddTopicCard } from "@/components/topics/AddTopicCard";
 type TopicsList = { topics: Topic[] | null };
 type ClientsList = { clients: ClientRef[] | null };
 interface NotifiersList { notifiers: NotifierRef[] | null }
+
+// Matches RESET_CONCURRENCY in ResetTopicCard — a bulk action should not
+// fire one request per selected topic simultaneously.
+const RECHECK_CONCURRENCY = 4;
 
 export function TopicsPage() {
   const qc = useQueryClient();
@@ -71,6 +76,32 @@ export function TopicsPage() {
     mutationFn: (id: string) => api.post<void>(`/topics/${id}/resume`),
     onSuccess: () => qc.invalidateQueries({ queryKey: QK.topics }),
   });
+  const recheck = useMutation({
+    mutationFn: (id: string) => api.post<void>(`/topics/${id}/recheck`),
+    onSuccess: (_data, id) => {
+      // Optimistic: the check is only *queued* here, the scheduler starts it
+      // within its next tick — but that's a 1-minute-default wait with no
+      // other visible feedback, so light the existing "Checking…" chip right
+      // away. If no check actually follows (e.g. the request raced a pause),
+      // useCheckStatus's own CHECKING_STALE_MS timer reverts it to idle.
+      useCheckStatus.getState().setChecking(id);
+      qc.invalidateQueries({ queryKey: QK.topics });
+    },
+  });
+
+  const bulkRecheck = async (ids: string[]) => {
+    await mapWithConcurrency(ids, RECHECK_CONCURRENCY, async (id) => {
+      try {
+        await api.post<void>(`/topics/${id}/recheck`);
+        useCheckStatus.getState().setChecking(id);
+      } catch {
+        // Best-effort, matching the row action: one failed topic must not
+        // stop the rest of the bulk fan-out.
+      }
+    });
+    await qc.invalidateQueries({ queryKey: QK.topics });
+    setSelected(new Set());
+  };
 
   const topics = data?.topics ?? [];
   const allSelected = topics.length > 0 && selected.size === topics.length;
@@ -167,6 +198,7 @@ export function TopicsPage() {
           count={selected.size}
           onPause={() => bulk("pause")}
           onResume={() => bulk("resume")}
+          onRecheck={() => void bulkRecheck([...selected])}
           onReset={() => setResetting(topics.filter((t) => selected.has(t.ID)))}
           onDelete={() => bulk("delete")}
           onClear={() => setSelected(new Set())}
@@ -205,6 +237,7 @@ export function TopicsPage() {
                   actions={{
                     onToggleSelect: () => toggleOne(t.ID),
                     onEdit: () => setEditing(t),
+                    onRecheck: () => recheck.mutate(t.ID),
                     onReset: () => setResetting([t]),
                     onDelete: () => del.mutate(t.ID),
                   }}

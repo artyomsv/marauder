@@ -37,6 +37,7 @@ type topicStore interface {
 	UpdateStatus(ctx context.Context, id, userID uuid.UUID, status domain.TopicStatus) error
 	Update(ctx context.Context, id, userID uuid.UUID, displayName string, clientID, notifierID *uuid.UUID, downloadDir, category string, replaceOnUpdate, replaceDeleteData bool, extra map[string]any) (*domain.Topic, error)
 	ResetCheckState(ctx context.Context, id, userID uuid.UUID) error
+	QueueRecheck(ctx context.Context, id, userID uuid.UUID) (repo.RecheckOutcome, error)
 }
 
 // deliveriesStore is the consumer seam over *repo.Deliveries for the
@@ -534,6 +535,53 @@ func (h *Topics) setStatus(w http.ResponseWriter, r *http.Request, status domain
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// Recheck handles POST /topics/{id}/recheck: bring the topic's next scheduled
+// check forward to now.
+//
+// This exists because a failing topic backs off up to six hours, which is
+// correct while a tracker is down and wrong the moment the operator fixes the
+// cause. Reset is the only other way to force a check and it is destructive —
+// it removes delivered torrents from the client.
+//
+// Nothing but next_check_at changes, so the stale error stays on screen until
+// the check that follows actually says otherwise.
+//
+// The outcome is classified from repo.RecheckOutcome, a single statement's
+// result — not by combining QueueRecheck with a follow-up GetByID. Two
+// separate statements can each see a different database snapshot, so a
+// pause/resume landing between them makes any such inference wrong (a
+// resumed topic misreported as "paused", or a retry that misreports an
+// existing topic as 404). One snapshot cannot disagree with itself.
+func (h *Topics) Recheck(w http.ResponseWriter, r *http.Request) {
+	uid, perr := currentUserID(r)
+	if perr != nil {
+		problem.Write(w, r, h.BaseURL, perr)
+		return
+	}
+	id, ierr := uuid.Parse(chi.URLParam(r, "id"))
+	if ierr != nil {
+		problem.Write(w, r, h.BaseURL, problem.ErrBadRequest("invalid id"))
+		return
+	}
+	outcome, qerr := h.Topics.QueueRecheck(r.Context(), id, uid)
+	if qerr != nil {
+		problem.Write(w, r, h.BaseURL, problem.ErrInternal(qerr.Error()))
+		return
+	}
+	switch {
+	case outcome.Queued:
+		w.WriteHeader(http.StatusNoContent)
+	case !outcome.Exists:
+		// Unknown and not-this-user's are the same answer, so the response
+		// cannot be used to probe for another user's topics.
+		problem.Write(w, r, h.BaseURL, problem.ErrNotFound("topic not found"))
+	default:
+		// Exists but was not queued: it is paused. The scheduler ignores
+		// paused topics, so a 204 would promise a check that never runs.
+		problem.Write(w, r, h.BaseURL, problem.ErrConflict("topic is paused; resume it first"))
+	}
 }
 
 // resetFinishTimeout bounds the reset's two fail-closed steps once they have

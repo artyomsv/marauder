@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Check now** — retry a topic immediately instead of waiting out its backoff.
+  A failing topic can back off for up to six hours, which is right while a
+  tracker is down and wrong once you have fixed the cause; previously the only
+  way to force a check was Reset, which removes the downloaded torrents from
+  your client. Available per row and over a multi-select. Not offered for
+  paused topics, since those are not checked at all.
+
 ## [1.17.0] - 2026-08-01
 
 ### Fixed

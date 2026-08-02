@@ -44,11 +44,18 @@ export function applyEvent(qc: QueryClient, ev: WireEvent): void {
     case "check.started":
       if (topicId) useCheckStatus.getState().setChecking(topicId);
       return;
+    // A finished check moves last_checked_at (and, on failure, last_error), so
+    // the list has to refetch or the row keeps showing the previous check's
+    // "checked N min ago" indefinitely. Without this the Check now action looks
+    // like it did nothing: the work happens, the timestamp on screen does not
+    // move, and the user clicks again.
     case "check.completed":
       if (topicId) useCheckStatus.getState().setChecked(topicId, ev.data?.next_check_at as string | undefined);
+      qc.invalidateQueries({ queryKey: QK.topics });
       return;
     case "check.failed":
       if (topicId) useCheckStatus.getState().setFailed(topicId, ev.body);
+      qc.invalidateQueries({ queryKey: QK.topics });
       return;
     case "topic.reset":
       if (topicId) {

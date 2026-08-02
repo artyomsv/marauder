@@ -236,11 +236,20 @@ const en: Record<string, string> = {
   "topics.bulk.pause": "Pause",
   "topics.bulk.resume": "Resume",
   "topics.bulk.reset": "Reset",
+  "topics.bulk.recheck": "Check now",
   "topics.bulk.delete": "Delete",
   "topics.bulk.confirmDelete": "Delete {count}?",
   "topics.bulk.yes": "Yes",
   "topics.bulk.no": "No",
   "topics.bulk.clear": "Clear",
+
+  // Row action: force an immediate check outside the topic's own schedule
+  "topics.recheck": "Check now",
+  "topics.actions.menu": "Topic actions",
+  "topics.actions.edit": "Edit",
+  "topics.actions.reset": "Reset",
+  "topics.actions.delete": "Delete",
+  "topics.actions.confirmDelete": "Confirm delete",
 
   // Reset topic (discard deliveries/progress/error state, re-check from scratch)
   "topics.reset.title": "Reset {name}",

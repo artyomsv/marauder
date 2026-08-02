@@ -415,6 +415,76 @@ WHERE id = $1 AND user_id = $2`
 	return nil
 }
 
+// RecheckOutcome is the atomic result of QueueRecheck: whether the topic
+// exists for this user, and whether its next check was actually brought
+// forward. Both facts come from ONE statement, deliberately.
+//
+// Classifying by combining separate statements does not work here: the handler
+// needs to tell "paused" from "not found", and any interleaving of a pause or
+// resume between two queries makes that inference wrong. A single snapshot
+// cannot disagree with itself.
+type RecheckOutcome struct {
+	Exists bool
+	Queued bool
+}
+
+// QueueRecheck brings a topic's next check forward to now, so the scheduler
+// picks it up on its next tick. It is the non-destructive counterpart to
+// ResetCheckState: a topic parked on a backoff after a tracker outage can be
+// retried the moment the cause is fixed, without removing anything from the
+// download client.
+//
+// It writes next_check_at and NOTHING else. status, last_error and
+// last_error_code belong to the scheduler, which clears them on the next
+// successful check — reporting the topic healthy before anything has verified
+// that would be a lie. last_checked_at is left alone too: it has not checked
+// anything yet, and it is half of the (last_checked_at, next_check_at)
+// optimistic-concurrency token, so disturbing it needlessly would widen the
+// window in which an in-flight check discards its own result.
+//
+// Paused topics are not queued because DueForCheck ignores them; moving their
+// next_check_at would be a silent no-op the API would have to report as
+// success. Ownership is enforced by the statement, matching ResetCheckState.
+//
+// Exists and Queued are read from the same CTE snapshot, so there is no gap
+// between "does it exist" and "was it updated" for a concurrent pause/resume
+// to fall into — see the RecheckOutcome doc comment for why that matters.
+func (r *Topics) QueueRecheck(ctx context.Context, id, userID uuid.UUID) (RecheckOutcome, error) {
+	// The eligibility predicate (status <> 'paused') MUST live in the UPDATE's
+	// own WHERE clause, not in the target CTE. Under READ COMMITTED, Postgres
+	// re-evaluates an UPDATE's own WHERE against the newest committed row
+	// version after locking it, so a pause committed between the statement
+	// snapshot and the update is still honoured. A status tested inside a CTE
+	// is frozen at the snapshot, which would let a concurrent pause slip
+	// through and return 204 — promising a check DueForCheck then ignores.
+	//
+	// target therefore tests only existence and ownership, which is what the
+	// caller needs to tell "paused" (409) from "not found" (404).
+	//
+	// The eligibility set deliberately mirrors DueForCheck's WHERE clause
+	// (status IN ('active', 'error')) rather than the logically-equivalent
+	// status <> 'paused' — today's two other statuses make them the same set,
+	// but a future third status would be silently queued here and silently
+	// ignored by DueForCheck, reintroducing the "204 promising a check that
+	// never runs" failure this endpoint exists to avoid. Keep the two in step.
+	const q = `
+WITH target AS (
+    SELECT 1 FROM topics WHERE id = $1 AND user_id = $2
+), updated AS (
+    UPDATE topics SET
+        next_check_at = now(),
+        updated_at    = now()
+    WHERE id = $1 AND user_id = $2 AND status IN ('active', 'error')
+    RETURNING 1
+)
+SELECT EXISTS (SELECT 1 FROM target), EXISTS (SELECT 1 FROM updated)`
+	var out RecheckOutcome
+	if err := r.pool.QueryRow(ctx, q, id, userID).Scan(&out.Exists, &out.Queued); err != nil {
+		return RecheckOutcome{}, fmt.Errorf("topics: queue recheck: %w", err)
+	}
+	return out, nil
+}
+
 // Update edits a topic's user-editable fields (display name, client, notifier,
 // download dir, category, and the capability Extra map). It does NOT
 // touch url/tracker/status/hash/scheduling. Returns ErrNotFound when the
