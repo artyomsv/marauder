@@ -450,14 +450,24 @@ type RecheckOutcome struct {
 // between "does it exist" and "was it updated" for a concurrent pause/resume
 // to fall into — see the RecheckOutcome doc comment for why that matters.
 func (r *Topics) QueueRecheck(ctx context.Context, id, userID uuid.UUID) (RecheckOutcome, error) {
+	// The eligibility predicate (status <> 'paused') MUST live in the UPDATE's
+	// own WHERE clause, not in the target CTE. Under READ COMMITTED, Postgres
+	// re-evaluates an UPDATE's own WHERE against the newest committed row
+	// version after locking it, so a pause committed between the statement
+	// snapshot and the update is still honoured. A status tested inside a CTE
+	// is frozen at the snapshot, which would let a concurrent pause slip
+	// through and return 204 — promising a check DueForCheck then ignores.
+	//
+	// target therefore tests only existence and ownership, which is what the
+	// caller needs to tell "paused" (409) from "not found" (404).
 	const q = `
 WITH target AS (
-    SELECT id, status FROM topics WHERE id = $1 AND user_id = $2
+    SELECT 1 FROM topics WHERE id = $1 AND user_id = $2
 ), updated AS (
     UPDATE topics SET
         next_check_at = now(),
         updated_at    = now()
-    WHERE id = (SELECT id FROM target WHERE status <> 'paused')
+    WHERE id = $1 AND user_id = $2 AND status <> 'paused'
     RETURNING 1
 )
 SELECT EXISTS (SELECT 1 FROM target), EXISTS (SELECT 1 FROM updated)`
