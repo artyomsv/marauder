@@ -220,10 +220,9 @@ func TestCredentialsTest_JSONBody(t *testing.T) {
 		name         string
 		tracker      string
 		wantVerified bool
-		wantDetail   bool
 	}{
 		{name: "verified plugin reports verified:true", tracker: "fakesession", wantVerified: true},
-		{name: "unverifiable plugin reports verified:false with a detail", tracker: "fakeunverifiable", wantVerified: false, wantDetail: true},
+		{name: "unverifiable plugin reports verified:false", tracker: "fakeunverifiable", wantVerified: false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -244,25 +243,29 @@ func TestCredentialsTest_JSONBody(t *testing.T) {
 			if w.Code != http.StatusOK {
 				t.Fatalf("status %d, want 200; body %s", w.Code, w.Body.String())
 			}
-			var got struct {
-				OK       bool   `json:"ok"`
-				Verified bool   `json:"verified"`
-				Detail   string `json:"detail"`
-			}
+			var got map[string]any
 			if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
 				t.Fatalf("decode body %s: %v", w.Body.String(), err)
 			}
-			if !got.OK {
-				t.Errorf("ok = false, want true (the sign-in itself did not fail)")
+			if got["ok"] != true {
+				t.Errorf("ok = %v, want true (the sign-in itself did not fail)", got["ok"])
 			}
-			if got.Verified != tt.wantVerified {
-				t.Errorf("verified = %v, want %v", got.Verified, tt.wantVerified)
+			// Read the key directly rather than through a typed struct: the
+			// whole point is that `verified` must be PRESENT and false, not
+			// absent. A struct field would decode both the same way.
+			verified, present := got["verified"]
+			if !present {
+				t.Fatalf("verified key absent from %s; the UI reads absence as "+
+					"'no round-trip happened' and would render success", w.Body.String())
 			}
-			if tt.wantDetail && got.Detail == "" {
-				t.Error("an unverified result must carry a detail explaining why")
+			if verified != tt.wantVerified {
+				t.Errorf("verified = %v, want %v", verified, tt.wantVerified)
 			}
-			if !tt.wantDetail && got.Detail != "" {
-				t.Errorf("detail = %q, want empty on a verified result", got.Detail)
+			// No server-supplied prose: the frontend owns this copy so it can
+			// localise it.
+			if _, hasDetail := got["detail"]; hasDetail {
+				t.Errorf("response carries a detail string (%v); the localised "+
+					"frontend string must not be overridden by English from the server", got["detail"])
 			}
 		})
 	}

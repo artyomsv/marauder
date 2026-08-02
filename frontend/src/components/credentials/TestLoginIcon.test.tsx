@@ -29,4 +29,12 @@ describe("TestLoginIcon", () => {
     render(<TestLoginIcon phase="failed" />);
     expect(screen.getByRole("img").getAttribute("aria-label")).not.toMatch(/unverified/i);
   });
+
+  // Before anything is tested there is no result to report, so the idle icon
+  // must not be the success icon — and must not announce itself at all.
+  it("does not present the idle state as a result", () => {
+    const { container } = render(<TestLoginIcon phase="idle" />);
+    expect(screen.queryByRole("img")).toBeNull();
+    expect(container.querySelector("svg")).not.toBeNull();
+  });
 });

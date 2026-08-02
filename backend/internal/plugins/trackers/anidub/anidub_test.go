@@ -2,6 +2,7 @@ package anidub
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -310,6 +311,103 @@ func TestCheck_HashChangesWhenTorrentReuploaded(t *testing.T) {
 	}
 }
 
+// TestVerify_UnrecognisedPage_ReportsUnsupported is the fail-closed inversion.
+//
+// Only one half of the marker pair is measured: an anonymous page carries
+// login_name and no logout link. That a SIGNED-IN page carries action=logout is
+// DLE convention, not something observed against a real account. Treating the
+// marker's absence as proof of rejection turns that unconfirmed assumption into
+// a hard 422 that refuses to store the credential — so if the assumption is
+// wrong (JS-injected marker, a different mobile template, an escaped attribute)
+// a user with perfectly good credentials cannot add the account at all, and is
+// told the credentials are probably wrong.
+//
+// A page matching neither marker is an unrecognised shape, not a rejection.
+// Say so with the sentinel this branch introduced.
+func TestVerify_UnrecognisedPage_ReportsUnsupported(t *testing.T) {
+	p := newTestPlugin(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(`<html><body><div>something else entirely</div></body></html>`))
+	})
+	ok, err := p.Verify(context.Background(), testCreds())
+	if !errors.Is(err, registry.ErrVerifyUnsupported) {
+		t.Fatalf("err = %v, want ErrVerifyUnsupported for a page matching neither marker", err)
+	}
+	if ok {
+		t.Error("ok must be false alongside the sentinel")
+	}
+}
+
+// TestCheck_IgnoresAnchorOnlyTorrentReferences pins the block-id anchoring.
+// DLE templates reference the block id from in-page anchors and inline JS, so
+// an unanchored torrent_\d+_info match can find "blocks" on a page that has
+// none — letting the non-empty-fingerprint guard pass for a topic with no
+// torrent at all.
+func TestCheck_IgnoresAnchorOnlyTorrentReferences(t *testing.T) {
+	p := newTestPlugin(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(`<html><body>
+<h1><span id="news-title">Gone</span></h1>
+<a href="#torrent_41936_info">jump</a>
+<script>document.getElementById('torrent_41936_info').hide()</script>
+</body></html>`))
+	})
+	if _, err := p.Check(context.Background(), &domain.Topic{URL: "https://tr.anidub.com/anime_tv/x/1-a.html"}, nil); err == nil {
+		t.Error("anchor and script references are not torrent blocks; Check must fail")
+	}
+}
+
+// TestFingerprintInput_IsReadable pins the string the change token digests,
+// so the golden hash in the e2e test is reviewable instead of self-confirming:
+// a reader can judge this by eye, and the digest of it by running sha256sum.
+func TestFingerprintInput_IsReadable(t *testing.T) {
+	got := fingerprintInput([]byte(realTopicHTML))
+	want := strings.Join([]string{
+		"id=41936",
+		"id=44590",
+		"name=[AniDub]_Pokemon_Horizons_100+.torrent",
+		"name=[AniDub]_Pokemon_Horizons.torrent",
+		"size=35.34 GB",
+		"size=66.16 GB",
+	}, "\x00")
+	if got != want {
+		t.Errorf("fingerprintInput =\n  %q\nwant\n  %q", got, want)
+	}
+}
+
+// TestCheck_HashSurvivesEntityEncodingChange guards a mass false-update. The
+// filename is captured from a title attribute where the site writes [ as
+// &#091;. If it ever emits the literal character instead, an encoding-sensitive
+// token changes for every anidub topic at once and re-downloads all of them.
+func TestCheck_HashSurvivesEntityEncodingChange(t *testing.T) {
+	decoded := strings.NewReplacer("&#091;", "[", "&#093;", "]").Replace(realTopicHTML)
+	if decoded == realTopicHTML {
+		t.Fatal("fixture guard: entity substitution did not apply")
+	}
+	if got, want := checkFixture(t, decoded).Hash, checkFixture(t, realTopicHTML).Hash; got != want {
+		t.Errorf("hash changed on entity encoding alone: %q vs %q", got, want)
+	}
+}
+
+// TestCheck_TitleDoesNotCaptureMarkup: the h1 fallback runs only when og:title
+// is absent, and whatever it returns is persisted by the scheduler's
+// placeholder self-heal, which checks for non-empty but not for markup.
+func TestCheck_TitleDoesNotCaptureMarkup(t *testing.T) {
+	body := `<html><body>
+<h1><a href="/x">back</a><span id="news-title">Real Title</span></h1>
+<div id='torrent_7_info'>
+<div class="list down">Размер: <span class="red">1.00 GB</span></div>
+<div class="list torrentname"><span>Имя файла:</span> <span class="red" title="a.torrent">n</span></div>
+</div></body></html>`
+	got := checkFixture(t, body).DisplayName
+	if strings.ContainsAny(got, "<>") {
+		t.Errorf("DisplayName = %q, must not contain markup", got)
+	}
+	if got != "Real Title" {
+		t.Errorf("DisplayName = %q, want %q", got, "Real Title")
+	}
+}
+
 // TestCheck_NoTorrentBlocks_ReturnsError covers the remaining failure path:
 // a page that parses but carries no torrent block at all (a deleted topic, or
 // selector drift after a redesign) must error rather than report an empty
@@ -412,12 +510,6 @@ func (h *hostRecordingRewrite) RoundTrip(req *http.Request) (*http.Response, err
 	return http.DefaultTransport.RoundTrip(out)
 }
 
-// fixtureAnidubHTML used to carry a `data-hash` attribute that the live site
-// has never emitted — invented markup, which is why the plugin's broken
-// selectors passed their tests for so long. It now reuses the captured page
-// shape so a fixture can only pass if the real page would.
-const fixtureAnidubHTML = realTopicHTML
-
 // TestCheck_RewritesToActiveDomain asserts that when the admin has
 // configured an active domain override, Check fetches that host instead of
 // the mirror recorded in the stored topic URL — anidub has no id-based
@@ -426,7 +518,7 @@ const fixtureAnidubHTML = realTopicHTML
 func TestCheck_RewritesToActiveDomain(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(200)
-		_, _ = w.Write([]byte(fixtureAnidubHTML))
+		_, _ = w.Write([]byte(realTopicHTML))
 	}))
 	t.Cleanup(srv.Close)
 

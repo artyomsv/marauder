@@ -78,10 +78,16 @@ func TestE2E(t *testing.T) {
 			Username:  "alice",
 			SecretEnc: []byte("password"),
 		},
-		// Golden value: sha256 of the fixture's torrent-block fingerprint
-		// ("id=42|name=…|size=1.20 GB"). Pinned so a change to how the token
-		// is derived has to be a deliberate edit, not a silent drift.
-		ExpectedHash:         "a2008d120e315904fd969910f6106b4c20edc66153fe34adfce6cee846957666",
+		// Golden value: sha256 of the fixture's fingerprint input, which is
+		// "id=42\x00name=[AniDub]_Series.torrent\x00size=1.20 GB" (NUL
+		// separators; entities decoded). Reproduce it without running the code:
+		//
+		//   printf 'id=42\x00name=[AniDub]_Series.torrent\x00size=1.20 GB' | sha256sum
+		//
+		// TestFingerprintInput_IsReadable asserts that input string directly, so
+		// this digest is reviewable rather than self-confirming — a reader can
+		// check the input by eye and the command above verifies the hash.
+		ExpectedHash:         "b3530af41eba0a9cd240985e4ace9646e69605a593d3a8c17d428a182d0285c9",
 		ExpectedNameContains: "сериал",
 	})
 }

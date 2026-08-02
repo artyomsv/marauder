@@ -10,8 +10,6 @@ interface VerificationNoticeProps {
    * sign-in did not fail but nothing actually verified it.
    */
   verified: boolean | undefined;
-  /** The server's explanation, shown verbatim when present. */
-  detail?: string;
 }
 
 /**
@@ -23,7 +21,7 @@ interface VerificationNoticeProps {
  * as a verified one is what let a credential for an entirely different site sit
  * in the UI looking healthy.
  */
-export function VerificationNotice({ verified, detail }: VerificationNoticeProps) {
+export function VerificationNotice({ verified }: VerificationNoticeProps) {
   const t = useT();
   if (verified !== false) return null;
   return (
@@ -32,7 +30,7 @@ export function VerificationNotice({ verified, detail }: VerificationNoticeProps
       className="mt-2 flex items-start gap-2 rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-warning"
     >
       <ShieldQuestion className="mt-px size-4 shrink-0" />
-      <span>{detail || t("credentials.unverified")}</span>
+      <span>{t("credentials.unverified")}</span>
     </div>
   );
 }

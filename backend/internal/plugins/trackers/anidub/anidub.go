@@ -208,6 +208,10 @@ func loginRejected(body []byte) bool {
 // times, so its absence reliably means "not signed in".
 var logoutMarker = []byte("action=logout")
 
+// anonymousMarker is the login form itself — the measured half of the pair.
+// Its presence is what licenses reporting "not signed in"; see Verify.
+var anonymousMarker = []byte("login_name")
+
 // Verify implements the positive-marker half of the credential check: it
 // fetches the site root on the session Login established and reports whether
 // that session is actually authenticated.
@@ -221,7 +225,21 @@ func (p *plugin) Verify(ctx context.Context, creds *domain.TrackerCredential) (b
 	if err != nil {
 		return false, err
 	}
-	return bytes.Contains(body, logoutMarker), nil
+	if bytes.Contains(body, logoutMarker) {
+		return true, nil
+	}
+	// Only report a rejection on the marker that was actually measured: the
+	// live anonymous page renders the login form (login_name x2, logout x0).
+	if bytes.Contains(body, anonymousMarker) {
+		return false, nil
+	}
+	// Neither marker: an unrecognised page shape. Reporting (false, nil) here
+	// would turn the *unconfirmed* half of the assumption — that a signed-in
+	// page carries the logout link — into a hard 422 that refuses to store the
+	// credential, so a wrong guess would lock a user out of adding a working
+	// account and blame their password. Say what is true instead: nothing here
+	// verified anything.
+	return false, registry.ErrVerifyUnsupported
 }
 
 var _ registry.WithMetadata = (*plugin)(nil)
@@ -249,8 +267,14 @@ var (
 	// original pattern required text directly between the <h1> tags, so the
 	// nested span left it matching nothing — which also disabled the
 	// scheduler's placeholder self-heal.
-	titleRe   = regexp.MustCompile(`(?s)<h1[^>]*>\s*(?:<span[^>]*>)?(.*?)(?:</span>)?\s*</h1>`)
-	ogTitleRe = regexp.MustCompile(`<meta\s+property="og:title"\s+content="([^"]*)"`)
+	// The title lives in <h1><span id="news-title">…</span></h1>. Match the
+	// span directly rather than "any span inside an h1": a sibling element
+	// before it (a back-link, a breadcrumb) would otherwise be swallowed into
+	// the capture, and whatever this returns is persisted by the scheduler's
+	// placeholder self-heal, which checks for non-empty but not for markup.
+	newsTitleRe = regexp.MustCompile(`(?s)<span[^>]*id="news-title"[^>]*>(.*?)</span>`)
+	titleRe     = regexp.MustCompile(`(?s)<h1[^>]*>(.*?)</h1>`)
+	ogTitleRe   = regexp.MustCompile(`<meta\s+property="og:title"\s+content="([^"]*)"`)
 	// The topic's own poster. Scoping to span.poster is load-bearing: sidebar
 	// posters for unrelated titles appear EARLIER in the document, so an
 	// unscoped "first poster image" match returns the wrong show's art.
@@ -261,20 +285,30 @@ var (
 	// stable id, filename and size. Seeder/leecher counts are deliberately
 	// excluded — they move constantly, and feeding them in would make every
 	// check look like a new release.
-	blockIDRe  = regexp.MustCompile(`torrent_(\d+)_info`)
+	// Anchored to the id ATTRIBUTE. DLE templates also reference the block id
+	// from in-page anchors (href="#torrent_N_info") and inline scripts, so an
+	// unanchored match finds "blocks" on a page that has none — which would let
+	// the non-empty-fingerprint guard pass for a topic carrying no torrent.
+	blockIDRe  = regexp.MustCompile(`id=['"]?torrent_(\d+)_info`)
 	fileNameRe = regexp.MustCompile(`Имя файла:</span>\s*<span class="red" title="([^"]*)"`)
 	sizeRe     = regexp.MustCompile(`Размер:\s*<span class="red">([^<]*)</span>`)
 )
 
-// pageTitle prefers og:title (clean, single-line) and falls back to the h1.
+// pageTitle prefers og:title (clean, single-line), then the news-title span,
+// then any h1. Every fallback is flattened through forumcommon.HTMLToText so a
+// nested tag cannot end up in a stored display name.
 func pageTitle(body []byte) string {
 	if m := ogTitleRe.FindSubmatch(body); m != nil {
 		if s := strings.TrimSpace(html.UnescapeString(string(m[1]))); s != "" {
 			return s
 		}
 	}
-	if m := titleRe.FindSubmatch(body); m != nil {
-		return strings.TrimSpace(html.UnescapeString(string(m[1])))
+	for _, re := range []*regexp.Regexp{newsTitleRe, titleRe} {
+		if m := re.FindSubmatch(body); m != nil {
+			if s := forumcommon.HTMLToText(string(m[1])); s != "" {
+				return s
+			}
+		}
 	}
 	return ""
 }
@@ -309,21 +343,36 @@ func (p *plugin) absoluteURL(ref string) string {
 // .torrent by the infohash package, so nothing needs one here. Torrent id +
 // filename + size covers exactly the re-upload case that means "new release".
 func pageFingerprint(body []byte) string {
+	input := fingerprintInput(body)
+	if input == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(input))
+	return hex.EncodeToString(sum[:])
+}
+
+// fingerprintInput builds the human-readable string the token digests. Split
+// out from pageFingerprint so a test can assert something a reviewer can
+// actually read ("id=42\x00name=…") instead of only a golden digest.
+//
+// Values are decoded before hashing: the filename is captured from a title
+// attribute where the site writes "[" as "&#091;", and a token that depends on
+// the ENCODING rather than the content would change for every anidub topic at
+// once — re-downloading all of them — the day the site emits the literal
+// character. The NUL separator cannot occur in HTML text, so no value can
+// forge a field boundary.
+func fingerprintInput(body []byte) string {
 	var parts []string
 	for _, m := range blockIDRe.FindAllSubmatch(body, maxTorrentBlocks) {
 		parts = append(parts, "id="+string(m[1]))
 	}
 	for _, m := range fileNameRe.FindAllSubmatch(body, maxTorrentBlocks) {
-		parts = append(parts, "name="+string(m[1]))
+		parts = append(parts, "name="+html.UnescapeString(string(m[1])))
 	}
 	for _, m := range sizeRe.FindAllSubmatch(body, maxTorrentBlocks) {
-		parts = append(parts, "size="+string(m[1]))
+		parts = append(parts, "size="+html.UnescapeString(string(m[1])))
 	}
-	if len(parts) == 0 {
-		return ""
-	}
-	sum := sha256.Sum256([]byte(strings.Join(parts, "|")))
-	return hex.EncodeToString(sum[:])
+	return strings.Join(parts, "\x00")
 }
 
 func (p *plugin) Check(ctx context.Context, topic *domain.Topic, creds *domain.TrackerCredential) (*domain.Check, error) {

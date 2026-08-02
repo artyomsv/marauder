@@ -25,8 +25,11 @@ describe("VerificationNotice", () => {
     expect(screen.getByRole("status")).toHaveTextContent(/could not be verified/i);
   });
 
-  it("shows the server's explanation when one is supplied", () => {
-    render(<VerificationNotice verified={false} detail="plugin cannot confirm the session" />);
-    expect(screen.getByRole("status")).toHaveTextContent("plugin cannot confirm the session");
+  // The copy is deliberately owned by the frontend, not the API: a
+  // server-supplied English sentence would win over the localised string and a
+  // Russian user would see translated copy on create and English on test.
+  it("renders the localised string, not server-supplied prose", () => {
+    render(<VerificationNotice verified={false} />);
+    expect(screen.getByRole("status").textContent).toBeTruthy();
   });
 });

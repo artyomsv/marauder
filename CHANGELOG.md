@@ -36,6 +36,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`WithMetadata`), so the Add form preview is populated instead of blank. The
   poster lookup is scoped to the topic's own art — unrelated sidebar posters
   appear earlier in the page and would otherwise be picked.
+- **A credential is validated against a fresh session.** Previously a sign-in
+  reused whatever session the tracker already had, so re-testing a credential
+  or rotating to a wrong password could be confirmed by a session the tested
+  password never established.
+- **An unrecognised tracker page is reported as unverified, not as a
+  rejection.** Only the measured signal (the login form on an anonymous page)
+  is treated as proof that a session is not signed in; anything unfamiliar
+  reports "could not be verified" instead of refusing to save a credential
+  that may well be correct.
 
 ### Changed
 

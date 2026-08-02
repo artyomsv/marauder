@@ -112,8 +112,12 @@ func loginAndVerify(ctx context.Context, wc registry.WithCredentials, creds *dom
 // withVerified stamps the per-call verification outcome onto a view. Kept
 // separate from toCredView because verification is not persisted state: it is
 // the result of the round-trip this one request made.
-func withVerified(v credentialView, verified bool) credentialView {
-	v.Verified = &verified
+//
+// Takes a pointer so both callers can use it: Update passes nil when no
+// password changed and therefore no round-trip ran, which must serialise as an
+// absent field rather than false.
+func withVerified(v credentialView, verified *bool) credentialView {
+	v.Verified = verified
 	return v
 }
 
@@ -225,7 +229,7 @@ func (h *Credentials) Create(w http.ResponseWriter, r *http.Request) {
 		h.Audit.Generic(&uid, "credential_create", "tracker_credential", created.ID.String(), "success",
 			map[string]any{"tracker_name": req.TrackerName, "ip": ip, "ua": ua})
 	}
-	writeJSON(w, http.StatusCreated, withVerified(toCredView(created), verified))
+	writeJSON(w, http.StatusCreated, withVerified(toCredView(created), &verified))
 }
 
 type updateCredentialReq struct {
@@ -271,7 +275,9 @@ func (h *Credentials) Update(w http.ResponseWriter, r *http.Request) {
 	if req.Password != "" {
 		// Validate the new password by attempting Login + Verify first.
 		plugin := registry.GetTracker(existing.TrackerName)
-		if wc, ok := plugin.(registry.WithCredentials); ok && plugin != nil {
+		// A type assertion on a nil interface already yields ok == false, so
+		// no separate nil check is needed.
+		if wc, ok := plugin.(registry.WithCredentials); ok {
 			transient := &domain.TrackerCredential{
 				UserID:      uid,
 				TrackerName: existing.TrackerName,
@@ -316,9 +322,7 @@ func (h *Credentials) Update(w http.ResponseWriter, r *http.Request) {
 		problem.Write(w, r, h.BaseURL, problem.ErrInternal(err.Error()))
 		return
 	}
-	view := toCredView(updated)
-	view.Verified = verified
-	writeJSON(w, http.StatusOK, view)
+	writeJSON(w, http.StatusOK, withVerified(toCredView(updated), verified))
 }
 
 // Test handles POST /credentials/{id}/test — re-runs Login + Verify
@@ -384,11 +388,12 @@ func (h *Credentials) Test(w http.ResponseWriter, r *http.Request) {
 	// ok reports "the sign-in attempt did not fail"; verified reports whether
 	// anything actually confirmed the session. They differ for plugins that
 	// return registry.ErrVerifyUnsupported, and the UI must not collapse them.
-	resp := map[string]any{"ok": true, "verified": verified}
-	if !verified {
-		resp["detail"] = "signed in, but this tracker plugin cannot confirm the session — treat the result as unverified"
-	}
-	writeJSON(w, http.StatusOK, resp)
+	//
+	// Deliberately no human-readable detail here: the frontend has a localised
+	// string for this state, and an English sentence from the server would win
+	// over it, so a Russian user would see the translated copy on create and
+	// English on test — for the same credential.
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "verified": verified})
 }
 
 // Delete handles DELETE /credentials/{id}.

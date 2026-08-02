@@ -46,10 +46,12 @@ export function CredentialsPage() {
   const [showAdd, setShowAdd] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [reauthId, setReauthId] = useState<string | null>(null);
-  // Set when the credential just added was accepted without its session
-  // being confirmed — the add form closes on success, so the warning has to
-  // outlive it.
-  const [unverified, setUnverified] = useState(false);
+  // Id of a credential that was saved without its session being confirmed.
+  // Keyed by id rather than a page-level boolean so the notice names the row
+  // it belongs to, and so it clears when that row is tested, edited or
+  // deleted — a floating page banner has no natural moment to go away and
+  // says nothing about which of several accounts it means.
+  const [unverifiedId, setUnverifiedId] = useState<string | null>(null);
   const credentials = credsData?.credentials ?? [];
   const trackers = systemInfo?.trackers ?? [];
 
@@ -63,7 +65,7 @@ export function CredentialsPage() {
   // reliable logged-in marker returns ok:true, verified:false.
   const test = useMutation({
     mutationFn: (id: string) =>
-      api.post<{ ok: boolean; verified: boolean; detail?: string }>(`/credentials/${id}/test`),
+      api.post<{ ok: boolean; verified: boolean }>(`/credentials/${id}/test`),
   });
 
   // A test result belongs to exactly one row — the one whose id was passed to
@@ -98,8 +100,6 @@ export function CredentialsPage() {
         </Button>
       </header>
 
-      {unverified && <VerificationNotice verified={false} />}
-
       <AnimatePresence>
         {showAdd && (
           <AddCredentialCard
@@ -108,7 +108,7 @@ export function CredentialsPage() {
             onClose={() => setShowAdd(false)}
             onCreated={(created) => {
               setShowAdd(false);
-              setUnverified(created?.verified === false);
+              setUnverifiedId(created?.verified === false ? created.id : null);
               qc.invalidateQueries({ queryKey: QK.credentials });
             }}
           />
@@ -118,8 +118,12 @@ export function CredentialsPage() {
             key={editingId}
             credential={credentials.find((c) => c.id === editingId)!}
             onClose={() => setEditingId(null)}
-            onSaved={() => {
+            onSaved={(updated) => {
               setEditingId(null);
+              // A password rotation re-runs Login+Verify, so its outcome
+              // matters just as much as a create's. An update that kept the
+              // current password reports `verified` absent and clears it.
+              setUnverifiedId(updated?.verified === false ? updated.id : null);
               qc.invalidateQueries({ queryKey: QK.credentials });
             }}
           />
@@ -217,8 +221,12 @@ export function CredentialsPage() {
                   {(test.error as Error)?.message}
                 </div>
               )}
-              {test.isSuccess && test.variables === c.id && (
-                <VerificationNotice verified={test.data.verified} detail={test.data.detail} />
+              {/* A fresh test result supersedes the save-time verdict for
+                  this row; otherwise fall back to what saving reported. */}
+              {test.isSuccess && test.variables === c.id ? (
+                <VerificationNotice verified={test.data.verified} />
+              ) : (
+                unverifiedId === c.id && <VerificationNotice verified={false} />
               )}
               <AnimatePresence>
                 {reauthId === c.id && (
@@ -727,7 +735,10 @@ function EditCredentialCard({
 }: {
   credential: CredentialView;
   onClose: () => void;
-  onSaved: () => void;
+  // The updated view is passed back for the same reason as onCreated: a
+  // password rotation re-runs Login+Verify, and discarding the result would
+  // report a clean success for exactly the plugins that cannot confirm one.
+  onSaved: (updated?: CredentialView) => void;
 }) {
   const [username, setUsername] = useState(credential.username);
   const [password, setPassword] = useState("");
@@ -739,7 +750,7 @@ function EditCredentialCard({
         username,
         password,
       }),
-    onSuccess: () => onSaved(),
+    onSuccess: (updated) => onSaved(updated),
     onError: (err) => {
       const detail =
         err instanceof ApiError ? err.problem.detail || err.problem.title : String(err);

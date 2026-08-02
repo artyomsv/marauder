@@ -1,4 +1,4 @@
-import { AlertCircle, CheckCircle2, Loader2, ShieldQuestion } from "lucide-react";
+import { AlertCircle, CheckCircle2, LogIn, Loader2, ShieldQuestion } from "lucide-react";
 
 import { useT } from "@/i18n";
 
@@ -25,6 +25,9 @@ export function TestLoginIcon({ phase }: { phase: TestLoginPhase }) {
     case "failed":
       return <AlertCircle role="img" aria-label={t("credentials.testFailed")} className="size-4 text-destructive" />;
     default:
-      return <CheckCircle2 aria-hidden className="size-4" />;
+      // Idle must NOT be a checkmark. Nothing has been tested yet, and in a
+      // component whose whole purpose is keeping "unverified" from reading as
+      // "verified", a tick meaning "no result" undercuts the same vocabulary.
+      return <LogIn aria-hidden className="size-4" />;
   }
 }
