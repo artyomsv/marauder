@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/artyomsv/marauder/backend/internal/domain"
@@ -183,6 +184,87 @@ func TestLogin_DoesNotReuseAnEstablishedSession(t *testing.T) {
 		t.Errorf("second Login carried cookies from the first session (%q); "+
 			"credential validation must start from a fresh jar or Verify is not independent",
 			loginCookies[1])
+	}
+}
+
+// TestLogin_DoesNotStrandConcurrentFetches is the regression test for the
+// race the fresh-jar fix introduced.
+//
+// Sessions are keyed by tracker:userID, so every one of a user's anidub topics
+// shares one jar, the scheduler calls Login on every check, and fetch
+// re-resolves the jar by key on every call. Invalidating the shared entry
+// therefore left a window — between the delete and the login response — where
+// the store held an ANONYMOUS jar. A concurrent Download resolving in that
+// window dials unauthenticated: on a login-gated download that yields an HTML
+// page which becomes Payload.TorrentFile, and recordDelivery fails open, so
+// nothing surfaces it.
+//
+// Validation must get a fresh jar without ever publishing an unauthenticated
+// one to the shared store.
+func TestLogin_DoesNotStrandConcurrentFetches(t *testing.T) {
+	var mu sync.Mutex
+	gatedCookie := ""
+	blocked := make(chan struct{})
+	resume := make(chan struct{})
+	var parkOnce sync.Once
+	warm := true
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost:
+			// Park the SECOND login mid-POST, holding the window open: the
+			// shared entry has been swapped but no login response has landed.
+			mu.Lock()
+			isWarm := warm
+			mu.Unlock()
+			if !isWarm {
+				parkOnce.Do(func() { close(blocked); <-resume })
+			}
+			http.SetCookie(w, &http.Cookie{Name: "dle_user_id", Value: "42", Path: "/"})
+			w.WriteHeader(200)
+			_, _ = w.Write([]byte(loggedInHTML))
+		case strings.HasPrefix(r.URL.Path, "/engine/download.php"):
+			mu.Lock()
+			gatedCookie = r.Header.Get("Cookie")
+			mu.Unlock()
+			w.WriteHeader(200)
+			_, _ = w.Write([]byte("d8:announce15:http://x/announcee"))
+		default:
+			w.WriteHeader(200)
+			_, _ = w.Write([]byte(realTopicHTML))
+		}
+	}))
+	t.Cleanup(srv.Close)
+	rec := &hostRecordingRewrite{target: strings.TrimPrefix(srv.URL, "http://")}
+	p := &plugin{sessions: forumcommon.New(), domain: defaultDomain, transport: rec}
+	creds := testCreds()
+
+	// Warm the shared session the way the scheduler does on every check.
+	if err := p.Login(context.Background(), creds); err != nil {
+		t.Fatalf("warm Login: %v", err)
+	}
+	mu.Lock()
+	warm = false
+	mu.Unlock()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = p.Login(context.Background(), creds)
+	}()
+	<-blocked
+
+	if _, err := p.fetch(context.Background(), "https://tr.anidub.com/engine/download.php?id=1", creds); err != nil {
+		t.Fatalf("concurrent fetch: %v", err)
+	}
+	close(resume)
+	<-done
+
+	mu.Lock()
+	defer mu.Unlock()
+	if gatedCookie == "" {
+		t.Error("a fetch concurrent with a login dialed with no session cookie; " +
+			"validation must not publish an unauthenticated jar to the shared store")
 	}
 }
 

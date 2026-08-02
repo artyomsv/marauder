@@ -130,16 +130,23 @@ func (p *plugin) Login(ctx context.Context, creds *domain.TrackerCredential) err
 	if creds == nil || creds.Username == "" {
 		return errors.New("anidub credentials are required")
 	}
-	// Validate against a FRESH jar. The store hands the same jar back for two
-	// hours and the scheduler calls Login on every check, so a user with
-	// working credentials always has a warm, authenticated session. Posting a
-	// new password onto that jar proves nothing: the tracker renders the
-	// signed-in page, no rejection marker matches, and Verify then confirms a
-	// session this attempt never established — a false green on exactly the
-	// paths that exist to catch a bad password (credential test, rotation).
+	// Validate on a FRESH, UNSTORED jar, then publish it only once it is
+	// authenticated.
+	//
+	// Fresh, because the store hands the same jar back for two hours and the
+	// scheduler calls Login on every check: a user with working credentials
+	// always has a warm session, and posting a new password onto it proves
+	// nothing — the tracker renders the signed-in page, no rejection marker
+	// matches, and Verify confirms a session this attempt never established.
+	//
+	// Unstored, because the entry is keyed by (tracker, user) and shared by
+	// every one of that user's topics, and fetch re-resolves it per request.
+	// Clearing it first would leave an anonymous jar visible for the duration
+	// of the login round-trip, which a concurrent Download could pick up
+	// between its topic-page and .torrent fetches — handing the client an HTML
+	// page, fail-open, with nothing to surface it.
 	key := forumcommon.SessionKey(pluginName, creds.UserID.String())
-	p.sessions.Invalidate(key)
-	sess := p.sessions.GetOrCreate(key, userAgent)
+	sess := forumcommon.NewSession(userAgent)
 	if p.transport != nil {
 		sess.Client.Transport = p.transport
 	}
@@ -170,9 +177,12 @@ func (p *plugin) Login(ctx context.Context, creds *domain.TrackerCredential) err
 		return fmt.Errorf("anidub login: unexpected status %d", resp.StatusCode)
 	}
 	if loginRejected(body) {
+		// Leave the stored session alone: a failed validation must not cost
+		// the scheduler the working session it already has.
 		return errors.New("anidub login failed: check the username and password")
 	}
 	sess.LoggedIn = true
+	p.sessions.Put(key, sess)
 	return nil
 }
 
