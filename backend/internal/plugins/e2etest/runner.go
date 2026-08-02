@@ -3,6 +3,7 @@ package e2etest
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
@@ -125,10 +126,16 @@ func RunFullPipeline(t *testing.T, c Case) {
 				t.Fatalf("Login: %v", err)
 			}
 			ok, err := wc.Verify(ctx, c.Creds)
-			if err != nil {
+			switch {
+			// A plugin that declares it cannot check the session is a valid
+			// state, not a failure — the pipeline still has to work. What is
+			// NOT acceptable is a plugin claiming (true, nil) without looking,
+			// which is why this is an explicit sentinel rather than silence.
+			case errors.Is(err, registry.ErrVerifyUnsupported):
+				t.Logf("Verify: unsupported by %s — credential state unchecked", plugin.Name())
+			case err != nil:
 				t.Fatalf("Verify: %v", err)
-			}
-			if !ok {
+			case !ok:
 				t.Errorf("Verify returned false after a successful Login")
 			}
 		}

@@ -398,6 +398,13 @@ export interface CredentialView {
   display_name: string;
   username: string;
   session_expired: boolean;
+  /**
+   * Outcome of the login round-trip the responding request performed.
+   * Absent on list responses (nothing was checked). `false` means the
+   * credential was accepted but the tracker plugin could not confirm the
+   * session — usable, but unproven.
+   */
+  verified?: boolean;
   created_at: string;
   updated_at: string;
 }

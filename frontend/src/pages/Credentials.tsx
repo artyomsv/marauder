@@ -2,9 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { motion, AnimatePresence } from "framer-motion";
 import {
-  AlertCircle,
   AlertTriangle,
-  CheckCircle2,
   KeyRound,
   Loader2,
   Pencil,
@@ -18,6 +16,8 @@ import { useT } from "@/i18n";
 import { QK } from "@/lib/queryKeys";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { VerificationNotice } from "@/components/credentials/VerificationNotice";
+import { TestLoginIcon, type TestLoginPhase } from "@/components/credentials/TestLoginIcon";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
@@ -46,6 +46,12 @@ export function CredentialsPage() {
   const [showAdd, setShowAdd] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [reauthId, setReauthId] = useState<string | null>(null);
+  // Id of a credential that was saved without its session being confirmed.
+  // Keyed by id rather than a page-level boolean so the notice names the row
+  // it belongs to, and so it clears when that row is tested, edited or
+  // deleted — a floating page banner has no natural moment to go away and
+  // says nothing about which of several accounts it means.
+  const [unverifiedId, setUnverifiedId] = useState<string | null>(null);
   const credentials = credsData?.credentials ?? [];
   const trackers = systemInfo?.trackers ?? [];
 
@@ -54,9 +60,31 @@ export function CredentialsPage() {
     onSuccess: () => qc.invalidateQueries({ queryKey: QK.credentials }),
   });
 
+  // `ok` only means the sign-in attempt did not fail. `verified` reports
+  // whether anything actually confirmed the session — a plugin with no
+  // reliable logged-in marker returns ok:true, verified:false.
   const test = useMutation({
-    mutationFn: (id: string) => api.post<{ ok: boolean }>(`/credentials/${id}/test`),
+    mutationFn: (id: string) =>
+      api.post<{ ok: boolean; verified: boolean }>(`/credentials/${id}/test`),
+    // A confirmed test retires the save-time verdict for that row. Without
+    // this the notice is only *hidden* while its row is the most recently
+    // tested one: testing any other row moves test.variables away, and the
+    // stale "could not be verified" warning reappears on a credential that
+    // was just confirmed.
+    onSuccess: (data, id) => {
+      if (data.verified) setUnverifiedId((prev) => (prev === id ? null : prev));
+    },
   });
+
+  // A test result belongs to exactly one row — the one whose id was passed to
+  // the mutation. Everything else stays idle.
+  const testPhase = (id: string): TestLoginPhase => {
+    if (test.variables !== id) return "idle";
+    if (test.isPending) return "pending";
+    if (test.isError) return "failed";
+    if (test.isSuccess) return test.data.verified ? "verified" : "unverified";
+    return "idle";
+  };
 
   return (
     <div className="space-y-8">
@@ -86,8 +114,9 @@ export function CredentialsPage() {
             trackers={trackers}
             existing={credentials}
             onClose={() => setShowAdd(false)}
-            onCreated={() => {
+            onCreated={(created) => {
               setShowAdd(false);
+              setUnverifiedId(created?.verified === false ? created.id : null);
               qc.invalidateQueries({ queryKey: QK.credentials });
             }}
           />
@@ -97,8 +126,12 @@ export function CredentialsPage() {
             key={editingId}
             credential={credentials.find((c) => c.id === editingId)!}
             onClose={() => setEditingId(null)}
-            onSaved={() => {
+            onSaved={(updated) => {
               setEditingId(null);
+              // A password rotation re-runs Login+Verify, so its outcome
+              // matters just as much as a create's. An update that kept the
+              // current password reports `verified` absent and clears it.
+              setUnverifiedId(updated?.verified === false ? updated.id : null);
               qc.invalidateQueries({ queryKey: QK.credentials });
             }}
           />
@@ -177,15 +210,7 @@ export function CredentialsPage() {
                   onClick={() => test.mutate(c.id)}
                   disabled={test.isPending && test.variables === c.id}
                 >
-                  {test.isPending && test.variables === c.id ? (
-                    <Loader2 className="size-4 animate-spin" />
-                  ) : test.isSuccess && test.variables === c.id ? (
-                    <CheckCircle2 className="size-4 text-success" />
-                  ) : test.isError && test.variables === c.id ? (
-                    <AlertCircle className="size-4 text-destructive" />
-                  ) : (
-                    <CheckCircle2 className="size-4" />
-                  )}
+                  <TestLoginIcon phase={testPhase(c.id)} />
                   Test login
                 </Button>
                 {c.session_expired && reauthId !== c.id && (
@@ -203,6 +228,13 @@ export function CredentialsPage() {
                 <div className="mt-2 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
                   {(test.error as Error)?.message}
                 </div>
+              )}
+              {/* A fresh test result supersedes the save-time verdict for
+                  this row; otherwise fall back to what saving reported. */}
+              {test.isSuccess && test.variables === c.id ? (
+                <VerificationNotice verified={test.data.verified} />
+              ) : (
+                unverifiedId === c.id && <VerificationNotice verified={false} />
               )}
               <AnimatePresence>
                 {reauthId === c.id && (
@@ -251,7 +283,10 @@ function AddCredentialCard({
   trackers: Tracker[];
   existing: CredentialView[];
   onClose: () => void;
-  onCreated: () => void;
+  // The created view is passed back so the page can report an unverified
+  // sign-in; the interactive paths pass nothing (they end in a confirmed
+  // session by construction).
+  onCreated: (created?: CredentialView) => void;
 }) {
   const t = useT();
   // Surface only trackers that don't already have a credential. The
@@ -286,7 +321,7 @@ function AddCredentialCard({
         username,
         password,
       }),
-    onSuccess: () => onCreated(),
+    onSuccess: (created) => onCreated(created),
     onError: (err) => setError(problemDetail(err)),
   });
 
@@ -708,7 +743,10 @@ function EditCredentialCard({
 }: {
   credential: CredentialView;
   onClose: () => void;
-  onSaved: () => void;
+  // The updated view is passed back for the same reason as onCreated: a
+  // password rotation re-runs Login+Verify, and discarding the result would
+  // report a clean success for exactly the plugins that cannot confirm one.
+  onSaved: (updated?: CredentialView) => void;
 }) {
   const [username, setUsername] = useState(credential.username);
   const [password, setPassword] = useState("");
@@ -720,7 +758,7 @@ function EditCredentialCard({
         username,
         password,
       }),
-    onSuccess: () => onSaved(),
+    onSuccess: (updated) => onSaved(updated),
     onError: (err) => {
       const detail =
         err instanceof ApiError ? err.problem.detail || err.problem.title : String(err);

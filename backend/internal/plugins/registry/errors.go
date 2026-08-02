@@ -51,3 +51,22 @@ var ErrSessionExpired = errors.New("tracker session expired")
 // or no longer-valid session — is available. The search handler surfaces it
 // as a per-tracker "needs an account" notice instead of a hard failure.
 var ErrSearchRequiresCredentials = errors.New("search requires credentials")
+
+// ErrVerifyUnsupported is returned by a WithCredentials plugin whose Verify
+// cannot actually determine whether the session is authenticated — typically
+// because nobody has identified a reliable logged-in marker for that tracker
+// yet.
+//
+// It exists because the alternative plugins reached for was `return true, nil`,
+// which is indistinguishable from a genuine positive and silently defeats the
+// two-signal design in the credentials handler: Login's negative check ("does
+// the body contain a known error phrase?") becomes the only gate, and that
+// check fails open on any wording it does not recognise. A real report: a user
+// entered credentials belonging to a different site entirely, the tracker
+// rejected them with HTTP 200 and a phrase the plugin did not match, and the
+// UI showed a green "login ok".
+//
+// A plugin returning this sentinel is saying "the credential may be fine, but
+// I did not check". Callers must surface that as its own state — never as
+// success.
+var ErrVerifyUnsupported = errors.New("this tracker plugin cannot verify credentials")

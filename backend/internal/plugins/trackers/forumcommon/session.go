@@ -27,6 +27,11 @@ type SessionStore struct {
 	sessions map[string]*Session
 }
 
+const (
+	sessionTimeout = 30 * time.Second
+	sessionTTL     = 2 * time.Hour
+)
+
 // Session is one logged-in HTTP client.
 type Session struct {
 	Client    *http.Client
@@ -48,25 +53,46 @@ func (s *SessionStore) GetOrCreate(key string, userAgent string) *Session {
 	if existing, ok := s.sessions[key]; ok && time.Now().Before(existing.ExpiresAt) {
 		return existing
 	}
-	jar, _ := cookiejar.New(nil)
-	sess := &Session{
-		Client: &http.Client{
-			Jar:     jar,
-			Timeout: 30 * time.Second,
-		},
-		UserAgent: userAgent,
-		ExpiresAt: time.Now().Add(2 * time.Hour),
-	}
+	sess := NewSession(userAgent)
 	s.sessions[key] = sess
 	return sess
 }
 
 // Invalidate forgets a session — used when a tracker returns a login page
 // where we expected real content.
+//
+// Do NOT use this to get a clean jar for validating a password. The store is
+// keyed by (tracker, user), so one entry is shared by every one of that user's
+// topics, and plugins re-resolve it per request — deleting it publishes an
+// anonymous jar that a concurrent check can pick up mid-operation. Build an
+// unstored session with NewSession, validate on that, and Put it once it is
+// authenticated.
 func (s *SessionStore) Invalidate(key string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.sessions, key)
+}
+
+// NewSession builds a session with its own cookie jar WITHOUT storing it, for
+// work that must not observe or disturb the shared one — validating a
+// password being the motivating case, since posting it onto an
+// already-authenticated jar proves nothing about the password.
+func NewSession(userAgent string) *Session {
+	jar, _ := cookiejar.New(nil)
+	return &Session{
+		Client:    &http.Client{Jar: jar, Timeout: sessionTimeout},
+		UserAgent: userAgent,
+		ExpiresAt: time.Now().Add(sessionTTL),
+	}
+}
+
+// Put installs a ready session under key in a single locked write, replacing
+// any existing entry. Pair it with NewSession: publish only once the session
+// is authenticated, so no reader can ever resolve an anonymous jar.
+func (s *SessionStore) Put(key string, sess *Session) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sessions[key] = sess
 }
 
 // SessionKey is the convention for building store keys.

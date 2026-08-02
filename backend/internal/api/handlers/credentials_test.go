@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -41,7 +42,20 @@ func (f *sessionRecordingTracker) Verify(context.Context, *domain.TrackerCredent
 
 var sessionRecorder = &sessionRecordingTracker{}
 
-func init() { registry.RegisterTracker(sessionRecorder) }
+// unverifiableTracker stands in for toloka/unionpeer: Login succeeds, but the
+// plugin has no way to confirm the session and says so.
+type unverifiableTracker struct{ sessionRecordingTracker }
+
+func (f *unverifiableTracker) Name() string        { return "fakeunverifiable" }
+func (f *unverifiableTracker) DisplayName() string { return "Fake Unverifiable" }
+func (f *unverifiableTracker) Verify(context.Context, *domain.TrackerCredential) (bool, error) {
+	return false, registry.ErrVerifyUnsupported
+}
+
+func init() {
+	registry.RegisterTracker(sessionRecorder)
+	registry.RegisterTracker(&unverifiableTracker{})
+}
 
 // fakeCredPlugin is a programmable registry.WithCredentials implementation
 // used to drive loginAndVerify through every failure mode without any
@@ -78,15 +92,35 @@ func (f *fakeCredPlugin) Verify(context.Context, *domain.TrackerCredential) (boo
 // login button said success" — this test pins that path closed.
 func TestLoginAndVerify(t *testing.T) {
 	tests := []struct {
-		name      string
-		plugin    *fakeCredPlugin
-		wantErr   bool
-		wantInErr string // substring that must appear in the error message
+		name         string
+		plugin       *fakeCredPlugin
+		wantErr      bool
+		wantInErr    string // substring that must appear in the error message
+		wantVerified bool   // only checked when wantErr is false
 	}{
 		{
-			name:    "happy path: Login ok + Verify (true, nil)",
-			plugin:  &fakeCredPlugin{loginErr: nil, verifyOK: true, verifyErr: nil},
-			wantErr: false,
+			name:         "happy path: Login ok + Verify (true, nil)",
+			plugin:       &fakeCredPlugin{loginErr: nil, verifyOK: true, verifyErr: nil},
+			wantErr:      false,
+			wantVerified: true,
+		},
+		{
+			// A plugin that cannot check session state must NOT be able to
+			// claim it did. The credential is still usable (Login succeeded),
+			// so this is not an error — but it reports verified=false so the
+			// caller can say "saved, could not be verified" instead of green.
+			name:         "verify unsupported: usable but unverified",
+			plugin:       &fakeCredPlugin{loginErr: nil, verifyErr: registry.ErrVerifyUnsupported},
+			wantErr:      false,
+			wantVerified: false,
+		},
+		{
+			// Login failing still fails, even when verification is unsupported —
+			// the sentinel must not become a way to swallow a real rejection.
+			name:      "verify unsupported but login failed",
+			plugin:    &fakeCredPlugin{loginErr: errors.New("wrong password"), verifyErr: registry.ErrVerifyUnsupported},
+			wantErr:   true,
+			wantInErr: "login: wrong password",
 		},
 		{
 			name:      "login returns error",
@@ -112,15 +146,16 @@ func TestLoginAndVerify(t *testing.T) {
 			wantInErr: "session is not logged in",
 		},
 		{
-			name:    "verify returns (true, nil)",
-			plugin:  &fakeCredPlugin{loginErr: nil, verifyOK: true, verifyErr: nil},
-			wantErr: false,
+			name:         "verify returns (true, nil)",
+			plugin:       &fakeCredPlugin{loginErr: nil, verifyOK: true, verifyErr: nil},
+			wantErr:      false,
+			wantVerified: true,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			creds := &domain.TrackerCredential{Username: "alice", SecretEnc: []byte("pw")}
-			err := loginAndVerify(context.Background(), tt.plugin, creds)
+			verified, err := loginAndVerify(context.Background(), tt.plugin, creds)
 			if tt.wantErr {
 				if err == nil {
 					t.Fatalf("loginAndVerify: got nil, want error containing %q", tt.wantInErr)
@@ -132,6 +167,9 @@ func TestLoginAndVerify(t *testing.T) {
 			}
 			if err != nil {
 				t.Fatalf("loginAndVerify: unexpected error: %v", err)
+			}
+			if verified != tt.wantVerified {
+				t.Errorf("verified = %v, want %v", verified, tt.wantVerified)
 			}
 		})
 	}
@@ -169,5 +207,66 @@ func TestCredentialsTest_DecryptsAndPassesSession(t *testing.T) {
 	if sessionRecorder.gotSession != `{"lf_session":"S"}` {
 		t.Errorf("Login received SessionEnc = %q, want the decrypted session JSON",
 			sessionRecorder.gotSession)
+	}
+}
+
+// TestCredentialsTest_JSONBody asserts what the endpoint actually puts on the
+// wire for each outcome. The unit test above covers loginAndVerify's return
+// values; this covers the serialisation the UI keys on to decide between a
+// green tick and an amber "unverified" notice, which is the whole point of the
+// distinction.
+func TestCredentialsTest_JSONBody(t *testing.T) {
+	tests := []struct {
+		name         string
+		tracker      string
+		wantVerified bool
+	}{
+		{name: "verified plugin reports verified:true", tracker: "fakesession", wantVerified: true},
+		{name: "unverifiable plugin reports verified:false", tracker: "fakeunverifiable", wantVerified: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pwEnc, pwNonce := encPassword(t, "pw")
+			uid := uuid.New()
+			store := &fakeCredStore{byID: &domain.TrackerCredential{
+				ID:          uuid.New(),
+				UserID:      uid,
+				TrackerName: tt.tracker,
+				Username:    "alice",
+				SecretEnc:   pwEnc,
+				SecretNonce: pwNonce,
+			}}
+			h := newCredsHandler(t, store)
+			w := httptest.NewRecorder()
+			h.Test(w, withURLParam(authedReq(t, uid, nil), "id", store.byID.ID.String()))
+
+			if w.Code != http.StatusOK {
+				t.Fatalf("status %d, want 200; body %s", w.Code, w.Body.String())
+			}
+			var got map[string]any
+			if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+				t.Fatalf("decode body %s: %v", w.Body.String(), err)
+			}
+			if got["ok"] != true {
+				t.Errorf("ok = %v, want true (the sign-in itself did not fail)", got["ok"])
+			}
+			// Read the key directly rather than through a typed struct: the
+			// whole point is that `verified` must be PRESENT and false, not
+			// absent. A struct field would decode both the same way.
+			verified, present := got["verified"]
+			if !present {
+				t.Fatalf("verified key absent from %s; the UI reads absence as "+
+					"'no round-trip happened' and would render success", w.Body.String())
+			}
+			if verified != tt.wantVerified {
+				t.Errorf("verified = %v, want %v", verified, tt.wantVerified)
+			}
+			// No server-supplied prose: the frontend owns this copy so it can
+			// localise it.
+			if _, hasDetail := got["detail"]; hasDetail {
+				t.Errorf("response carries a detail string (%v); the localised "+
+					"frontend string must not be overridden by English from the server", got["detail"])
+			}
+		})
 	}
 }

@@ -111,17 +111,25 @@ What works **today**:
 
 **Validated end-to-end**: the generic magnet and `.torrent`-URL paths,
 the Torznab/Newznab indexer adapters, the **RuTracker**, **LostFilm**
-(including interactive captcha login), and **Kinozal** plugins, and
-**NNM-Club** (anonymous-only — its login is Cloudflare-Turnstile-gated,
-so accounts aren't supported), each against a live target.
+(including interactive captcha login), **Kinozal**, **AniLiberty**
+(public API, read-only) and **AniDub** plugins, and **NNM-Club**
+(anonymous-only — its login is Cloudflare-Turnstile-gated, so accounts
+aren't supported), each against a live target.
 
-What's still **alpha**: the other 8 CIS forum-tracker plugins
-(Anilibria, Anidub, Rutor, Toloka, Unionpeer,
-Tapochek, Free-Torrents, HD-Club) are structurally complete with
-fixture-based tests but have not been validated against live sites —
-that requires real account credentials and is the first thing
-community contributors will help with. See [CHANGELOG.md](CHANGELOG.md)
-for the per-plugin status table.
+What's still **alpha**: the other 6 CIS forum-tracker plugins
+(Rutor, Toloka, Unionpeer, Tapochek, Free-Torrents, HD-Club) are
+structurally complete with fixture-based tests but have not been
+validated against live sites — that requires real account credentials
+and is the first thing community contributors will help with.
+
+Two of them, **Toloka** and **Unionpeer**, can log in but cannot
+*confirm* a login: no reliable signed-in marker has been identified for
+either, so Marauder saves the credential and reports it as unverified
+rather than showing a green tick it has not earned. Identifying that
+marker is a good first contribution — see
+[`docs/plugin-development.md`](docs/plugin-development.md).
+
+See [CHANGELOG.md](CHANGELOG.md) for the per-plugin status table.
 
 ---
 

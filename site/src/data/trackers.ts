@@ -86,11 +86,12 @@ export const trackers: Tracker[] = [
   {
     slug: "anidub",
     name: "tr.anidub.com",
-    description: "Russian-dubbed anime with quality variants.",
+    description:
+      "Russian-dubbed anime with quality variants. Verified end-to-end against a live account.",
     category: "forum-cis",
     region: "RU",
     auth: "account",
-    status: "alpha",
+    status: "validated",
     quality: true,
   },
   {
@@ -105,7 +106,8 @@ export const trackers: Tracker[] = [
   {
     slug: "toloka",
     name: "Toloka.to",
-    description: "Ukrainian phpBB tracker.",
+    description:
+      "Ukrainian phpBB tracker. Sign-in is saved but cannot be confirmed automatically.",
     category: "forum-cis",
     region: "UA",
     auth: "account",
@@ -114,7 +116,8 @@ export const trackers: Tracker[] = [
   {
     slug: "unionpeer",
     name: "Unionpeer.org",
-    description: "Russian-language phpBB tracker.",
+    description:
+      "Russian-language phpBB tracker. Sign-in is saved but cannot be confirmed automatically.",
     category: "forum-cis",
     region: "RU",
     auth: "account",
