@@ -56,7 +56,6 @@ export function TopicRow({
   lookups,
   actions,
 }: TopicRowProps) {
-  const t = useT();
   return (
     <motion.div
       initial={{ opacity: 0 }}
