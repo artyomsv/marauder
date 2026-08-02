@@ -245,6 +245,11 @@ const en: Record<string, string> = {
 
   // Row action: force an immediate check outside the topic's own schedule
   "topics.recheck": "Check now",
+  "topics.actions.menu": "Topic actions",
+  "topics.actions.edit": "Edit",
+  "topics.actions.reset": "Reset",
+  "topics.actions.delete": "Delete",
+  "topics.actions.confirmDelete": "Confirm delete",
 
   // Reset topic (discard deliveries/progress/error state, re-check from scratch)
   "topics.reset.title": "Reset {name}",

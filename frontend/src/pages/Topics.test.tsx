@@ -673,16 +673,18 @@ describe("TopicsPage reset", () => {
     renderTopicsPage();
     await screen.findByText("Alpha");
 
-    // Two fixture topics, two reset buttons. Exercise both indices so this
+    // Two fixture topics, two overflow menus. Exercise both indices so this
     // proves each row's action closes over its own topic — clicking index 0
     // and only ever checking "Reset Alpha" would pass identically if every
-    // row's button were (incorrectly) bound to topics[0].
-    const resetButtons = screen.getAllByRole("button", { name: /reset topic/i });
+    // row's action were (incorrectly) bound to topics[0].
+    const menus = screen.getAllByRole("button", { name: /topic actions/i });
 
-    await userEvent.click(resetButtons[0]);
+    await userEvent.click(menus[0]);
+    await userEvent.click(await screen.findByRole("menuitem", { name: /^reset$/i }));
     expect(await screen.findByText(/Reset Alpha/)).toBeInTheDocument();
 
-    await userEvent.click(resetButtons[1]);
+    await userEvent.click(menus[1]);
+    await userEvent.click(await screen.findByRole("menuitem", { name: /^reset$/i }));
     expect(await screen.findByText(/Reset Beta/)).toBeInTheDocument();
   });
 
@@ -721,16 +723,16 @@ describe("TopicsPage recheck", () => {
     renderTopicsPage();
     await screen.findByText("Alpha");
 
-    // Two fixture topics, two row "Check now" buttons. Click the SECOND one —
-    // clicking index 0 would pass identically if every row's action were
-    // (incorrectly) bound to topics[0], e.g. a `/reset` typo that fell
-    // through to the always-first topic. A typo landing on `/reset` instead
-    // of `/recheck` would decode an empty body into defaults and remove the
-    // topic's delivered torrents from the client — exactly what this
-    // non-destructive action exists to avoid.
-    const checkButtons = screen.getAllByRole("button", { name: /check now/i });
-    expect(checkButtons).toHaveLength(2);
-    await userEvent.click(checkButtons[1]);
+    // Two fixture topics, two overflow menus. Open the SECOND one — driving
+    // index 0 would pass identically if every row's action were (incorrectly)
+    // bound to topics[0]. That matters here beyond tidiness: a typo landing on
+    // `/reset` instead of `/recheck` would decode an empty body into defaults
+    // and remove the topic's delivered torrents from the client — exactly what
+    // this non-destructive action exists to avoid.
+    const menus = screen.getAllByRole("button", { name: /topic actions/i });
+    expect(menus).toHaveLength(2);
+    await userEvent.click(menus[1]);
+    await userEvent.click(await screen.findByRole("menuitem", { name: /check now/i }));
 
     await waitFor(() => expect(mockApi.post).toHaveBeenCalledWith("/topics/t2/recheck"));
     expect(mockApi.post).not.toHaveBeenCalledWith("/topics/t1/recheck");
@@ -742,10 +744,10 @@ describe("TopicsPage recheck", () => {
     await screen.findByText("Alpha");
 
     await userEvent.click(screen.getByLabelText("Select all"));
-    // The bulk bar's "Check now" button shares its accessible name with each
-    // row's own recheck button, so scope the query to the bar — identified by
-    // its "N selected" label — the same way the reset test above scopes to
-    // the reset card.
+    // Scope to the bar — identified by its "N selected" label — the same way
+    // the reset test above scopes to the reset card. The rows' own Check now
+    // entries only exist while a menu is open, but scoping keeps this test
+    // honest about which control it is driving.
     const bar = (await screen.findByText(/2 selected/)).closest("div")!;
     await userEvent.click(within(bar).getByRole("button", { name: /check now/i }));
 

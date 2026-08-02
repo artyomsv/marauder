@@ -247,6 +247,11 @@ const ru: Record<string, string> = {
 
   // Действие строки: немедленная проверка вне расписания темы
   "topics.recheck": "Проверить сейчас",
+  "topics.actions.menu": "Действия с темой",
+  "topics.actions.edit": "Изменить",
+  "topics.actions.reset": "Сбросить",
+  "topics.actions.delete": "Удалить",
+  "topics.actions.confirmDelete": "Подтвердить удаление",
 
   // Сброс темы (сброс доставок/прогресса/ошибок, повторная проверка с нуля)
   "topics.reset.title": "Сбросить «{name}»",

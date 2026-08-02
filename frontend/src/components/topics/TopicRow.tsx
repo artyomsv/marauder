@@ -1,12 +1,19 @@
 import { motion } from "framer-motion";
-import { Pencil, RefreshCw, RotateCcw } from "lucide-react";
+import { Check, Loader2, MoreVertical, Pencil, RefreshCw, RotateCcw, Trash2 } from "lucide-react";
 
 import type { Topic } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { cn, formatRelative } from "@/lib/utils";
 import { useT } from "@/i18n";
-import { DeleteConfirm } from "@/components/shared/DeleteConfirm";
+import { useArmedConfirm } from "@/lib/hooks/useArmedConfirm";
 import { PosterImage } from "@/components/topics/PosterImage";
 import { TopicUrl } from "@/components/topics/TopicUrl";
 import { TopicError } from "@/components/topics/TopicError";
@@ -119,40 +126,93 @@ export function TopicRow({
           </div>
         </div>
       )}
-      <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100">
-        <Button
-          variant="ghost"
-          size="icon"
-          aria-label="Edit topic"
-          onClick={() => actions.onEdit()}
-        >
-          <Pencil className="size-4" />
-        </Button>
-        {topic.Status !== "paused" && (
-          <Button
-            variant="ghost"
-            size="icon"
-            aria-label={t("topics.recheck")}
-            title={t("topics.recheck")}
-            onClick={actions.onRecheck}
-          >
-            <RefreshCw className="size-4" />
-          </Button>
-        )}
-        <Button
-          variant="ghost"
-          size="icon"
-          aria-label="Reset topic"
-          onClick={actions.onReset}
-        >
-          <RotateCcw className="size-4" />
-        </Button>
-        <DeleteConfirm
-          onConfirm={() => actions.onDelete()}
-          isPending={deletePending}
-          label="Delete topic"
-        />
-      </div>
+      <TopicRowActionsMenu
+        status={topic.Status}
+        deletePending={deletePending}
+        actions={actions}
+      />
     </motion.div>
+  );
+}
+
+// TopicRowActionsMenu collapses the row's actions into a single overflow menu.
+//
+// They used to be four hover-revealed icon buttons. Adding "Check now" made the
+// cost obvious: the icons crowded the row's timestamps, only one carried a
+// tooltip, and two of them — RefreshCw for Check now and RotateCcw for Reset —
+// are near-identical circular arrows sitting side by side, one harmless and one
+// destructive. A menu gives every action a written label and costs one click
+// for actions nobody performs in bulk from a row.
+//
+// Delete keeps its two-click arming rather than firing straight from the menu:
+// the menu makes the label unambiguous, but it does not make the action less
+// destructive. Radix closes on select by default, so the arming item suppresses
+// that until the user resolves it.
+function TopicRowActionsMenu({
+  status,
+  deletePending,
+  actions,
+}: {
+  status: Topic["Status"];
+  deletePending: boolean;
+  actions: TopicRowActions;
+}) {
+  const t = useT();
+  const { armed, arm, disarm, confirmAndDisarm } = useArmedConfirm({ timeoutMs: 4000 });
+
+  return (
+    <DropdownMenu onOpenChange={(open) => !open && disarm()}>
+      <DropdownMenuTrigger asChild>
+        <Button variant="ghost" size="icon" aria-label={t("topics.actions.menu")}>
+          <MoreVertical className="size-4" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end">
+        <DropdownMenuItem onSelect={() => actions.onEdit()}>
+          <Pencil className="size-4" />
+          {t("topics.actions.edit")}
+        </DropdownMenuItem>
+        {/* The scheduler skips paused topics, so offering a check that can
+            never run would be a dead control. */}
+        {status !== "paused" && (
+          <DropdownMenuItem onSelect={() => actions.onRecheck()}>
+            <RefreshCw className="size-4" />
+            {t("topics.recheck")}
+          </DropdownMenuItem>
+        )}
+        <DropdownMenuItem onSelect={() => actions.onReset()}>
+          <RotateCcw className="size-4" />
+          {t("topics.actions.reset")}
+        </DropdownMenuItem>
+        <DropdownMenuSeparator />
+        {armed ? (
+          <DropdownMenuItem
+            destructive
+            onSelect={() => confirmAndDisarm(() => actions.onDelete())}
+          >
+            {deletePending ? (
+              <Loader2 className="size-4 animate-spin" />
+            ) : (
+              <Check className="size-4" />
+            )}
+            {t("topics.actions.confirmDelete")}
+          </DropdownMenuItem>
+        ) : (
+          <DropdownMenuItem
+            destructive
+            // Keep the menu open so the confirm step replaces this item in
+            // place, instead of the menu vanishing and the click doing nothing
+            // visible.
+            onSelect={(e) => {
+              e.preventDefault();
+              arm();
+            }}
+          >
+            <Trash2 className="size-4" />
+            {t("topics.actions.delete")}
+          </DropdownMenuItem>
+        )}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
