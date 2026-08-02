@@ -43,7 +43,13 @@ var urlPattern = regexp.MustCompile(`^https?://(?:www\.)?([^/]+)/series/([^/]+)/
 // knownDomains is the compiled-in set of LostFilm mirrors. Combined with
 // admin-configured custom domains (via the resolver) it forms the runtime
 // host allowlist for the plugin.
-var knownDomains = []string{"www.lostfilm.tv", "lostfilm.tv", "lostfilm.win", "lostfilm.run"}
+//
+// lostfilm.win was dropped on 2026-08-03: it still resolves and its nginx
+// answers 200, but with a zero-byte body, and any real path ("/series/")
+// closes the connection ("Empty reply from server"). A host that answers
+// without serving is a rotation trap — every check would fail there while
+// looking reachable.
+var knownDomains = []string{"www.lostfilm.tv", "lostfilm.tv", "lostfilm.run"}
 
 // effectiveDomain resolves the domain every request is built against:
 // a test-injected p.domain wins (httptest servers), then the admin-

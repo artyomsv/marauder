@@ -1839,7 +1839,7 @@ func TestClassifyError_MapsKnownPatternsToCodes(t *testing.T) {
 		{"refused, url id contains 401", `nnm-club GET: Get "https://nnmclub.to/forum/viewtopic.php?t=4012": dial tcp 1.2.3.4:80: connect: connection refused`, errCodeUnreachable},
 		// Other 4xx (e.g. 404) is neither auth nor a 5xx: falls through to
 		// unknown so the UI shows the raw detail instead of a wrong phrase.
-		{"not-found 404 falls through to unknown", `freetorrents GET https://x.invalid/?id=1 -> 404`, errCodeUnknown},
+		{"not-found 404 falls through to unknown", `tapochek GET https://x.invalid/?id=1 -> 404`, errCodeUnknown},
 		{"unrecognised", "something completely different happened", errCodeUnknown},
 	}
 	for _, tt := range tests {

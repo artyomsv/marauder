@@ -119,7 +119,7 @@ export const trackerPages: TrackerPageContent[] = [
   {
     slug: "kinozal",
     description:
-      "Watch a Kinozal.tv topic and auto-download new torrents with Marauder. Logs in with your account, scrapes the page, and pushes new releases to qBittorrent, Transmission, Deluge, or µTorrent.",
+      "Watch a Kinozal topic and auto-download new torrents with Marauder. Logs in with your account, scrapes the page, and pushes new releases to qBittorrent, Transmission, Deluge, or µTorrent.",
     keywords: [
       "kinozal monitor",
       "kinozal auto download",
@@ -128,7 +128,7 @@ export const trackerPages: TrackerPageContent[] = [
       "kinozal sonarr alternative",
     ],
     intro:
-      "Kinozal.tv is a popular Russian-language tracker for movies and TV, built on a phpBB-style forum. Like other forum trackers, it gates content behind a login and serves it from topic threads rather than an indexer API. Marauder logs in with your Kinozal account and monitors the topic for new .torrent attachments.",
+      "Kinozal is a popular Russian-language tracker for movies and TV, reachable at kinozal.me and kinozal.guru since the original kinozal.tv domain stopped resolving. Like other forum trackers, it gates content behind a login and serves it from topic threads rather than an indexer API. Marauder logs in with your Kinozal account and monitors the topic for new .torrent attachments, and can switch between the mirrors from Settings → Tracker domains.",
     howItWorks: [
       "Authenticates with your Kinozal account and reuses the encrypted session for each scheduled check.",
       "Detects in-place .torrent replacements on the topic page and forwards them to your download client.",

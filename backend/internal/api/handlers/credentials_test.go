@@ -42,8 +42,8 @@ func (f *sessionRecordingTracker) Verify(context.Context, *domain.TrackerCredent
 
 var sessionRecorder = &sessionRecordingTracker{}
 
-// unverifiableTracker stands in for toloka/unionpeer: Login succeeds, but the
-// plugin has no way to confirm the session and says so.
+// unverifiableTracker stands in for toloka: Login succeeds, but the plugin
+// has no way to confirm the session and says so.
 type unverifiableTracker struct{ sessionRecordingTracker }
 
 func (f *unverifiableTracker) Name() string        { return "fakeunverifiable" }

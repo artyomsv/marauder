@@ -25,17 +25,41 @@ import (
 	"github.com/artyomsv/marauder/backend/internal/plugins/trackers/forumcommon"
 )
 
-// siteSuffix is the " :: Кинозал.ТВ" tail Kinozal appends to every <title>.
-const siteSuffix = " :: Кинозал.ТВ"
+// siteSuffixRe matches the " :: Кинозал.<BRAND>" tail Kinozal appends to every
+// <title>, where <BRAND> tracks the mirror being served (.ТВ / .МЕ / .GURU).
+// Anchored to the end so a release title that legitimately contains " :: " is
+// left intact.
+var siteSuffixRe = regexp.MustCompile(` :: Кинозал\.[^\s:]+$`)
 
 const (
-	pluginName    = "kinozal"
-	displayName   = "Kinozal.tv"
-	defaultDomain = "kinozal.tv"
+	pluginName  = "kinozal"
+	displayName = "Kinozal"
+	// defaultDomain is kinozal.me, not the original kinozal.tv: as of
+	// 2026-08-03 kinozal.tv no longer resolves — both 8.8.8.8 and 1.1.1.1
+	// return SERVFAIL (broken authoritative NS), so a fresh install starting
+	// there could never reach the tracker. kinozal.tv survives in parseDomains
+	// (not knownDomains) so topic URLs already stored against it still parse
+	// without the dead host becoming a fetch or rotation candidate again.
+	defaultDomain = "kinozal.me"
 	userAgent     = "Marauder/0.3 (+https://marauder.cc)"
 )
 
-var knownDomains = []string{"kinozal.tv", "kinozal.me", "kinozal.guru"}
+// knownDomains are the hosts Marauder is willing to *fetch from*. Returned by
+// Domains(), which feeds the admin's active-domain picker, the automatic
+// rotation ring, and the boot-time re-validation that drops a persisted active
+// domain a plugin no longer lists. The dead kinozal.tv is deliberately absent:
+// listing it would let rotation land back on a host that cannot resolve, and
+// would preserve it across an upgrade for anyone who had selected it
+// explicitly.
+var knownDomains = []string{"kinozal.me", "kinozal.guru"}
+
+// parseDomains are the hosts a stored topic URL may legitimately carry. It is
+// knownDomains plus retired hosts, and is used by CanParse only — never to
+// build a request. kinozal.tv was the default for most of the project's life,
+// so dropping it outright would orphan every topic added before 2026-08-03;
+// keeping it here is safe because canonicalDetailsURL rebuilds every request
+// from effectiveDomain(), so a stored kinozal.tv URL is never fetched as-is.
+var parseDomains = []string{"kinozal.me", "kinozal.guru", "kinozal.tv"}
 
 // urlPattern is host-agnostic; CanParse gates the captured host against the
 // known + admin-configured domain allowlist (the SSRF barrier — see
@@ -78,7 +102,7 @@ func (p *plugin) effectiveDomain() string {
 
 func (p *plugin) CanParse(rawURL string) bool {
 	m := urlPattern.FindStringSubmatch(strings.TrimSpace(rawURL))
-	return m != nil && registry.DomainAllowed(pluginName, m[1], knownDomains)
+	return m != nil && registry.DomainAllowed(pluginName, m[1], parseDomains)
 }
 
 func (p *plugin) Parse(_ context.Context, rawURL string) (*domain.Topic, error) {
@@ -172,11 +196,19 @@ var (
 )
 
 // cleanTitle decodes a raw <title> match from cp1251 and strips the site
-// suffix. Thin wrapper over the shared forumcommon helper so Check and
-// ResolveMetadata stay consistent. Decoding is mandatory: undecoded cp1251
-// Cyrillic is invalid UTF-8 and Postgres rejects it (SQLSTATE 22021) on write.
+// suffix, so Check and ResolveMetadata stay consistent. Decoding is mandatory:
+// undecoded cp1251 Cyrillic is invalid UTF-8 and Postgres rejects it
+// (SQLSTATE 22021) on write.
+//
+// The suffix is matched by pattern rather than by the shared
+// forumcommon.CleanTitle's fixed-string trim because each mirror brands the
+// tail after its own domain — measured 2026-08-03: kinozal.me serves
+// "Кинозал.МЕ" and kinozal.guru "Кинозал.GURU" where kinozal.tv served
+// "Кинозал.ТВ". Trimming one literal would leave the other mirrors' tails on
+// every topic name after a domain rotation.
 func cleanTitle(raw string) string {
-	return forumcommon.CleanTitle(raw, siteSuffix)
+	t := strings.TrimSpace(forumcommon.DecodeWindows1251(raw))
+	return strings.TrimSpace(siteSuffixRe.ReplaceAllString(t, ""))
 }
 
 // extractImageURL returns the og:image poster from a topic page body, made

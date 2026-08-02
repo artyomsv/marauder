@@ -5,7 +5,7 @@ import { breadcrumbSchema } from "@/data/schemas";
 const seo = {
   title: "Features — auth, scheduler, plugins, observability",
   description:
-    "A deep dive into Marauder's architecture: 16 trackers, 5 torrent clients, 4 notifiers, OIDC sign-in, AES-256-GCM secrets, Argon2id passwords, ES256 JWTs, scheduler with bounded worker pool, Prometheus metrics, audit log, en + ru i18n.",
+    "A deep dive into Marauder's architecture: 13 trackers, 5 torrent clients, 4 notifiers, OIDC sign-in, AES-256-GCM secrets, Argon2id passwords, ES256 JWTs, scheduler with bounded worker pool, Prometheus metrics, audit log, en + ru i18n.",
   path: "/features",
   keywords: [
     "marauder features",
@@ -46,7 +46,7 @@ const sections = [
       "Tracker interface: CanParse, Parse, Check, Download — plus optional WithCredentials, WithQuality, WithCloudflare capabilities",
       "Client interface: Test, Add, ConfigSchema — supports magnet URIs, raw .torrent bytes, and watch-folder writes",
       "Notifier interface: Test, Send — Telegram, Email, Webhook, Pushover bundled",
-      "16 trackers, 5 clients, 4 notifiers shipped in v1.0",
+      "13 trackers, 5 clients, 4 notifiers",
       "Per-plugin E2E test harness with a fake qBittorrent — every tracker plugin runs through Parse → Login → Verify → Check → Download → submit-to-qbit on every CI run",
       "Forum-tracker plugins share a common SessionStore that holds a cookie jar per (tracker, user_id) pair so concurrent topic checks reuse the same logged-in client",
     ],

@@ -29,15 +29,22 @@ const schemas = [
 // Trackers monitorrent ships, per its README:
 // lostfilm.tv, rutor.org, free-torrents.org, rutracker.org, tapochek.net,
 // unionpeer.org, nnmclub.to, tr.anidub.com, kinozal.tv, hdclub.org,
-// anilibria.tv, toloka.to — every one of which Marauder also ships.
+// anilibria.tv, toloka.to.
+//
+// Marauder shipped all twelve until 2026-08-03, when three of those sites
+// were confirmed defunct and their plugins removed: hdclub.org (shut down
+// in 2017, domain now redirects to an unrelated file-hosting site),
+// unionpeer.org (all domains parked or NXDOMAIN) and free-torrents.org
+// (no DNS A record). monitorrent still lists them, but they no longer
+// resolve to a tracker for either project.
 const sharedTrackers = [
-  "RuTracker", "LostFilm", "Kinozal", "NNM-Club", "Rutor", "Anilibria",
-  "Anidub", "Toloka", "Unionpeer", "Tapochek", "Free-Torrents", "HD-Club",
+  "RuTracker", "LostFilm", "Kinozal", "NNM-Club", "Rutor", "AniLiberty",
+  "Anidub", "Toloka", "Tapochek",
 ];
 
 const matrix = [
   { feature: "Forum-tracker topic monitoring",        mt: "yes (its core job)",        ma: "yes (its core job)" },
-  { feature: "CIS forum trackers bundled",            mt: "12",                        ma: "12 (same set)" },
+  { feature: "CIS forum trackers bundled",            mt: "12 (3 now defunct)",        ma: "9 (the 9 still online)" },
   { feature: "Torznab indexer support",               mt: "no",                        ma: "yes (torznab plugin)" },
   { feature: "Newznab / Usenet indexer support",      mt: "no",                        ma: "yes (newznab plugin)" },
   { feature: "Torrent clients",                       mt: "Transmission, Deluge, µTorrent, qBittorrent", ma: "Transmission, Deluge, µTorrent, qBittorrent + watch folder" },

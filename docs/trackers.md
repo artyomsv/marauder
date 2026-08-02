@@ -183,7 +183,7 @@ gotcha is that the `pp` cookie expires after a few weeks of
 inactivity, in which case Marauder transparently re-runs Login
 on the next check.
 
-### Kinozal.tv
+### Kinozal
 
 | | |
 |---|---|
@@ -192,7 +192,15 @@ on the next check.
 | **Quality selection** | No |
 | **Episode filter** | No |
 | **Cloudflare** | No |
-| **URL format** | `https://kinozal.tv/details.php?id=<id>` |
+| **URL format** | `https://kinozal.me/details.php?id=<id>` |
+
+> **Default domain changed 2026-08-03.** The original `kinozal.tv` stopped
+> resolving — both `8.8.8.8` and `1.1.1.1` return SERVFAIL — so the plugin
+> default is now `kinozal.me`. `kinozal.tv` remains in the allowlist so
+> topic URLs already stored against it keep working, and `kinozal.guru` is
+> available as a mirror. Each mirror brands the page `<title>` after its
+> own domain (`Кинозал.МЕ`, `Кинозал.GURU`), which the title cleaner now
+> strips by pattern rather than by one hardcoded suffix.
 
 Russian movie / TV tracker. Same one-thread-one-topic model as
 RuTracker. The infohash is read from the authenticated
@@ -214,16 +222,26 @@ delivery all confirmed.
 | **Account required** | No (anonymous) |
 | **Quality selection** | No |
 | **Episode filter** | No |
-| **Cloudflare** | **Yes** — requires the cfsolver sidecar |
+| **Cloudflare** | Site is behind Cloudflare, but no solver is needed in practice |
 | **URL format** | `https://nnmclub.to/forum/viewtopic.php?t=<id>` |
 
-phpBB tracker wrapped in Cloudflare. Works anonymously — account
-login is not supported because Cloudflare Turnstile blocks automated
-login flows. Marauder routes through the `cfsolver` sidecar profile
-(start it with `docker compose --profile cfsolver up -d`) which uses
-headless Chromium via chromedp to solve the Cloudflare interstitial
-and hand the cookies back. No credentials needed; do **not** add an
-NNM-Club account entry on `/accounts`.
+phpBB tracker behind Cloudflare. Works anonymously — account login is
+not supported because Cloudflare Turnstile blocks automated login
+flows. No credentials needed; do **not** add an NNM-Club account entry
+on `/accounts`.
+
+**No sidecar required.** Earlier revisions of this page told you to start
+a `cfsolver` profile. That is obsolete twice over: the `cfsolver` service
+was superseded by the FlareSolverr clearance minter, and NNM-Club does
+not currently serve an interstitial to Marauder at all — topic pages
+return the real HTML to an ordinary Go request. Cloudflare policy is
+dynamic and per-IP, so the clearance path remains available if your
+egress does get challenged, but it is not part of normal setup.
+
+**Validation status:** verified end-to-end against the live site on
+2026-08-03 with no credentials and no solver — `Check` resolved a real
+infohash and title from a public release topic, `Download` produced a
+magnet, and `ResolveMetadata` returned the title and poster.
 
 ---
 
@@ -235,10 +253,14 @@ NNM-Club account entry on `/accounts`.
 | `anilibria` | AniLiberty | No (public API) | No | No | No |
 | `rutor` | Rutor | No | No | No | No |
 | `toloka` | Toloka | Yes | No | No | No |
-| `unionpeer` | Unionpeer | Yes | No | No | No |
 | `tapochek` | Tapochek | Yes | No | No | No |
-| `hdclub` | HD-Club | Yes | No | No | No |
-| `freetorrents` | Free-Torrents.org | Yes | No | No | No |
+
+> **Removed 2026-08-03.** `hdclub`, `unionpeer` and `freetorrents` were
+> deleted after each of their domains was probed and found not to serve a
+> tracker any more: HD-Club shut down in 2017 and `hdclub.org` now
+> redirects to an unrelated file-hosting affiliate site; every Unionpeer
+> domain is either a parking page or NXDOMAIN; `free-torrents.org` has no
+> DNS A record. Topics stored against them will report a missing plugin.
 
 All of these implement `Login` and reach content through the same
 session-cookie pattern as LostFilm. Selectors are in each plugin's
@@ -247,8 +269,8 @@ for the guide on adding new ones or fixing selector drift.
 
 **Not every plugin can confirm a login.** `Verify` is the second,
 independent signal that a session is really authenticated — it fetches
-a page and looks for a positive logged-in marker. `toloka` and
-`unionpeer` have no known marker yet, so they return
+a page and looks for a positive logged-in marker. `toloka` has no known
+marker yet, so it returns
 `registry.ErrVerifyUnsupported` rather than claiming a check they did
 not make. Adding or testing an account for those trackers saves the
 credential and shows an amber **"could not be verified"** notice

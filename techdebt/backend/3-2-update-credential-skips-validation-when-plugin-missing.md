@@ -34,7 +34,7 @@ rest and the row is still owner-scoped.
 The exposure is narrow because `Create` blocks the same condition: such a row
 can only exist if the plugin set changed *underneath* an existing credential —
 a plugin removed in an upgrade, or one that dropped `WithCredentials` in a later
-release. That is a real path (Toloka and Unionpeer could in principle drop it)
+release. That is a real path (Toloka could in principle drop it)
 but not a common one.
 
 The cost when it does happen is a stored password nobody ever validated,

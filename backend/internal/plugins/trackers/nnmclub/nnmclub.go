@@ -38,7 +38,11 @@ const (
 // registry.DomainAllowed).
 var urlPattern = regexp.MustCompile(`^https?://(?:www\.)?([^/]+)/forum/viewtopic\.php\?t=(\d+)`)
 
-var knownDomains = []string{"nnmclub.to", "nnmclub.me"}
+// knownDomains deliberately no longer lists nnmclub.me: as of 2026-08-03 it
+// is a parked domain (it serves a router.parklogic.com redirect page, not the
+// forum). Leaving it here would let domain rotation move a working install
+// onto a parking page it can never recover from on its own.
+var knownDomains = []string{"nnmclub.to"}
 
 type plugin struct {
 	sessions  *forumcommon.SessionStore

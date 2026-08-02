@@ -61,9 +61,11 @@ func TestCanParse(t *testing.T) {
 	cases := map[string]bool{
 		"https://nnmclub.to/forum/viewtopic.php?t=12345":     true,
 		"https://www.nnmclub.to/forum/viewtopic.php?t=12345": true,
-		"https://nnmclub.me/forum/viewtopic.php?t=12345":     true,
-		"https://nnmclub.to/forum/index.php":                 false,
-		"https://example.com/":                               false,
+		// nnmclub.me became a parked domain (2026-08-03) and was dropped from
+		// knownDomains, so it must no longer parse as NNM-Club.
+		"https://nnmclub.me/forum/viewtopic.php?t=12345": false,
+		"https://nnmclub.to/forum/index.php":             false,
+		"https://example.com/":                           false,
 	}
 	for u, want := range cases {
 		if got := p.CanParse(u); got != want {
@@ -181,7 +183,7 @@ func TestCanParse_CustomDomain_AllowedViaResolver(t *testing.T) {
 
 func TestDomains_CanonicalFirst(t *testing.T) {
 	p := &plugin{}
-	want := []string{"nnmclub.to", "nnmclub.me"}
+	want := []string{"nnmclub.to"}
 	if !reflect.DeepEqual(p.Domains(), want) {
 		t.Errorf("Domains() = %v, want %v", p.Domains(), want)
 	}
@@ -215,7 +217,7 @@ func TestCheck_RewritesToActiveDomain(t *testing.T) {
 
 	registry.SetDomainResolver(func(name string) registry.DomainConfig {
 		if name == "nnmclub" {
-			return registry.DomainConfig{Active: "nnmclub.me"}
+			return registry.DomainConfig{Active: "nnmclub.mirror", Custom: []string{"nnmclub.mirror"}}
 		}
 		return registry.DomainConfig{}
 	})
@@ -231,8 +233,8 @@ func TestCheck_RewritesToActiveDomain(t *testing.T) {
 	if len(rec.hosts) == 0 {
 		t.Fatal("no requests recorded")
 	}
-	if rec.hosts[0] != "nnmclub.me" {
-		t.Errorf("fetch host = %q, want active domain nnmclub.me", rec.hosts[0])
+	if rec.hosts[0] != "nnmclub.mirror" {
+		t.Errorf("fetch host = %q, want active domain nnmclub.mirror", rec.hosts[0])
 	}
 }
 
@@ -250,7 +252,7 @@ func TestDownload_RewritesToActiveDomain(t *testing.T) {
 
 	registry.SetDomainResolver(func(name string) registry.DomainConfig {
 		if name == "nnmclub" {
-			return registry.DomainConfig{Active: "nnmclub.me"}
+			return registry.DomainConfig{Active: "nnmclub.mirror", Custom: []string{"nnmclub.mirror"}}
 		}
 		return registry.DomainConfig{}
 	})
@@ -266,8 +268,8 @@ func TestDownload_RewritesToActiveDomain(t *testing.T) {
 	if len(rec.hosts) == 0 {
 		t.Fatal("no requests recorded")
 	}
-	if rec.hosts[0] != "nnmclub.me" {
-		t.Errorf("fetch host = %q, want active domain nnmclub.me", rec.hosts[0])
+	if rec.hosts[0] != "nnmclub.mirror" {
+		t.Errorf("fetch host = %q, want active domain nnmclub.mirror", rec.hosts[0])
 	}
 }
 
@@ -282,7 +284,7 @@ func TestResolveMetadata_RewritesToActiveDomain(t *testing.T) {
 
 	registry.SetDomainResolver(func(name string) registry.DomainConfig {
 		if name == "nnmclub" {
-			return registry.DomainConfig{Active: "nnmclub.me"}
+			return registry.DomainConfig{Active: "nnmclub.mirror", Custom: []string{"nnmclub.mirror"}}
 		}
 		return registry.DomainConfig{}
 	})
@@ -297,7 +299,7 @@ func TestResolveMetadata_RewritesToActiveDomain(t *testing.T) {
 	if len(rec.hosts) == 0 {
 		t.Fatal("no requests recorded")
 	}
-	if rec.hosts[0] != "nnmclub.me" {
-		t.Errorf("fetch host = %q, want active domain nnmclub.me", rec.hosts[0])
+	if rec.hosts[0] != "nnmclub.mirror" {
+		t.Errorf("fetch host = %q, want active domain nnmclub.mirror", rec.hosts[0])
 	}
 }

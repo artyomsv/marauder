@@ -7,6 +7,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- **Three tracker plugins whose sites no longer exist: `hdclub`,
+  `unionpeer` and `freetorrents`.** Every advertised tracker domain was
+  probed against the live internet on 2026-08-03. HD-Club shut down in 2017
+  and `hdclub.org` now redirects to an unrelated file-hosting affiliate
+  site — `details.php`, `login.php` and `browse.php` all 404 there. All
+  three Unionpeer domains are gone: `.org` and `.com` serve domain-parking
+  pages, `.net` is NXDOMAIN. `free-torrents.org` has no DNS A record on any
+  resolver. Marauder now bundles 13 trackers instead of 16. Topics stored
+  against the removed trackers will report a missing plugin.
+
+### Fixed
+
+- **Kinozal's default domain no longer resolves.** `kinozal.tv` returns
+  SERVFAIL from both `8.8.8.8` and `1.1.1.1` (broken authoritative
+  nameservers), so a fresh install started on a host it could never reach.
+  The compiled default is now `kinozal.me`, with `kinozal.guru` as a mirror;
+  `kinozal.tv` stays in the allowlist so already-stored topic URLs keep
+  parsing.
+
+- **Kinozal topic names kept the mirror's branding.** Each mirror ends its
+  page `<title>` with its own domain (`Кинозал.МЕ`, `Кинозал.GURU`) where
+  the plugin trimmed only the literal `Кинозал.ТВ`, so any non-`.tv` mirror
+  left the tail glued to every topic display name. The suffix is now matched
+  by pattern, and a release title that legitimately contains `" :: "` is
+  left intact.
+
+- **A retired tracker domain could still be picked as a live one.** A
+  plugin's `Domains()` list does three jobs at once: it decides which topic
+  URLs parse, which hosts the admin can select, and which hosts automatic
+  rotation may rotate onto. Kinozal keeps the SERVFAIL'd `kinozal.tv` for
+  the first job, which silently made it eligible for the other two — so
+  rotation could land back on it, and an install with it explicitly
+  selected would keep it across the upgrade instead of falling back to the
+  working default. URL recognition is now a separate list from the
+  fetch/rotation candidates.
+
+- **NNM-Club's documented setup was obsolete.** `docs/trackers.md` told
+  users to start a `cfsolver` sidecar profile for it. That service was
+  superseded by the FlareSolverr clearance minter, and NNM-Club serves
+  Marauder the real page over an ordinary request anyway — verified
+  end-to-end against a live release topic with no credentials and no
+  solver. Its catalogue status moves from alpha to validated.
+
+- **Two dead mirrors removed from the domain allowlists, so automatic
+  rotation can no longer strand a working install on them.** `nnmclub.me`
+  is a parked domain, and `lostfilm.win` answers `200 OK` with a zero-byte
+  body while closing the connection on any real path — a host that answers
+  without serving looks reachable to a rotation check but fails every
+  fetch. NNM-Club keeps `nnmclub.to`; LostFilm keeps `lostfilm.tv` and
+  `lostfilm.run`.
+
 ## [1.19.0] - 2026-08-02
 
 ### Fixed

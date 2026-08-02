@@ -67,7 +67,7 @@ func TestSearch_ParsesLiveShapedRows(t *testing.T) {
 	if first.Title != "Планета Дюна / Planet Dune / 2021 / ПМ, СТ / WEB-DL (1080p)" {
 		t.Errorf("Title = %q", first.Title)
 	}
-	if first.URL != "https://kinozal.tv/details.php?id=2147332" {
+	if first.URL != "https://kinozal.me/details.php?id=2147332" {
 		t.Errorf("URL = %q", first.URL)
 	}
 	// The size is the s-cell that looks like a size — not the comments

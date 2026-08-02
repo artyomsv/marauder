@@ -115,10 +115,12 @@ touching config files.
 - [x] `anidub` tracker plugin — alpha, with WithQuality
 - [x] `rutor` tracker plugin — public, no auth
 - [x] `toloka` tracker plugin — alpha
-- [x] `unionpeer` tracker plugin — alpha
+- [x] `unionpeer` tracker plugin — alpha — **removed 2026-08-03, site defunct**
 - [x] `tapochek` tracker plugin — alpha
-- [x] `hdclub` — TBDev/Gazelle-style private tracker plugin (alpha)
-- [x] `freetorrents` — phpBB Free-Torrents.org plugin (alpha)
+- [x] `hdclub` — TBDev/Gazelle-style private tracker plugin (alpha) —
+      **removed 2026-08-03, site shut down in 2017**
+- [x] `freetorrents` — phpBB Free-Torrents.org plugin (alpha) —
+      **removed 2026-08-03, domain has no DNS A record**
 - [x] **E2E test harness + 14 per-tracker E2E tests** — every tracker
       now has a `<name>_e2e_test.go` that exercises the full pipeline
       through a fake qBittorrent

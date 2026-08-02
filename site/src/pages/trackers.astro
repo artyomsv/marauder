@@ -7,7 +7,7 @@ import { breadcrumbSchema } from "@/data/schemas";
 const seo = {
   title: "Supported trackers — RuTracker, Kinozal, LostFilm, Torznab, more",
   description:
-    "Marauder supports 16 trackers in v1.0: RuTracker, Kinozal, NNM-Club, LostFilm, Anilibria, Anidub, Rutor, Toloka, Unionpeer, Tapochek, Free-Torrents, HD-Club, generic magnet/.torrent URLs, plus Torznab and Newznab indexers.",
+    "Marauder supports 13 trackers: RuTracker, Kinozal, NNM-Club, LostFilm, AniLiberty, Anidub, Rutor, Toloka, Tapochek, generic magnet/.torrent URLs, plus Torznab and Newznab indexers.",
   path: "/trackers",
   keywords: [
     "rutracker monitor",
@@ -43,10 +43,10 @@ const indexers = trackers.filter((t) => t.category === "indexer");
     <header class="mb-12">
       <p class="mb-2 text-xs font-mono uppercase tracking-wider text-muted-foreground">tracker catalogue</p>
       <h1 class="text-4xl font-bold tracking-tight sm:text-5xl">
-        {trackerCount} trackers in v1.0
+        {trackerCount} bundled trackers
       </h1>
       <p class="mt-4 max-w-3xl text-lg text-muted-foreground">
-        Marauder ships with sixteen tracker plugins covering CIS forum-style
+        Marauder ships with {trackerCount} tracker plugins covering CIS forum-style
         sites, public magnet/torrent feeds, and the entire *arr-stack
         ecosystem via Torznab and Newznab. {validatedCount} are
         E2E-validated against real services. {alphaCount} are alpha —

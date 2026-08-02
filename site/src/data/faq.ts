@@ -22,7 +22,7 @@ export const homeFaq: FaqItem[] = [
   {
     question: "Which trackers does Marauder support?",
     answer:
-      "16 trackers in v1.0: RuTracker, Kinozal, NNM-Club, LostFilm, Anilibria, Anidub, Rutor, Toloka, Unionpeer, Tapochek, Free-Torrents, HD-Club, plus generic .torrent and magnet URLs, plus Torznab and Newznab indexers (which together cover 500+ sites via Jackett, Prowlarr, NZBHydra2).",
+      "13 trackers: RuTracker, Kinozal, NNM-Club, LostFilm, AniLiberty, Anidub, Rutor, Toloka, Tapochek, plus generic .torrent and magnet URLs, plus Torznab and Newznab indexers (which together cover 500+ sites via Jackett, Prowlarr, NZBHydra2).",
   },
   {
     question: "Which torrent clients does Marauder support?",
