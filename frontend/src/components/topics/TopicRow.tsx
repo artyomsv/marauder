@@ -85,7 +85,10 @@ export function TopicRow({
         {!compact && <TopicUrl url={topic.URL} />}
         <TopicError topic={topic} />
         {!compact && <DeliveryStatus topicId={topic.ID} />}
-        {!compact && <TopicCheckStatus topicId={topic.ID} />}
+        {/* Not gated by compact, unlike its siblings above: it's the only
+            feedback a "Check now" click produces (the tick that runs it is
+            up to a minute away), so compact-density users need it too. */}
+        <TopicCheckStatus topicId={topic.ID} />
         {!compact && <TopicHistoryDisclosure topicId={topic.ID} />}
         <div className="mt-2 flex flex-wrap items-center gap-2">
           <Badge variant="default" className="shrink-0 font-mono">

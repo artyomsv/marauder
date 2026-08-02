@@ -704,3 +704,55 @@ describe("TopicsPage reset", () => {
     expect(mockApi.resetTopic.mock.calls.map((c: unknown[]) => c[0]).sort()).toEqual(["t1", "t2"]);
   });
 });
+
+describe("TopicsPage recheck", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockApi.get.mockImplementation((path: string) => {
+      if (path === "/topics") return Promise.resolve({ topics: RESET_ROW_TOPICS });
+      if (path === "/clients") return Promise.resolve({ clients: [] });
+      if (path === "/notifiers") return Promise.resolve({ notifiers: [] });
+      return Promise.resolve({});
+    });
+  });
+
+  it("posts to the clicked row's own recheck endpoint", async () => {
+    mockApi.post.mockResolvedValue({});
+    renderTopicsPage();
+    await screen.findByText("Alpha");
+
+    // Two fixture topics, two row "Check now" buttons. Click the SECOND one —
+    // clicking index 0 would pass identically if every row's action were
+    // (incorrectly) bound to topics[0], e.g. a `/reset` typo that fell
+    // through to the always-first topic. A typo landing on `/reset` instead
+    // of `/recheck` would decode an empty body into defaults and remove the
+    // topic's delivered torrents from the client — exactly what this
+    // non-destructive action exists to avoid.
+    const checkButtons = screen.getAllByRole("button", { name: /check now/i });
+    expect(checkButtons).toHaveLength(2);
+    await userEvent.click(checkButtons[1]);
+
+    await waitFor(() => expect(mockApi.post).toHaveBeenCalledWith("/topics/t2/recheck"));
+    expect(mockApi.post).not.toHaveBeenCalledWith("/topics/t1/recheck");
+  });
+
+  it("issues one recheck request per selected topic from the bulk bar", async () => {
+    mockApi.post.mockResolvedValue({});
+    renderTopicsPage();
+    await screen.findByText("Alpha");
+
+    await userEvent.click(screen.getByLabelText("Select all"));
+    // The bulk bar's "Check now" button shares its accessible name with each
+    // row's own recheck button, so scope the query to the bar — identified by
+    // its "N selected" label — the same way the reset test above scopes to
+    // the reset card.
+    const bar = (await screen.findByText(/2 selected/)).closest("div")!;
+    await userEvent.click(within(bar).getByRole("button", { name: /check now/i }));
+
+    await waitFor(() => expect(mockApi.post).toHaveBeenCalledTimes(2));
+    expect(mockApi.post.mock.calls.map((c: unknown[]) => c[0]).sort()).toEqual([
+      "/topics/t1/recheck",
+      "/topics/t2/recheck",
+    ]);
+  });
+});

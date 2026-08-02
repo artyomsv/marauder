@@ -460,6 +460,13 @@ func (r *Topics) QueueRecheck(ctx context.Context, id, userID uuid.UUID) (Rechec
 	//
 	// target therefore tests only existence and ownership, which is what the
 	// caller needs to tell "paused" (409) from "not found" (404).
+	//
+	// The eligibility set deliberately mirrors DueForCheck's WHERE clause
+	// (status IN ('active', 'error')) rather than the logically-equivalent
+	// status <> 'paused' — today's two other statuses make them the same set,
+	// but a future third status would be silently queued here and silently
+	// ignored by DueForCheck, reintroducing the "204 promising a check that
+	// never runs" failure this endpoint exists to avoid. Keep the two in step.
 	const q = `
 WITH target AS (
     SELECT 1 FROM topics WHERE id = $1 AND user_id = $2
@@ -467,7 +474,7 @@ WITH target AS (
     UPDATE topics SET
         next_check_at = now(),
         updated_at    = now()
-    WHERE id = $1 AND user_id = $2 AND status <> 'paused'
+    WHERE id = $1 AND user_id = $2 AND status IN ('active', 'error')
     RETURNING 1
 )
 SELECT EXISTS (SELECT 1 FROM target), EXISTS (SELECT 1 FROM updated)`

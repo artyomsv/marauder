@@ -341,7 +341,7 @@ The **status poll fallback** (in `DeliveryStatus`) is now gated by `useSseStatus
 - **Component size**: max 250 lines per file (currently breached by
   `Clients.tsx` and `TopicForm.tsx` — pre-existing tech debt, tracked in
   `techdebt/frontend/`. `Topics.tsx` was fixed by the topic-reset work: it
-  dropped from 425 to 216 lines by extracting `TopicRow`, `BulkActionBar`,
+  dropped from 425 to 237 lines by extracting `TopicRow`, `BulkActionBar`,
   `DensityToggle`, `TopicsEmptyState` and `StatusIndicator` into
   `components/topics/`).
 - **Path alias**: `@/` maps to `src/`.

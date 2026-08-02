@@ -28,6 +28,10 @@ type TopicsList = { topics: Topic[] | null };
 type ClientsList = { clients: ClientRef[] | null };
 interface NotifiersList { notifiers: NotifierRef[] | null }
 
+// Matches RESET_CONCURRENCY in ResetTopicCard — a bulk action should not
+// fire one request per selected topic simultaneously.
+const RECHECK_CONCURRENCY = 4;
+
 export function TopicsPage() {
   const qc = useQueryClient();
   const { data, isLoading } = useQuery({
@@ -74,18 +78,29 @@ export function TopicsPage() {
   });
   const recheck = useMutation({
     mutationFn: (id: string) => api.post<void>(`/topics/${id}/recheck`),
-    onSuccess: () => qc.invalidateQueries({ queryKey: QK.topics }),
+    onSuccess: (_data, id) => {
+      // Optimistic: the check is only *queued* here, the scheduler starts it
+      // within its next tick — but that's a 1-minute-default wait with no
+      // other visible feedback, so light the existing "Checking…" chip right
+      // away. If no check actually follows (e.g. the request raced a pause),
+      // useCheckStatus's own CHECKING_STALE_MS timer reverts it to idle.
+      useCheckStatus.getState().setChecking(id);
+      qc.invalidateQueries({ queryKey: QK.topics });
+    },
   });
 
-  // Matches RESET_CONCURRENCY in ResetTopicCard — a bulk action should not
-  // fire one request per selected topic simultaneously.
-  const RECHECK_CONCURRENCY = 4;
-
   const bulkRecheck = async (ids: string[]) => {
-    await mapWithConcurrency(ids, RECHECK_CONCURRENCY, (id) =>
-      api.post<void>(`/topics/${id}/recheck`).catch(() => undefined),
-    );
+    await mapWithConcurrency(ids, RECHECK_CONCURRENCY, async (id) => {
+      try {
+        await api.post<void>(`/topics/${id}/recheck`);
+        useCheckStatus.getState().setChecking(id);
+      } catch {
+        // Best-effort, matching the row action: one failed topic must not
+        // stop the rest of the bulk fan-out.
+      }
+    });
     await qc.invalidateQueries({ queryKey: QK.topics });
+    setSelected(new Set());
   };
 
   const topics = data?.topics ?? [];

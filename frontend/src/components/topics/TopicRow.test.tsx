@@ -12,7 +12,7 @@ const lookups: TopicRowLookups = {
   notifierById: new Map(),
 };
 
-function makeTopic(status: string): Topic {
+function makeTopic(status: Topic["Status"]): Topic {
   return {
     ID: "t1",
     DisplayName: "Some Show",
@@ -32,7 +32,7 @@ function makeActions(): TopicRowActions {
   };
 }
 
-function renderRow(status: string, actions: TopicRowActions) {
+function renderRow(status: Topic["Status"], actions: TopicRowActions) {
   // TopicRow renders DeliveryStatus / TopicCheckStatus / TopicHistoryDisclosure,
   // which call useQuery — a QueryClientProvider is required or the render throws.
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
