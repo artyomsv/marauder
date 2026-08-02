@@ -240,11 +240,31 @@ NNM-Club account entry on `/accounts`.
 | `hdclub` | HD-Club | Yes | No | No | No |
 | `freetorrents` | Free-Torrents.org | Yes | No | No | No |
 
-All of these implement `Login`/`Verify` and reach content through
-the same session-cookie pattern as LostFilm. Selectors are in
-each plugin's package — see
-[`docs/plugin-development.md`](plugin-development.md) for the
-guide on adding new ones or fixing selector drift.
+All of these implement `Login` and reach content through the same
+session-cookie pattern as LostFilm. Selectors are in each plugin's
+package — see [`docs/plugin-development.md`](plugin-development.md)
+for the guide on adding new ones or fixing selector drift.
+
+**Not every plugin can confirm a login.** `Verify` is the second,
+independent signal that a session is really authenticated — it fetches
+a page and looks for a positive logged-in marker. `toloka` and
+`unionpeer` have no known marker yet, so they return
+`registry.ErrVerifyUnsupported` rather than claiming a check they did
+not make. Adding or testing an account for those trackers saves the
+credential and shows an amber **"could not be verified"** notice
+instead of a green tick. The credential still works; Marauder is only
+declining to imply it validated something it could not. See
+[`docs/plugin-development.md`](plugin-development.md) if you can
+identify a logged-in marker for one of them.
+
+**AniDub validation status:** verified end-to-end against the live
+tracker with a real account on 2026-08-02 — login rejection detection,
+session verification, title/poster resolution, change detection, and a
+real `.torrent` delivered to qBittorrent. Note that AniDub publishes no
+infohash on its topic pages, so the plugin's change token is derived
+from the torrent block (id, filename, size) rather than a page hash;
+seeder counts are deliberately excluded because they would otherwise
+make every check look like a new release.
 
 AniLiberty is the public-API exception in this group. Current
 `https://aniliberty.top/anime/releases/release/<alias>` URLs use the official

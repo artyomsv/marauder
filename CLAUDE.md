@@ -275,6 +275,12 @@ src/
 │   │   └── BulkActionBar.tsx       Multi-select action bar
 │   ├── notifiers/             Page-specific notifier components
 │   │   └── EventPicker.tsx    Event type checkbox list (for notifier subscription)
+│   ├── credentials/           Page-specific tracker-account components
+│   │   ├── TestLoginIcon.tsx        Test-login result icon; renders the three
+│   │   │                            outcomes of loginAndVerify distinctly —
+│   │   │                            verified / unverified / failed
+│   │   └── VerificationNotice.tsx   Amber "saved but could not be verified"
+│   │                                banner (ErrVerifyUnsupported plugins)
 │   └── ui/                    shadcn primitives — DO NOT hand-edit
 ├── hooks/                     (legacy folder, mostly empty — prefer lib/hooks)
 ├── i18n/                      en/ru dictionaries + useT hook
@@ -339,11 +345,11 @@ The **status poll fallback** (in `DeliveryStatus`) is now gated by `useSseStatus
 - **Icons**: `lucide-react` exclusively.
 - **i18n**: `useT()` from `i18n/`. English + Russian dictionaries.
 - **Component size**: max 250 lines per file (currently breached by
-  `Clients.tsx` and `TopicForm.tsx` — pre-existing tech debt, tracked in
-  `techdebt/frontend/`. `Topics.tsx` was fixed by the topic-reset work: it
-  dropped from 425 to 237 lines by extracting `TopicRow`, `BulkActionBar`,
-  `DensityToggle`, `TopicsEmptyState` and `StatusIndicator` into
-  `components/topics/`).
+  `Credentials.tsx` (~816), `Clients.tsx` and `TopicForm.tsx` — pre-existing
+  tech debt, all tracked in `techdebt/frontend/`. `Topics.tsx` was fixed by the
+  topic-reset work: it dropped from 425 to 237 lines by extracting `TopicRow`,
+  `BulkActionBar`, `DensityToggle`, `TopicsEmptyState` and `StatusIndicator`
+  into `components/topics/`).
 - **Path alias**: `@/` maps to `src/`.
 - **Tests**: Vitest + `@testing-library/react` + `userEvent` + jsdom.
   Co-locate `*.test.tsx` next to the component. Run with `npm test`.

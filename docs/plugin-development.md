@@ -133,6 +133,56 @@ type WithInteractiveLogin interface {
 The registry detects these via type assertion at runtime — no separate
 registration needed.
 
+### Login vs Verify — and never fake a Verify
+
+`Login` and `Verify` are two *independent* signals, on purpose.
+
+`Login` is usually a **negative** check: post the form, then look for a
+known error phrase in the response. That is unbounded — you have to
+enumerate every way a site can say "no", in every inflection, forever —
+and it fails **open** on any wording you did not anticipate. Many
+trackers answer a rejected sign-in with `HTTP 200` and the login form
+re-rendered, so a status check alone will not save you.
+
+`Verify` is the **positive** check that makes the pair trustworthy:
+fetch a page on the established session and look for a marker that can
+only be present when signed in — a logout link, the account menu, an
+unread-PM counter. Anything else is a failure.
+
+```go
+// Good: a positive marker, measured against the real site.
+func (p *plugin) Verify(ctx context.Context, creds *domain.TrackerCredential) (bool, error) {
+    body, err := p.fetch(ctx, "https://"+p.effectiveDomain()+"/", creds)
+    if err != nil {
+        return false, err
+    }
+    return bytes.Contains(body, []byte("action=logout")), nil
+}
+```
+
+**Never write `return true, nil`.** It is indistinguishable from a real
+positive, so it silently disables the second signal and leaves the
+fail-open `Login` check as the only gate. That combination once let a
+credential belonging to a *different website* be reported as a
+successful login.
+
+If you genuinely cannot find a marker, say so:
+
+```go
+func (p *plugin) Verify(_ context.Context, _ *domain.TrackerCredential) (bool, error) {
+    return false, registry.ErrVerifyUnsupported
+}
+```
+
+The handler maps that sentinel to "saved, but unverified": the
+credential is still stored and usable, and the UI shows an amber notice
+instead of a green tick. `toloka` and `unionpeer` are in this state
+today — supplying a real marker for either is a welcome contribution.
+
+When you add a marker, verify **both** directions against the live site:
+confirm it is present when signed in *and* absent when anonymous. A
+marker that is always present turns `Verify` back into a rubber stamp.
+
 ### Interactive (captcha) login
 
 For trackers that gate login behind a captcha, don't hand-roll the flow —
