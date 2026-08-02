@@ -4,14 +4,38 @@
 // many users in 2019-2020. It runs on a phpBB-like forum at
 // `tr.anidub.com/<category>/<slug>.html`.
 //
-// **Validation status:** structurally complete. The login path was measured
-// against the live site on 2026-08-02: a rejected sign-in returns HTTP 200
-// with the login form re-rendered and the banner "вход на сайт не был
-// произведен", and an anonymous page carries `login_name` twice and
-// `action=logout` zero times. The remaining assumption is that a *signed-in*
-// page does carry `action=logout` (DLE's standard logout link) — that half
-// still wants confirmation from a real account. Topic-page selectors mirror
-// the public HTML as of 2026-04.
+// **Validation status:** structurally complete. Measured against the live site
+// on 2026-08-02:
+//
+//   - A rejected sign-in returns HTTP 200 with the login form re-rendered and
+//     the banner "вход на сайт не был произведен".
+//   - An anonymous page carries `login_name` twice and `action=logout` zero
+//     times.
+//   - Responses are served as `Content-Type: text/html; charset=UTF-8`. The
+//     marker lists below are byte literals, so this matters: were the site to
+//     start serving cp1251 anywhere, none of them would match and the failure
+//     would be silent and in the false-green direction — the same shape as the
+//     "не верный" / "неверное" mismatch this plugin was fixed for.
+//   - No topic page carries an infohash, on film or series pages; see
+//     pageFingerprint.
+//
+// Two things remain UNMEASURED, and both are handled by not asserting them:
+//
+//   - That a *signed-in* page carries `action=logout` (DLE's standard logout
+//     link). Verify therefore only reports a rejection on the marker that was
+//     measured, and returns registry.ErrVerifyUnsupported for a page matching
+//     neither — never a rejection it cannot substantiate.
+//   - What a *successful* login POST response contains. Login is published on
+//     the negative check alone, so a rejection worded outside
+//     loginFailureMarkers would publish an unauthenticated session over the
+//     user's working one. That is self-healing — Verify still reports the
+//     failure to the user, and the scheduler's next check re-logs-in with the
+//     stored password — and it is deliberately NOT tightened by requiring the
+//     logout marker here, because nobody has captured a successful login
+//     response to confirm what it contains. Guessing is what produced the
+//     fail-closed bug this plugin already had.
+//
+// Topic-page selectors mirror the public HTML as of 2026-04.
 package anidub
 
 import (
@@ -273,10 +297,6 @@ func (p *plugin) ResolveMetadata(ctx context.Context, rawURL string, creds *doma
 }
 
 var (
-	// The title sits inside <h1><span id="news-title">…</span></h1>. The
-	// original pattern required text directly between the <h1> tags, so the
-	// nested span left it matching nothing — which also disabled the
-	// scheduler's placeholder self-heal.
 	// The title lives in <h1><span id="news-title">…</span></h1>. Match the
 	// span directly rather than "any span inside an h1": a sibling element
 	// before it (a back-link, a breadcrumb) would otherwise be swallowed into

@@ -66,6 +66,14 @@ export function CredentialsPage() {
   const test = useMutation({
     mutationFn: (id: string) =>
       api.post<{ ok: boolean; verified: boolean }>(`/credentials/${id}/test`),
+    // A confirmed test retires the save-time verdict for that row. Without
+    // this the notice is only *hidden* while its row is the most recently
+    // tested one: testing any other row moves test.variables away, and the
+    // stale "could not be verified" warning reappears on a credential that
+    // was just confirmed.
+    onSuccess: (data, id) => {
+      if (data.verified) setUnverifiedId((prev) => (prev === id ? null : prev));
+    },
   });
 
   // A test result belongs to exactly one row — the one whose id was passed to
