@@ -5,6 +5,17 @@ version: 2
 # We update weekly across every ecosystem in the repo. Minor and patch
 # bumps are grouped to keep PR noise manageable; major bumps are
 # always individual so reviewers can read each one carefully.
+#
+# Every entry waits seven days before proposing a newly published
+# version. That is the other half of pinning every action to a commit
+# SHA, not a duplicate of it: pinning stops a published tag being
+# repointed at a malicious commit, while cooldown stops a brand-new
+# version being proposed before anyone has had a chance to look at it —
+# the window several real registry compromises were caught in.
+#
+# It delays nothing that matters. GitHub applies cooldown to version
+# updates only, so a Dependabot *security* update raised from an
+# advisory ignores it and lands immediately.
 
 updates:
   # ------------------------------------------------------- Go modules
@@ -16,6 +27,8 @@ updates:
       time: "06:00"
       timezone: Etc/UTC
     open-pull-requests-limit: 10
+    cooldown:
+      default-days: 7
     labels:
       - dependencies
       - go
@@ -35,6 +48,8 @@ updates:
       time: "06:00"
       timezone: Etc/UTC
     open-pull-requests-limit: 5
+    cooldown:
+      default-days: 7
     labels:
       - dependencies
       - go
@@ -56,6 +71,8 @@ updates:
       time: "06:00"
       timezone: Etc/UTC
     open-pull-requests-limit: 10
+    cooldown:
+      default-days: 7
     labels:
       - dependencies
       - frontend
@@ -88,6 +105,8 @@ updates:
       time: "06:00"
       timezone: Etc/UTC
     open-pull-requests-limit: 5
+    cooldown:
+      default-days: 7
     labels:
       - dependencies
       - github-actions
@@ -105,6 +124,8 @@ updates:
     schedule:
       interval: weekly
       day: monday
+    cooldown:
+      default-days: 7
     labels:
       - dependencies
       - docker
@@ -116,6 +137,8 @@ updates:
     schedule:
       interval: weekly
       day: monday
+    cooldown:
+      default-days: 7
     labels:
       - dependencies
       - docker
@@ -127,6 +150,8 @@ updates:
     schedule:
       interval: weekly
       day: monday
+    cooldown:
+      default-days: 7
     labels:
       - dependencies
       - docker
