@@ -34,7 +34,7 @@ jobs:
         client: [qbittorrent, transmission, deluge, utorrent]
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # Authenticated pulls get a per-account quota instead of the anonymous
       # per-IP pool shared by all GitHub-hosted runners, which rate-limited an
       # entire nightly run (issues #119-#121). No-op until the secrets exist.
@@ -64,7 +64,7 @@ jobs:
         client: [qbittorrent, transmission, deluge]
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Docker Hub login (higher pull quota)
         if: env.DOCKERHUB_TOKEN != ''
         run: echo "$DOCKERHUB_TOKEN" | docker login -u "$DOCKERHUB_USERNAME" --password-stdin
