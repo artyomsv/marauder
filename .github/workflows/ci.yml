@@ -26,12 +26,14 @@ permissions:
 jobs:
   # ---------------------------------------------------------------- backend
   backend:
-    name: Backend (Go ${{ matrix.go }})
+    name: Backend
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        go: ['1.25']
+    # Deliberately NOT a matrix. A job with a strategy.matrix has its matrix values appended to the
+    # check name by GitHub — `name: Backend` plus `go: ['1.25']` reports as "Backend (1.25)", not
+    # "Backend". This job is a required status check, so a name carrying the Go version deadlocks
+    # every pull request the moment the version moves. A single-valued matrix bought nothing.
+    env:
+      GO_VERSION: '1.25'
     defaults:
       run:
         working-directory: backend
@@ -42,7 +44,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v7
         with:
-          go-version: ${{ matrix.go }}
+          go-version: ${{ env.GO_VERSION }}
           cache: true
           cache-dependency-path: backend/go.sum
 
@@ -221,12 +223,12 @@ jobs:
 
   # ---------------------------------------------------------------- frontend
   frontend:
-    name: Frontend (Node ${{ matrix.node }})
+    name: Frontend
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        node: ['22']
+    # Not a matrix, for the same reason as `backend` above: a matrix would put the Node version back
+    # into the check name, and this job is a required status check.
+    env:
+      NODE_VERSION: '22'
     defaults:
       run:
         working-directory: frontend
@@ -237,7 +239,7 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@v7
         with:
-          node-version: ${{ matrix.node }}
+          node-version: ${{ env.NODE_VERSION }}
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
