@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.19.2] - 2026-08-05
+
 ### Fixed
 
 - **A restart no longer parks Cloudflare-gated topics on a 30-minute
