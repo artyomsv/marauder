@@ -36,6 +36,16 @@ services:
     restart: unless-stopped
     environment:
       LOG_LEVEL: "info"
+    # Same readiness probe as the dev overlay. The backend lives in a separate
+    # Compose project here, so nothing can order it against this service —
+    # a backend that starts first relies on the scheduler's fast retry
+    # (registry.ErrClearanceUnavailable) to recover instead.
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8191/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
     logging:
       driver: json-file
       options:

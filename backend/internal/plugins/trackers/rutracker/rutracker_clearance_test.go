@@ -31,10 +31,12 @@ func pluginFor(t *testing.T, srv *httptest.Server) *plugin {
 	}
 }
 
-// stubClearance is a registry.ClearanceProvider for tests.
+// stubClearance is a registry.ClearanceProvider for tests. A non-nil err makes
+// every mint fail, standing in for a solver that is down or still booting.
 type stubClearance struct {
 	mu          sync.Mutex
 	c           registry.Clearance
+	err         error
 	mints       int
 	invalidated int
 }
@@ -43,6 +45,9 @@ func (s *stubClearance) Clearance(context.Context, string) (registry.Clearance, 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.mints++
+	if s.err != nil {
+		return registry.Clearance{}, s.err
+	}
 	return s.c, nil
 }
 
@@ -67,6 +72,131 @@ func installClearance(t *testing.T) *stubClearance {
 	registry.SetClearanceProvider(sc)
 	t.Cleanup(func() { registry.SetClearanceProvider(nil) })
 	return sc
+}
+
+// installBrokenClearance installs a provider that cannot mint — the state
+// FlareSolverr is in while its browser is still starting.
+func installBrokenClearance(t *testing.T, err error) *stubClearance {
+	t.Helper()
+	sc := &stubClearance{err: err}
+	registry.SetClearanceProvider(sc)
+	t.Cleanup(func() { registry.SetClearanceProvider(nil) })
+	return sc
+}
+
+// errSolverDown is the shape of a real boot-race mint failure: FlareSolverr's
+// port is not listening yet.
+var errSolverDown = errors.New(`flaresolverr: sessions.create: Post "http://flaresolverr:8191/v1": dial tcp 172.24.0.2:8191: connect: connection refused`)
+
+// TestFetchBytes_ProviderDownThenChallenged_BlamesSolverNotTracker is the
+// regression for the 2026-08-05 boot race. The mint failed because the solver
+// was still starting; the fetch fell open and RuTracker answered with its
+// challenge. Reporting that as ErrCloudflareChallenge told the user the
+// tracker "needs a browser to get through" while the browser was 8s from
+// ready, and cost them a 30-minute backoff. The solver's own failure is the
+// diagnosis, and it must survive into the message.
+func TestFetchBytes_ProviderDownThenChallenged_BlamesSolverNotTracker(t *testing.T) {
+	var calls int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&calls, 1)
+		w.Header().Set("Cf-Mitigated", "challenge")
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	defer srv.Close()
+	sc := installBrokenClearance(t, errSolverDown)
+
+	p := pluginFor(t, srv)
+	_, err := p.fetchBytes(context.Background(), nil, nil,
+		"https://"+p.domain+"/forum/viewtopic.php?t=1")
+
+	if !errors.Is(err, registry.ErrClearanceUnavailable) {
+		t.Fatalf("err = %v, want it to wrap registry.ErrClearanceUnavailable", err)
+	}
+	if errors.Is(err, registry.ErrCloudflareChallenge) {
+		t.Errorf("err = %v, must NOT wrap ErrCloudflareChallenge: that code tells the user the tracker needs a browser, when the browser is what failed", err)
+	}
+	if !errors.Is(err, errSolverDown) {
+		t.Errorf("err = %v, want the provider's own cause preserved — the scheduler classifies and backs off on it", err)
+	}
+	// No cached clearance exists to invalidate, so the retry would only be a
+	// second doomed request against an already-unwell solver.
+	if n := atomic.LoadInt32(&calls); n != 1 {
+		t.Errorf("calls = %d, want 1 (no retry when the solver itself is down)", n)
+	}
+	if _, inv := sc.counts(); inv != 0 {
+		t.Errorf("invalidated = %d, want 0 — there was never a clearance to drop", inv)
+	}
+}
+
+// TestFetchBytes_ProviderDownButNotChallenged_Succeeds keeps the fail-open
+// behaviour that matters: an un-gated path must still work while the solver is
+// down. Only a request the tracker actually blocks becomes an error.
+func TestFetchBytes_ProviderDownButNotChallenged_Succeeds(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`<html>ok</html>`))
+	}))
+	defer srv.Close()
+	installBrokenClearance(t, errSolverDown)
+
+	p := pluginFor(t, srv)
+	body, err := p.fetchBytes(context.Background(), nil, nil,
+		"https://"+p.domain+"/forum/viewtopic.php?t=1")
+	if err != nil {
+		t.Fatalf("fetchBytes = %v, want success: a failed mint must not fail a request the tracker never blocked", err)
+	}
+	if !strings.Contains(string(body), "ok") {
+		t.Errorf("body = %q, want the page", body)
+	}
+}
+
+// TestLogin_ProviderDownThenChallenged_BlamesSolverNotTracker is the login-path
+// twin. This is the exact error the two stuck topics recorded: `auth failed:
+// rutracker login: tracker is behind a cloudflare challenge`.
+func TestLogin_ProviderDownThenChallenged_BlamesSolverNotTracker(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cf-Mitigated", "challenge")
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	defer srv.Close()
+	installBrokenClearance(t, errSolverDown)
+
+	p := pluginFor(t, srv)
+	err := p.Login(context.Background(), &domain.TrackerCredential{
+		UserID: uuid.New(), Username: "bob", SecretEnc: []byte("pw"),
+	})
+
+	if !errors.Is(err, registry.ErrClearanceUnavailable) {
+		t.Fatalf("Login err = %v, want it to wrap registry.ErrClearanceUnavailable", err)
+	}
+	if errors.Is(err, registry.ErrCloudflareChallenge) {
+		t.Errorf("Login err = %v, must NOT wrap ErrCloudflareChallenge", err)
+	}
+	if !errors.Is(err, errSolverDown) {
+		t.Errorf("Login err = %v, want the provider's cause preserved", err)
+	}
+}
+
+// TestFetchBytes_ProviderHealthyButChallenged_StillBlamesCloudflare guards the
+// other direction: when the solver answered and the tracker is genuinely
+// gated, `cloudflare` remains the honest code. The new sentinel must not
+// swallow the case it was carved out of.
+func TestFetchBytes_ProviderHealthyButChallenged_StillBlamesCloudflare(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cf-Mitigated", "challenge")
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	defer srv.Close()
+	installClearance(t)
+
+	p := pluginFor(t, srv)
+	_, err := p.fetchBytes(context.Background(), nil, nil,
+		"https://"+p.domain+"/forum/viewtopic.php?t=1")
+	if !errors.Is(err, registry.ErrCloudflareChallenge) {
+		t.Fatalf("err = %v, want ErrCloudflareChallenge when the solver is healthy", err)
+	}
+	if errors.Is(err, registry.ErrClearanceUnavailable) {
+		t.Errorf("err = %v, must not blame the solver when it answered", err)
+	}
 }
 
 func TestFetchBytes_SendsClearanceCookieAndBrowserUA(t *testing.T) {

@@ -1069,6 +1069,21 @@ func classifyError(msg string) string {
 		return errCodePluginMissing
 	}
 
+	// A failed clearance mint outranks everything, including the Cloudflare
+	// wording it necessarily arrives with. When the solver could not answer,
+	// the tracker's wall is a consequence, not evidence: the message carries
+	// both stories and only the solver one is actionable. On 2026-08-05
+	// FlareSolverr needed ~9s to launch Chrome while the scheduler began
+	// checking 1s after boot, and every RuTracker topic was reported as
+	// `cloudflare` — "this tracker needs a browser to get through" — about a
+	// browser that was mid-startup. Matching our own wording rather than the
+	// product name keeps this true for any provider, and placing it above the
+	// unreachable pass stops the embedded "connection refused" (the solver's
+	// port, not the tracker's) from rotating the tracker's domain.
+	if strings.Contains(m, "clearance unavailable") {
+		return errCodeSolver
+	}
+
 	// Cloudflare MUST be decided before both passes below, not after. The
 	// HTTP-status pass maps 403 -> auth, and the keyword pass matches
 	// "login failed" / "invalid credentials" — a challenge error carries a
@@ -1151,6 +1166,15 @@ func isTransientError(err error) bool {
 		return false
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	// A solver that could not mint is our own infrastructure, not a verdict
+	// about the tracker, and infrastructure comes back — most often within
+	// seconds, as when FlareSolverr is still launching its browser at boot.
+	// Matched on the sentinel rather than the cause's wording so it holds
+	// whatever the provider failed with. transientRetryMax still bounds it: a
+	// solver that stays down falls back to exponential backoff.
+	if errors.Is(err, registry.ErrClearanceUnavailable) {
 		return true
 	}
 	var netErr net.Error

@@ -28,6 +28,25 @@ services:
   backend:
     ports:
       - "${MARAUDER_DEV_BACKEND_PORT:-34081}:8679"
+    # Wait for the solver's browser, not just its container. FlareSolverr
+    # spends ~9s launching Chrome before it listens, and the scheduler starts
+    # checking ~1s after the backend boots — so on 2026-08-05 every RuTracker
+    # topic that was due at startup failed its clearance mint and recorded a
+    # Cloudflare error for a solver that was merely still starting.
+    #
+    # required: false keeps the coupling one-way. FlareSolverr is optional
+    # infrastructure; a broken or absent solver must delay the backend, never
+    # prevent it from starting. It lives here rather than in the base compose
+    # file because the base stack has no flaresolverr service to depend on.
+    #
+    # This orders the dev stack only. Kubernetes, the standalone arr overlay
+    # (separate Compose project — nothing can order across the two) and any
+    # mid-life solver restart all reproduce the same race, which is why the
+    # backend also had to stop misreporting it: see registry.ErrClearanceUnavailable.
+    depends_on:
+      flaresolverr:
+        condition: service_healthy
+        required: false
 
   frontend:
     ports:
@@ -82,6 +101,16 @@ services:
     restart: unless-stopped
     environment:
       LOG_LEVEL: "info"
+    # /health answers only once the browser self-test has passed, which is the
+    # readiness that matters — the port opening is not the same as the solver
+    # being able to solve. start_period covers the ~9s Chrome launch without
+    # burning retries; the container ships curl.
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8191/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
     logging:
       driver: json-file
       options:

@@ -231,7 +231,10 @@ func TestRoundTrip_MaxTimeoutRespectsCallerDeadline(t *testing.T) {
 	})
 	rt := New(f.srv.URL, 60*time.Second) // configured far higher than the caller allows
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	// 30s is a real caller budget (a download iteration gets TrackerHTTPTimeout)
+	// and clears minSolveBudget, so this exercises the tightening rather than
+	// the refusal — TestSolveBudget_TableTest covers budgets below the floor.
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://rutracker.org/forum/index.php", nil)
 	resp, err := rt.RoundTrip(req)
@@ -241,8 +244,8 @@ func TestRoundTrip_MaxTimeoutRespectsCallerDeadline(t *testing.T) {
 	resp.Body.Close()
 
 	got, _ := f.lastBody["maxTimeout"].(float64)
-	if got <= 0 || got > 10_000 {
-		t.Errorf("maxTimeout = %v ms, want it bounded by the caller's 10s deadline", got)
+	if got <= 0 || got > 30_000 {
+		t.Errorf("maxTimeout = %v ms, want it bounded by the caller's 30s deadline", got)
 	}
 }
 
@@ -689,5 +692,68 @@ func TestNew_EmptyURLIsDisabled(t *testing.T) {
 	req, _ := http.NewRequest(http.MethodGet, "https://rutracker.org/forum/index.php", nil)
 	if _, err := rt.RoundTrip(req); !errors.Is(err, ErrDisabled) {
 		t.Errorf("error = %v, want ErrDisabled", err)
+	}
+}
+
+// TestSolveBudget_TableTest pins the floor against what a solve actually
+// costs. Measured against live RuTracker on 2026-08-05, a managed-challenge
+// solve took 10.9s, 11.3s, 11.4s, 11.6s, 11.9s, 12.3s, 12.9s and 13.4s across
+// eight runs. The old 5s floor let 15s and 8s budgets through; both timed out,
+// and because FlareSolverr serialises, each abandoned browser blocked the next
+// caller. Refusing instantly is strictly better than paying the full budget to
+// learn the same thing.
+func TestSolveBudget_TableTest(t *testing.T) {
+	tests := []struct {
+		name       string
+		configured time.Duration
+		remaining  time.Duration // 0 means "no deadline on the context"
+		want       time.Duration
+		wantErr    bool
+	}{
+		{name: "no deadline uses the configured ceiling", configured: 60 * time.Second, want: 60 * time.Second},
+		{name: "a comfortable deadline tightens the budget", configured: 60 * time.Second, remaining: 35 * time.Second, want: 35 * time.Second},
+		{name: "just above the floor is allowed", configured: 60 * time.Second, remaining: minSolveBudget + time.Second, want: minSolveBudget + time.Second},
+		// The two live failures from the boot race.
+		{name: "15s cannot finish a ~12s solve", configured: 60 * time.Second, remaining: 15 * time.Second, wantErr: true},
+		{name: "8s cannot finish a ~12s solve", configured: 60 * time.Second, remaining: 8 * time.Second, wantErr: true},
+		// An operator who configures a short ceiling has said what they want;
+		// honour it rather than silently exceeding the documented maximum.
+		{name: "a configured ceiling below the floor lowers the floor", configured: 3 * time.Second, want: 3 * time.Second},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tr := New("http://solver:8191", tt.configured)
+			ctx := context.Background()
+			if tt.remaining > 0 {
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithTimeout(ctx, tt.remaining)
+				defer cancel()
+			}
+			got, err := tr.solveBudget(ctx)
+			if tt.wantErr {
+				if !errors.Is(err, ErrBudgetTooShort) {
+					t.Fatalf("solveBudget = (%s, %v), want ErrBudgetTooShort", got, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("solveBudget: %v", err)
+			}
+			// time.Until burns a few microseconds between setup and the call.
+			if diff := tt.want - got; diff < 0 || diff > 100*time.Millisecond {
+				t.Errorf("solveBudget = %s, want ~%s", got, tt.want)
+			}
+		})
+	}
+}
+
+// minSolveBudget must stay above the slowest solve observed in production, or
+// the floor is decoration: a budget that passes the guard and then times out
+// leaves a browser running for a caller that has already left.
+func TestMinSolveBudget_ExceedsObservedSolveTime(t *testing.T) {
+	const slowestObservedSolve = 13400 * time.Millisecond // live RuTracker, 2026-08-05
+	if minSolveBudget <= slowestObservedSolve {
+		t.Errorf("minSolveBudget = %s, want > %s (the slowest measured challenge solve)",
+			minSolveBudget, slowestObservedSolve)
 	}
 }

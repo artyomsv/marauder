@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A restart no longer parks Cloudflare-gated topics on a 30-minute
+  backoff with the wrong explanation.** FlareSolverr spends about nine
+  seconds launching its browser, while the scheduler begins checking a
+  second after the backend boots — so every RuTracker topic due at startup
+  failed to mint a clearance, fell through to a bare request, and recorded
+  "Blocked by Cloudflare — this tracker needs a browser to get through"
+  about a browser that was still starting. Three changes: a failed mint is
+  now reported as a solver problem rather than a tracker wall (new
+  `registry.ErrClearanceUnavailable`, classified `solver`, which also stops
+  the solver's own "connection refused" from rotating the tracker's
+  domain); such a failure counts as transient, so the topic retries in a
+  minute instead of half an hour; and the dev/arr Compose stacks gained a
+  FlareSolverr healthcheck that the backend waits on. Requests the tracker
+  does not actually block still succeed while the solver is down, and a
+  genuine challenge with a healthy solver is still reported as Cloudflare.
+- **Solves that could never finish are refused instead of started.** The
+  minimum solve budget was 5s while real RuTracker challenges measure
+  10.9-13.4s, so 15s and 8s budgets passed the guard and then timed out —
+  and because FlareSolverr serialises, each abandoned browser blocked the
+  next topic's fetch. The floor is now 20s.
+
 ## [1.19.1] - 2026-08-02
 
 ### Removed

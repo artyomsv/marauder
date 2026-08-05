@@ -34,12 +34,38 @@ var ErrCaptchaRequired = errors.New("tracker requires a captcha")
 // browser used (see the flaresolverr package doc — an earlier note here blamed
 // the TLS fingerprint, which was a User-Agent mismatch).
 //
-// So this error means "no usable clearance for this tracker" — the solver is
-// unconfigured, unreachable, or the cached clearance just died. It is not
-// "retry later" and not "fix your credentials".
+// So this error means "the tracker is gated and we had no usable clearance" —
+// either no solver is configured or the cached clearance just died. It is not
+// "retry later" and not "fix your credentials". When the solver IS configured
+// but could not answer, use ErrClearanceUnavailable instead.
 //
 // Plugins wrap it with %w so callers can match via errors.Is.
 var ErrCloudflareChallenge = errors.New("tracker is behind a cloudflare challenge")
+
+// ErrClearanceUnavailable is returned when a request was blocked by a
+// Cloudflare challenge AND the configured clearance provider had already
+// failed to supply a clearance for it. It names the solver, not the tracker.
+//
+// The distinction is the whole point. ErrCloudflareChallenge is classified
+// `cloudflare`, which tells the user "this tracker needs a browser to get
+// through" — true when the solver answered and the tracker is genuinely
+// gated, and actively misleading when the solver is simply down. On
+// 2026-08-05 FlareSolverr took ~9s to launch Chrome while the scheduler began
+// checking 1s after boot; every RuTracker topic failed the mint, fell open
+// into a bare request, and was reported as a Cloudflare wall — with a
+// 30-minute exponential backoff — while the browser it claimed to need was
+// finishing its own startup.
+//
+// Callers wrapping this MUST include the provider's own error as the cause:
+// the scheduler classifies it `solver` (never rotating the tracker's domain on
+// it) and treats it as transient, so a topic retries in a minute rather than
+// parking for half an hour.
+//
+// It deliberately does NOT wrap ErrCloudflareChallenge. Plugins retry once on
+// that sentinel by invalidating the cached clearance and re-fetching, which is
+// pointless here: there is no cached clearance to drop, and a second doomed
+// request only adds load while the solver is already unwell.
+var ErrClearanceUnavailable = errors.New("cloudflare clearance unavailable")
 
 // ErrSessionExpired is returned by a cookie-session plugin's Login when
 // no stored session exists or the stored session no longer authenticates.

@@ -165,20 +165,23 @@ func (p *plugin) ChallengeProbeURL() string {
 }
 
 // applyClearance seeds the session jar with the Cloudflare clearance cookie
-// for u's host and returns it so the caller can match the User-Agent.
+// for u's host and returns it so the caller can match the User-Agent, plus the
+// provider's error if the mint failed.
 //
-// A solver failure is not fatal: the request proceeds without a clearance and
-// the tracker's own 403 surfaces as ErrCloudflareChallenge, which is a far
-// clearer diagnosis than a solver-internal error.
-func (p *plugin) applyClearance(ctx context.Context, sess *forumcommon.Session, u *url.URL) registry.Clearance {
+// A solver failure is not fatal to the REQUEST: plenty of RuTracker paths are
+// ungated, so the caller proceeds without a clearance. It is fatal to the
+// DIAGNOSIS, which is why the error comes back instead of being logged and
+// dropped. A caller that then hits a challenge must blame the solver rather
+// than report ErrCloudflareChallenge — see challengeCause.
+func (p *plugin) applyClearance(ctx context.Context, sess *forumcommon.Session, u *url.URL) (registry.Clearance, error) {
 	c, err := registry.ClearanceFor(ctx, p.ChallengeProbeURL())
 	if err != nil {
 		log.Warn().Str("plugin", pluginName).Err(err).
 			Msg("cloudflare clearance unavailable; requesting without one")
-		return registry.Clearance{}
+		return registry.Clearance{}, err
 	}
 	if !c.Valid() {
-		return registry.Clearance{}
+		return registry.Clearance{}, nil
 	}
 	jarCookies := make([]*http.Cookie, 0, len(c.Cookies))
 	for name, val := range c.Cookies {
@@ -186,7 +189,23 @@ func (p *plugin) applyClearance(ctx context.Context, sess *forumcommon.Session, 
 	}
 	root := &url.URL{Scheme: u.Scheme, Host: u.Host, Path: "/"}
 	sess.Client.Jar.SetCookies(root, jarCookies)
-	return c
+	return c, nil
+}
+
+// challengeCause names the culprit for a request the tracker just blocked.
+//
+// clearErr is applyClearance's second return: non-nil means the configured
+// solver could not mint, so this request was always going to be challenged and
+// the tracker's wall says nothing about the tracker. Reporting
+// ErrCloudflareChallenge there produces the "this tracker needs a browser to
+// get through" message while the browser is the thing that is broken — the
+// 2026-08-05 boot race, where FlareSolverr's ~9s Chrome startup parked two
+// topics on a 30-minute backoff.
+func challengeCause(clearErr error) error {
+	if clearErr != nil {
+		return fmt.Errorf("%w: %w", registry.ErrClearanceUnavailable, clearErr)
+	}
+	return registry.ErrCloudflareChallenge
 }
 
 // SupportsAnonymousDownload implements registry.WithAnonymousDownload: the
@@ -298,7 +317,7 @@ func (p *plugin) loginOnce(ctx context.Context, creds *domain.TrackerCredential)
 		return err
 	}
 	sess := p.session(creds)
-	clearance := p.applyClearance(ctx, sess, u)
+	clearance, clearErr := p.applyClearance(ctx, sess, u)
 
 	form := url.Values{
 		"login_username": {creds.Username},
@@ -323,7 +342,7 @@ func (p *plugin) loginOnce(ctx context.Context, creds *domain.TrackerCredential)
 	// challenge page naturally lacks that marker, and reporting it as bad
 	// credentials is the misdiagnosis this guard exists to prevent.
 	if isCloudflareChallenge(resp) {
-		return fmt.Errorf("rutracker login: %w", registry.ErrCloudflareChallenge)
+		return fmt.Errorf("rutracker login: %w", challengeCause(clearErr))
 	}
 	// Same reasoning as the guard above, for a different failure: an error page
 	// has no logged-in marker either, so falling through to the marker check
@@ -642,7 +661,7 @@ func (p *plugin) fetchOnce(ctx context.Context, creds *domain.TrackerCredential,
 	}
 
 	sess := p.session(creds)
-	clearance := p.applyClearance(ctx, sess, u)
+	clearance, clearErr := p.applyClearance(ctx, sess, u)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
@@ -656,7 +675,7 @@ func (p *plugin) fetchOnce(ctx context.Context, creds *domain.TrackerCredential,
 	}
 	defer resp.Body.Close()
 	if isCloudflareChallenge(resp) {
-		return nil, fmt.Errorf("rutracker GET %s: %w", target, registry.ErrCloudflareChallenge)
+		return nil, fmt.Errorf("rutracker GET %s: %w", target, challengeCause(clearErr))
 	}
 	if resp.StatusCode != 200 {
 		return nil, fmt.Errorf("rutracker GET %s -> %d", target, resp.StatusCode)
