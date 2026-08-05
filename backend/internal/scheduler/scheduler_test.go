@@ -1346,6 +1346,28 @@ func TestBackoff_TableTest(t *testing.T) {
 			maxBackoff:        transientRetryDelay + 50*time.Millisecond,
 		},
 		{
+			// A solver that cannot mint is infrastructure, not a verdict about
+			// the tracker, and infrastructure comes back. On 2026-08-05 this
+			// case took the exponential path and parked two topics for 30
+			// minutes over a 9-second FlareSolverr startup.
+			name:              "clearance unavailable retries fast, not exponential",
+			consecutiveErrors: 1,
+			failure:           true,
+			cause:             fmt.Errorf("rutracker login: %w: solver said no", registry.ErrClearanceUnavailable),
+			minBackoff:        transientRetryDelay,
+			maxBackoff:        transientRetryDelay + 50*time.Millisecond,
+		},
+		{
+			// Transient does not mean infinite: a solver that stays down still
+			// falls back to exponential after transientRetryMax attempts.
+			name:              "clearance unavailable still gives up on fast retry once persistent",
+			consecutiveErrors: transientRetryMax,
+			failure:           true,
+			cause:             fmt.Errorf("rutracker login: %w: solver said no", registry.ErrClearanceUnavailable),
+			minBackoff:        64 * base,
+			maxBackoff:        64*base + 50*time.Millisecond,
+		},
+		{
 			// At transientRetryMax consecutive failures the fast-retry stops
 			// and exponential backoff resumes: 2^(5+1) * 60s = 64m (< 6h cap).
 			name:              "transient error falls back to exponential once persistent",
@@ -1820,6 +1842,18 @@ func TestClassifyError_MapsKnownPatternsToCodes(t *testing.T) {
 		// `solver` told the user "the tracker itself is probably fine,
 		// retrying", which is the opposite of the truth.
 		{"unsolved challenge is a cloudflare problem", "flaresolverr: request.get: Challenge not solved!", errCodeCloudflare},
+		// The 2026-08-05 boot race: the solver was still launching Chrome when
+		// the scheduler started checking, the mint was refused, and the bare
+		// request hit the tracker's challenge. Both halves of that story are in
+		// the message, and the SOLVER half is the actionable one — the tracker
+		// was never the problem. This must outrank the challenge wording it
+		// necessarily arrives with, and the "connection refused" that would
+		// otherwise read as a dead tracker domain and trigger rotation.
+		{"clearance unavailable outranks the challenge it caused", `rutracker GET https://rutracker.org/forum/viewtopic.php?t=1: cloudflare clearance unavailable: flaresolverr: sessions.create: dial tcp 172.24.0.2:8191: connect: connection refused`, errCodeSolver},
+		{"clearance unavailable wrapped by the login path", "auth failed: rutracker login: cloudflare clearance unavailable: flaresolverr is not configured", errCodeSolver},
+		// Matched on our own wording, not the product name, so a provider that
+		// is not FlareSolverr classifies identically.
+		{"clearance unavailable from a non-flaresolverr provider", "rutracker login: cloudflare clearance unavailable: solver returned 503", errCodeSolver},
 		// A tracker or custom-mirror hostname containing the solver's name must
 		// not hijack the classification; only our own wrapper prefix counts.
 		{"tracker url mentioning the solver is still a network error", `kinozal GET https://flaresolverr.example.com/details.php?id=1 -> 522`, errCodeUnreachable},

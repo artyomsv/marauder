@@ -379,11 +379,21 @@ type solveResponse struct {
 	Solution solution `json:"solution"`
 }
 
-// minSolveBudget is the floor for maxTimeout. Below roughly this, a solve
-// cannot finish anyway, and sending a near-zero budget would make
-// FlareSolverr fail instantly with a confusing message rather than letting
-// the caller's own deadline surface.
-const minSolveBudget = 5 * time.Second
+// minSolveBudget is the floor for maxTimeout: below this a solve cannot
+// finish, so we refuse rather than start one nobody will be around to collect.
+//
+// It is set from measurement, not intuition. Live RuTracker managed-challenge
+// solves on 2026-08-05 took 10.9-13.4s across eight runs, and the earlier 5s
+// floor was far below that — so 15s and 8s budgets sailed through the guard
+// and then timed out, which is the worst of both worlds: FlareSolverr kept
+// driving a browser for the full budget after the caller had gone, and because
+// it serialises, that browser blocked the next topic's fetch. 20s clears the
+// slowest observed solve with headroom while still refusing the budgets that
+// demonstrably cannot succeed.
+//
+// Raising this makes the guard MORE eager to refuse, which is the safe
+// direction: a refusal is instant and legible, a doomed solve is neither.
+const minSolveBudget = 20 * time.Second
 
 // maxTimeoutMillis is the solve budget handed to FlareSolverr, in
 // milliseconds.

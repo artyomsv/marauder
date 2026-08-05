@@ -148,7 +148,10 @@ func (p *plugin) newInteractiveSession(ctx context.Context) *forumcommon.Session
 	// deadline it could block for the full configured ceiling — longer than the
 	// handler's own budget, which is exactly how a request ends up exceeding the
 	// server's write deadline and returning no valid response at all.
-	if c := p.applyClearance(ctx, sess, u); c.Valid() {
+	// A mint failure is already logged by applyClearance; here there is no
+	// challenge yet to misattribute, so the session just goes out with its
+	// honest UA and the engine's own error path reports what happens next.
+	if c, _ := p.applyClearance(ctx, sess, u); c.Valid() {
 		// The engine sends sess.UserAgent on both the login POST and the
 		// captcha fetch; it must match the UA the clearance was minted with.
 		sess.UserAgent = c.UserAgent
