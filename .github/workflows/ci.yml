@@ -26,7 +26,7 @@ permissions:
 jobs:
   # ---------------------------------------------------------------- backend
   backend:
-    name: Backend (Go ${{ matrix.go }})
+    name: Backend
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -221,7 +221,7 @@ jobs:
 
   # ---------------------------------------------------------------- frontend
   frontend:
-    name: Frontend (Node ${{ matrix.node }})
+    name: Frontend
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
