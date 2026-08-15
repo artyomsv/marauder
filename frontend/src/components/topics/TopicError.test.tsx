@@ -35,6 +35,22 @@ describe("TopicError", () => {
     expect(screen.queryByText(RAW)).toBeNull();
   });
 
+  // `client` and `internal` name components that are not the tracker. Their
+  // whole reason for existing is that the raw text ("...: context deadline
+  // exceeded") reads exactly like a tracker timeout, so a silent fall-through
+  // to the raw error would reinstate the misdiagnosis these codes remove.
+  it("renders the friendly message for a torrent-client failure", () => {
+    render(<TopicError topic={topicWith(RAW, "client")} />);
+    expect(screen.getByText(/couldn't reach your torrent client/i)).toBeInTheDocument();
+    expect(screen.queryByText(RAW)).toBeNull();
+  });
+
+  it("renders the friendly message for an internal failure", () => {
+    render(<TopicError topic={topicWith(RAW, "internal")} />);
+    expect(screen.getByText(/couldn't save/i)).toBeInTheDocument();
+    expect(screen.queryByText(RAW)).toBeNull();
+  });
+
   it("falls back to the raw error when the code is unknown", () => {
     render(<TopicError topic={topicWith(RAW, "unknown")} />);
     expect(screen.getByText(RAW)).toBeInTheDocument();

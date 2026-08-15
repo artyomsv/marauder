@@ -150,10 +150,14 @@ func (f *fakeTopics) VerifyCheckState(_ context.Context, t *domain.Topic) error 
 type fakeClients struct {
 	client       *domain.Client
 	getByIDCalls []uuid.UUID
+	getByIDErr   error
 }
 
 func (f *fakeClients) GetByID(_ context.Context, id uuid.UUID, _ uuid.UUID) (*domain.Client, error) {
 	f.getByIDCalls = append(f.getByIDCalls, id)
+	if f.getByIDErr != nil {
+		return nil, f.getByIDErr
+	}
 	return f.client, nil
 }
 
@@ -310,6 +314,7 @@ func (f *fakeClientPlugin) Remove(_ context.Context, _ []byte, hashes []string, 
 type fixture struct {
 	s            *Scheduler
 	topics       *fakeTopics
+	clients      *fakeClients
 	clientPlugin *fakeClientPlugin
 	deliveries   *fakeDeliveries
 	emitter      *fakeEmitter
@@ -338,6 +343,7 @@ func newFixture(t *testing.T, tracker *fakeTracker) *fixture {
 	clientPlugin := &fakeClientPlugin{name: "fakeclient"}
 
 	topicsImpl := &fakeTopics{}
+	clientsImpl := &fakeClients{client: client}
 
 	deliveries := &fakeDeliveries{}
 	emit := &fakeEmitter{}
@@ -345,7 +351,7 @@ func newFixture(t *testing.T, tracker *fakeTracker) *fixture {
 		cfg:           cfg,
 		log:           zerolog.New(io.Discard),
 		topics:        topicsImpl,
-		clients:       &fakeClients{client: client},
+		clients:       clientsImpl,
 		creds:         &fakeCreds{},
 		deliveries:    deliveries,
 		emit:          emit,
@@ -374,6 +380,7 @@ func newFixture(t *testing.T, tracker *fakeTracker) *fixture {
 	return &fixture{
 		s:            s,
 		topics:       topicsImpl,
+		clients:      clientsImpl,
 		clientPlugin: clientPlugin,
 		deliveries:   deliveries,
 		emitter:      emit,
@@ -1859,6 +1866,31 @@ func TestClassifyError_MapsKnownPatternsToCodes(t *testing.T) {
 		{"tracker url mentioning the solver is still a network error", `kinozal GET https://flaresolverr.example.com/details.php?id=1 -> 522`, errCodeUnreachable},
 		{"auth failed prefix", "auth failed: invalid credentials", errCodeAuth},
 		{"session expired", "lostfilm: session expired", errCodeAuth},
+		// A network failure inside the login path must outrank the
+		// "auth failed: " prefix that loadCredentials stamps onto every error
+		// it reports, for the same reason the Cloudflare and solver blocks
+		// above outrank it. On 2026-08-15 a LostFilm custom mirror stopped
+		// resolving; every check recorded `auth`, which told the user their
+		// credentials were wrong AND — because `auth` is not in the set
+		// recordResult rotates on — meant the tracker could never step off the
+		// dead domain. 13-22 consecutive errors with no path to recovery.
+		{"dns failure wrapped by the login path", `auth failed: lostfilm: session validation: lostfilm verify: Get "https://mirror.lostfilm.tv/my": dial tcp: lookup mirror.lostfilm.tv on 127.0.0.11:53: no such host`, errCodeUnreachable},
+		{"login timeout wrapped by the login path", "auth failed: rutracker login: context deadline exceeded", errCodeTimeout},
+		{"connection refused wrapped by the login path", "auth failed: kinozal login: dial tcp 1.2.3.4:443: connect: connection refused", errCodeUnreachable},
+		// The other half of that ordering: a genuine credential rejection
+		// carries no network marker and must still classify as auth.
+		{"genuine credential rejection stays auth", "auth failed: lostfilm login: invalid credentials", errCodeAuth},
+		{"genuine session expiry stays auth", "auth failed: lostfilm: session expired", errCodeAuth},
+		// The reorder applies to every check error, not only login-wrapped
+		// ones, so its one deliberate semantic change is pinned here rather
+		// than left implicit: a message carrying BOTH an auth keyword and a
+		// network marker now reads as network. That is the correct reading —
+		// the request never got an answer to reject — and unlike `auth` it
+		// lets rotation try another domain instead of parking forever.
+		{"auth wording with a network marker reads as network", "rutracker login failed: read tcp 1.2.3.4:443: connection reset by peer", errCodeUnreachable},
+		// A bare network error on the non-login path is untouched by the
+		// reorder: it matched unreachable before and still does.
+		{"bare network error unaffected by the reorder", `Get "https://rutracker.org/forum/index.php": dial tcp: lookup rutracker.org: no such host`, errCodeUnreachable},
 		{"unauthorized 401", "unexpected status 401 unauthorized", errCodeAuth},
 		{"forbidden 403 status", `lostfilm GET https://lostfilm.tv/series/x -> 403`, errCodeAuth},
 		{"captcha required", "captcha required to log in", errCodeAuth},
@@ -1891,6 +1923,7 @@ func TestRecordResult_ClassifiesAndPersistsErrorCode(t *testing.T) {
 	f.s.recordResult(
 		context.Background(), zerolog.Nop(), topic, "", false,
 		time.Now(), `kinozal GET: Get "https://kinozal.tv/details.php?id=1": context deadline exceeded`,
+		nil,
 	)
 	if len(f.topics.recordCalls) != 1 {
 		t.Fatalf("want 1 record call, got %d", len(f.topics.recordCalls))
@@ -1903,7 +1936,7 @@ func TestRecordResult_ClassifiesAndPersistsErrorCode(t *testing.T) {
 func TestRecordResult_SuccessLeavesErrorCodeEmpty(t *testing.T) {
 	f := newFixture(t, &fakeTracker{})
 	topic := &domain.Topic{ID: uuid.New(), TrackerName: "faketracker"}
-	f.s.recordResult(context.Background(), zerolog.Nop(), topic, "abc", true, time.Now(), "")
+	f.s.recordResult(context.Background(), zerolog.Nop(), topic, "abc", true, time.Now(), "", nil)
 	if len(f.topics.recordCalls) != 1 {
 		t.Fatalf("want 1 record call, got %d", len(f.topics.recordCalls))
 	}
@@ -1946,6 +1979,15 @@ func TestRecordResult_NetworkError_ReportsDomainFailure(t *testing.T) {
 			0,
 		},
 		{"solver refusal does not rotate", "flaresolverr: Challenge not solved!", 0},
+		// The deadlock this fix removes: while a DNS failure in the login path
+		// classified as `auth`, rotation never fired, so a tracker parked on a
+		// custom mirror that had stopped resolving stayed there forever. It
+		// must now rotate so the ring can step to a domain that resolves.
+		{
+			"dns failure in the login path rotates",
+			`auth failed: lostfilm verify: Get "https://mirror.lostfilm.tv/my": dial tcp: lookup mirror.lostfilm.tv: no such host`,
+			1,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1954,12 +1996,248 @@ func TestRecordResult_NetworkError_ReportsDomainFailure(t *testing.T) {
 			f.s.domains = rot
 			topic := &domain.Topic{ID: uuid.New(), TrackerName: "kinozal"}
 			f.s.recordResult(context.Background(), zerolog.Nop(), topic,
-				"", false, time.Now(), tt.errMsg)
+				"", false, time.Now(), tt.errMsg, nil)
 			if len(rot.calls) != tt.wantCalls {
 				t.Errorf("ReportFailure calls = %d, want %d", len(rot.calls), tt.wantCalls)
 			}
 			if tt.wantCalls == 1 && rot.calls[0] != "kinozal" {
 				t.Errorf("ReportFailure tracker = %q, want kinozal", rot.calls[0])
+			}
+		})
+	}
+}
+
+// --- Typed causes: failures that are not the tracker's ------------------
+
+// A failure handing the payload to the user's torrent client says nothing
+// about the tracker. Classified by message it landed in the same bucket as a
+// tracker timeout, which both told the user "the tracker didn't respond" and
+// rotated the tracker's domain. Observed 2026-08-15: an unreachable
+// Transmission rotated LostFilm off www.lostfilm.tv 8ms after the submit timed
+// out, on a tracker that had just authenticated and detected new episodes.
+func TestRecordResult_ClientDeliveryFailure_DoesNotBlameTracker(t *testing.T) {
+	rot := &fakeRotator{}
+	f := newFixture(t, &fakeTracker{})
+	f.s.domains = rot
+	topic := &domain.Topic{ID: uuid.New(), TrackerName: "lostfilm"}
+
+	cause := fmt.Errorf("%w: %w", errClientDelivery,
+		errors.New(`Post "http://transmission:9091/transmission/rpc": context deadline exceeded`))
+	f.s.recordResult(context.Background(), zerolog.Nop(), topic,
+		"", false, time.Now(), cause.Error(), cause)
+
+	if len(f.topics.recordCalls) != 1 {
+		t.Fatalf("want 1 record call, got %d", len(f.topics.recordCalls))
+	}
+	if got := f.topics.recordCalls[0].errCode; got != errCodeClient {
+		t.Errorf("errCode = %q, want %q", got, errCodeClient)
+	}
+	if len(rot.calls) != 0 {
+		t.Errorf("ReportFailure calls = %d, want 0 — a client outage must not rotate the tracker's domain", len(rot.calls))
+	}
+}
+
+// A failure writing our own episode-progress state is the same shape with the
+// database in place of the client: "context deadline exceeded", classified
+// `timeout`, rotating the tracker's domain on evidence about our DB.
+func TestRecordResult_StatePersistFailure_DoesNotBlameTracker(t *testing.T) {
+	rot := &fakeRotator{}
+	f := newFixture(t, &fakeTracker{})
+	f.s.domains = rot
+	topic := &domain.Topic{ID: uuid.New(), TrackerName: "lostfilm"}
+
+	cause := fmt.Errorf("%w: %w", errStatePersist, context.DeadlineExceeded)
+	f.s.recordResult(context.Background(), zerolog.Nop(), topic,
+		"", false, time.Now(), cause.Error(), cause)
+
+	if got := f.lastRecord(t).errCode; got != errCodeInternal {
+		t.Errorf("errCode = %q, want %q", got, errCodeInternal)
+	}
+	if len(rot.calls) != 0 {
+		t.Errorf("ReportFailure calls = %d, want 0 — a database failure must not rotate the tracker's domain", len(rot.calls))
+	}
+}
+
+// The sentinel decides, not the wording: the same "context deadline exceeded"
+// text with no sentinel is still a tracker timeout and still rotates. This
+// pairing is what proves the typed check is doing the separating, since
+// classifyError cannot tell the two apart.
+func TestRecordResult_TrackerTimeout_StillRotates(t *testing.T) {
+	rot := &fakeRotator{}
+	f := newFixture(t, &fakeTracker{})
+	f.s.domains = rot
+	topic := &domain.Topic{ID: uuid.New(), TrackerName: "lostfilm"}
+
+	cause := errors.New(`Post "https://www.lostfilm.tv/v_search.php": context deadline exceeded`)
+	f.s.recordResult(context.Background(), zerolog.Nop(), topic,
+		"", false, time.Now(), cause.Error(), cause)
+
+	if got := f.lastRecord(t).errCode; got != errCodeTimeout {
+		t.Errorf("errCode = %q, want %q", got, errCodeTimeout)
+	}
+	if len(rot.calls) != 1 {
+		t.Fatalf("ReportFailure calls = %d, want 1", len(rot.calls))
+	}
+}
+
+// --- Wrap sites, end to end -------------------------------------------
+//
+// The tests above hand recordResult a cause they built themselves, so they
+// pin the CLASSIFIER but not the code that produces the sentinel. That gap is
+// not hypothetical: the errClientDelivery wrap was moved from downloadAllPending
+// into sendViaClient and every one of those tests stayed green. These drive
+// runCheck so the wrap sites themselves are load-bearing — delete either wrap
+// and these fail.
+
+func TestRunCheck_ClientAddFails_RecordsClientCodeWithoutRotating(t *testing.T) {
+	tr := &fakeTracker{
+		name:   "faketracker",
+		checks: []checkResult{{check: &domain.Check{Hash: "new-hash"}}},
+		downloads: []downloadResult{
+			{payload: &domain.Payload{MagnetURI: "magnet:?xt=urn:btih:c12fe1c06bba254a9dc9f519b335aa7c1367a88a"}},
+		},
+	}
+	rot := &fakeRotator{}
+	f := newFixture(t, tr)
+	f.s.domains = rot
+	// Wording deliberately identical to a tracker timeout: only the sentinel
+	// applied at the Add call separates the two.
+	f.clientPlugin.addErr = errors.New(`Post "http://transmission:9091/transmission/rpc": context deadline exceeded`)
+
+	f.s.runCheck(context.Background(), f.s.log, f.topic)
+
+	if got := f.lastRecord(t).errCode; got != errCodeClient {
+		t.Errorf("errCode = %q, want %q", got, errCodeClient)
+	}
+	if len(rot.calls) != 0 {
+		t.Errorf("ReportFailure calls = %d, want 0 — a client outage must not rotate the tracker's domain", len(rot.calls))
+	}
+}
+
+func TestRunCheck_EpisodeMarkFails_RecordsInternalCodeWithoutRotating(t *testing.T) {
+	tr := &fakeTracker{
+		name: "faketracker",
+		checks: []checkResult{{
+			check: &domain.Check{
+				Hash:  "new-hash",
+				Extra: map[string]any{"pending_episodes": []string{"S01E01", "S01E02"}},
+			},
+		}},
+		downloads: []downloadResult{
+			{payload: &domain.Payload{MagnetURI: "magnet:1"}},
+			{payload: &domain.Payload{MagnetURI: "magnet:2"}},
+		},
+	}
+	rot := &fakeRotator{}
+	f := newFixture(t, tr)
+	f.s.domains = rot
+	f.topics.markErr = errors.New("context deadline exceeded")
+
+	f.s.runCheck(context.Background(), f.s.log, f.topic)
+
+	if got := f.lastRecord(t).errCode; got != errCodeInternal {
+		t.Errorf("errCode = %q, want %q", got, errCodeInternal)
+	}
+	if len(rot.calls) != 0 {
+		t.Errorf("ReportFailure calls = %d, want 0 — a database failure must not rotate the tracker's domain", len(rot.calls))
+	}
+}
+
+// The client row is read from Postgres on every submit, so a DB timeout there
+// renders as "context deadline exceeded" just like a tracker timeout. Left
+// unmarked it rotated the TRACKER's domain on evidence about our database —
+// reachable, since RotateFailureThreshold is 2 within 5m and rotation mutates
+// the in-memory active domain before it tries to persist, so it lands even
+// while the DB that would record it is down.
+func TestRunCheck_ClientLookupFails_RecordsInternalCodeWithoutRotating(t *testing.T) {
+	tr := &fakeTracker{
+		name:   "faketracker",
+		checks: []checkResult{{check: &domain.Check{Hash: "new-hash"}}},
+		downloads: []downloadResult{
+			{payload: &domain.Payload{MagnetURI: "magnet:?xt=urn:btih:c12fe1c06bba254a9dc9f519b335aa7c1367a88a"}},
+		},
+	}
+	rot := &fakeRotator{}
+	f := newFixture(t, tr)
+	f.s.domains = rot
+	f.clients.getByIDErr = errors.New("context deadline exceeded")
+
+	f.s.runCheck(context.Background(), f.s.log, f.topic)
+
+	if got := f.lastRecord(t).errCode; got != errCodeInternal {
+		t.Errorf("errCode = %q, want %q", got, errCodeInternal)
+	}
+	if len(rot.calls) != 0 {
+		t.Errorf("ReportFailure calls = %d, want 0 — a database failure must not rotate the tracker's domain", len(rot.calls))
+	}
+}
+
+func TestClassifyCause_SentinelOutranksMessage(t *testing.T) {
+	tests := []struct {
+		name  string
+		msg   string
+		cause error
+		want  string
+	}{
+		{
+			"client sentinel wins over timeout wording",
+			`submit to torrent client: Post "http://qbit:6611/api/v2/torrents/add": context deadline exceeded`,
+			fmt.Errorf("%w: %w", errClientDelivery, context.DeadlineExceeded),
+			errCodeClient,
+		},
+		{
+			"client sentinel wins over connection-refused wording",
+			"submit to torrent client: dial tcp 203.0.113.10:9091: connect: connection refused",
+			fmt.Errorf("%w: %w", errClientDelivery, errors.New("connect: connection refused")),
+			errCodeClient,
+		},
+		{
+			"state-persist sentinel wins over timeout wording",
+			"marauder storage: context deadline exceeded",
+			fmt.Errorf("%w: %w", errStatePersist, context.DeadlineExceeded),
+			errCodeInternal,
+		},
+		{
+			"nil cause falls back to the message",
+			"tracker plugin not installed",
+			nil,
+			errCodePluginMissing,
+		},
+		// sendViaClient can fail three ways and only one of them means "your
+		// torrent client is unreachable". The sentinel is applied at the Add
+		// call for exactly this reason: wrapping the whole function made a
+		// missing plugin and an undecryptable config both render as
+		// "check it's running", which is wrong and unactionable. Both fall to
+		// `unknown`, which shows the raw text — accurate and already actionable
+		// ("client plugin %q not installed" says precisely what is wrong).
+		// Note the client-plugin message does NOT match the "plugin not
+		// installed" substring that yields errCodePluginMissing, because the
+		// quoted client name sits between the two halves; that code belongs to
+		// the tracker-plugin path, whose copy is tracker-specific anyway.
+		// Neither code is in the rotation set, so nothing here rotates.
+		{
+			"missing client plugin is not a client outage",
+			`client plugin "qbittorrent" not installed`,
+			errors.New(`client plugin "qbittorrent" not installed`),
+			errCodeUnknown,
+		},
+		{
+			"undecryptable client config is not a client outage",
+			"decrypt client config: cipher: message authentication failed",
+			errors.New("decrypt client config: cipher: message authentication failed"),
+			errCodeUnknown,
+		},
+		{
+			"unrelated cause falls back to the message",
+			`kinozal GET: Get "https://kinozal.me/details.php?id=1": context deadline exceeded`,
+			errors.New("boom"),
+			errCodeTimeout,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := classifyCause(tt.msg, tt.cause); got != tt.want {
+				t.Errorf("classifyCause(%q, %v) = %q, want %q", tt.msg, tt.cause, got, tt.want)
 			}
 		})
 	}

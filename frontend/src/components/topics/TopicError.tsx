@@ -15,6 +15,8 @@ const CODE_KEYS: Record<string, string> = {
   solver: "topics.error.solver",
   parse: "topics.error.parse",
   plugin_missing: "topics.error.pluginMissing",
+  client: "topics.error.client",
+  internal: "topics.error.internal",
 };
 
 interface TopicErrorProps {
