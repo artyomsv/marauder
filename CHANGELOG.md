@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.19.3] - 2026-08-15
+
 ### Fixed
 
 - **A tracker whose mirror stops resolving is no longer reported as a
