@@ -1874,6 +1874,16 @@ func TestClassifyError_MapsKnownPatternsToCodes(t *testing.T) {
 		// carries no network marker and must still classify as auth.
 		{"genuine credential rejection stays auth", "auth failed: lostfilm login: invalid credentials", errCodeAuth},
 		{"genuine session expiry stays auth", "auth failed: lostfilm: session expired", errCodeAuth},
+		// The reorder applies to every check error, not only login-wrapped
+		// ones, so its one deliberate semantic change is pinned here rather
+		// than left implicit: a message carrying BOTH an auth keyword and a
+		// network marker now reads as network. That is the correct reading —
+		// the request never got an answer to reject — and unlike `auth` it
+		// lets rotation try another domain instead of parking forever.
+		{"auth wording with a network marker reads as network", "rutracker login failed: read tcp 1.2.3.4:443: connection reset by peer", errCodeUnreachable},
+		// A bare network error on the non-login path is untouched by the
+		// reorder: it matched unreachable before and still does.
+		{"bare network error unaffected by the reorder", `Get "https://rutracker.org/forum/index.php": dial tcp: lookup rutracker.org: no such host`, errCodeUnreachable},
 		{"unauthorized 401", "unexpected status 401 unauthorized", errCodeAuth},
 		{"forbidden 403 status", `lostfilm GET https://lostfilm.tv/series/x -> 403`, errCodeAuth},
 		{"captcha required", "captcha required to log in", errCodeAuth},
@@ -2005,7 +2015,7 @@ func TestRecordResult_ClientDeliveryFailure_DoesNotBlameTracker(t *testing.T) {
 	topic := &domain.Topic{ID: uuid.New(), TrackerName: "lostfilm"}
 
 	cause := fmt.Errorf("%w: %w", errClientDelivery,
-		errors.New(`Post "http://192.168.2.65:8083/transmission/rpc": context deadline exceeded`))
+		errors.New(`Post "http://transmission:9091/transmission/rpc": context deadline exceeded`))
 	f.s.recordResult(context.Background(), zerolog.Nop(), topic,
 		"", false, time.Now(), cause.Error(), cause)
 
@@ -2078,7 +2088,7 @@ func TestClassifyCause_SentinelOutranksMessage(t *testing.T) {
 		},
 		{
 			"client sentinel wins over connection-refused wording",
-			"submit to torrent client: dial tcp 192.168.2.65:8083: connect: connection refused",
+			"submit to torrent client: dial tcp 203.0.113.10:9091: connect: connection refused",
 			fmt.Errorf("%w: %w", errClientDelivery, errors.New("connect: connection refused")),
 			errCodeClient,
 		},
@@ -2093,6 +2103,30 @@ func TestClassifyCause_SentinelOutranksMessage(t *testing.T) {
 			"tracker plugin not installed",
 			nil,
 			errCodePluginMissing,
+		},
+		// sendViaClient can fail three ways and only one of them means "your
+		// torrent client is unreachable". The sentinel is applied at the Add
+		// call for exactly this reason: wrapping the whole function made a
+		// missing plugin and an undecryptable config both render as
+		// "check it's running", which is wrong and unactionable. Both fall to
+		// `unknown`, which shows the raw text — accurate and already actionable
+		// ("client plugin %q not installed" says precisely what is wrong).
+		// Note the client-plugin message does NOT match the "plugin not
+		// installed" substring that yields errCodePluginMissing, because the
+		// quoted client name sits between the two halves; that code belongs to
+		// the tracker-plugin path, whose copy is tracker-specific anyway.
+		// Neither code is in the rotation set, so nothing here rotates.
+		{
+			"missing client plugin is not a client outage",
+			`client plugin "qbittorrent" not installed`,
+			errors.New(`client plugin "qbittorrent" not installed`),
+			errCodeUnknown,
+		},
+		{
+			"undecryptable client config is not a client outage",
+			"decrypt client config: cipher: message authentication failed",
+			errors.New("decrypt client config: cipher: message authentication failed"),
+			errCodeUnknown,
 		},
 		{
 			"unrelated cause falls back to the message",

@@ -739,7 +739,13 @@ func (s *Scheduler) downloadAllPending(ctx context.Context, log zerolog.Logger, 
 				return delivered, deliveredHashes, nil
 			}
 			metrics.SchedulerTopicChecksTotal.WithLabelValues(t.TrackerName, "submit_error").Inc()
-			return delivered, deliveredHashes, fmt.Errorf("%w: %w", errClientDelivery, err)
+			// Returned as-is: sendViaClient marks the one failure that means
+			// "the client is unreachable" with errClientDelivery itself. A
+			// blanket wrap here would also claim a missing client plugin and an
+			// undecryptable client config are outages, telling the user to
+			// check that a client is running when the actual fault is
+			// configuration they can see and fix.
+			return delivered, deliveredHashes, err
 		}
 		// Record the human label of what was just delivered. Episodic
 		// trackers supply it via pending_human; single-torrent trackers fall
@@ -861,7 +867,12 @@ func (s *Scheduler) sendViaClient(ctx context.Context, log zerolog.Logger, cfg *
 		Category:    t.Category,
 	}); err != nil {
 		metrics.ClientSubmitTotal.WithLabelValues(cfg.ClientName, "error").Inc()
-		return err
+		// The one failure in this function that genuinely means "the user's
+		// torrent client did not answer". Marked here rather than around the
+		// whole call so the two configuration faults above — no plugin, bad
+		// config blob — keep their own classification and are not reported as
+		// an outage of a client that may be running perfectly well.
+		return fmt.Errorf("%w: %w", errClientDelivery, err)
 	}
 	metrics.ClientSubmitTotal.WithLabelValues(cfg.ClientName, "ok").Inc()
 	s.recordDelivery(ctx, log, t, cfg, payload, label)
