@@ -1906,6 +1906,7 @@ func TestRecordResult_ClassifiesAndPersistsErrorCode(t *testing.T) {
 	f.s.recordResult(
 		context.Background(), zerolog.Nop(), topic, "", false,
 		time.Now(), `kinozal GET: Get "https://kinozal.tv/details.php?id=1": context deadline exceeded`,
+		nil,
 	)
 	if len(f.topics.recordCalls) != 1 {
 		t.Fatalf("want 1 record call, got %d", len(f.topics.recordCalls))
@@ -1918,7 +1919,7 @@ func TestRecordResult_ClassifiesAndPersistsErrorCode(t *testing.T) {
 func TestRecordResult_SuccessLeavesErrorCodeEmpty(t *testing.T) {
 	f := newFixture(t, &fakeTracker{})
 	topic := &domain.Topic{ID: uuid.New(), TrackerName: "faketracker"}
-	f.s.recordResult(context.Background(), zerolog.Nop(), topic, "abc", true, time.Now(), "")
+	f.s.recordResult(context.Background(), zerolog.Nop(), topic, "abc", true, time.Now(), "", nil)
 	if len(f.topics.recordCalls) != 1 {
 		t.Fatalf("want 1 record call, got %d", len(f.topics.recordCalls))
 	}
@@ -1978,12 +1979,132 @@ func TestRecordResult_NetworkError_ReportsDomainFailure(t *testing.T) {
 			f.s.domains = rot
 			topic := &domain.Topic{ID: uuid.New(), TrackerName: "kinozal"}
 			f.s.recordResult(context.Background(), zerolog.Nop(), topic,
-				"", false, time.Now(), tt.errMsg)
+				"", false, time.Now(), tt.errMsg, nil)
 			if len(rot.calls) != tt.wantCalls {
 				t.Errorf("ReportFailure calls = %d, want %d", len(rot.calls), tt.wantCalls)
 			}
 			if tt.wantCalls == 1 && rot.calls[0] != "kinozal" {
 				t.Errorf("ReportFailure tracker = %q, want kinozal", rot.calls[0])
+			}
+		})
+	}
+}
+
+// --- Typed causes: failures that are not the tracker's ------------------
+
+// A failure handing the payload to the user's torrent client says nothing
+// about the tracker. Classified by message it landed in the same bucket as a
+// tracker timeout, which both told the user "the tracker didn't respond" and
+// rotated the tracker's domain. Observed 2026-08-15: an unreachable
+// Transmission rotated LostFilm off www.lostfilm.tv 8ms after the submit timed
+// out, on a tracker that had just authenticated and detected new episodes.
+func TestRecordResult_ClientDeliveryFailure_DoesNotBlameTracker(t *testing.T) {
+	rot := &fakeRotator{}
+	f := newFixture(t, &fakeTracker{})
+	f.s.domains = rot
+	topic := &domain.Topic{ID: uuid.New(), TrackerName: "lostfilm"}
+
+	cause := fmt.Errorf("%w: %w", errClientDelivery,
+		errors.New(`Post "http://192.168.2.65:8083/transmission/rpc": context deadline exceeded`))
+	f.s.recordResult(context.Background(), zerolog.Nop(), topic,
+		"", false, time.Now(), cause.Error(), cause)
+
+	if len(f.topics.recordCalls) != 1 {
+		t.Fatalf("want 1 record call, got %d", len(f.topics.recordCalls))
+	}
+	if got := f.topics.recordCalls[0].errCode; got != errCodeClient {
+		t.Errorf("errCode = %q, want %q", got, errCodeClient)
+	}
+	if len(rot.calls) != 0 {
+		t.Errorf("ReportFailure calls = %d, want 0 — a client outage must not rotate the tracker's domain", len(rot.calls))
+	}
+}
+
+// A failure writing our own episode-progress state is the same shape with the
+// database in place of the client: "context deadline exceeded", classified
+// `timeout`, rotating the tracker's domain on evidence about our DB.
+func TestRecordResult_StatePersistFailure_DoesNotBlameTracker(t *testing.T) {
+	rot := &fakeRotator{}
+	f := newFixture(t, &fakeTracker{})
+	f.s.domains = rot
+	topic := &domain.Topic{ID: uuid.New(), TrackerName: "lostfilm"}
+
+	cause := fmt.Errorf("%w: %w", errStatePersist, context.DeadlineExceeded)
+	f.s.recordResult(context.Background(), zerolog.Nop(), topic,
+		"", false, time.Now(), cause.Error(), cause)
+
+	if got := f.topics.recordCalls[0].errCode; got != errCodeInternal {
+		t.Errorf("errCode = %q, want %q", got, errCodeInternal)
+	}
+	if len(rot.calls) != 0 {
+		t.Errorf("ReportFailure calls = %d, want 0 — a database failure must not rotate the tracker's domain", len(rot.calls))
+	}
+}
+
+// The sentinel decides, not the wording: the same "context deadline exceeded"
+// text with no sentinel is still a tracker timeout and still rotates. This
+// pairing is what proves the typed check is doing the separating, since
+// classifyError cannot tell the two apart.
+func TestRecordResult_TrackerTimeout_StillRotates(t *testing.T) {
+	rot := &fakeRotator{}
+	f := newFixture(t, &fakeTracker{})
+	f.s.domains = rot
+	topic := &domain.Topic{ID: uuid.New(), TrackerName: "lostfilm"}
+
+	cause := errors.New(`Post "https://www.lostfilm.tv/v_search.php": context deadline exceeded`)
+	f.s.recordResult(context.Background(), zerolog.Nop(), topic,
+		"", false, time.Now(), cause.Error(), cause)
+
+	if got := f.topics.recordCalls[0].errCode; got != errCodeTimeout {
+		t.Errorf("errCode = %q, want %q", got, errCodeTimeout)
+	}
+	if len(rot.calls) != 1 {
+		t.Fatalf("ReportFailure calls = %d, want 1", len(rot.calls))
+	}
+}
+
+func TestClassifyCause_SentinelOutranksMessage(t *testing.T) {
+	tests := []struct {
+		name  string
+		msg   string
+		cause error
+		want  string
+	}{
+		{
+			"client sentinel wins over timeout wording",
+			`submit to torrent client: Post "http://qbit:6611/api/v2/torrents/add": context deadline exceeded`,
+			fmt.Errorf("%w: %w", errClientDelivery, context.DeadlineExceeded),
+			errCodeClient,
+		},
+		{
+			"client sentinel wins over connection-refused wording",
+			"submit to torrent client: dial tcp 192.168.2.65:8083: connect: connection refused",
+			fmt.Errorf("%w: %w", errClientDelivery, errors.New("connect: connection refused")),
+			errCodeClient,
+		},
+		{
+			"state-persist sentinel wins over timeout wording",
+			"record progress: context deadline exceeded",
+			fmt.Errorf("%w: %w", errStatePersist, context.DeadlineExceeded),
+			errCodeInternal,
+		},
+		{
+			"nil cause falls back to the message",
+			"tracker plugin not installed",
+			nil,
+			errCodePluginMissing,
+		},
+		{
+			"unrelated cause falls back to the message",
+			`kinozal GET: Get "https://kinozal.me/details.php?id=1": context deadline exceeded`,
+			errors.New("boom"),
+			errCodeTimeout,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := classifyCause(tt.msg, tt.cause); got != tt.want {
+				t.Errorf("classifyCause(%q, %v) = %q, want %q", tt.msg, tt.cause, got, tt.want)
 			}
 		})
 	}

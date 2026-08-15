@@ -328,10 +328,10 @@ func (s *Scheduler) worker(ctx context.Context, id int) {
 // #126 Phase 2): a timeout or unreachable classification means the
 // tracker's current domain may be dead, so the store gets a chance to
 // rotate to a configured mirror (cooldown-gated on its side).
-func (s *Scheduler) recordResult(ctx context.Context, log zerolog.Logger, t *domain.Topic, hash string, updated bool, nextCheckAt time.Time, errMsg string) {
+func (s *Scheduler) recordResult(ctx context.Context, log zerolog.Logger, t *domain.Topic, hash string, updated bool, nextCheckAt time.Time, errMsg string, cause error) {
 	var errCode string
 	if errMsg != "" {
-		errCode = classifyError(errMsg)
+		errCode = classifyCause(errMsg, cause)
 	}
 	if s.domains != nil && (errCode == errCodeTimeout || errCode == errCodeUnreachable) {
 		s.domains.ReportFailure(ctx, t.TrackerName)
@@ -378,7 +378,7 @@ func (s *Scheduler) runCheck(ctx context.Context, log zerolog.Logger, t *domain.
 	if tr == nil {
 		log.Error().Msg("no registered tracker")
 		metrics.SchedulerTopicChecksTotal.WithLabelValues(t.TrackerName, "no_plugin").Inc()
-		s.recordResult(ctx, log, t, "", false, s.backoff(t, true, nil), "tracker plugin not installed")
+		s.recordResult(ctx, log, t, "", false, s.backoff(t, true, nil), "tracker plugin not installed", nil)
 		s.notifyError(ctx, t, "tracker plugin not installed")
 		s.recordChecked(false, true)
 		return
@@ -406,7 +406,7 @@ func (s *Scheduler) runCheck(ctx context.Context, log zerolog.Logger, t *domain.
 	if err != nil {
 		log.Warn().Err(err).Msg("check failed")
 		metrics.SchedulerTopicChecksTotal.WithLabelValues(t.TrackerName, "error").Inc()
-		s.recordResult(ctx, log, t, "", false, s.backoff(t, true, err), err.Error())
+		s.recordResult(ctx, log, t, "", false, s.backoff(t, true, err), err.Error(), err)
 		s.notifyError(ctx, t, err.Error())
 		s.recordChecked(false, true)
 		return
@@ -478,7 +478,7 @@ func (s *Scheduler) runCheck(ctx context.Context, log zerolog.Logger, t *domain.
 				log.Warn().Err(dlErr).Msg("download failed")
 				metrics.SchedulerTopicChecksTotal.WithLabelValues(t.TrackerName, "download_error").Inc()
 			}
-			s.recordResult(ctx, log, t, t.LastHash, anySubmitted, s.backoff(t, true, dlErr), dlErr.Error())
+			s.recordResult(ctx, log, t, t.LastHash, anySubmitted, s.backoff(t, true, dlErr), dlErr.Error(), dlErr)
 			s.notifyError(ctx, t, dlErr.Error())
 			s.recordChecked(true, true)
 			return
@@ -518,7 +518,7 @@ func (s *Scheduler) runCheck(ctx context.Context, log zerolog.Logger, t *domain.
 			Data: map[string]any{"next_check_at": nextCheckAt.UTC().Format(time.RFC3339)},
 		})
 	}
-	s.recordResult(ctx, log, t, check.Hash, updated || anySubmitted, nextCheckAt, "")
+	s.recordResult(ctx, log, t, check.Hash, updated || anySubmitted, nextCheckAt, "", nil)
 	s.recordChecked(updated || anySubmitted, false)
 }
 
@@ -664,7 +664,7 @@ func (s *Scheduler) loadCredentials(ctx context.Context, checkCtx context.Contex
 		}
 		log.Warn().Err(loginErr).Msg("tracker login failed")
 		metrics.SchedulerTopicChecksTotal.WithLabelValues(t.TrackerName, "auth_error").Inc()
-		s.recordResult(ctx, log, t, "", false, s.backoff(t, true, loginErr), "auth failed: "+loginErr.Error())
+		s.recordResult(ctx, log, t, "", false, s.backoff(t, true, loginErr), "auth failed: "+loginErr.Error(), loginErr)
 		s.recordChecked(false, true)
 		return nil, false
 	}
@@ -739,7 +739,7 @@ func (s *Scheduler) downloadAllPending(ctx context.Context, log zerolog.Logger, 
 				return delivered, deliveredHashes, nil
 			}
 			metrics.SchedulerTopicChecksTotal.WithLabelValues(t.TrackerName, "submit_error").Inc()
-			return delivered, deliveredHashes, fmt.Errorf("submit: %w", err)
+			return delivered, deliveredHashes, fmt.Errorf("%w: %w", errClientDelivery, err)
 		}
 		// Record the human label of what was just delivered. Episodic
 		// trackers supply it via pending_human; single-torrent trackers fall
@@ -775,7 +775,7 @@ func (s *Scheduler) downloadAllPending(ctx context.Context, log zerolog.Logger, 
 					Msg("episode mark discarded: another write won the state guard")
 				return delivered, deliveredHashes, nil
 			}
-			return delivered, deliveredHashes, fmt.Errorf("persist downloaded: %w", err)
+			return delivered, deliveredHashes, fmt.Errorf("%w: %w", errStatePersist, err)
 		}
 		log.Info().Str("packed", pending[0]).Msg("marked episode downloaded")
 
@@ -1037,7 +1037,13 @@ const (
 	errCodeSolver        = "solver"
 	errCodeParse         = "parse"
 	errCodePluginMissing = "plugin_missing"
-	errCodeUnknown       = "unknown"
+	// errCodeClient and errCodeInternal name failures in components that are
+	// not the tracker — the user's torrent client and Marauder's own storage.
+	// Both are deliberately outside the timeout/unreachable set recordResult
+	// rotates domains on: neither is evidence about the tracker's domain.
+	errCodeClient   = "client"
+	errCodeInternal = "internal"
+	errCodeUnknown  = "unknown"
 )
 
 // urlInError matches an http(s) URL embedded in an error message. Tracker
@@ -1051,6 +1057,46 @@ var urlInError = regexp.MustCompile(`https?://[^\s"']+`)
 // anchored to the conventional `GET <url> -> <code>` / `unexpected status
 // <code>` formats so we never pick up an arbitrary 3-digit run.
 var httpStatusInError = regexp.MustCompile(`(?:->|status:?)\s*(\d{3})\b`)
+
+// errClientDelivery marks a failure that occurred while handing a payload to
+// the user's torrent client, rather than while talking to the tracker. It is a
+// typed sentinel and not a message prefix on purpose: by the time a submit
+// failure reaches classification it reads `Post "http://host:port/...":
+// context deadline exceeded`, which is indistinguishable from a tracker
+// timeout — and the two demand opposite responses. On 2026-08-15 an
+// unreachable Transmission produced exactly that message and rotated LostFilm
+// off www.lostfilm.tv 8ms later, on a tracker that had just authenticated
+// successfully and detected new episodes. Every other branch in classifyError
+// matches on strings, which is what allowed both this and the "auth failed: "
+// misclassification; the client case is decided by errors.Is so no wording can
+// reintroduce it.
+var errClientDelivery = errors.New("submit to torrent client")
+
+// errStatePersist marks a failure to write Marauder's own state (the episode
+// progress mark), as opposed to a failure talking to the tracker. Same
+// reasoning as errClientDelivery: a database timeout renders as "context
+// deadline exceeded" and is indistinguishable by message from a tracker
+// timeout, so it was classified `timeout` and rotated the tracker's domain on
+// evidence about our database. Kept distinct from errClientDelivery because
+// they are different subsystems and the user can act on one but not the other.
+var errStatePersist = errors.New("record progress")
+
+// classifyCause resolves a check failure to a stable errCode. The typed cause
+// is consulted first because it carries provenance the rendered message has
+// already lost — which component failed, as opposed to how it reads. Callers
+// with no error value (a synthesised message such as "tracker plugin not
+// installed") pass nil, and errors.Is(nil, ...) is false, so those fall
+// straight through to the message-based classifier.
+func classifyCause(msg string, cause error) string {
+	switch {
+	case errors.Is(cause, errClientDelivery):
+		return errCodeClient
+	case errors.Is(cause, errStatePersist):
+		return errCodeInternal
+	default:
+		return classifyError(msg)
+	}
+}
 
 // classifyError maps a raw error message into one of the stable errCode*
 // constants. It matches on substrings of the lowercased message because the
