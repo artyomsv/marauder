@@ -2193,7 +2193,7 @@ func TestClassifyCause_SentinelOutranksMessage(t *testing.T) {
 		},
 		{
 			"state-persist sentinel wins over timeout wording",
-			"record progress: context deadline exceeded",
+			"marauder storage: context deadline exceeded",
 			fmt.Errorf("%w: %w", errStatePersist, context.DeadlineExceeded),
 			errCodeInternal,
 		},
