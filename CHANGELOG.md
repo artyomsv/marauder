@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A tracker whose mirror stops resolving is no longer reported as a
+  credentials problem, and now recovers on its own.** The scheduler stamps
+  `auth failed:` onto every error from the login path, and the classifier
+  checked that prefix before it checked for network failures — so a DNS
+  failure surfaced as "Login failed or the session expired — check this
+  tracker's credentials". The misdiagnosis also disabled the cure: `auth`
+  is not one of the codes that trigger domain rotation, so a tracker
+  parked on a mirror that had stopped resolving could never step off it.
+  Seen on LostFilm with a custom mirror that went dead — 13-22 consecutive
+  errors with no path back. Network-class failures now outrank the
+  wrapper, matching how Cloudflare and solver errors are already handled;
+  a genuine credential rejection is unaffected.
+- **A torrent client that is down no longer blames the tracker or rewrites
+  its domain.** A failed submit arrives as `Post "http://host:port/...":
+  context deadline exceeded`, which reads exactly like a tracker timeout —
+  so the topic reported "Tracker didn't respond in time" and the tracker's
+  active domain was rotated to a mirror on the strength of it. Seen with
+  an unreachable Transmission: LostFilm rotated off `www.lostfilm.tv`
+  eight milliseconds after the submit timed out, on a tracker that had
+  just authenticated and found new episodes. A failure to save a topic's
+  episode progress had the same shape with the database in place of the
+  client. Both now carry a typed marker and distinct `client` and
+  `internal` error codes, are named as such in the UI in English and
+  Russian, and sit outside the set that domain rotation reacts to.
+
 ## [1.19.2] - 2026-08-05
 
 ### Fixed
