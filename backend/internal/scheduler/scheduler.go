@@ -1127,10 +1127,22 @@ func classifyError(msg string) string {
 	}
 
 	switch {
-	case containsAny(m, "auth failed", "session expired", "unauthorized",
-		"invalid api key", "invalid credentials", "captcha", "login failed",
-		"requires credentials"):
-		return errCodeAuth
+	// The two network-class passes MUST precede the auth keywords below, for
+	// the same reason the Cloudflare and solver blocks above do: the message
+	// being classified is one WE built. loadCredentials stamps "auth failed: "
+	// onto every error from the login path — including a DNS or connect
+	// failure that never reached a login form — so the wrapper, not the cause,
+	// decided the code. On 2026-08-15 a LostFilm custom mirror stopped
+	// resolving and every check recorded `auth`: the UI told the user to check
+	// credentials that were fine, and because `auth` is absent from the
+	// timeout/unreachable set recordResult rotates on, the tracker could never
+	// step off the dead domain — 13-22 consecutive errors with no path back.
+	// Ordering network first is what makes that case self-healing.
+	//
+	// A genuine credential rejection carries none of these markers and still
+	// lands on `auth`. Where both appear — "login failed: context deadline
+	// exceeded" — the network reading is the correct one: the login request
+	// never got an answer to reject it.
 	case containsAny(m, "context deadline exceeded", "deadline exceeded",
 		"timeout", "i/o timeout", "client.timeout"):
 		return errCodeTimeout
@@ -1138,6 +1150,10 @@ func classifyError(msg string) string {
 		"no such host", "server misbehaving", "no route to host",
 		"network is unreachable", "tls handshake", "eof"):
 		return errCodeUnreachable
+	case containsAny(m, "auth failed", "session expired", "unauthorized",
+		"invalid api key", "invalid credentials", "captcha", "login failed",
+		"requires credentials"):
+		return errCodeAuth
 	case containsAny(m, "parse", "unparseable", "malformed",
 		"invalid character", "decode"):
 		return errCodeParse

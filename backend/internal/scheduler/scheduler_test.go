@@ -1859,6 +1859,21 @@ func TestClassifyError_MapsKnownPatternsToCodes(t *testing.T) {
 		{"tracker url mentioning the solver is still a network error", `kinozal GET https://flaresolverr.example.com/details.php?id=1 -> 522`, errCodeUnreachable},
 		{"auth failed prefix", "auth failed: invalid credentials", errCodeAuth},
 		{"session expired", "lostfilm: session expired", errCodeAuth},
+		// A network failure inside the login path must outrank the
+		// "auth failed: " prefix that loadCredentials stamps onto every error
+		// it reports, for the same reason the Cloudflare and solver blocks
+		// above outrank it. On 2026-08-15 a LostFilm custom mirror stopped
+		// resolving; every check recorded `auth`, which told the user their
+		// credentials were wrong AND — because `auth` is not in the set
+		// recordResult rotates on — meant the tracker could never step off the
+		// dead domain. 13-22 consecutive errors with no path to recovery.
+		{"dns failure wrapped by the login path", `auth failed: lostfilm: session validation: lostfilm verify: Get "https://mirror.lostfilm.tv/my": dial tcp: lookup mirror.lostfilm.tv on 127.0.0.11:53: no such host`, errCodeUnreachable},
+		{"login timeout wrapped by the login path", "auth failed: rutracker login: context deadline exceeded", errCodeTimeout},
+		{"connection refused wrapped by the login path", "auth failed: kinozal login: dial tcp 1.2.3.4:443: connect: connection refused", errCodeUnreachable},
+		// The other half of that ordering: a genuine credential rejection
+		// carries no network marker and must still classify as auth.
+		{"genuine credential rejection stays auth", "auth failed: lostfilm login: invalid credentials", errCodeAuth},
+		{"genuine session expiry stays auth", "auth failed: lostfilm: session expired", errCodeAuth},
 		{"unauthorized 401", "unexpected status 401 unauthorized", errCodeAuth},
 		{"forbidden 403 status", `lostfilm GET https://lostfilm.tv/series/x -> 403`, errCodeAuth},
 		{"captcha required", "captcha required to log in", errCodeAuth},
@@ -1946,6 +1961,15 @@ func TestRecordResult_NetworkError_ReportsDomainFailure(t *testing.T) {
 			0,
 		},
 		{"solver refusal does not rotate", "flaresolverr: Challenge not solved!", 0},
+		// The deadlock this fix removes: while a DNS failure in the login path
+		// classified as `auth`, rotation never fired, so a tracker parked on a
+		// custom mirror that had stopped resolving stayed there forever. It
+		// must now rotate so the ring can step to a domain that resolves.
+		{
+			"dns failure in the login path rotates",
+			`auth failed: lostfilm verify: Get "https://mirror.lostfilm.tv/my": dial tcp: lookup mirror.lostfilm.tv: no such host`,
+			1,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
