@@ -84,6 +84,10 @@ const en: Record<string, string> = {
     "Couldn't read the tracker's page — its layout may have changed.",
   "topics.error.pluginMissing":
     "This tracker isn't supported by the current Marauder version.",
+  "topics.error.client":
+    "Couldn't reach your torrent client — check it's running and reachable from Marauder. The tracker is fine.",
+  "topics.error.internal":
+    "Marauder couldn't save this topic's progress — the tracker is fine. Retrying automatically.",
 
   // Clients
   "clients.section": "delivery",
