@@ -150,10 +150,14 @@ func (f *fakeTopics) VerifyCheckState(_ context.Context, t *domain.Topic) error 
 type fakeClients struct {
 	client       *domain.Client
 	getByIDCalls []uuid.UUID
+	getByIDErr   error
 }
 
 func (f *fakeClients) GetByID(_ context.Context, id uuid.UUID, _ uuid.UUID) (*domain.Client, error) {
 	f.getByIDCalls = append(f.getByIDCalls, id)
+	if f.getByIDErr != nil {
+		return nil, f.getByIDErr
+	}
 	return f.client, nil
 }
 
@@ -310,6 +314,7 @@ func (f *fakeClientPlugin) Remove(_ context.Context, _ []byte, hashes []string, 
 type fixture struct {
 	s            *Scheduler
 	topics       *fakeTopics
+	clients      *fakeClients
 	clientPlugin *fakeClientPlugin
 	deliveries   *fakeDeliveries
 	emitter      *fakeEmitter
@@ -338,6 +343,7 @@ func newFixture(t *testing.T, tracker *fakeTracker) *fixture {
 	clientPlugin := &fakeClientPlugin{name: "fakeclient"}
 
 	topicsImpl := &fakeTopics{}
+	clientsImpl := &fakeClients{client: client}
 
 	deliveries := &fakeDeliveries{}
 	emit := &fakeEmitter{}
@@ -345,7 +351,7 @@ func newFixture(t *testing.T, tracker *fakeTracker) *fixture {
 		cfg:           cfg,
 		log:           zerolog.New(io.Discard),
 		topics:        topicsImpl,
-		clients:       &fakeClients{client: client},
+		clients:       clientsImpl,
 		creds:         &fakeCreds{},
 		deliveries:    deliveries,
 		emit:          emit,
@@ -374,6 +380,7 @@ func newFixture(t *testing.T, tracker *fakeTracker) *fixture {
 	return &fixture{
 		s:            s,
 		topics:       topicsImpl,
+		clients:      clientsImpl,
 		clientPlugin: clientPlugin,
 		deliveries:   deliveries,
 		emitter:      emit,
@@ -2043,7 +2050,7 @@ func TestRecordResult_StatePersistFailure_DoesNotBlameTracker(t *testing.T) {
 	f.s.recordResult(context.Background(), zerolog.Nop(), topic,
 		"", false, time.Now(), cause.Error(), cause)
 
-	if got := f.topics.recordCalls[0].errCode; got != errCodeInternal {
+	if got := f.lastRecord(t).errCode; got != errCodeInternal {
 		t.Errorf("errCode = %q, want %q", got, errCodeInternal)
 	}
 	if len(rot.calls) != 0 {
@@ -2065,11 +2072,103 @@ func TestRecordResult_TrackerTimeout_StillRotates(t *testing.T) {
 	f.s.recordResult(context.Background(), zerolog.Nop(), topic,
 		"", false, time.Now(), cause.Error(), cause)
 
-	if got := f.topics.recordCalls[0].errCode; got != errCodeTimeout {
+	if got := f.lastRecord(t).errCode; got != errCodeTimeout {
 		t.Errorf("errCode = %q, want %q", got, errCodeTimeout)
 	}
 	if len(rot.calls) != 1 {
 		t.Fatalf("ReportFailure calls = %d, want 1", len(rot.calls))
+	}
+}
+
+// --- Wrap sites, end to end -------------------------------------------
+//
+// The tests above hand recordResult a cause they built themselves, so they
+// pin the CLASSIFIER but not the code that produces the sentinel. That gap is
+// not hypothetical: the errClientDelivery wrap was moved from downloadAllPending
+// into sendViaClient and every one of those tests stayed green. These drive
+// runCheck so the wrap sites themselves are load-bearing — delete either wrap
+// and these fail.
+
+func TestRunCheck_ClientAddFails_RecordsClientCodeWithoutRotating(t *testing.T) {
+	tr := &fakeTracker{
+		name:   "faketracker",
+		checks: []checkResult{{check: &domain.Check{Hash: "new-hash"}}},
+		downloads: []downloadResult{
+			{payload: &domain.Payload{MagnetURI: "magnet:?xt=urn:btih:c12fe1c06bba254a9dc9f519b335aa7c1367a88a"}},
+		},
+	}
+	rot := &fakeRotator{}
+	f := newFixture(t, tr)
+	f.s.domains = rot
+	// Wording deliberately identical to a tracker timeout: only the sentinel
+	// applied at the Add call separates the two.
+	f.clientPlugin.addErr = errors.New(`Post "http://transmission:9091/transmission/rpc": context deadline exceeded`)
+
+	f.s.runCheck(context.Background(), f.s.log, f.topic)
+
+	if got := f.lastRecord(t).errCode; got != errCodeClient {
+		t.Errorf("errCode = %q, want %q", got, errCodeClient)
+	}
+	if len(rot.calls) != 0 {
+		t.Errorf("ReportFailure calls = %d, want 0 — a client outage must not rotate the tracker's domain", len(rot.calls))
+	}
+}
+
+func TestRunCheck_EpisodeMarkFails_RecordsInternalCodeWithoutRotating(t *testing.T) {
+	tr := &fakeTracker{
+		name: "faketracker",
+		checks: []checkResult{{
+			check: &domain.Check{
+				Hash:  "new-hash",
+				Extra: map[string]any{"pending_episodes": []string{"S01E01", "S01E02"}},
+			},
+		}},
+		downloads: []downloadResult{
+			{payload: &domain.Payload{MagnetURI: "magnet:1"}},
+			{payload: &domain.Payload{MagnetURI: "magnet:2"}},
+		},
+	}
+	rot := &fakeRotator{}
+	f := newFixture(t, tr)
+	f.s.domains = rot
+	f.topics.markErr = errors.New("context deadline exceeded")
+
+	f.s.runCheck(context.Background(), f.s.log, f.topic)
+
+	if got := f.lastRecord(t).errCode; got != errCodeInternal {
+		t.Errorf("errCode = %q, want %q", got, errCodeInternal)
+	}
+	if len(rot.calls) != 0 {
+		t.Errorf("ReportFailure calls = %d, want 0 — a database failure must not rotate the tracker's domain", len(rot.calls))
+	}
+}
+
+// The client row is read from Postgres on every submit, so a DB timeout there
+// renders as "context deadline exceeded" just like a tracker timeout. Left
+// unmarked it rotated the TRACKER's domain on evidence about our database —
+// reachable, since RotateFailureThreshold is 2 within 5m and rotation mutates
+// the in-memory active domain before it tries to persist, so it lands even
+// while the DB that would record it is down.
+func TestRunCheck_ClientLookupFails_RecordsInternalCodeWithoutRotating(t *testing.T) {
+	tr := &fakeTracker{
+		name:   "faketracker",
+		checks: []checkResult{{check: &domain.Check{Hash: "new-hash"}}},
+		downloads: []downloadResult{
+			{payload: &domain.Payload{MagnetURI: "magnet:?xt=urn:btih:c12fe1c06bba254a9dc9f519b335aa7c1367a88a"}},
+		},
+	}
+	rot := &fakeRotator{}
+	f := newFixture(t, tr)
+	f.s.domains = rot
+	f.clients.getByIDErr = errors.New("context deadline exceeded")
+
+	f.s.runCheck(context.Background(), f.s.log, f.topic)
+
+	if got := f.lastRecord(t).errCode; got != errCodeInternal {
+		t.Errorf("errCode = %q, want %q", got, errCodeInternal)
+	}
+	if len(rot.calls) != 0 {
+		t.Errorf("ReportFailure calls = %d, want 0 — a database failure must not rotate the tracker's domain", len(rot.calls))
 	}
 }
 

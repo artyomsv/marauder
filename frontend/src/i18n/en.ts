@@ -87,7 +87,7 @@ const en: Record<string, string> = {
   "topics.error.client":
     "Couldn't reach your torrent client — check it's running and reachable from Marauder. The tracker is fine.",
   "topics.error.internal":
-    "Marauder couldn't save this topic's progress — the tracker is fine. Retrying automatically.",
+    "Marauder couldn't save or load this topic's data — the tracker is fine. Retrying automatically.",
 
   // Clients
   "clients.section": "delivery",

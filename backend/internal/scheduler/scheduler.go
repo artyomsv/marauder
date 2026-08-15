@@ -825,7 +825,13 @@ func (s *Scheduler) submitToClient(ctx context.Context, log zerolog.Logger, t *d
 	}
 	cfg, err := s.clients.GetByID(ctx, *t.ClientID, t.UserID)
 	if err != nil {
-		return fmt.Errorf("load client: %w", err)
+		// A live DB read: on a Postgres timeout this renders as "context
+		// deadline exceeded" and, unmarked, classifies `timeout` and rotates
+		// the TRACKER's domain on evidence about our database. Reachable, not
+		// theoretical — RotateFailureThreshold is 2 within 5m, and rotation
+		// mutates the in-memory active domain before it persists, so it takes
+		// effect even while the DB that would record it is down.
+		return fmt.Errorf("%w: load client: %w", errStatePersist, err)
 	}
 	return s.sendViaClient(ctx, log, cfg, t, payload, label)
 }
@@ -867,11 +873,14 @@ func (s *Scheduler) sendViaClient(ctx context.Context, log zerolog.Logger, cfg *
 		Category:    t.Category,
 	}); err != nil {
 		metrics.ClientSubmitTotal.WithLabelValues(cfg.ClientName, "error").Inc()
-		// The one failure in this function that genuinely means "the user's
-		// torrent client did not answer". Marked here rather than around the
-		// whole call so the two configuration faults above — no plugin, bad
-		// config blob — keep their own classification and are not reported as
-		// an outage of a client that may be running perfectly well.
+		// The one failure on the whole submit path that genuinely means "the
+		// user's torrent client did not answer". Marked here rather than around
+		// the call so the configuration faults keep their own classification
+		// and are not reported as an outage of a client that may be running
+		// perfectly well: no plugin and a bad config blob above, plus "no
+		// client configured" and the client-row read in submitToClient, the
+		// caller. The last of those is DB-backed and carries errStatePersist
+		// for the same reason this one carries errClientDelivery.
 		return fmt.Errorf("%w: %w", errClientDelivery, err)
 	}
 	metrics.ClientSubmitTotal.WithLabelValues(cfg.ClientName, "ok").Inc()
@@ -1083,14 +1092,17 @@ var httpStatusInError = regexp.MustCompile(`(?:->|status:?)\s*(\d{3})\b`)
 // reintroduce it.
 var errClientDelivery = errors.New("submit to torrent client")
 
-// errStatePersist marks a failure to write Marauder's own state (the episode
-// progress mark), as opposed to a failure talking to the tracker. Same
+// errStatePersist marks a failure in Marauder's own storage — reading or
+// writing our database — as opposed to a failure talking to the tracker. Same
 // reasoning as errClientDelivery: a database timeout renders as "context
 // deadline exceeded" and is indistinguishable by message from a tracker
 // timeout, so it was classified `timeout` and rotated the tracker's domain on
 // evidence about our database. Kept distinct from errClientDelivery because
 // they are different subsystems and the user can act on one but not the other.
-var errStatePersist = errors.New("record progress")
+//
+// Applies to both directions, not just writes: the episode-progress mark
+// (a write) and the per-topic client row read that precedes every submit.
+var errStatePersist = errors.New("marauder storage")
 
 // classifyCause resolves a check failure to a stable errCode. The typed cause
 // is consulted first because it carries provenance the rendered message has
