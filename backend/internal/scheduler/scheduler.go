@@ -21,7 +21,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math"
 	"net"
 	"regexp"
 	"strings"
@@ -1036,10 +1035,24 @@ func (s *Scheduler) backoff(t *domain.Topic, failure bool, cause error) time.Tim
 	}
 	attempt := t.ConsecutiveErrors + 1
 	base := time.Duration(t.CheckIntervalSec) * time.Second
-	mult := math.Pow(2, float64(attempt))
-	d := time.Duration(float64(base) * mult)
-	if d > s.cfg.CheckMaxBackoff {
-		d = s.cfg.CheckMaxBackoff
+	// Integer math, with the cap as the starting value rather than a clamp
+	// applied afterwards. The previous form computed
+	// time.Duration(float64(base) * math.Pow(2, attempt)), which overflows
+	// int64 once the topic has failed enough times (27 consecutive errors at
+	// a 60s interval). An out-of-range float→Duration conversion is undefined
+	// in Go and saturates to INT64_MIN on amd64, so the result was *negative*
+	// — it passed the `d > CheckMaxBackoff` clamp untouched and scheduled the
+	// next check ~292 years in the past. DueForCheck selects on
+	// next_check_at <= now(), so the topic then came due on every single tick:
+	// exponential backoff inverted into permanent hammering of both the
+	// tracker and the torrent client. Measured 2026-08-16, a topic with 651
+	// consecutive errors held next_check_at = 1734-05-07 and re-checked once
+	// a minute indefinitely.
+	d := s.cfg.CheckMaxBackoff
+	if attempt >= 1 && attempt < 63 {
+		if mult := time.Duration(1) << uint(attempt); base <= s.cfg.CheckMaxBackoff/mult {
+			d = base * mult
+		}
 	}
 	return time.Now().UTC().Add(d)
 }

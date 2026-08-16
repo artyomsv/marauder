@@ -1427,6 +1427,41 @@ func TestBackoff_TableTest(t *testing.T) {
 			maxBackoff:        6*time.Hour + 50*time.Millisecond,
 			expectCapped:      true,
 		},
+		{
+			// Last error count whose 2^attempt scaling still fits in an int64
+			// Duration at a 60s interval. Guards the boundary from below so a
+			// future change to the cap or the exponent can't silently move it.
+			name:              "highest non-overflowing attempt stays capped",
+			consecutiveErrors: 26,
+			failure:           true,
+			minBackoff:        6 * time.Hour,
+			maxBackoff:        6*time.Hour + 50*time.Millisecond,
+			expectCapped:      true,
+		},
+		{
+			// One past that boundary, float64(base)*2^attempt exceeds int64.
+			// Converting an out-of-range float to a Duration is undefined in Go
+			// and saturates to INT64_MIN on amd64 — a *negative* backoff, which
+			// slips past the `d > CheckMaxBackoff` clamp and schedules the next
+			// check ~292 years in the past. DueForCheck then matches on every
+			// tick, so the topic is hammered once a minute forever. Measured
+			// 2026-08-16: a topic with 651 consecutive errors held
+			// next_check_at = 1734-05-07 and re-checked every 60s.
+			name:              "overflowing attempt stays capped, never negative",
+			consecutiveErrors: 27,
+			failure:           true,
+			minBackoff:        6 * time.Hour,
+			maxBackoff:        6*time.Hour + 50*time.Millisecond,
+			expectCapped:      true,
+		},
+		{
+			name:              "extreme failure count stays capped, never negative",
+			consecutiveErrors: 651,
+			failure:           true,
+			minBackoff:        6 * time.Hour,
+			maxBackoff:        6*time.Hour + 50*time.Millisecond,
+			expectCapped:      true,
+		},
 	}
 
 	for _, tt := range tests {
