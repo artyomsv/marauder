@@ -7,7 +7,7 @@
 **A modern, self-hosted torrent topic monitor for the trackers the *arr stack can't reach.**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Release: v1.19.4](https://img.shields.io/badge/release-v1.19.4-success.svg)](CHANGELOG.md)
+[![Release: v1.19.5](https://img.shields.io/badge/release-v1.19.5-success.svg)](CHANGELOG.md)
 
 [![CI](https://github.com/artyomsv/marauder/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/artyomsv/marauder/actions/workflows/ci.yml)
 [![CodeQL](https://github.com/artyomsv/marauder/actions/workflows/codeql.yml/badge.svg?branch=main)](https://github.com/artyomsv/marauder/actions/workflows/codeql.yml)
@@ -84,7 +84,7 @@ Read the full rationale: [VISION.md](docs/VISION.md) ·
 
 ## Project status
 
-**v1.19.4** — latest release (v1.0.0 was the initial production cut;
+**v1.19.5** — latest release (v1.0.0 was the initial production cut;
 v1.0.1 was the first release to publish container images to GHCR).
 
 What works **today**:
@@ -167,7 +167,7 @@ docker compose -f docker-compose.ghcr.yml --env-file .env up -d
 ```
 
 Requires Docker Compose **v2.23.1+**. Pin the release with `MARAUDER_VERSION`
-in `.env` (defaults to `1.19.4`); `latest` also exists.
+in `.env` (defaults to `1.19.5`); `latest` also exists.
 
 ### Build from source (contributors)
 
