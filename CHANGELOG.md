@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.19.5] - 2026-08-16
+
 ### Fixed
 
 - **A misconfigured backoff ceiling can no longer make a topic due on every
