@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A topic that keeps failing is no longer re-checked every tick forever.**
+  Exponential backoff computed the delay as
+  `time.Duration(float64(base) * math.Pow(2, attempt))`, which overflows an
+  int64 once a topic has failed enough times — 27 consecutive errors at a
+  60s check interval, 23 at 15 minutes. An out-of-range float-to-Duration
+  conversion is undefined in Go and saturates to the minimum int64, so the
+  delay came out *negative*: it passed the "cap at 6h" clamp untouched
+  (a negative value is not greater than the cap) and set the next check
+  roughly 292 years in the past. The topic was then due on every scheduler
+  tick, so backoff silently inverted into hammering the tracker and the
+  torrent client once a minute, indefinitely. Seen on a topic with 651
+  consecutive errors holding `next_check_at = 1734-05-07`. The delay is now
+  computed with integer math that cannot overflow, and the cap is the
+  starting value rather than a clamp applied afterwards.
+
 ## [1.19.3] - 2026-08-15
 
 ### Fixed
