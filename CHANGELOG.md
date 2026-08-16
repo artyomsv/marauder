@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.19.4] - 2026-08-16
+
 ### Fixed
 
 - **A topic that keeps failing is no longer re-checked every tick forever.**
