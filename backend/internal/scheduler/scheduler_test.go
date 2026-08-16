@@ -1330,6 +1330,7 @@ func TestBackoff_TableTest(t *testing.T) {
 	base := time.Duration(interval) * time.Second
 	tests := []struct {
 		name              string
+		intervalSec       int // zero uses the shared `interval` above
 		consecutiveErrors int
 		failure           bool
 		cause             error
@@ -1439,16 +1440,46 @@ func TestBackoff_TableTest(t *testing.T) {
 			expectCapped:      true,
 		},
 		{
-			// One past that boundary, float64(base)*2^attempt exceeds int64.
-			// Converting an out-of-range float to a Duration is undefined in Go
-			// and saturates to INT64_MIN on amd64 — a *negative* backoff, which
-			// slips past the `d > CheckMaxBackoff` clamp and schedules the next
-			// check ~292 years in the past. DueForCheck then matches on every
-			// tick, so the topic is hammered once a minute forever. Measured
-			// 2026-08-16: a topic with 651 consecutive errors held
-			// next_check_at = 1734-05-07 and re-checked every 60s.
+			// One past that boundary the old float path saturated to INT64_MIN,
+			// yielding a negative delay that slipped past the cap check. See
+			// backoff's comment for the full account.
 			name:              "overflowing attempt stays capped, never negative",
 			consecutiveErrors: 27,
+			failure:           true,
+			minBackoff:        6 * time.Hour,
+			maxBackoff:        6*time.Hour + 50*time.Millisecond,
+			expectCapped:      true,
+		},
+		{
+			// The overflow threshold moves with the interval, and 900s is the
+			// project's default (topics.defaultCheckIntervalSec), so this is
+			// the boundary real topics actually crossed: 23 errors, not 27.
+			// The rest of this table is pinned to 60s and would not have caught
+			// a regression that only reappears at the default interval.
+			name:              "overflowing attempt at the default 15-minute interval stays capped",
+			intervalSec:       900,
+			consecutiveErrors: 23,
+			failure:           true,
+			minBackoff:        6 * time.Hour,
+			maxBackoff:        6*time.Hour + 50*time.Millisecond,
+			expectCapped:      true,
+		},
+		{
+			// attempt == 63 is the first value the shift guard excludes, and
+			// the only one where 1<<attempt is negative (INT64_MIN) rather
+			// than zero. Pins the bound: widening it to `< 64` must fail here.
+			name:              "attempt at the shift guard boundary stays capped",
+			consecutiveErrors: 62,
+			failure:           true,
+			minBackoff:        6 * time.Hour,
+			maxBackoff:        6*time.Hour + 50*time.Millisecond,
+			expectCapped:      true,
+		},
+		{
+			// attempt == 64: 1<<attempt is zero, which is what would make the
+			// overflow guard's division panic if the bound were dropped.
+			name:              "attempt past the shift guard stays capped",
+			consecutiveErrors: 63,
 			failure:           true,
 			minBackoff:        6 * time.Hour,
 			maxBackoff:        6*time.Hour + 50*time.Millisecond,
@@ -1466,8 +1497,12 @@ func TestBackoff_TableTest(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			iv := tt.intervalSec
+			if iv == 0 {
+				iv = interval
+			}
 			topic := &domain.Topic{
-				CheckIntervalSec:  interval,
+				CheckIntervalSec:  iv,
 				ConsecutiveErrors: tt.consecutiveErrors,
 			}
 			before := time.Now().UTC()
@@ -1479,10 +1514,101 @@ func TestBackoff_TableTest(t *testing.T) {
 			if delta > tt.maxBackoff {
 				t.Errorf("backoff = %v, want <= %v", delta, tt.maxBackoff)
 			}
-			if tt.expectCapped && delta != 6*time.Hour && delta < 6*time.Hour {
-				t.Errorf("expected backoff to be capped at 6h, got %v", delta)
+			// Assert the cap comes from config rather than a hardcoded 6h, so
+			// changing the fixture's cap cannot silently void this check. The
+			// minBackoff assertion above already covers the lower side.
+			if tt.expectCapped && delta > cfg.CheckMaxBackoff+50*time.Millisecond {
+				t.Errorf("expected backoff capped at %v, got %v", cfg.CheckMaxBackoff, delta)
 			}
 		})
+	}
+}
+
+// TestBackoffDelay_NeverNonPositive pins the one invariant this computation
+// must never break: the delay is always positive. DueForCheck matches on
+// `next_check_at <= now()`, so a zero or negative delay reproduces exactly the
+// unbounded retry the exponential-overflow fix removed — reachable again
+// through configuration, since MARAUDER_CHECK_MAX_BACKOFF is env-driven and the
+// config package has no validation at all.
+//
+// This asserts against backoffDelay rather than backoff on purpose. Going
+// through backoff means comparing timestamps sampled either side of its own
+// time.Now() call, so a delay of exactly zero still yields a few hundred
+// nanoseconds of positive delta and would pass a strictly-future check while
+// being due immediately in practice.
+func TestBackoffDelay_NeverNonPositive(t *testing.T) {
+	tests := []struct {
+		name        string
+		maxBackoff  time.Duration
+		intervalSec int
+		failure     bool
+	}{
+		{
+			// "0" is a plausible operator reading of "no maximum".
+			name:        "zero max backoff on failure",
+			maxBackoff:  0,
+			intervalSec: 900,
+			failure:     true,
+		},
+		{
+			name:        "negative max backoff on failure",
+			maxBackoff:  -1 * time.Hour,
+			intervalSec: 900,
+			failure:     true,
+		},
+		{
+			// Not reachable through the API today — topic create clamps a
+			// non-positive interval to the 900s default and no UPDATE writes
+			// the column — but backoff is the chokepoint for outbound request
+			// rate and should not depend on a clamp two packages away.
+			name:        "zero check interval on failure",
+			maxBackoff:  6 * time.Hour,
+			intervalSec: 0,
+			failure:     true,
+		},
+		{
+			name:        "zero check interval on success",
+			maxBackoff:  6 * time.Hour,
+			intervalSec: 0,
+			failure:     false,
+		},
+		{
+			name:        "negative check interval on success",
+			maxBackoff:  6 * time.Hour,
+			intervalSec: -60,
+			failure:     false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := &Scheduler{cfg: &config.Config{CheckMaxBackoff: tt.maxBackoff}}
+			topic := &domain.Topic{
+				CheckIntervalSec:  tt.intervalSec,
+				ConsecutiveErrors: 3,
+			}
+			if got := s.backoffDelay(topic, tt.failure, nil); got <= 0 {
+				t.Errorf("backoffDelay = %v, want > 0; a non-positive delay "+
+					"makes next_check_at <= now(), so the topic is due on "+
+					"every tick and hammers the tracker and torrent client",
+					got)
+			}
+		})
+	}
+}
+
+// TestBackoffDelay_ShortIntervalNotRaised guards the boundary of the rescue
+// above: floorDelay exists to correct misconfiguration, not to impose a minimum
+// poll rate. Topic creation accepts any positive check_interval_sec
+// (topics/create.go only clamps <= 0), so a deliberately short interval is a
+// user's choice and must pass through unchanged.
+func TestBackoffDelay_ShortIntervalNotRaised(t *testing.T) {
+	s := &Scheduler{cfg: &config.Config{CheckMaxBackoff: 6 * time.Hour}}
+	topic := &domain.Topic{CheckIntervalSec: 30}
+
+	if got := s.backoffDelay(topic, false, nil); got != 30*time.Second {
+		t.Errorf("backoffDelay = %v, want 30s; a user-chosen interval below "+
+			"the misconfiguration floor must not be silently raised", got)
 	}
 }
 

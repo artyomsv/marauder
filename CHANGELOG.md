@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A misconfigured backoff ceiling can no longer make a topic due on every
+  tick.** `MARAUDER_CHECK_MAX_BACKOFF` is read straight from the environment
+  and nothing validates it, so setting it to `0` — a plausible reading of "no
+  maximum" — or to a negative duration produced a zero-or-negative retry delay.
+  That puts `next_check_at` at or before `now()`, and since checks are selected
+  with `next_check_at <= now()` the topic came due on every tick: the same
+  unbounded retry against the tracker and the torrent client that the 1.19.4
+  overflow fix removed, reached through configuration instead of arithmetic.
+  A non-positive ceiling now falls back to the documented 6h default, and the
+  delay computation funnels through a single guard that substitutes a one-minute
+  retry for any non-positive result. A deliberately short `check_interval_sec`
+  is untouched — the guard corrects misconfiguration, it does not impose a
+  minimum poll rate.
+
 ## [1.19.4] - 2026-08-16
 
 ### Fixed
