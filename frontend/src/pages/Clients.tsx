@@ -378,7 +378,7 @@ function fieldsForPlugin(name: string): Field[] {
           label: "RPC URL",
           placeholder: "http://192.168.1.10:9091/transmission/rpc",
           helpText:
-            "Use the full RPC URL ending in /transmission/rpc. Default Transmission Web UI port is 9091; some packages (e.g. transmission-daemon) use 8083 or 9091. Example: http://192.168.2.65:8083/transmission/rpc",
+            "Use the full RPC URL ending in /transmission/rpc. Default Transmission Web UI port is 9091; some packages (e.g. transmission-daemon) use 8083 or 9091. Example: http://192.168.1.10:8083/transmission/rpc",
         },
         { key: "username", label: "Username (optional)" },
         { key: "password", label: "Password (optional)", password: true },

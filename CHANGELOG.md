@@ -1388,7 +1388,7 @@ add LostFilm / RuTracker / Kinozal accounts.
   *"Use the full RPC URL ending in /transmission/rpc. Default
   Transmission Web UI port is 9091; some packages (e.g.
   transmission-daemon) use 8083 or 9091. Example:
-  http://192.168.2.65:8083/transmission/rpc"*. Same treatment for
+  http://192.168.1.10:8083/transmission/rpc"*. Same treatment for
   qBittorrent, Deluge, µTorrent, and the download-folder plugin.
 - **`docs/clients.md`** — new per-client setup guide. One section per
   supported client showing the exact URL format, default port,
