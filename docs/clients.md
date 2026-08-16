@@ -60,7 +60,7 @@ written to the audit log.
 
 | Field | Example |
 |---|---|
-| RPC URL | `http://192.168.2.65:8083/transmission/rpc` |
+| RPC URL | `http://192.168.1.10:8083/transmission/rpc` |
 | Username (optional) | (only if Transmission's RPC password is enabled) |
 | Password (optional) | |
 

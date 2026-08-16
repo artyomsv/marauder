@@ -1023,38 +1023,79 @@ const transientRetryDelay = 60 * time.Second
 // that is genuinely down isn't hammered once a minute forever.
 const transientRetryMax = 5
 
+// defaultMaxBackoff is the ceiling used when the configured one is missing or
+// non-positive. It mirrors the envDefault on Config.CheckMaxBackoff.
+const defaultMaxBackoff = 6 * time.Hour
+
 // backoff computes the next_check_at timestamp. On success we use the topic's
 // configured interval. On a *transient* failure (network blip) we retry quickly
 // so it auto-recovers; on a durable failure we exponentially back off to the cap.
 func (s *Scheduler) backoff(t *domain.Topic, failure bool, cause error) time.Time {
+	return time.Now().UTC().Add(s.backoffDelay(t, failure, cause))
+}
+
+// backoffDelay is the delay half of backoff, split out so that the invariant
+// this computation must never break — the delay is always positive — is
+// enforced in one place and can be asserted directly, without comparing
+// timestamps taken either side of backoff's own clock read. Every return whose
+// value is computed from config or topic state funnels through floorDelay; the
+// transient path is exempt only because it returns a positive constant.
+func (s *Scheduler) backoffDelay(t *domain.Topic, failure bool, cause error) time.Duration {
+	base := time.Duration(t.CheckIntervalSec) * time.Second
 	if !failure {
-		return time.Now().UTC().Add(time.Duration(t.CheckIntervalSec) * time.Second)
+		return floorDelay(base)
 	}
 	if isTransientError(cause) && t.ConsecutiveErrors < transientRetryMax {
-		return time.Now().UTC().Add(transientRetryDelay)
+		return transientRetryDelay
 	}
+
+	// A non-positive ceiling would otherwise flow straight through as the
+	// delay, since the cap is this function's starting value. MARAUDER_CHECK_
+	// MAX_BACKOFF is env-driven and the config package validates nothing, and
+	// "0" is a plausible operator reading of "no maximum".
+	maxBackoff := s.cfg.CheckMaxBackoff
+	if maxBackoff <= 0 {
+		maxBackoff = defaultMaxBackoff
+	}
+
 	attempt := t.ConsecutiveErrors + 1
-	base := time.Duration(t.CheckIntervalSec) * time.Second
 	// Integer math, with the cap as the starting value rather than a clamp
 	// applied afterwards. The previous form computed
 	// time.Duration(float64(base) * math.Pow(2, attempt)), which overflows
-	// int64 once the topic has failed enough times (27 consecutive errors at
-	// a 60s interval). An out-of-range float→Duration conversion is undefined
-	// in Go and saturates to INT64_MIN on amd64, so the result was *negative*
-	// — it passed the `d > CheckMaxBackoff` clamp untouched and scheduled the
-	// next check ~292 years in the past. DueForCheck selects on
-	// next_check_at <= now(), so the topic then came due on every single tick:
-	// exponential backoff inverted into permanent hammering of both the
-	// tracker and the torrent client. Measured 2026-08-16, a topic with 651
-	// consecutive errors held next_check_at = 1734-05-07 and re-checked once
-	// a minute indefinitely.
-	d := s.cfg.CheckMaxBackoff
+	// int64 once the topic has failed enough times — 27 consecutive errors at
+	// a 60s interval, 23 at the 900s default. An out-of-range float→Duration
+	// conversion is undefined in Go and saturates to INT64_MIN on amd64, so the
+	// result was *negative* — it passed the `d > CheckMaxBackoff` clamp
+	// untouched and scheduled the next check ~292 years in the past.
+	// DueForCheck selects on next_check_at <= now(), so the topic then came due
+	// on every single tick: exponential backoff inverted into permanent
+	// hammering of both the tracker and the torrent client. Measured
+	// 2026-08-16, a topic with 651 consecutive errors held
+	// next_check_at = 1734-05-07 and re-checked once a minute indefinitely.
+	d := maxBackoff
+	// The shift count must stay in [1,63): uint() of a negative attempt, and
+	// any attempt >= 64, both yield mult == 0 — which would make the division
+	// below panic rather than merely mis-scale.
 	if attempt >= 1 && attempt < 63 {
-		if mult := time.Duration(1) << uint(attempt); base <= s.cfg.CheckMaxBackoff/mult {
+		if mult := time.Duration(1) << uint(attempt); base <= maxBackoff/mult {
 			d = base * mult
 		}
 	}
-	return time.Now().UTC().Add(d)
+	return floorDelay(d)
+}
+
+// floorDelay substitutes a sane retry for a non-positive delay, which can only
+// arise from misconfiguration (a zero/negative check interval or backoff cap).
+// It deliberately does NOT raise small positive delays: any positive
+// check_interval_sec is accepted at topic creation, so a deliberately short
+// interval is a user's choice, not a defect. A zero or negative delay is a
+// defect — it makes DueForCheck match immediately and forever, which is the
+// failure this whole function exists to avoid.
+func floorDelay(d time.Duration) time.Duration {
+	if d <= 0 {
+		return transientRetryDelay
+	}
+	return d
 }
 
 // Error codes are stable, machine-readable classifications of a check
