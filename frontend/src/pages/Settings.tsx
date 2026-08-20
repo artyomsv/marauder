@@ -260,7 +260,7 @@ function AboutCard() {
           </Row>
         )}
         <Row label={t("settings.about.license")}>
-          <span className="font-mono text-foreground">MIT</span>
+          <span className="font-mono text-foreground">Apache-2.0</span>
         </Row>
         <Row label={t("settings.about.links")}>
           <div className="flex flex-wrap gap-3 text-xs">

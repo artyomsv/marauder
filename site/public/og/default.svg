@@ -43,16 +43,16 @@
     Auto-deliver to qBittorrent, Transmission, Deluge or a watch folder.
   </text>
   <g transform="translate(80, 555)">
-    <rect x="0" y="0" rx="20" ry="20" width="180" height="40" fill="none" stroke="#a855f7" stroke-width="2"/>
-    <text x="90" y="27" text-anchor="middle" font-family="Inter, sans-serif" font-size="20" font-weight="600" fill="#a855f7">
-      Open Source · MIT
+    <rect x="0" y="0" rx="20" ry="20" width="215" height="40" fill="none" stroke="#a855f7" stroke-width="2"/>
+    <text x="108" y="27" text-anchor="middle" font-family="Inter, sans-serif" font-size="20" font-weight="600" fill="#a855f7">
+      Open Source · Apache 2.0
     </text>
-    <rect x="200" y="0" rx="20" ry="20" width="160" height="40" fill="none" stroke="#06b6d4" stroke-width="2"/>
-    <text x="280" y="27" text-anchor="middle" font-family="Inter, sans-serif" font-size="20" font-weight="600" fill="#06b6d4">
+    <rect x="235" y="0" rx="20" ry="20" width="160" height="40" fill="none" stroke="#06b6d4" stroke-width="2"/>
+    <text x="315" y="27" text-anchor="middle" font-family="Inter, sans-serif" font-size="20" font-weight="600" fill="#06b6d4">
       13 Trackers
     </text>
-    <rect x="380" y="0" rx="20" ry="20" width="180" height="40" fill="none" stroke="#10b981" stroke-width="2"/>
-    <text x="470" y="27" text-anchor="middle" font-family="Inter, sans-serif" font-size="20" font-weight="600" fill="#10b981">
+    <rect x="415" y="0" rx="20" ry="20" width="180" height="40" fill="none" stroke="#10b981" stroke-width="2"/>
+    <text x="505" y="27" text-anchor="middle" font-family="Inter, sans-serif" font-size="20" font-weight="600" fill="#10b981">
       Go · React 19 · PG 18
     </text>
   </g>

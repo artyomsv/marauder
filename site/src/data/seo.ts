@@ -35,7 +35,7 @@ export const SITE = {
    *  except to correct drift. */
   software: {
     version: "1.19.5",
-    license: "MIT",
+    license: "Apache-2.0",
     operatingSystem: "Linux, Docker, macOS, Windows",
     applicationCategory: "Utility",
     runtime: "Self-hosted",

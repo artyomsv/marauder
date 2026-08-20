@@ -6,7 +6,7 @@
 
 **A modern, self-hosted torrent topic monitor for the trackers the *arr stack can't reach.**
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Release: v1.19.5](https://img.shields.io/badge/release-v1.19.5-success.svg)](CHANGELOG.md)
 
 [![CI](https://github.com/artyomsv/marauder/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/artyomsv/marauder/actions/workflows/ci.yml)
@@ -260,7 +260,7 @@ marauder/
 ├── deploy/             docker-compose files, .env.example, nginx configs
 ├── docs/               VISION / COMPETITORS / PRD / ROADMAP / guides
 ├── CHANGELOG.md        Keep a Changelog format
-├── LICENSE             MIT
+├── LICENSE             Apache-2.0
 └── README.md
 ```
 
@@ -284,7 +284,11 @@ For now:
 
 ## License & credits
 
-Marauder is released under the [MIT License](LICENSE).
+Marauder is released under the [Apache License 2.0](LICENSE).
+
+"Marauder" and the Marauder mark are trademarks of Artjoms Stukans. The licence
+covers the code, not the name — see [TRADEMARK.md](TRADEMARK.md) if you are
+distributing a modified build.
 
 Built inspired by [monitorrent](https://github.com/werwolfby/monitorrent) — the
 project that pioneered the forum-tracker monitoring niche. Marauder is an

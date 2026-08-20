@@ -37,7 +37,7 @@ export const homeFaq: FaqItem[] = [
   {
     question: "Is Marauder free?",
     answer:
-      "Yes. Marauder is open source under the MIT License. There is no paid tier, no hosted version, no telemetry. You self-host it on your own machine.",
+      "Yes. Marauder is open source under the Apache License 2.0. There is no paid tier, no hosted version, no telemetry. You self-host it on your own machine.",
   },
   {
     question: "How do I install it?",
