@@ -21,7 +21,7 @@ links to the user's torrent client(s). It is built with a Go backend, a React 19
 designed to be easy to extend.
 
 Public URL: **`https://marauder.cc`**
-License: **MIT**
+License: **Apache-2.0**
 Repository: **[artyomsv/marauder](https://github.com/artyomsv/marauder)**
 
 ---
@@ -840,7 +840,7 @@ Pipelines (all run on PR and on push to `main`):
 | Memory growth under 1 000+ topics | Medium | Medium | Nightly soak test in CI; pprof endpoint (gated) for diagnostics. |
 | User points Marauder at a tracker they don't have rights to use | N/A | Legal/ethical | README disclaimer; Marauder does not ship pre-configured URLs; behavior is user's responsibility. |
 | Supply chain: a Go dep is compromised | Low | High | `govulncheck` in CI; `go.sum` committed; no auto-updates to `main`; renovate bot in dry-run mode. |
-| Single-maintainer bus factor | Medium | High | MIT license, plugin-centric architecture, and first-class CONTRIBUTING guide lower the bar for others to take over. |
+| Single-maintainer bus factor | Medium | High | Apache-2.0 licence, plugin-centric architecture, and first-class CONTRIBUTING guide lower the bar for others to take over. |
 
 ---
 

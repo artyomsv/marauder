@@ -16,7 +16,7 @@ monitors have stalled.
 
 | Project | Focus | Covers forum trackers (RuTracker, LostFilm, NNM-Club)? | Actively maintained? | License | UI |
 |---|---|---|---|---|---|
-| **Marauder** *(this project)* | Forum-tracker monitoring + client delivery | ✅ Yes, first-class | ✅ | MIT | Modern React 19 |
+| **Marauder** *(this project)* | Forum-tracker monitoring + client delivery | ✅ Yes, first-class | ✅ | Apache-2.0 | Modern React 19 |
 | [Sonarr](https://sonarr.tv/) | TV show automation | ❌ Torznab only | ✅ | GPLv3 | Good |
 | [Radarr](https://radarr.video/) | Movie automation | ❌ Torznab only | ✅ | GPLv3 | Good |
 | [Lidarr](https://lidarr.audio/) | Music automation | ❌ Torznab only | ✅ | GPLv3 | Good |
