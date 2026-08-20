@@ -4,9 +4,35 @@ Copyright 2026 Artjoms Stukans
 This product includes software developed at
 https://github.com/artyomsv/marauder
 
-Licensed under the Apache License, Version 2.0. Some contributions remain under
-the MIT License pending relicensing consent from their authors; see LICENSE and
-MIT-LICENSE.txt.
+Licensed under the Apache License, Version 2.0 (the "License"). You may obtain
+a copy in the LICENSE file, or at http://www.apache.org/licenses/LICENSE-2.0
+
+--- Licensing transition -------------------------------------------------------
+
+Marauder is transitioning from the MIT License to the Apache License, Version
+2.0. All new contributions are licensed under Apache-2.0.
+
+Contributions for which relicensing consent has been obtained are licensed
+under Apache-2.0. Contributions made by authors who originally licensed their
+work under the MIT License and who have not granted explicit permission to
+relicense remain licensed under the MIT License, the text of which is
+reproduced in MIT-LICENSE.txt.
+
+No rights beyond those granted by the applicable original license are conveyed
+for such contributions.
+
+Releases published before August 2026 remain under the MIT License they
+shipped with.
+
+This statement lives here rather than in LICENSE deliberately. LICENSE is kept
+byte-identical to the canonical Apache-2.0 text, because GitHub's licence
+detector matches the whole file and any preamble drops it below the confidence
+threshold — which reports the project as "Other", and empties the
+org.opencontainers.image.licenses label on the published container images.
+NOTICE is also the file Apache-2.0 section 4(d) requires derivatives to carry,
+so the caveat travels further here than it would there.
+
+--- Trademarks -----------------------------------------------------------------
 
 "Marauder" and the Marauder mark are trademarks of Artjoms Stukans. The Apache
 License grants no rights to them; see TRADEMARK.md.
