@@ -61,6 +61,10 @@ const ru: Record<string, string> = {
   "topics.search.noResults": "Ничего не найдено",
   "topics.search.needsAccount": "нужен аккаунт трекера — добавьте его в разделе «Аккаунты»",
   "topics.search.loginFailed": "не удалось войти на трекер — проверьте аккаунт в разделе «Аккаунты»",
+  "topics.search.solverMissing":
+    "обходчик Cloudflare не настроен — этому трекеру он необходим; с аккаунтом всё в порядке",
+  "topics.search.solverDown":
+    "обходчик Cloudflare не отвечает — трекер и аккаунт в порядке",
   "topics.search.trackerFailed": "поиск на этом трекере не удался",
   "topics.search.coverage": "Поиск по:",
   "topics.add.urlPlaceholder":
@@ -79,7 +83,9 @@ const ru: Record<string, string> = {
   "topics.error.auth":
     "Ошибка входа или сессия истекла — проверьте учётные данные этого трекера.",
   "topics.error.cloudflare":
-    "Cloudflare заблокировал запрос до трекера — учётные данные в порядке. Этому трекеру нужен браузер, чтобы пройти проверку.",
+    "Cloudflare заблокировал запрос до трекера — учётные данные в порядке. Обходчик получил разрешение, но трекер его отклонил: обходчик должен выходить в интернет с того же публичного IP, что и Marauder.",
+  "topics.error.solverMissing":
+    "Обходчик Cloudflare не настроен, а без него этот трекер недоступен. Запустите контейнер FlareSolverr и укажите его адрес в MARAUDER_FLARESOLVERR_URL.",
   "topics.error.solver":
     "Обходчик Cloudflare недоступен или не ответил вовремя — сам трекер, скорее всего, доступен. Проверки будут повторяться.",
   "topics.error.parse":

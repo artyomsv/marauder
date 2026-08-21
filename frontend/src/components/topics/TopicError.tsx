@@ -13,6 +13,7 @@ const CODE_KEYS: Record<string, string> = {
   auth: "topics.error.auth",
   cloudflare: "topics.error.cloudflare",
   solver: "topics.error.solver",
+  solver_missing: "topics.error.solverMissing",
   parse: "topics.error.parse",
   plugin_missing: "topics.error.pluginMissing",
   client: "topics.error.client",

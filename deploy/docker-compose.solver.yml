@@ -1,0 +1,92 @@
+# Cloudflare solver overlay for Marauder.
+#
+# Usage — layer it onto either production stack:
+#   docker compose -f docker-compose.yml      -f docker-compose.solver.yml up -d
+#   docker compose -f docker-compose.ghcr.yml -f docker-compose.solver.yml up -d
+#
+# What it does: starts a FlareSolverr container AND points the backend at it.
+# Both halves live here on purpose. Marauder shipped the environment variable
+# and (in the dev overlay) the container as two independent switches, and issue
+# #158 was the result — a user who flipped one of them got a stack where
+# nothing was wrong except that the two halves had never been introduced. There
+# is no way to enable half of this file.
+#
+# Who needs it: anyone using a Cloudflare-gated tracker. Today that is
+# RuTracker, whose every /forum/ request is answered with a 403 challenge
+# without a clearance — so checks, search and .torrent downloads all fail.
+# Every other tracker works without this file, which is why it is opt-in: the
+# container runs a full Chrome and costs a few hundred MB of RAM.
+#
+# How it works: Marauder does NOT proxy its traffic through the browser.
+# FlareSolverr solves the challenge once and returns a cf_clearance cookie plus
+# the User-Agent it was issued for; Marauder replays that pair on its own
+# requests. That is what lets it submit a login and carry a binary .torrent
+# rather than degrading to a magnet.
+#
+# IMPORTANT: the solver must reach the internet from the SAME public IP as the
+# backend — Cloudflare binds the clearance to the requesting address. That is
+# automatic here (both containers share this stack's egress) and breaks if you
+# route only one of them through a VPN.
+#
+# The dev overlay (docker-compose.dev.yml) already starts its own FlareSolverr
+# for the Sonarr/Prowlarr work and wires the URL itself, so layering this on
+# top of it is redundant. It is no longer harmful — that overlay declares
+# `networks: [default]` on its solver so this file's isolated network unions
+# with it rather than replacing it, which would have cut Prowlarr off from the
+# solver silently.
+
+services:
+  backend:
+    networks: [default, solver]
+    environment:
+      MARAUDER_FLARESOLVERR_URL: ${MARAUDER_FLARESOLVERR_URL:-http://flaresolverr:8191}
+      MARAUDER_FLARESOLVERR_TIMEOUT: ${MARAUDER_FLARESOLVERR_TIMEOUT:-60s}
+    # Wait for the browser, not just the container. FlareSolverr spends ~9s
+    # launching Chrome before it can solve anything, while the scheduler starts
+    # checking ~1s after the backend boots. required: false keeps the coupling
+    # one-way: a broken solver must delay the backend, never stop it starting.
+    depends_on:
+      flaresolverr:
+        condition: service_healthy
+        required: false
+
+  flaresolverr:
+    networks: [solver]
+    # Digest kept in sync with docker-compose.{solver,dev,arr}.yml — all three run
+    # the same solver, and the network wiring between them is now load-bearing.
+    image: ghcr.io/flaresolverr/flaresolverr@sha256:139dfee1c6f89249c8d665d1333a42e8ec74ec0a86bc6bb1c8461e10d3a66a47
+    restart: unless-stopped
+    environment:
+      LOG_LEVEL: ${MARAUDER_FLARESOLVERR_LOG_LEVEL:-info}
+    # /health answers only once the browser self-test has passed, which is the
+    # readiness that matters — the port opening is not the same as the solver
+    # being able to solve. start_period covers the Chrome launch without
+    # burning retries; the container ships curl.
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8191/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+    # Not published to the host: only the backend talks to it, by service DNS.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+# FlareSolverr is an unauthenticated browser-proxy by design: anyone who can
+# reach :8191 can make it fetch any URL from this stack's egress, rendered by a
+# real browser. On the default flat bridge that includes the LAN-facing gateway,
+# the frontend, and any torrent client layered in from the test-clients
+# matrix — the containers most likely to be compromised, since they parse
+# untrusted peer data. So the solver gets its own network and the backend joins
+# both: `http://flaresolverr:8191` still resolves for the backend, and nothing
+# else in the project can reach it. (The Helm chart already does the equivalent
+# via templates/networkpolicy.yaml.)
+# NOTE: `solver` must NOT be `internal: true` — FlareSolverr has to reach the
+# internet to solve the challenge at all. Isolation here is about who can reach
+# IN to the solver, not about what the solver can reach out to.
+networks:
+  default:
+  solver:

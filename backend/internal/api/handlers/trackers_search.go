@@ -34,6 +34,12 @@ const (
 const (
 	searchErrNoCredentials = "no_credentials"
 	searchErrLoginFailed   = "login_failed"
+	// Neither of these is the account's fault. Reporting them as login_failed
+	// sent a user with perfectly good credentials to re-enter them — issue #158
+	// on the search surface, which is login-gated on RuTracker and so turns any
+	// Cloudflare block into an apparent auth failure.
+	searchErrSolverMissing = "solver_missing"
+	searchErrSolver        = "solver"
 	searchErrTimeout       = "timeout"
 	searchErrFailed        = "failed"
 )
@@ -41,6 +47,8 @@ const (
 var searchErrMessages = map[string]string{
 	searchErrNoCredentials: "search requires credentials",
 	searchErrLoginFailed:   "tracker login failed",
+	searchErrSolverMissing: "no Cloudflare solver is configured",
+	searchErrSolver:        "the Cloudflare solver did not answer",
 	searchErrTimeout:       "search timed out",
 	searchErrFailed:        "search failed",
 }
@@ -158,21 +166,37 @@ func (h *Trackers) Search(w http.ResponseWriter, r *http.Request) {
 			ctx, cancel := context.WithTimeout(r.Context(), h.perTrackerBudget())
 			defer cancel()
 			name := ws.Name()
-			creds, loginFailed := h.searchCredentials(ctx, uid, ws)
+			creds, loginFailed, loginErr := h.searchCredentials(ctx, uid, ws)
 			results, err := ws.Search(ctx, q, creds)
 			switch {
 			case errors.Is(err, registry.ErrSearchRequiresCredentials):
 				// A stored-but-unusable credential is a different user story
-				// ("your login broke") than a missing one ("add an account").
+				// ("your login broke") than a missing one ("add an account") —
+				// and a Cloudflare block is neither. On a login-gated searcher
+				// the solver states arrive here wearing a login failure's
+				// clothes, so they must be read off the login error rather than
+				// inferred from the fact that warming failed.
 				code := searchErrNoCredentials
-				if loginFailed {
+				switch {
+				case errors.Is(loginErr, registry.ErrClearanceNotConfigured):
+					code = searchErrSolverMissing
+				case errors.Is(loginErr, registry.ErrClearanceUnavailable):
+					code = searchErrSolver
+				case loginFailed:
 					code = searchErrLoginFailed
 				}
 				metrics.TrackerSearchTotal.WithLabelValues(name, code).Inc()
 				outcomes[i] = outcome{errView: newSearchErrorView(ws, code)}
 			case err != nil:
+				// The same three-way split as above, for a searcher that fails
+				// outright rather than by reporting missing credentials.
 				code := searchErrFailed
-				if errors.Is(err, context.DeadlineExceeded) || ctx.Err() != nil {
+				switch {
+				case errors.Is(err, registry.ErrClearanceNotConfigured):
+					code = searchErrSolverMissing
+				case errors.Is(err, registry.ErrClearanceUnavailable):
+					code = searchErrSolver
+				case errors.Is(err, context.DeadlineExceeded) || ctx.Err() != nil:
 					code = searchErrTimeout
 				}
 				metrics.TrackerSearchTotal.WithLabelValues(name, "error").Inc()
@@ -233,21 +257,21 @@ func (h *Trackers) perTrackerBudget() time.Duration {
 // trip. (Deliberately neither loginAndVerify — Login→Verify always, right
 // for validating fresh credentials, wasteful per search — nor the
 // scheduler's Login-only loadCredentials.)
-func (h *Trackers) searchCredentials(ctx context.Context, uid uuid.UUID, t registry.Tracker) (creds *domain.TrackerCredential, loginFailed bool) {
+func (h *Trackers) searchCredentials(ctx context.Context, uid uuid.UUID, t registry.Tracker) (creds *domain.TrackerCredential, loginFailed bool, loginErr error) {
 	wc, needsCreds := t.(registry.WithCredentials)
 	if !needsCreds || h.Creds == nil || h.Master == nil {
-		return nil, false
+		return nil, false, nil
 	}
 	stored, err := h.Creds.GetForTracker(ctx, uid, t.Name())
 	if err != nil || stored == nil {
-		return nil, false
+		return nil, false, nil
 	}
 	// Decrypt secret + session like Credentials.Test does — session-cookie
 	// trackers validate the session blob, not the password.
 	plain, err := h.Master.Decrypt(stored.SecretEnc, stored.SecretNonce)
 	if err != nil {
 		log.Warn().Str("tracker", t.Name()).Err(err).Msg("search credential decrypt failed; searching anonymously")
-		return nil, true
+		return nil, true, err
 	}
 	transient := &domain.TrackerCredential{
 		ID:          stored.ID,
@@ -260,16 +284,16 @@ func (h *Trackers) searchCredentials(ctx context.Context, uid uuid.UUID, t regis
 		sess, derr := h.Master.Decrypt(stored.SessionEnc, stored.SessionNonce)
 		if derr != nil {
 			log.Warn().Str("tracker", t.Name()).Err(derr).Msg("search session decrypt failed; searching anonymously")
-			return nil, true
+			return nil, true, derr
 		}
 		transient.SessionEnc = sess
 	}
 	if ok, verr := wc.Verify(ctx, transient); verr == nil && ok {
-		return transient, false
+		return transient, false, nil
 	}
 	if lerr := wc.Login(ctx, transient); lerr != nil {
 		log.Debug().Str("tracker", t.Name()).Err(lerr).Msg("search credential login failed; searching anonymously")
-		return nil, true
+		return nil, true, lerr
 	}
-	return transient, false
+	return transient, false, nil
 }

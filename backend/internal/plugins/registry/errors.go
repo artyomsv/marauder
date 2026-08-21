@@ -34,10 +34,13 @@ var ErrCaptchaRequired = errors.New("tracker requires a captcha")
 // browser used (see the flaresolverr package doc — an earlier note here blamed
 // the TLS fingerprint, which was a User-Agent mismatch).
 //
-// So this error means "the tracker is gated and we had no usable clearance" —
-// either no solver is configured or the cached clearance just died. It is not
-// "retry later" and not "fix your credentials". When the solver IS configured
-// but could not answer, use ErrClearanceUnavailable instead.
+// So this error means "the solver answered and the tracker is gated anyway" —
+// in practice a clearance that just died, or one minted from an egress the
+// tracker does not accept. It is not "retry later" and not "fix your
+// credentials". The two adjacent states have their own sentinels: a configured
+// solver that could not answer is ErrClearanceUnavailable, and no solver
+// configured at all is ErrClearanceNotConfigured. Do not fold either back into
+// this one — collapsing the third was issue #158.
 //
 // Plugins wrap it with %w so callers can match via errors.Is.
 var ErrCloudflareChallenge = errors.New("tracker is behind a cloudflare challenge")
@@ -47,9 +50,9 @@ var ErrCloudflareChallenge = errors.New("tracker is behind a cloudflare challeng
 // failed to supply a clearance for it. It names the solver, not the tracker.
 //
 // The distinction is the whole point. ErrCloudflareChallenge is classified
-// `cloudflare`, which tells the user "this tracker needs a browser to get
-// through" — true when the solver answered and the tracker is genuinely
-// gated, and actively misleading when the solver is simply down. On
+// `cloudflare`, whose message blames the tracker's wall — true when the solver
+// answered and the tracker is genuinely gated, and actively misleading when
+// the solver is simply down. On
 // 2026-08-05 FlareSolverr took ~9s to launch Chrome while the scheduler began
 // checking 1s after boot; every RuTracker topic failed the mint, fell open
 // into a bare request, and was reported as a Cloudflare wall — with a
@@ -66,6 +69,35 @@ var ErrCloudflareChallenge = errors.New("tracker is behind a cloudflare challeng
 // pointless here: there is no cached clearance to drop, and a second doomed
 // request only adds load while the solver is already unwell.
 var ErrClearanceUnavailable = errors.New("cloudflare clearance unavailable")
+
+// ErrClearanceNotConfigured is returned when a request was blocked by a
+// Cloudflare challenge and NO clearance provider is installed at all — the
+// operator never set MARAUDER_FLARESOLVERR_URL.
+//
+// It is the third leg of a distinction that decides what the user does next:
+//
+//	ErrCloudflareChallenge     solver answered, tracker is genuinely gated
+//	ErrClearanceUnavailable    solver is configured but could not mint
+//	ErrClearanceNotConfigured  there is no solver to ask
+//
+// Issue #158: none of the shipped deployment stacks wired a solver up, so
+// every RuTracker install reported the first of those. That message then read
+// "this tracker needs a browser to get through", which the reporter reasonably
+// took as a browser Marauder would open, and waited. It has since been
+// reworded, but rewording alone would not have helped: the fix a user can act
+// on is "run FlareSolverr and point Marauder at it", and only this sentinel
+// knows that is the situation.
+//
+// Deliberately NOT wrapped in ErrClearanceUnavailable, despite both naming the
+// solver. That one is classified transient and retried in a minute because a
+// failed mint is infrastructure and infrastructure comes back; a missing
+// configuration does not come back on its own, so this takes the ordinary
+// exponential backoff instead of hammering a tracker forever.
+//
+// Like ErrClearanceUnavailable it does NOT wrap ErrCloudflareChallenge, so the
+// plugin's invalidate-and-refetch retry is skipped: there is no cached
+// clearance to drop and no provider to re-mint from.
+var ErrClearanceNotConfigured = errors.New("cloudflare clearance not configured")
 
 // ErrSessionExpired is returned by a cookie-session plugin's Login when
 // no stored session exists or the stored session no longer authenticates.

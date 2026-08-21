@@ -7,6 +7,91 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **RuTracker could not work on any shipped deployment stack, and said so in a
+  way nobody could act on** (issue #158). RuTracker has been behind a
+  Cloudflare challenge since 2026-07-28 and needs a FlareSolverr container to
+  mint a clearance. No stack ever connected the two: the prebuilt GHCR stack
+  neither shipped a solver nor even passed `MARAUDER_FLARESOLVERR_URL` to the
+  backend (so setting it in `.env` did nothing), the source-build stack passed
+  the variable but shipped no solver, the dev overlay started a solver and
+  waited for it to be healthy but never told the backend its address, and the
+  Helm chart's `arr.flaresolverr` deployed a container the backend was never
+  pointed at. Every install therefore reported *"Blocked by Cloudflare — this
+  tracker needs a browser to get through"*, which reads as a browser Marauder
+  is about to open. It never was: the browser is a container the operator has
+  to run, and nothing in the product said so.
+
+  - New `deploy/docker-compose.solver.yml` overlay starts FlareSolverr **and**
+    wires `MARAUDER_FLARESOLVERR_URL` in a single step, for either production
+    stack. The two switches are deliberately not separately flippable — a
+    solver nothing points at is indistinguishable from no solver at all.
+  - `docker-compose.ghcr.yml` now passes `MARAUDER_FLARESOLVERR_URL` /
+    `MARAUDER_FLARESOLVERR_TIMEOUT` through to the backend at all.
+  - The dev overlay points the backend at the FlareSolverr it already starts.
+  - `arr.flaresolverr.enabled=true` now sets the URL on the backend too.
+  - `config.MARAUDER_FLARESOLVERR_URL` is rejected while
+    `arr.flaresolverr.enabled=true`, following the chart's existing
+    reserved-key convention rather than silently picking a winner. An empty
+    override would otherwise suppress the chart's value and leave the freshly
+    deployed solver wired to nothing — issue #158 arriving through Helm.
+  - New `registry.ErrClearanceNotConfigured` sentinel and `solver_missing`
+    error code separate "no solver was ever configured" from "a configured
+    solver failed" (`solver`) and "the solver answered and the tracker is
+    genuinely gated" (`cloudflare`). Topics now say *"No Cloudflare solver is
+    configured… Run a FlareSolverr container and point
+    MARAUDER_FLARESOLVERR_URL at it"*, and the Accounts page says the same.
+    Unlike a failed mint it is **not** treated as transient: a missing setting
+    does not fix itself in 60s, so it takes the ordinary exponential backoff
+    instead of retrying against the tracker forever.
+  - The `cloudflare` message no longer promises a browser. It now names the
+    real remaining cause — the solver's clearance was rejected, which is
+    almost always a split egress, since Cloudflare binds the clearance to the
+    requesting IP.
+  - Docs: `docs/trackers.md` listed RuTracker as **Cloudflare: No** (stale
+    since 2026-07-28) and now carries a setup section; `getting-started.md`
+    never mentioned RuTracker or FlareSolverr; `deploy/.env.example` pointed at
+    a `--profile arr` that does not exist; and marauder.cc claimed "the bundled
+    compose stack can start one for you", which was not true of either
+    production stack.
+
+  - A configured solver that answers with an unusable clearance (a cookie
+    without the User-Agent it was issued for, or vice versa — either alone is
+    still refused by Cloudflare) is now reported as a solver failure. It
+    previously fell through to the `cloudflare` message, which told the user
+    their clearance had been *rejected* over an egress-IP mismatch when nothing
+    had been minted to reject, sending them after a VPN problem that did not
+    exist.
+  - The solver overlay puts FlareSolverr on its own Docker network, joined only
+    by the backend. FlareSolverr is an unauthenticated browser-proxy by design,
+    and the default flat bridge would have exposed it to the LAN-facing gateway,
+    the frontend, and any torrent client layered in from the test-clients
+    matrix. The Helm chart already did the equivalent via its NetworkPolicy. The
+    docs now state plainly that FlareSolverr has no authentication.
+  - Tracker search no longer blames the user's account for a Cloudflare
+    problem. RuTracker's search is login-gated, so a missing or unreachable
+    solver arrived as a failed login and rendered "tracker login failed — check
+    your account under Accounts", sending a user with perfectly good
+    credentials to re-enter them. `GET /trackers/search` gains `solver_missing`
+    and `solver` per-tracker error codes alongside `login_failed`.
+  - `ErrClearanceUnavailable` is now matched by sentinel in the scheduler's
+    `classifyCause`, not only by message. Its text is assembled from whatever
+    the provider failed with, so its wording is not Marauder's to keep stable —
+    and the embedded cause is typically a dial error against the solver's own
+    port, which fell through to the network passes and rotated the tracker's
+    domain over an outage of our own infrastructure.
+  - The dev overlay's FlareSolverr declares `networks: [default]` explicitly so
+    that layering the solver overlay on top unions the two network lists rather
+    than replacing them. Without it Prowlarr — the reason that service exists in
+    the dev stack — silently lost the solver, with no Compose error.
+
+### Security
+
+- **A solver URL containing credentials is no longer logged verbatim.**
+  `MARAUDER_FLARESOLVERR_URL` is operator-supplied and may carry userinfo when
+  it points at a self-hosted solver behind auth (`http://user:pass@host:8191`);
+  it was written to the boot log at Info as given. The password is now masked.
 ## [1.19.5] - 2026-08-16
 
 ### Fixed

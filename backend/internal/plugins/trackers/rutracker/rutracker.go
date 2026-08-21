@@ -164,6 +164,14 @@ func (p *plugin) ChallengeProbeURL() string {
 	return "https://" + p.effectiveDomain() + "/forum/login.php"
 }
 
+// errUnusableClearance marks a provider that answered but supplied a clearance
+// missing its cookie or its User-Agent. It never reaches the user: challengeCause
+// wraps it in registry.ErrClearanceUnavailable, which is what "a configured
+// solver could not supply a clearance" already means. It exists only so
+// applyClearance can report that state distinctly from having no provider,
+// since both otherwise return the zero Clearance with a nil error.
+var errUnusableClearance = errors.New("clearance provider returned a clearance without both a cookie and a user-agent")
+
 // applyClearance seeds the session jar with the Cloudflare clearance cookie
 // for u's host and returns it so the caller can match the User-Agent, plus the
 // provider's error if the mint failed.
@@ -181,6 +189,17 @@ func (p *plugin) applyClearance(ctx context.Context, sess *forumcommon.Session, 
 		return registry.Clearance{}, err
 	}
 	if !c.Valid() {
+		// Valid() demands BOTH a cookie and the User-Agent it was issued for;
+		// either alone still yields a challenge. A provider that answered with
+		// half a clearance has therefore failed, and saying so is the only way
+		// the caller can tell this apart from having no provider at all —
+		// which is the state that returns the same zero value below. Without
+		// the split, challengeCause fell through to ErrCloudflareChallenge and
+		// told the user their solver's clearance had been rejected over an
+		// egress-IP mismatch, when nothing had been minted to reject.
+		if registry.ClearanceConfigured() {
+			return registry.Clearance{}, errUnusableClearance
+		}
 		return registry.Clearance{}, nil
 	}
 	jarCookies := make([]*http.Cookie, 0, len(c.Cookies))
@@ -194,16 +213,26 @@ func (p *plugin) applyClearance(ctx context.Context, sess *forumcommon.Session, 
 
 // challengeCause names the culprit for a request the tracker just blocked.
 //
-// clearErr is applyClearance's second return: non-nil means the configured
-// solver could not mint, so this request was always going to be challenged and
-// the tracker's wall says nothing about the tracker. Reporting
-// ErrCloudflareChallenge there produces the "this tracker needs a browser to
-// get through" message while the browser is the thing that is broken — the
-// 2026-08-05 boot race, where FlareSolverr's ~9s Chrome startup parked two
-// topics on a 30-minute backoff.
+// Three outcomes, because three different people have to do three different
+// things about them:
+//
+//   - No provider installed: the operator never configured a solver, so this
+//     request — and every gated one after it — was doomed before it was made.
+//     Blaming the tracker here produced issue #158, where the message told the
+//     user the tracker "needs a browser to get through" while nothing in the
+//     deployment had ever been asked to run one.
+//   - clearErr non-nil: a configured solver could not mint, so this request
+//     was always going to be challenged and the tracker's wall says nothing
+//     about the tracker. That was the 2026-08-05 boot race, where
+//     FlareSolverr's ~9s Chrome startup parked two topics on a 30-minute
+//     backoff.
+//   - Neither: the solver answered and the tracker is genuinely gated.
 func challengeCause(clearErr error) error {
 	if clearErr != nil {
 		return fmt.Errorf("%w: %w", registry.ErrClearanceUnavailable, clearErr)
+	}
+	if !registry.ClearanceConfigured() {
+		return registry.ErrClearanceNotConfigured
 	}
 	return registry.ErrCloudflareChallenge
 }

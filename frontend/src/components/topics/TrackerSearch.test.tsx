@@ -195,4 +195,53 @@ describe("TrackerSearch", () => {
     expect(await screen.findByText(/tracker login failed/i)).toBeInTheDocument();
     expect(screen.queryByText(/needs a tracker account/i)).toBeNull();
   });
+
+  // Issue #158 on the search surface. RuTracker's search is login-gated, so a
+  // missing Cloudflare solver arrives as a failed login and was rendered
+  // "check your account under Accounts" — sending the user to fix a credential
+  // that is fine. The two solver states must be distinguishable from a real
+  // auth failure and from each other, since one is "you have no solver" and
+  // the other is "yours is down".
+  it("blames the missing solver, not the account", async () => {
+    mockSearchResponse({
+      results: [],
+      errors: [
+        {
+          tracker_name: "rutracker",
+          tracker_display_name: "RuTracker.org",
+          code: "solver_missing",
+          error: "no Cloudflare solver is configured",
+        },
+      ],
+    });
+    render(<TrackerSearch onSelect={() => {}} />, { wrapper: wrap() });
+
+    await userEvent.type(screen.getByRole("textbox"), "test");
+    await userEvent.click(screen.getByRole("button", { name: /search/i }));
+
+    expect(await screen.findByText(/no Cloudflare solver/i)).toBeInTheDocument();
+    expect(screen.queryByText(/check your account/i)).toBeNull();
+    expect(screen.queryByText(/needs a tracker account/i)).toBeNull();
+  });
+
+  it("distinguishes a solver that is down from one that is absent", async () => {
+    mockSearchResponse({
+      results: [],
+      errors: [
+        {
+          tracker_name: "rutracker",
+          tracker_display_name: "RuTracker.org",
+          code: "solver",
+          error: "the Cloudflare solver did not answer",
+        },
+      ],
+    });
+    render(<TrackerSearch onSelect={() => {}} />, { wrapper: wrap() });
+
+    await userEvent.type(screen.getByRole("textbox"), "test");
+    await userEvent.click(screen.getByRole("button", { name: /search/i }));
+
+    expect(await screen.findByText(/solver isn't responding/i)).toBeInTheDocument();
+    expect(screen.queryByText(/check your account/i)).toBeNull();
+  });
 });

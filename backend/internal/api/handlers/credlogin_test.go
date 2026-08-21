@@ -40,6 +40,30 @@ func TestExplainLoginFailure(t *testing.T) {
 			wantContain: "Cloudflare",
 		},
 		{
+			// Issue #158. The reporter added a RuTracker account on a stack
+			// that never passed MARAUDER_FLARESOLVERR_URL to the backend, and
+			// was told the tracker "needs a browser" — so they waited for a
+			// browser window. The message has to name the setting, because
+			// running a solver and pointing Marauder at it is the only thing
+			// that fixes this and nothing else in the product says so.
+			name:        "no solver configured names the setting to change",
+			err:         fmt.Errorf("login: %w", registry.ErrClearanceNotConfigured),
+			wantContain: "MARAUDER_FLARESOLVERR_URL",
+			wantAbsent:  "credentials",
+		},
+		{
+			// This branch was added alongside the one above and shipped
+			// untested. Before it existed such an error fell through to the
+			// raw `err.Error()`, which reads as a Go transport dump — the very
+			// thing explainLoginFailure exists to replace. It must also stay
+			// distinct from the not-configured case: "your solver is down" and
+			// "you have no solver" send the user to different places.
+			name:        "configured solver that did not answer names the container, not the setting",
+			err:         fmt.Errorf("login: %w: dial tcp 172.24.0.2:8191: connect: connection refused", registry.ErrClearanceUnavailable),
+			wantContain: "FlareSolverr container",
+			wantAbsent:  "MARAUDER_FLARESOLVERR_URL",
+		},
+		{
 			name:        "captcha required",
 			err:         fmt.Errorf("login: %w", registry.ErrCaptchaRequired),
 			wantContain: "captcha",

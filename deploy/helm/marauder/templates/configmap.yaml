@@ -8,6 +8,16 @@ data:
   MARAUDER_HTTP_ADDR: ":8679"
   MARAUDER_CFSOLVER_ENABLED: "true"
   MARAUDER_CFSOLVER_URL: {{ printf "http://%s-cfsolver:9244" (include "marauder.fullname" .) | quote }}
+  {{- if .Values.arr.flaresolverr.enabled }}
+  # Point the backend at the in-cluster solver whenever the chart deploys one.
+  # Enabling the container without this line is issue #158: the solver runs and
+  # nothing ever asks it for a clearance, so RuTracker fails as though no
+  # solver existed. To use a solver you run yourself, set enabled=false and supply
+  # `config.MARAUDER_FLARESOLVERR_URL` instead — setting both is rejected — note it
+  # must egress from the same public IP as the backend for its clearance to be
+  # accepted.
+  MARAUDER_FLARESOLVERR_URL: {{ printf "http://%s-flaresolverr:%v" (include "marauder.fullname" .) .Values.arr.flaresolverr.port | quote }}
+  {{- end }}
   {{- if .Values.initialAdmin.username }}
   MARAUDER_ADMIN_INITIAL_USERNAME: {{ .Values.initialAdmin.username | quote }}
   {{- end }}

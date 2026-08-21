@@ -28,6 +28,16 @@ services:
   backend:
     ports:
       - "${MARAUDER_DEV_BACKEND_PORT:-34081}:8679"
+    # Point the backend at the solver this overlay always starts. The base
+    # stack ships no flaresolverr service at all and so leaves the URL empty;
+    # here it is unconditional, so defaulting it costs nothing and removes a
+    # step nobody remembers.
+    #
+    # Without this the dev stack reproduced issue #158 exactly: FlareSolverr
+    # ran, the backend waited for it to be healthy (below), and then never
+    # asked it for anything — RuTracker failed as though no solver existed.
+    environment:
+      MARAUDER_FLARESOLVERR_URL: ${MARAUDER_FLARESOLVERR_URL:-http://flaresolverr:8191}
     # Wait for the solver's browser, not just its container. FlareSolverr
     # spends ~9s launching Chrome before it listens, and the scheduler starts
     # checking ~1s after the backend boots — so on 2026-08-05 every RuTracker
@@ -97,6 +107,16 @@ services:
   # FlareSolverr lets Prowlarr through Cloudflare (RuTracker/Kinozal); it has
   # no host port — only Prowlarr talks to it (http://flaresolverr:8191).
   flaresolverr:
+    # Explicit even though `default` is the default, because it is load-bearing
+    # under a merge: docker-compose.solver.yml puts its flaresolverr on an
+    # isolated `solver` network, and if this service declared no networks of its
+    # own that list would become the sole declaration rather than being unioned
+    # with it. Prowlarr — the reason this service exists here — would then
+    # silently lose the solver, with no compose error and only its
+    # Cloudflare-gated indexers quietly failing.
+    networks: [default]
+    # Digest kept in sync with docker-compose.{solver,arr}.yml — all three run
+    # the same solver, and the network wiring between them is load-bearing.
     image: ghcr.io/flaresolverr/flaresolverr@sha256:139dfee1c6f89249c8d665d1333a42e8ec74ec0a86bc6bb1c8461e10d3a66a47
     restart: unless-stopped
     environment:

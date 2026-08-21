@@ -159,7 +159,7 @@ func run() error {
 			}
 		}()
 		logger.Info().
-			Str("url", cfg.FlareSolverrURL).
+			Str("url", flaresolverr.RedactURL(cfg.FlareSolverrURL)).
 			Dur("timeout", cfg.FlareSolverrTimeout).
 			Msg("flaresolverr clearance provider enabled")
 

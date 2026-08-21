@@ -24,7 +24,15 @@ interface SearchTrackerError {
   tracker_display_name: string;
   // Stable classification from the backend; the raw error text never
   // reaches the client (it can embed admin-configured mirror hosts).
-  code: "no_credentials" | "login_failed" | "timeout" | "failed";
+  // Keep in sync with the searchErr* constants in
+  // backend/internal/api/handlers/trackers_search.go.
+  code:
+    | "no_credentials"
+    | "login_failed"
+    | "solver_missing"
+    | "solver"
+    | "timeout"
+    | "failed";
   error: string;
 }
 
@@ -152,7 +160,11 @@ export function TrackerSearch({ onSelect }: TrackerSearchProps) {
             ? t("topics.search.needsAccount")
             : e.code === "login_failed"
               ? t("topics.search.loginFailed")
-              : t("topics.search.trackerFailed")}
+              : e.code === "solver_missing"
+                ? t("topics.search.solverMissing")
+                : e.code === "solver"
+                  ? t("topics.search.solverDown")
+                  : t("topics.search.trackerFailed")}
         </p>
       ))}
     </div>

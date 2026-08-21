@@ -35,6 +35,25 @@ describe("TopicError", () => {
     expect(screen.queryByText(RAW)).toBeNull();
   });
 
+  // Issue #158. The reporter ran a stack that never wired a solver up, saw
+  // "this tracker needs a browser to get through", and waited for a browser
+  // window. Two things must hold: an unconfigured solver gets its own message
+  // naming what to run, and no Cloudflare message promises a browser Marauder
+  // has no way to open.
+  it("names the missing solver instead of blaming the tracker", () => {
+    render(<TopicError topic={topicWith(RAW, "solver_missing")} />);
+    expect(screen.getByText(/FlareSolverr/i)).toBeInTheDocument();
+    expect(screen.queryByText(RAW)).toBeNull();
+  });
+
+  it.each(["cloudflare", "solver", "solver_missing"])(
+    "does not promise a browser window for %s",
+    (code) => {
+      render(<TopicError topic={topicWith(RAW, code)} />);
+      expect(screen.queryByText(/needs a browser/i)).toBeNull();
+    },
+  );
+
   // `client` and `internal` name components that are not the tracker. Their
   // whole reason for existing is that the raw text ("...: context deadline
   // exceeded") reads exactly like a tracker timeout, so a silent fall-through
