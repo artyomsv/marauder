@@ -31,8 +31,20 @@ func explainLoginFailure(err error) string {
 	switch {
 	case errors.Is(err, registry.ErrCaptchaRequired):
 		return "the tracker is asking for a captcha — use the captcha login to sign in"
+	// Checked before ErrCloudflareChallenge: both describe a request the
+	// tracker blocked, but only this one has a fix the user can act on, and
+	// naming the setting is the whole point. Issue #158 was a reporter waiting
+	// for a browser window because the Cloudflare message implied one.
+	case errors.Is(err, registry.ErrClearanceNotConfigured):
+		return "no Cloudflare solver is configured — this tracker cannot be reached without one. Run a FlareSolverr container and set MARAUDER_FLARESOLVERR_URL to point at it"
+	case errors.Is(err, registry.ErrClearanceUnavailable):
+		return "the Cloudflare solver did not answer — check the FlareSolverr container is running and reachable from Marauder"
 	case errors.Is(err, registry.ErrCloudflareChallenge):
-		return "blocked by Cloudflare — the challenge solver is unavailable or its clearance was rejected"
+		// The solver answered and the tracker blocked us anyway. The usual
+		// cause is not a broken solver but a split egress: the clearance is
+		// bound to the requesting address, so a solver behind a different VPN
+		// exit mints cookies Marauder cannot use.
+		return "blocked by Cloudflare — the solver's clearance was rejected. It must reach the internet from the same public IP as Marauder"
 	case errors.Is(err, registry.ErrSessionExpired):
 		return "the stored session has expired — sign in again to refresh it"
 	// Order is load-bearing: a timeout is also a *net.OpError and so satisfies

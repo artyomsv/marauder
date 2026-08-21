@@ -72,6 +72,24 @@ func SetClearanceProvider(p ClearanceProvider) {
 	clearanceP = p
 }
 
+// ClearanceConfigured reports whether a clearance provider is installed.
+//
+// It exists because ClearanceFor deliberately reports "no provider" as
+// (zero, nil) so an unconfigured deployment degrades to a direct dial instead
+// of failing. That is right for the request and wrong for the diagnosis: a
+// caller the tracker then challenges cannot tell an operator who never set
+// MARAUDER_FLARESOLVERR_URL from a solver that answered against a page that is
+// genuinely gated. Issue #158 was exactly that — every shipped Compose stack
+// left the URL empty, so RuTracker reported "this tracker needs a browser to
+// get through" and the reporter waited for a browser window that was never
+// going to open. The two states call for opposite messages, so the state is
+// readable on its own rather than inferred from an error that is not raised.
+func ClearanceConfigured() bool {
+	clearanceMu.RLock()
+	defer clearanceMu.RUnlock()
+	return clearanceP != nil
+}
+
 // ClearanceFor returns a clearance obtained by solving probeURL, or the zero
 // Clearance when no provider is configured. See ClearanceProvider.Clearance
 // for what probeURL must be.

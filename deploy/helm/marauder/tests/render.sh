@@ -106,6 +106,11 @@ assert_absent  "no sonarr default" 'name: t-marauder-sonarr' --
 assert_contains "sonarr enabled" 'name: t-marauder-sonarr' -- --set arr.sonarr.enabled=true $SHARED
 assert_contains "prowlarr enabled" 'name: t-marauder-prowlarr' -- --set arr.prowlarr.enabled=true
 assert_contains "flaresolverr enabled" 'name: t-marauder-flaresolverr' -- --set arr.flaresolverr.enabled=true
+# The container alone is not the feature: issue #158 was every deployment path
+# starting a solver the backend was never pointed at, which is indistinguishable
+# at runtime from having no solver. Assert the wiring, both directions.
+assert_contains "flaresolverr url wired" 'MARAUDER_FLARESOLVERR_URL: "http://t-marauder-flaresolverr:8191"' -- --set arr.flaresolverr.enabled=true
+assert_absent  "no flaresolverr url by default" 'MARAUDER_FLARESOLVERR_URL' --
 # multiple clients at once share one downloads volume
 assert_contains "multi: qbittorrent" 'name: t-marauder-qbittorrent' -- --set clients.qbittorrent.enabled=true --set clients.transmission.enabled=true $SHARED
 assert_contains "multi: transmission" 'name: t-marauder-transmission' -- --set clients.qbittorrent.enabled=true --set clients.transmission.enabled=true $SHARED

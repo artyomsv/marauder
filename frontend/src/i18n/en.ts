@@ -76,8 +76,14 @@ const en: Record<string, string> = {
     "Couldn't reach the tracker — it may be offline or blocking requests. Retrying automatically.",
   "topics.error.auth":
     "Login failed or the session expired — check this tracker's credentials.",
+  // `cloudflare` now means the solver answered and the tracker blocked us
+  // anyway, so it names the usual cause (split egress) rather than telling the
+  // user a browser is needed — that phrasing was read as a promise Marauder
+  // would open one (issue #158) and is now `solverMissing`'s job to explain.
   "topics.error.cloudflare":
-    "Blocked by Cloudflare before reaching the tracker — your credentials are fine. This tracker needs a browser to get through.",
+    "Blocked by Cloudflare before reaching the tracker — your credentials are fine. The solver's clearance was rejected; it must reach the internet from the same public IP as Marauder.",
+  "topics.error.solverMissing":
+    "No Cloudflare solver is configured, and this tracker can't be reached without one. Run a FlareSolverr container and point MARAUDER_FLARESOLVERR_URL at it.",
   "topics.error.solver":
     "The Cloudflare solver isn't available or didn't answer in time — the tracker itself is probably reachable. Checks will keep retrying.",
   "topics.error.parse":

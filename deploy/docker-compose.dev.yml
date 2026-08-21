@@ -28,6 +28,16 @@ services:
   backend:
     ports:
       - "${MARAUDER_DEV_BACKEND_PORT:-34081}:8679"
+    # Point the backend at the solver this overlay always starts. The base
+    # stack leaves the URL empty because its flaresolverr service is
+    # profile-gated and may not exist; here it is unconditional, so defaulting
+    # it costs nothing and removes a step nobody remembers.
+    #
+    # Without this the dev stack reproduced issue #158 exactly: FlareSolverr
+    # ran, the backend waited for it to be healthy (below), and then never
+    # asked it for anything — RuTracker failed as though no solver existed.
+    environment:
+      MARAUDER_FLARESOLVERR_URL: ${MARAUDER_FLARESOLVERR_URL:-http://flaresolverr:8191}
     # Wait for the solver's browser, not just its container. FlareSolverr
     # spends ~9s launching Chrome before it listens, and the scheduler starts
     # checking ~1s after the backend boots — so on 2026-08-05 every RuTracker

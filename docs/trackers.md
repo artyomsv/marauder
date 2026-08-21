@@ -1,5 +1,9 @@
 # Tracker setup guide
 
+> **FlareSolverr has no authentication.** Anything that can reach its port can
+> drive a real browser to any URL from your network. The solver overlay puts it
+> on its own Docker network so only Marauder's backend can reach it; if you host
+> it yourself, keep it on a trusted network and never expose it publicly.
 Marauder's tracker plugins are how it watches a topic page for updates.
 Some plugins work with no setup (public RSS, Newznab, magnet links);
 others need a per-user account so they can log in and reach the
@@ -170,10 +174,10 @@ for the test fixture) and the full redirector chain via httptest.
 | | |
 |---|---|
 | **Plugin name** | `rutracker` |
-| **Account required** | Yes (free) |
+| **Account required** | Optional (free) — a magnet works anonymously, an account gets the full `.torrent` |
 | **Quality selection** | No |
 | **Episode filter** | No |
-| **Cloudflare** | No |
+| **Cloudflare** | **Yes — a solver is required** |
 | **URL format** | `https://rutracker.org/forum/viewtopic.php?t=<id>` |
 
 Largest CIS public-private tracker. One thread = one topic.
@@ -182,6 +186,47 @@ replaces the attached `.torrent`. Free accounts work; the only
 gotcha is that the `pp` cookie expires after a few weeks of
 inactivity, in which case Marauder transparently re-runs Login
 on the next check.
+
+#### RuTracker needs a Cloudflare solver
+
+Since **2026-07-28** RuTracker answers every `/forum/` request from a plain
+HTTP client with a Cloudflare challenge. Without a solver, checks, login,
+search and downloads all fail, and Marauder reports:
+
+> No Cloudflare solver is configured, and this tracker can't be reached
+> without one.
+
+Start one by layering the solver overlay onto whichever stack you run:
+
+```bash
+# source-build stack
+docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.solver.yml up -d
+
+# prebuilt (GHCR) stack
+docker compose -f deploy/docker-compose.ghcr.yml -f deploy/docker-compose.solver.yml \
+  --env-file deploy/.env up -d
+```
+
+The overlay starts a FlareSolverr container **and** sets
+`MARAUDER_FLARESOLVERR_URL` for the backend. Both halves matter: a solver
+nothing points at is indistinguishable from no solver at all, which is what
+[issue #158](https://github.com/artyomsv/marauder/issues/158) was.
+
+Already running FlareSolverr elsewhere (an *arr stack, for instance)? Skip the
+overlay and set `MARAUDER_FLARESOLVERR_URL=http://<host>:8191` in
+`deploy/.env`. On Kubernetes, `arr.flaresolverr.enabled=true` deploys one and
+wires the URL for you.
+
+> **The solver must egress from the same public IP as the backend.**
+> Cloudflare binds the clearance to the requesting address, so a solver behind
+> a different VPN exit mints cookies Marauder cannot use — that shows up as
+> "the solver's clearance was rejected" rather than as a missing solver.
+
+Marauder does **not** proxy its traffic through the browser. FlareSolverr
+solves the challenge once and returns a `cf_clearance` cookie plus the
+User-Agent it was issued for; Marauder replays that pair on its own requests.
+Keeping the requests Marauder's own is what lets it submit a login and carry a
+binary `.torrent` instead of degrading to a magnet.
 
 ### Kinozal
 
@@ -334,6 +379,9 @@ failure modes for credentialed trackers:
 | `lostfilm v_search returned neither Location header nor meta-refresh` | Redirector signature changed | Inspect the v_search response in your browser, update `metaRefreshRe` |
 | `lostfilm download page: no per-quality torrent links found` | Quality button selector drifted | Update `qualityLinkRe` |
 | `lostfilm GET ... -> 403` | Cloudflare interstitial added | Wait for the cfsolver profile or pull updated cookies |
+| No Cloudflare solver is configured | RuTracker is challenge-gated and no solver was started | Layer `docker-compose.solver.yml` onto your stack (see [RuTracker](#rutracker-needs-a-cloudflare-solver)) |
+| The Cloudflare solver did not answer | FlareSolverr is down, still launching Chrome (~9s), or unreachable | Check the container is running; a boot-time occurrence clears itself on the next check |
+| Blocked by Cloudflare — the solver's clearance was rejected | Solver and backend egress from different public IPs | Put both behind the same exit, or neither |
 
 The selector regexes are deliberately small and named so that a
 contributor can fix drift in a single line. See the comments at

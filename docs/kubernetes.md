@@ -250,6 +250,26 @@ arr:
   flaresolverr: { enabled: true }
 ```
 
+**RuTracker needs `arr.flaresolverr`.** It is the one tracker behind a
+Cloudflare challenge; without a solver, every check fails with "No Cloudflare
+solver is configured". Setting `arr.flaresolverr.enabled=true` both deploys the
+container and sets `MARAUDER_FLARESOLVERR_URL` on the backend — enabling only
+one of those is [issue #158](https://github.com/artyomsv/marauder/issues/158)
+and looks identical to having no solver. To use a solver you already run, leave
+it disabled and set the URL yourself:
+
+```yaml
+config:
+  MARAUDER_FLARESOLVERR_URL: http://flaresolverr.media.svc:8191
+```
+
+Either way the solver must egress from the same public IP as the backend —
+Cloudflare binds the clearance to the requesting address.
+
+FlareSolverr has no authentication, so keep it in-cluster: the chart's
+NetworkPolicy already restricts ingress to first-party Marauder pods. Do not
+expose it via an Ingress or a LoadBalancer Service.
+
 You can also run your download clients outside the chart and point Marauder at
 them by Service DNS (e.g. `http://qbittorrent.media.svc:8080`) — the same way
 the docker-compose stack uses `http://qbittorrent:6611`.

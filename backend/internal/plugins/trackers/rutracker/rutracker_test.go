@@ -564,7 +564,15 @@ func newChallengedPlugin(t *testing.T) *plugin {
 // Cloudflare interstitial — which of course lacks that marker — was reported
 // as "invalid credentials". That sent a user hunting a password problem that
 // did not exist while the real cause was a network-layer block.
+//
+// A working provider is installed so this exercises the branch it names: the
+// solver answered and the tracker is gated anyway. Without one the plugin
+// reports registry.ErrClearanceNotConfigured instead, which is issue #158 and
+// is covered by TestFetchBytes_NoProviderConfigured_BlamesTheMissingSolver.
+// Both must avoid blaming the credentials, which is what the second assertion
+// below pins regardless of which sentinel is chosen.
 func TestLogin_CloudflareChallenge_NotReportedAsBadCredentials(t *testing.T) {
+	installClearance(t)
 	p := newChallengedPlugin(t)
 	creds := &domain.TrackerCredential{
 		UserID:    uuid.New(),

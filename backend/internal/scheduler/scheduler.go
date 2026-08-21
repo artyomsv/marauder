@@ -1104,11 +1104,17 @@ func floorDelay(d time.Duration) time.Duration {
 // kept for debugging). Keep these strings in sync with the frontend's
 // topics.error.* i18n keys (frontend/src/components/topics/TopicError.tsx).
 const (
-	errCodeTimeout       = "timeout"
-	errCodeUnreachable   = "unreachable"
-	errCodeAuth          = "auth"
-	errCodeCloudflare    = "cloudflare"
-	errCodeSolver        = "solver"
+	errCodeTimeout     = "timeout"
+	errCodeUnreachable = "unreachable"
+	errCodeAuth        = "auth"
+	errCodeCloudflare  = "cloudflare"
+	errCodeSolver      = "solver"
+	// errCodeSolverMissing is the third Cloudflare outcome: no solver was
+	// ever configured. Kept apart from errCodeSolver — which means a
+	// configured solver misbehaved and will probably recover — because this
+	// one never recovers without an operator changing configuration, and from
+	// errCodeCloudflare because the tracker is not the thing to fix.
+	errCodeSolverMissing = "solver_missing"
 	errCodeParse         = "parse"
 	errCodePluginMissing = "plugin_missing"
 	// errCodeClient and errCodeInternal name failures in components that are
@@ -1170,6 +1176,13 @@ func classifyCause(msg string, cause error) string {
 		return errCodeClient
 	case errors.Is(cause, errStatePersist):
 		return errCodeInternal
+	// Matched typed as well as by wording (classifyError also recognises the
+	// sentinel's message). The message path alone is one rephrase away from
+	// silently reverting to `cloudflare`, and this is the classification that
+	// decides whether the user is told to fix their setup or told the tracker
+	// is hard to reach.
+	case errors.Is(cause, registry.ErrClearanceNotConfigured):
+		return errCodeSolverMissing
 	default:
 		return classifyError(msg)
 	}
@@ -1190,6 +1203,17 @@ func classifyError(msg string) string {
 
 	if strings.Contains(m, "plugin not installed") {
 		return errCodePluginMissing
+	}
+
+	// No solver configured at all outranks everything below, including the
+	// Cloudflare wording it necessarily carries. Issue #158: every shipped
+	// deployment stack left MARAUDER_FLARESOLVERR_URL empty, so RuTracker
+	// reported `cloudflare` — "this tracker needs a browser to get through" —
+	// on installs where nothing had ever been asked to run a browser. It must
+	// not fall into errCodeSolver either: that says the solver is unwell and
+	// checks will recover, and nothing here recovers until the operator acts.
+	if strings.Contains(m, "clearance not configured") {
+		return errCodeSolverMissing
 	}
 
 	// A failed clearance mint outranks everything, including the Cloudflare

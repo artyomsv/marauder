@@ -80,6 +80,12 @@ services:
       MARAUDER_PROGRESS_WATCHER_ENABLED: ${MARAUDER_PROGRESS_WATCHER_ENABLED:-true}
       MARAUDER_PROGRESS_POLL_INTERVAL: ${MARAUDER_PROGRESS_POLL_INTERVAL:-5s}
       MARAUDER_SSE_HEARTBEAT_INTERVAL: ${MARAUDER_SSE_HEARTBEAT_INTERVAL:-25s}
+      # Required for RuTracker. Empty = no solver, and every gated request then
+      # fails with "no Cloudflare solver is configured". This stack shipped
+      # without these two lines until issue #158: the solver could be started
+      # but the backend was never told, so setting it in .env did nothing.
+      MARAUDER_FLARESOLVERR_URL: ${MARAUDER_FLARESOLVERR_URL:-}
+      MARAUDER_FLARESOLVERR_TIMEOUT: ${MARAUDER_FLARESOLVERR_TIMEOUT:-60s}
       MARAUDER_ADMIN_INITIAL_USERNAME: ${MARAUDER_ADMIN_INITIAL_USERNAME:-}
       MARAUDER_ADMIN_INITIAL_PASSWORD: ${MARAUDER_ADMIN_INITIAL_PASSWORD:-}
       MARAUDER_OIDC_ENABLED: ${MARAUDER_OIDC_ENABLED:-false}

@@ -49,6 +49,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -580,4 +581,23 @@ func (t *Transport) fetch(ctx context.Context, req *http.Request, session string
 		Request:       req,
 	}
 	return out, nil
+}
+
+// RedactURL renders a solver URL safe to log by masking any password in its
+// userinfo. It exists because MARAUDER_FLARESOLVERR_URL is operator-supplied
+// and may legitimately carry credentials when it points at a solver the
+// operator runs behind auth — a configuration Marauder's own docs suggest.
+//
+// An unparseable value is replaced rather than echoed: it is exactly as
+// operator-supplied as a parseable one, so "it did not parse" is no reason to
+// assume it holds nothing worth hiding.
+func RedactURL(raw string) string {
+	if raw == "" {
+		return ""
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "[unparseable url]"
+	}
+	return u.Redacted()
 }

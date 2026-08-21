@@ -1376,6 +1376,21 @@ func TestBackoff_TableTest(t *testing.T) {
 			maxBackoff:        64*base + 50*time.Millisecond,
 		},
 		{
+			// The counterpart to the two cases above, and the reason the
+			// missing-solver case gets its own sentinel rather than reusing
+			// ErrClearanceUnavailable. A failed mint is infrastructure and
+			// infrastructure comes back, so it earns the fast retry. A solver
+			// that was never configured does not come back: retrying every 60s
+			// would pound the tracker forever over a setting only the operator
+			// can change. Exponential backoff is the correct response.
+			name:              "missing solver backs off exponentially, no fast retry",
+			consecutiveErrors: 1,
+			failure:           true,
+			cause:             fmt.Errorf("rutracker login: %w", registry.ErrClearanceNotConfigured),
+			minBackoff:        4 * base,
+			maxBackoff:        4*base + 50*time.Millisecond,
+		},
+		{
 			// At transientRetryMax consecutive failures the fast-retry stops
 			// and exponential backoff resumes: 2^(5+1) * 60s = 64m (< 6h cap).
 			name:              "transient error falls back to exponential once persistent",
@@ -2017,6 +2032,18 @@ func TestClassifyError_MapsKnownPatternsToCodes(t *testing.T) {
 		// was never the problem. This must outrank the challenge wording it
 		// necessarily arrives with, and the "connection refused" that would
 		// otherwise read as a dead tracker domain and trigger rotation.
+		// Issue #158: no solver was ever configured, so the mint was never
+		// attempted and the bare request met the wall. `cloudflare` would tell
+		// the user the tracker needs a browser — true, but it reads as a
+		// browser Marauder is about to open, and the reporter waited for a
+		// window that could not appear. `solver` would be worse still: it says
+		// a solver is unwell and checks will recover on their own, when
+		// nothing recovers until the operator changes configuration.
+		{"missing solver is a setup problem, not a tracker property", `rutracker GET https://rutracker.org/forum/viewtopic.php?t=1: cloudflare clearance not configured`, errCodeSolverMissing},
+		{"missing solver wrapped by the login path", "auth failed: rutracker login: cloudflare clearance not configured", errCodeSolverMissing},
+		// The wording carries "cloudflare" and would otherwise be swallowed by
+		// the challenge pass, which is the misclassification this code removes.
+		{"missing solver outranks the cloudflare wording it carries", "rutracker login: cloudflare clearance not configured", errCodeSolverMissing},
 		{"clearance unavailable outranks the challenge it caused", `rutracker GET https://rutracker.org/forum/viewtopic.php?t=1: cloudflare clearance unavailable: flaresolverr: sessions.create: dial tcp 172.24.0.2:8191: connect: connection refused`, errCodeSolver},
 		{"clearance unavailable wrapped by the login path", "auth failed: rutracker login: cloudflare clearance unavailable: flaresolverr is not configured", errCodeSolver},
 		// Matched on our own wording, not the product name, so a provider that
@@ -2357,6 +2384,29 @@ func TestClassifyCause_SentinelOutranksMessage(t *testing.T) {
 			"marauder storage: context deadline exceeded",
 			fmt.Errorf("%w: %w", errStatePersist, context.DeadlineExceeded),
 			errCodeInternal,
+		},
+		{
+			// Proves the typed branch is live rather than dead weight behind
+			// classifyError's wording match. The message here says "timeout"
+			// and nothing about a clearance, so ONLY the sentinel can produce
+			// solver_missing — if the typed case is ever removed or the error
+			// stops being passed as a cause, this reverts to `timeout` and
+			// starts rotating RuTracker's domain over a missing setting.
+			"missing-solver sentinel wins over unrelated wording",
+			"rutracker: context deadline exceeded",
+			fmt.Errorf("rutracker login: %w", registry.ErrClearanceNotConfigured),
+			errCodeSolverMissing,
+		},
+		{
+			// The real shape from scheduler.go's loadCredentials call site: the
+			// MESSAGE is stamped "auth failed: " while the untouched cause is
+			// passed alongside. Without the typed pass the wrapper would decide
+			// the code — the exact failure mode that once made a dead mirror
+			// look like bad credentials.
+			"missing-solver sentinel survives the auth-failed message stamp",
+			"auth failed: rutracker login: cloudflare clearance not configured",
+			fmt.Errorf("rutracker login: %w", registry.ErrClearanceNotConfigured),
+			errCodeSolverMissing,
 		},
 		{
 			"nil cause falls back to the message",

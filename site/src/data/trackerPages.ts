@@ -46,7 +46,7 @@ export const trackerPages: TrackerPageContent[] = [
       "This is Marauder's reference plugin — verified end-to-end against a live RuTracker account.",
     ],
     setup: [
-      "Point Marauder at a FlareSolverr instance (MARAUDER_FLARESOLVERR_URL); the bundled compose stack can start one for you. It must reach the internet from the same address as Marauder.",
+      "Start the solver overlay: `docker compose -f docker-compose.yml -f docker-compose.solver.yml up -d`. It runs FlareSolverr and points Marauder at it in one step — a solver that nothing points at behaves exactly like no solver at all. Already run FlareSolverr elsewhere? Set MARAUDER_FLARESOLVERR_URL instead. Either way it must reach the internet from the same public IP as Marauder.",
       "Add your RuTracker login under Credentials (stored AES-256-GCM encrypted).",
       "Paste the topic URL (e.g. a series or release thread) as a new topic.",
       "Pick the torrent client and category; Marauder resolves the title and poster automatically.",

@@ -757,3 +757,33 @@ func TestMinSolveBudget_ExceedsObservedSolveTime(t *testing.T) {
 			minSolveBudget, slowestObservedSolve)
 	}
 }
+
+// TestRedactURL_StripsCredentials guards a log line, which is an odd thing to
+// test until you notice what it logs. MARAUDER_FLARESOLVERR_URL is operator-
+// supplied and the docs now tell operators they may point it at a solver they
+// run themselves — and a solver someone bothered to put behind auth is reached
+// as http://user:pass@host:8191. Logged verbatim at Info on every boot, that
+// password lands in the container logs, in `docker logs`, and in whatever
+// ships them onward.
+func TestRedactURL_StripsCredentials(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"no credentials is unchanged", "http://flaresolverr:8191", "http://flaresolverr:8191"},
+		{"password redacted", "http://user:s3cret@host:8191", "http://user:xxxxx@host:8191"},
+		{"username alone is kept", "http://user@host:8191", "http://user@host:8191"},
+		{"empty stays empty", "", ""},
+		// A value that does not parse must not be echoed on the assumption it
+		// is harmless — it is exactly as operator-supplied as the ones above.
+		{"unparseable is not echoed", "http://%zz:pw@host", "[unparseable url]"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := RedactURL(tt.in); got != tt.want {
+				t.Errorf("RedactURL(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}

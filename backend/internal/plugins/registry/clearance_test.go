@@ -94,3 +94,27 @@ func TestClearance_Valid_RequiresBothCookieAndUA(t *testing.T) {
 		})
 	}
 }
+
+// TestClearanceConfigured_ReportsWhetherAProviderIsInstalled pins the
+// distinction issue #158 turned on. ClearanceFor deliberately reports "no
+// provider" as (zero, nil) so ungated paths keep working, which means a caller
+// that then gets challenged cannot tell "the operator never configured a
+// solver" from "the solver answered and the tracker is genuinely gated". Those
+// need opposite messages, so the state has to be readable separately.
+func TestClearanceConfigured_ReportsWhetherAProviderIsInstalled(t *testing.T) {
+	SetClearanceProvider(nil)
+	if ClearanceConfigured() {
+		t.Fatal("ClearanceConfigured() = true with no provider installed")
+	}
+
+	t.Cleanup(func() { SetClearanceProvider(nil) })
+	SetClearanceProvider(&stubProvider{})
+	if !ClearanceConfigured() {
+		t.Fatal("ClearanceConfigured() = false after SetClearanceProvider")
+	}
+
+	SetClearanceProvider(nil)
+	if ClearanceConfigured() {
+		t.Fatal("ClearanceConfigured() = true after the provider was removed")
+	}
+}

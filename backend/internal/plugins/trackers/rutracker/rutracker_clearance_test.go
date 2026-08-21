@@ -557,3 +557,140 @@ func TestLogin_CorruptStoredSession_FallsBackToCredentials(t *testing.T) {
 		t.Fatalf("a corrupt stored session must fall back to a credential POST, got %v", posted)
 	}
 }
+
+// noClearanceProvider guarantees the process-wide provider is absent, which is
+// the default state of every Marauder install that has not set
+// MARAUDER_FLARESOLVERR_URL. Tests in this package install providers globally,
+// so the absence has to be asserted rather than assumed.
+func noClearanceProvider(t *testing.T) {
+	t.Helper()
+	registry.SetClearanceProvider(nil)
+	t.Cleanup(func() { registry.SetClearanceProvider(nil) })
+}
+
+// TestFetchBytes_NoProviderConfigured_BlamesTheMissingSolver is the regression
+// for issue #158. The reporter ran the prebuilt Compose stack, which never
+// passed MARAUDER_FLARESOLVERR_URL to the backend, so no provider was ever
+// installed. Every RuTracker request fell open, hit the challenge, and was
+// reported as ErrCloudflareChallenge — "this tracker needs a browser to get
+// through" — which reads as a promise that Marauder will open one. It cannot:
+// the browser is a container the operator has to run. That is a setup problem
+// with a concrete fix, and it must not be reported as a property of the
+// tracker.
+func TestFetchBytes_NoProviderConfigured_BlamesTheMissingSolver(t *testing.T) {
+	var calls int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&calls, 1)
+		w.Header().Set("Cf-Mitigated", "challenge")
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	defer srv.Close()
+	noClearanceProvider(t)
+
+	p := pluginFor(t, srv)
+	_, err := p.fetchBytes(context.Background(), nil, nil,
+		"https://"+p.domain+"/forum/viewtopic.php?t=1")
+
+	if !errors.Is(err, registry.ErrClearanceNotConfigured) {
+		t.Fatalf("err = %v, want it to wrap registry.ErrClearanceNotConfigured", err)
+	}
+	if errors.Is(err, registry.ErrCloudflareChallenge) {
+		t.Errorf("err = %v, must NOT wrap ErrCloudflareChallenge: that code blames the tracker for a solver the operator never started", err)
+	}
+	// ErrClearanceUnavailable means a CONFIGURED solver failed, and the
+	// scheduler treats it as transient because infrastructure comes back.
+	// Nothing is coming back here until the operator changes configuration,
+	// so retrying every 60s forever would be wrong.
+	if errors.Is(err, registry.ErrClearanceUnavailable) {
+		t.Errorf("err = %v, must NOT wrap ErrClearanceUnavailable: no solver failed, none was configured", err)
+	}
+	if n := atomic.LoadInt32(&calls); n != 1 {
+		t.Errorf("calls = %d, want 1 (no invalidate-and-retry: there is no cached clearance and no provider to re-mint from)", n)
+	}
+}
+
+// TestFetchBytes_NoProviderConfigured_UngatedPathStillWorks keeps the
+// fail-open guarantee. Most of RuTracker is reachable without a clearance, and
+// a solverless install must keep working on those paths — only a request the
+// tracker actually blocks becomes an error.
+func TestFetchBytes_NoProviderConfigured_UngatedPathStillWorks(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`<html>ok</html>`))
+	}))
+	defer srv.Close()
+	noClearanceProvider(t)
+
+	p := pluginFor(t, srv)
+	body, err := p.fetchBytes(context.Background(), nil, nil,
+		"https://"+p.domain+"/forum/viewtopic.php?t=1")
+	if err != nil {
+		t.Fatalf("err = %v, want nil on an unchallenged path with no solver configured", err)
+	}
+	if !strings.Contains(string(body), "ok") {
+		t.Fatalf("body = %q", body)
+	}
+}
+
+// TestFetchBytes_ProviderReturnedUnusableClearance_BlamesSolver closes the
+// fourth Cloudflare state, found in review of the issue #158 fix.
+//
+// registry.Clearance.Valid() requires BOTH a cookie and the User-Agent it was
+// issued for. A provider that answers with only one of them has failed, but
+// applyClearance reported that identically to "no provider installed" —
+// (zero, nil) — so a provider WAS configured, challengeCause fell through to
+// ErrCloudflareChallenge, and the user was told the solver's clearance had
+// been rejected and to check that its egress IP matches Marauder's. Nothing
+// was ever minted, so nothing was rejected and egress is not the problem;
+// that sends the operator after a VPN misconfiguration that does not exist.
+//
+// A configured provider that cannot supply a usable clearance is exactly what
+// ErrClearanceUnavailable means, so it belongs in that bucket.
+func TestFetchBytes_ProviderReturnedUnusableClearance_BlamesSolver(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cf-Mitigated", "challenge")
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	defer srv.Close()
+
+	// Cookie present, User-Agent missing: Valid() is false, and replaying the
+	// cookie under any other UA is refused by Cloudflare anyway.
+	sc := &stubClearance{c: registry.Clearance{Cookies: map[string]string{"cf_clearance": "CLEAR"}}}
+	registry.SetClearanceProvider(sc)
+	t.Cleanup(func() { registry.SetClearanceProvider(nil) })
+
+	p := pluginFor(t, srv)
+	_, err := p.fetchBytes(context.Background(), nil, nil,
+		"https://"+p.domain+"/forum/viewtopic.php?t=1")
+
+	if !errors.Is(err, registry.ErrClearanceUnavailable) {
+		t.Fatalf("err = %v, want it to wrap registry.ErrClearanceUnavailable — a configured provider that cannot mint is a solver failure", err)
+	}
+	if errors.Is(err, registry.ErrCloudflareChallenge) {
+		t.Errorf("err = %v, must NOT wrap ErrCloudflareChallenge: that message blames the tracker and tells the user to check egress IPs, when no clearance was ever minted", err)
+	}
+	if errors.Is(err, registry.ErrClearanceNotConfigured) {
+		t.Errorf("err = %v, must NOT wrap ErrClearanceNotConfigured: a provider IS installed, so telling the user to set MARAUDER_FLARESOLVERR_URL is wrong", err)
+	}
+}
+
+// TestFetchBytes_UnusableClearance_UngatedPathStillWorks keeps the fail-open
+// guarantee for this state too: the diagnosis changed, the request did not.
+func TestFetchBytes_UnusableClearance_UngatedPathStillWorks(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`<html>ok</html>`))
+	}))
+	defer srv.Close()
+
+	registry.SetClearanceProvider(&stubClearance{c: registry.Clearance{Cookies: map[string]string{"cf_clearance": "CLEAR"}}})
+	t.Cleanup(func() { registry.SetClearanceProvider(nil) })
+
+	p := pluginFor(t, srv)
+	body, err := p.fetchBytes(context.Background(), nil, nil,
+		"https://"+p.domain+"/forum/viewtopic.php?t=1")
+	if err != nil {
+		t.Fatalf("err = %v, want nil on an unchallenged path", err)
+	}
+	if !strings.Contains(string(body), "ok") {
+		t.Fatalf("body = %q", body)
+	}
+}

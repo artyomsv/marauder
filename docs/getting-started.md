@@ -217,6 +217,33 @@ docker compose -f docker-compose.ghcr.yml --env-file .env up -d
 
 ---
 
+## Using RuTracker? Start the Cloudflare solver
+
+Every tracker Marauder supports works with the stack you just started, with
+one exception: **RuTracker** sits behind a Cloudflare challenge and needs a
+solver alongside Marauder. Without one, adding a RuTracker account or topic
+fails with *"No Cloudflare solver is configured"*.
+
+Add the solver overlay to whichever stack you run:
+
+```bash
+# Option A (prebuilt images)
+docker compose -f deploy/docker-compose.ghcr.yml -f deploy/docker-compose.solver.yml \
+  --env-file deploy/.env up -d
+
+# Option B (build from source)
+docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.solver.yml up -d
+```
+
+That one file starts a FlareSolverr container **and** points Marauder at it.
+On Kubernetes, set `arr.flaresolverr.enabled=true`.
+
+It's opt-in because it runs a full Chrome and costs a few hundred MB of RAM —
+skip it unless you use RuTracker. Details, including the same-public-IP
+requirement, are in **[trackers.md](trackers.md#rutracker-needs-a-cloudflare-solver)**.
+
+---
+
 ## Next steps
 
 - **[Connect a torrent client](clients.md)** — qBittorrent, Transmission,
@@ -240,6 +267,7 @@ docker compose -f docker-compose.ghcr.yml --env-file .env up -d
 | Login fails with `Unexpected token '<' ... is not valid JSON` | You opened a service directly instead of the gateway | Use the gateway at `http://localhost:34080`, not an individual container port. |
 | `MARAUDER_MASTER_KEY is required` on startup | Key not set in `.env` | Run `openssl rand -base64 32` and put it in `MARAUDER_MASTER_KEY`. |
 | Port 34080 already in use | Another process holds the port | Set `MARAUDER_HOST_PORT` in `.env` to a free port in the 30000–49999 range. |
+| RuTracker fails with `No Cloudflare solver is configured` | RuTracker is challenge-gated and no solver is running | Add `-f deploy/docker-compose.solver.yml` to your `up` command (see above). |
 
 ### Making the GHCR packages public (maintainer, one-time)
 
