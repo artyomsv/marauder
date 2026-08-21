@@ -31,6 +31,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `MARAUDER_FLARESOLVERR_TIMEOUT` through to the backend at all.
   - The dev overlay points the backend at the FlareSolverr it already starts.
   - `arr.flaresolverr.enabled=true` now sets the URL on the backend too.
+  - `config.MARAUDER_FLARESOLVERR_URL` is rejected while
+    `arr.flaresolverr.enabled=true`, following the chart's existing
+    reserved-key convention rather than silently picking a winner. An empty
+    override would otherwise suppress the chart's value and leave the freshly
+    deployed solver wired to nothing — issue #158 arriving through Helm.
   - New `registry.ErrClearanceNotConfigured` sentinel and `solver_missing`
     error code separate "no solver was ever configured" from "a configured
     solver failed" (`solver`) and "the solver answered and the tracker is

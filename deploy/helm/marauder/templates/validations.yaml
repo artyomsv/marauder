@@ -22,6 +22,17 @@ actionable message when a value combination would silently misbehave.
 {{- end }}
 {{- end }}
 
+
+{{- /* MARAUDER_FLARESOLVERR_URL is reserved only while the chart deploys the
+       solver itself — that is when it manages the key. Rejecting the conflict
+       rather than picking a winner is deliberate: an empty override would
+       otherwise suppress the chart's value and leave the freshly deployed
+       FlareSolverr wired to nothing, which is issue #158 arriving through the
+       chart instead of through Compose. Supplying your own solver is still
+       supported — turn the bundled one off. */ -}}
+{{- if and .Values.arr.flaresolverr.enabled (hasKey (.Values.config | default dict) "MARAUDER_FLARESOLVERR_URL") }}
+{{- fail "config.MARAUDER_FLARESOLVERR_URL is managed by the chart while arr.flaresolverr.enabled=true. To point Marauder at a solver you run yourself, set arr.flaresolverr.enabled=false and keep config.MARAUDER_FLARESOLVERR_URL; to use the bundled solver, remove config.MARAUDER_FLARESOLVERR_URL." }}
+{{- end }}
 {{- /* The downloads volume is shared with any bundled client/arr that mounts it. */ -}}
 {{- $dl := .Values.persistence.downloads -}}
 {{- $sharers := list -}}
