@@ -222,6 +222,11 @@ wires the URL for you.
 > a different VPN exit mints cookies Marauder cannot use — that shows up as
 > "the solver's clearance was rejected" rather than as a missing solver.
 
+> **Topics that were already failing won't recover instantly.** A missing
+> solver takes the ordinary retry backoff, which reaches 6 hours, so topics
+> that have been failing for a while keep showing the old error until their
+> next scheduled check. Select them on the Topics page and use **Check now** to
+> retry immediately rather than concluding the solver didn't work.
 Marauder does **not** proxy its traffic through the browser. FlareSolverr
 solves the challenge once and returns a `cf_clearance` cookie plus the
 User-Agent it was issued for; Marauder replays that pair on its own requests.

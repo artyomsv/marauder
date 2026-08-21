@@ -34,10 +34,13 @@ var ErrCaptchaRequired = errors.New("tracker requires a captcha")
 // browser used (see the flaresolverr package doc — an earlier note here blamed
 // the TLS fingerprint, which was a User-Agent mismatch).
 //
-// So this error means "the tracker is gated and we had no usable clearance" —
-// either no solver is configured or the cached clearance just died. It is not
-// "retry later" and not "fix your credentials". When the solver IS configured
-// but could not answer, use ErrClearanceUnavailable instead.
+// So this error means "the solver answered and the tracker is gated anyway" —
+// in practice a clearance that just died, or one minted from an egress the
+// tracker does not accept. It is not "retry later" and not "fix your
+// credentials". The two adjacent states have their own sentinels: a configured
+// solver that could not answer is ErrClearanceUnavailable, and no solver
+// configured at all is ErrClearanceNotConfigured. Do not fold either back into
+// this one — collapsing the third was issue #158.
 //
 // Plugins wrap it with %w so callers can match via errors.Is.
 var ErrCloudflareChallenge = errors.New("tracker is behind a cloudflare challenge")
@@ -47,9 +50,9 @@ var ErrCloudflareChallenge = errors.New("tracker is behind a cloudflare challeng
 // failed to supply a clearance for it. It names the solver, not the tracker.
 //
 // The distinction is the whole point. ErrCloudflareChallenge is classified
-// `cloudflare`, which tells the user "this tracker needs a browser to get
-// through" — true when the solver answered and the tracker is genuinely
-// gated, and actively misleading when the solver is simply down. On
+// `cloudflare`, whose message blames the tracker's wall — true when the solver
+// answered and the tracker is genuinely gated, and actively misleading when
+// the solver is simply down. On
 // 2026-08-05 FlareSolverr took ~9s to launch Chrome while the scheduler began
 // checking 1s after boot; every RuTracker topic failed the mint, fell open
 // into a bare request, and was reported as a Cloudflare wall — with a
@@ -78,10 +81,12 @@ var ErrClearanceUnavailable = errors.New("cloudflare clearance unavailable")
 //	ErrClearanceNotConfigured  there is no solver to ask
 //
 // Issue #158: none of the shipped deployment stacks wired a solver up, so
-// every RuTracker install reported the first of those. That message says the
-// tracker "needs a browser to get through", which the reporter reasonably read
-// as a browser Marauder would open, and waited. The fix a user can act on is
-// "run FlareSolverr and point Marauder at it", and only this sentinel says so.
+// every RuTracker install reported the first of those. That message then read
+// "this tracker needs a browser to get through", which the reporter reasonably
+// took as a browser Marauder would open, and waited. It has since been
+// reworded, but rewording alone would not have helped: the fix a user can act
+// on is "run FlareSolverr and point Marauder at it", and only this sentinel
+// knows that is the situation.
 //
 // Deliberately NOT wrapped in ErrClearanceUnavailable, despite both naming the
 // solver. That one is classified transient and retried in a minute because a

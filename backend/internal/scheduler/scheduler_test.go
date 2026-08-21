@@ -2043,7 +2043,7 @@ func TestClassifyError_MapsKnownPatternsToCodes(t *testing.T) {
 		{"missing solver wrapped by the login path", "auth failed: rutracker login: cloudflare clearance not configured", errCodeSolverMissing},
 		// The wording carries "cloudflare" and would otherwise be swallowed by
 		// the challenge pass, which is the misclassification this code removes.
-		{"missing solver outranks the cloudflare wording it carries", "rutracker login: cloudflare clearance not configured", errCodeSolverMissing},
+		{"missing solver outranks the auth-failed wrapper, not the cloudflare branch", "auth failed: rutracker login: cloudflare clearance not configured", errCodeSolverMissing},
 		{"clearance unavailable outranks the challenge it caused", `rutracker GET https://rutracker.org/forum/viewtopic.php?t=1: cloudflare clearance unavailable: flaresolverr: sessions.create: dial tcp 172.24.0.2:8191: connect: connection refused`, errCodeSolver},
 		{"clearance unavailable wrapped by the login path", "auth failed: rutracker login: cloudflare clearance unavailable: flaresolverr is not configured", errCodeSolver},
 		// Matched on our own wording, not the product name, so a provider that

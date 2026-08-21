@@ -111,6 +111,9 @@ assert_contains "flaresolverr enabled" 'name: t-marauder-flaresolverr' -- --set 
 # at runtime from having no solver. Assert the wiring, both directions.
 assert_contains "flaresolverr url wired" 'MARAUDER_FLARESOLVERR_URL: "http://t-marauder-flaresolverr:8191"' -- --set arr.flaresolverr.enabled=true
 assert_absent  "no flaresolverr url by default" 'MARAUDER_FLARESOLVERR_URL' --
+# An explicit override must win outright, not render a second duplicate key.
+assert_contains "flaresolverr url override wins" 'MARAUDER_FLARESOLVERR_URL: "http://mine:8191"' -- --set arr.flaresolverr.enabled=true --set config.MARAUDER_FLARESOLVERR_URL=http://mine:8191
+assert_absent  "override leaves no bundled url" 'MARAUDER_FLARESOLVERR_URL: "http://t-marauder-flaresolverr' -- --set arr.flaresolverr.enabled=true --set config.MARAUDER_FLARESOLVERR_URL=http://mine:8191
 # multiple clients at once share one downloads volume
 assert_contains "multi: qbittorrent" 'name: t-marauder-qbittorrent' -- --set clients.qbittorrent.enabled=true --set clients.transmission.enabled=true $SHARED
 assert_contains "multi: transmission" 'name: t-marauder-transmission' -- --set clients.qbittorrent.enabled=true --set clients.transmission.enabled=true $SHARED

@@ -1205,8 +1205,12 @@ func classifyError(msg string) string {
 		return errCodePluginMissing
 	}
 
-	// No solver configured at all outranks everything below, including the
-	// Cloudflare wording it necessarily carries. Issue #158: every shipped
+	// No solver configured at all outranks everything below, notably the
+	// `auth failed: ` prefix that loadCredentials stamps onto every login-path
+	// error — without this branch the wrapper decides the code and a missing
+	// solver reads as bad credentials. (It never competed with the cloudflare
+	// branch: that one matches "cloudflare challenge", which this message does
+	// not contain.) Issue #158: every shipped
 	// deployment stack left MARAUDER_FLARESOLVERR_URL empty, so RuTracker
 	// reported `cloudflare` — "this tracker needs a browser to get through" —
 	// on installs where nothing had ever been asked to run a browser. It must

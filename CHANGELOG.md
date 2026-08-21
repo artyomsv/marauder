@@ -64,6 +64,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     the frontend, and any torrent client layered in from the test-clients
     matrix. The Helm chart already did the equivalent via its NetworkPolicy. The
     docs now state plainly that FlareSolverr has no authentication.
+  - The dev overlay's FlareSolverr declares `networks: [default]` explicitly so
+    that layering the solver overlay on top unions the two network lists rather
+    than replacing them. Without it Prowlarr — the reason that service exists in
+    the dev stack — silently lost the solver, with no Compose error.
 
 ### Security
 

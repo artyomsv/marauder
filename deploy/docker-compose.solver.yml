@@ -29,7 +29,11 @@
 # route only one of them through a VPN.
 #
 # The dev overlay (docker-compose.dev.yml) already starts its own FlareSolverr
-# for the Sonarr/Prowlarr work, so do NOT layer this on top of it.
+# for the Sonarr/Prowlarr work and wires the URL itself, so layering this on
+# top of it is redundant. It is no longer harmful — that overlay declares
+# `networks: [default]` on its solver so this file's isolated network unions
+# with it rather than replacing it, which would have cut Prowlarr off from the
+# solver silently.
 
 services:
   backend:
@@ -48,6 +52,8 @@ services:
 
   flaresolverr:
     networks: [solver]
+    # Digest kept in sync with docker-compose.{solver,dev,arr}.yml — all three run
+    # the same solver, and the network wiring between them is now load-bearing.
     image: ghcr.io/flaresolverr/flaresolverr@sha256:139dfee1c6f89249c8d665d1333a42e8ec74ec0a86bc6bb1c8461e10d3a66a47
     restart: unless-stopped
     environment:
