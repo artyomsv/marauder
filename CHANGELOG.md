@@ -64,6 +64,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     the frontend, and any torrent client layered in from the test-clients
     matrix. The Helm chart already did the equivalent via its NetworkPolicy. The
     docs now state plainly that FlareSolverr has no authentication.
+  - Tracker search no longer blames the user's account for a Cloudflare
+    problem. RuTracker's search is login-gated, so a missing or unreachable
+    solver arrived as a failed login and rendered "tracker login failed — check
+    your account under Accounts", sending a user with perfectly good
+    credentials to re-enter them. `GET /trackers/search` gains `solver_missing`
+    and `solver` per-tracker error codes alongside `login_failed`.
+  - `ErrClearanceUnavailable` is now matched by sentinel in the scheduler's
+    `classifyCause`, not only by message. Its text is assembled from whatever
+    the provider failed with, so its wording is not Marauder's to keep stable —
+    and the embedded cause is typically a dial error against the solver's own
+    port, which fell through to the network passes and rotated the tracker's
+    domain over an outage of our own infrastructure.
   - The dev overlay's FlareSolverr declares `networks: [default]` explicitly so
     that layering the solver overlay on top unions the two network lists rather
     than replacing them. Without it Prowlarr — the reason that service exists in

@@ -2386,6 +2386,21 @@ func TestClassifyCause_SentinelOutranksMessage(t *testing.T) {
 			errCodeInternal,
 		},
 		{
+			// The counterpart to the missing-solver cases below, and the
+			// asymmetry review flagged in the first pass: ErrClearanceUnavailable
+			// was message-matched only. Its message is the one built from an
+			// arbitrary provider error via "%w: %w", so it is MORE exposed to
+			// rewording than the sentinel that already had a typed case — a
+			// provider whose error text drifts, or a wrapper that truncates,
+			// silently drops it to the network passes and rotates the tracker's
+			// domain over our own solver being down. That is the 2026-07-30
+			// misclassification, reachable again by wording alone.
+			"solver-failure sentinel wins over unrelated wording",
+			`rutracker GET https://rutracker.org/forum/viewtopic.php?t=1: dial tcp 172.24.0.2:8191: connect: connection refused`,
+			fmt.Errorf("rutracker: %w: solver said no", registry.ErrClearanceUnavailable),
+			errCodeSolver,
+		},
+		{
 			// Proves the typed branch is live rather than dead weight behind
 			// classifyError's wording match. The message here says "timeout"
 			// and nothing about a clearance, so ONLY the sentinel can produce

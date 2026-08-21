@@ -1183,6 +1183,16 @@ func classifyCause(msg string, cause error) string {
 	// is hard to reach.
 	case errors.Is(cause, registry.ErrClearanceNotConfigured):
 		return errCodeSolverMissing
+	// Same reasoning, one sentinel over. This one is the more exposed of the
+	// two: its message is assembled from whatever the provider failed with
+	// ("%w: %w"), so its wording is not ours to keep stable, and the embedded
+	// cause is routinely a dial error against the SOLVER's port. Matched by
+	// message alone it needs only a reworded provider error to fall through to
+	// the network passes — which are in the set recordResult rotates domains
+	// on, so a solver outage would migrate the tracker onto a mirror over
+	// evidence about our own infrastructure. That is the 2026-07-30 incident.
+	case errors.Is(cause, registry.ErrClearanceUnavailable):
+		return errCodeSolver
 	default:
 		return classifyError(msg)
 	}

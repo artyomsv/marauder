@@ -59,6 +59,10 @@ const en: Record<string, string> = {
   "topics.search.noResults": "No results",
   "topics.search.needsAccount": "needs a tracker account — add one under Accounts",
   "topics.search.loginFailed": "tracker login failed — check your account under Accounts",
+  "topics.search.solverMissing":
+    "no Cloudflare solver is configured — this tracker needs one; your account is fine",
+  "topics.search.solverDown":
+    "the Cloudflare solver isn't responding — the tracker and your account are fine",
   "topics.search.trackerFailed": "search failed on this tracker",
   "topics.search.coverage": "Searches:",
   "topics.add.urlPlaceholder":

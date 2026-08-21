@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -462,5 +463,63 @@ func TestSearchCredentials_DecryptFails_ReportsLoginFailed(t *testing.T) {
 	}
 	if len(resp.Errors) != 1 || resp.Errors[0].Code != "login_failed" {
 		t.Fatalf("errors = %+v, want login_failed (undecryptable stored secret)", resp.Errors)
+	}
+}
+
+// TestSearchCredentials_NoSolverConfigured_ReportsSolverMissing is issue #158
+// on the search surface, found by exercising a solverless backend against live
+// RuTracker rather than by reading the code.
+//
+// RuTracker's search is login-gated, so with no clearance provider the login
+// is challenged and every search came back "tracker login failed — check your
+// account under Accounts". The account is fine. The user is sent to re-enter
+// credentials that were never the problem, which is the precise misdiagnosis
+// this change exists to remove — it was simply removed on the topic and
+// account surfaces and not this one.
+func TestSearchCredentials_NoSolverConfigured_ReportsSolverMissing(t *testing.T) {
+	mk := testMasterKey(t)
+	cred := encryptedCred(t, mk, "fake-warm-nosolver")
+	warm := &fakeWarmTracker{
+		fakeSearchTracker: fakeSearchTracker{name: "fake-warm-nosolver"},
+		verifyOK:          false,
+		loginErr:          fmt.Errorf("rutracker login: %w", registry.ErrClearanceNotConfigured),
+	}
+	registry.RegisterTracker(warm)
+
+	h := &Trackers{BaseURL: "http://test", Creds: &fakeSearchCredStore{cred: cred}, Master: mk}
+	w := httptest.NewRecorder()
+	h.Search(w, searchRequest(t, cred.UserID, "q=test&trackers=fake-warm-nosolver"))
+	var resp searchResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Errors) != 1 || resp.Errors[0].Code != "solver_missing" {
+		t.Fatalf("errors = %+v, want solver_missing — blaming the account sends the user to fix a credential that is fine", resp.Errors)
+	}
+}
+
+// TestSearchCredentials_SolverDown_ReportsSolver is the sibling state: a solver
+// IS configured and could not mint. Also previously reported as a bad login,
+// and equally not the account's fault — but the operator action differs, so the
+// two do not share a code.
+func TestSearchCredentials_SolverDown_ReportsSolver(t *testing.T) {
+	mk := testMasterKey(t)
+	cred := encryptedCred(t, mk, "fake-warm-solverdown")
+	warm := &fakeWarmTracker{
+		fakeSearchTracker: fakeSearchTracker{name: "fake-warm-solverdown"},
+		verifyOK:          false,
+		loginErr:          fmt.Errorf("rutracker login: %w: dial tcp: connection refused", registry.ErrClearanceUnavailable),
+	}
+	registry.RegisterTracker(warm)
+
+	h := &Trackers{BaseURL: "http://test", Creds: &fakeSearchCredStore{cred: cred}, Master: mk}
+	w := httptest.NewRecorder()
+	h.Search(w, searchRequest(t, cred.UserID, "q=test&trackers=fake-warm-solverdown"))
+	var resp searchResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Errors) != 1 || resp.Errors[0].Code != "solver" {
+		t.Fatalf("errors = %+v, want solver", resp.Errors)
 	}
 }

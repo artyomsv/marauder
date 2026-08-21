@@ -61,6 +61,10 @@ const ru: Record<string, string> = {
   "topics.search.noResults": "Ничего не найдено",
   "topics.search.needsAccount": "нужен аккаунт трекера — добавьте его в разделе «Аккаунты»",
   "topics.search.loginFailed": "не удалось войти на трекер — проверьте аккаунт в разделе «Аккаунты»",
+  "topics.search.solverMissing":
+    "обходчик Cloudflare не настроен — этому трекеру он необходим; с аккаунтом всё в порядке",
+  "topics.search.solverDown":
+    "обходчик Cloudflare не отвечает — трекер и аккаунт в порядке",
   "topics.search.trackerFailed": "поиск на этом трекере не удался",
   "topics.search.coverage": "Поиск по:",
   "topics.add.urlPlaceholder":
