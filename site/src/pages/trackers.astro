@@ -101,7 +101,7 @@ const indexers = trackers.filter((t) => t.category === "indexer");
               <tr id={t.slug} class="hover:bg-muted/20">
                 <td class="px-4 py-3 font-mono text-foreground">
                   {trackerPageSlugs.includes(t.slug)
-                    ? <a href={`/trackers/${t.slug}`} class="underline decoration-foreground/30 underline-offset-4 hover:decoration-foreground">{t.name}</a>
+                    ? <a href={`/trackers/${t.slug}/`} class="underline decoration-foreground/30 underline-offset-4 hover:decoration-foreground">{t.name}</a>
                     : t.name}
                 </td>
                 <td class="px-4 py-3 text-muted-foreground">{t.region}</td>

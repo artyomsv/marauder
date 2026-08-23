@@ -1,28 +1,40 @@
 ---
 import { SITE } from "@/data/seo";
+import { trackers } from "@/data/trackers";
+import { trackerPages } from "@/data/trackerPages";
+
+// The per-tracker pages are the site's highest-intent landing pages but are
+// reachable only from the /trackers/ hub and the homepage grid. Footer links
+// re-present them on every page so discovery does not depend on a crawler
+// following one specific card in one specific grid.
+const trackerLinks = trackerPages.map((p) => ({
+  href: `/trackers/${p.slug}/`,
+  text: trackers.find((t) => t.slug === p.slug)?.name ?? p.slug,
+}));
 
 const sections = [
   {
     title: "Product",
     links: [
-      { href: "/features", text: "Features" },
-      { href: "/trackers", text: "Trackers" },
-      { href: "/integrations", text: "Integrations" },
-      { href: "/install", text: "Install" },
+      { href: "/features/", text: "Features" },
+      { href: "/trackers/", text: "Trackers" },
+      { href: "/integrations/", text: "Integrations" },
+      { href: "/install/", text: "Install" },
     ],
   },
   {
     title: "Compare",
     links: [
-      { href: "/vs/sonarr", text: "vs Sonarr / Radarr" },
-      { href: "/vs/monitorrent", text: "vs monitorrent" },
-      { href: "/vs/flexget", text: "vs FlexGet" },
+      { href: "/vs/sonarr/", text: "vs Sonarr / Radarr" },
+      { href: "/vs/prowlarr/", text: "vs Prowlarr" },
+      { href: "/vs/monitorrent/", text: "vs monitorrent" },
+      { href: "/vs/flexget/", text: "vs FlexGet" },
     ],
   },
   {
     title: "Documentation",
     links: [
-      { href: "/docs", text: "Documentation" },
+      { href: "/docs/", text: "Documentation" },
       { href: SITE.github + "/blob/main/docs/PRD.md", text: "PRD", external: true },
       { href: SITE.github + "/blob/main/docs/plugin-development.md", text: "Plugin guide", external: true },
       { href: SITE.github + "/blob/main/docs/oidc.md", text: "Keycloak / OIDC", external: true },
@@ -37,8 +49,12 @@ const sections = [
       { href: SITE.github + "/issues", text: "Issues", external: true },
       { href: SITE.github + "/blob/main/CONTRIBUTING.md", text: "Contributing", external: true },
       { href: SITE.github + "/blob/main/LICENSE", text: "Apache 2.0 License", external: true },
-      { href: "/legal", text: "Disclaimer" },
+      { href: "/legal/", text: "Disclaimer" },
     ],
+  },
+  {
+    title: "Trackers",
+    links: trackerLinks,
   },
 ];
 
@@ -46,7 +62,7 @@ const year = new Date().getFullYear();
 ---
 <footer class="mt-32 border-t border-border/60 bg-background/40">
   <div class="mx-auto max-w-6xl px-6 py-14">
-    <div class="grid grid-cols-2 gap-10 md:grid-cols-4">
+    <div class="grid grid-cols-2 gap-10 md:grid-cols-3 lg:grid-cols-5">
       {sections.map((section) => (
         <nav aria-labelledby={`footer-${section.title.toLowerCase()}`}>
           <h2 id={`footer-${section.title.toLowerCase()}`} class="mb-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
@@ -83,7 +99,7 @@ const year = new Date().getFullYear();
         </p>
       </div>
       <p class="text-xs text-muted-foreground">
-        <a href="/ru" class="underline hover:text-foreground">Русский</a> &middot;
+        <a href="/ru/" class="underline hover:text-foreground">Русский</a> &middot;
         Built with <a href="https://astro.build" class="underline hover:text-foreground" rel="noopener external">Astro</a> &middot; Hosted on GitHub Pages
       </p>
     </div>

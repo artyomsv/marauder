@@ -2,11 +2,11 @@
 import { SITE } from "@/data/seo";
 
 const nav = [
-  { href: "/features", label: "Features" },
-  { href: "/trackers", label: "Trackers" },
-  { href: "/integrations", label: "Integrations" },
-  { href: "/install", label: "Install" },
-  { href: "/docs", label: "Docs" },
+  { href: "/features/", label: "Features" },
+  { href: "/trackers/", label: "Trackers" },
+  { href: "/integrations/", label: "Integrations" },
+  { href: "/install/", label: "Install" },
+  { href: "/docs/", label: "Docs" },
 ];
 
 const current = Astro.url.pathname;
@@ -29,7 +29,7 @@ const current = Astro.url.pathname;
 
     <ul class="hidden md:flex items-center gap-1 text-sm">
       {nav.map((item) => {
-        const active = current === item.href || current.startsWith(item.href + "/");
+        const active = current.startsWith(item.href);
         return (
           <li>
             <a href={item.href}
