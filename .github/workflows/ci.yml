@@ -221,6 +221,19 @@ jobs:
       - name: Run verify-arch tests
         run: bash .github/scripts/verify-arch_test.sh
 
+  acceptance-scripts:
+    name: Acceptance helper tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Pure text classifier, no Docker: it decides whether a failed nightly
+      # was the client or the registry, and a wrong answer either silences the
+      # canary or files issues against clients we never reached (#166-#168).
+      - name: Run acceptance lib tests
+        run: bash deploy/acceptance/lib_test.sh
+
   # ---------------------------------------------------------------- frontend
   frontend:
     name: Frontend

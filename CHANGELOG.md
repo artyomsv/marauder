@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The nightly client canary blamed torrent clients for Docker Hub outages**
+  (issues #166, #167, #168 — a repeat of #119-#121). On 2026-08-28 all three
+  `latest` acceptance legs died on `toomanyrequests` from the anonymous Docker
+  Hub quota that every GitHub-hosted runner shares, before a single container
+  started. Three issues were filed saying *"a new upstream release likely
+  changed the client's API contract"* about qBittorrent, Transmission and
+  Deluge — none of which had been contacted. `acceptance.sh` exited `1` for
+  every failure, so the workflow had no way to tell the two apart.
+
+  The July guard (a green pinned baseline implies a real canary failure) did
+  not hold: the quota is time-based, and that night it hit only the later
+  canary jobs while the pinned legs had already finished.
+
+  - `acceptance.sh` now retries the stack bring-up up to three times with a
+    30s/60s backoff, and exits `75` (`EX_TEMPFAIL`) when the images still
+    cannot be fetched, instead of `1`.
+  - The canary workflow reads that code: `75` becomes a run annotation and
+    files nothing, and only a genuine failure — the stack came up and the
+    client rejected the plugin handshake — files or comments on an issue.
+  - A registry failure no longer reddens the pinned baseline either, which
+    also runs on release tags against immutable image tags.
+  - New `deploy/acceptance/lib.sh` holds the registry-failure classifier,
+    unit-tested by `lib_test.sh` against the real log lines from the run that
+    filed the false issues, and run in CI as the `Acceptance helper tests` job.
+    The patterns are deliberately narrow: a broad match would classify a real
+    upstream regression as infrastructure and silence the canary.
+
 ## [1.19.6] - 2026-08-21
 
 ### Fixed

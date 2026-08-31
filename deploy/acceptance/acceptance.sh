@@ -14,6 +14,8 @@ CHANNEL="${2:?usage: acceptance.sh <client> <pinned|latest>}"
 
 # Run from the deploy/ directory (this script lives in deploy/acceptance/).
 DEPLOY_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck source=acceptance/lib.sh
+source "$DEPLOY_DIR/acceptance/lib.sh"
 cd "$DEPLOY_DIR"
 
 # Isolated project + non-default API port so a running dev stack is untouched.
@@ -47,6 +49,7 @@ esac
 
 # Fresh, throwaway env (never touch the developer's deploy/.env).
 ENV_FILE="$(mktemp)"
+UP_LOG="$(mktemp)"
 cp .env.example "$ENV_FILE"
 MASTER=$(openssl rand -base64 32)
 METRICS=$(openssl rand -hex 32)
@@ -56,13 +59,39 @@ COMPOSE+=(--env-file "$ENV_FILE")
 
 cleanup() {
   "${COMPOSE[@]}" down -v >/dev/null 2>&1 || true
-  rm -f "$ENV_FILE"
+  rm -f "$ENV_FILE" "$UP_LOG"
 }
 trap cleanup EXIT
 
+# Bring the stack up, retrying registry failures. Every image here is pulled on
+# the anonymous Docker Hub quota shared by all GitHub-hosted runners, so a
+# `toomanyrequests` reports the busy hour, not the client under test. Retrying
+# clears most of them; the ones that survive exit EX_INFRA so the caller can
+# tell "could not fetch the images" from "the client rejected us" instead of
+# filing an upstream-regression issue about a registry (issues #119-#121, #166-#168).
+UP_ATTEMPTS=3
 echo "==> $CLIENT/$CHANNEL: bringing up base stack + $SERVICE"
-"${COMPOSE[@]}" up -d --wait --wait-timeout 180 \
-  db backend frontend gateway "$SERVICE"
+for attempt in $(seq 1 "$UP_ATTEMPTS"); do
+  if "${COMPOSE[@]}" up -d --wait --wait-timeout 180 \
+       db backend frontend gateway "$SERVICE" >"$UP_LOG" 2>&1; then
+    cat "$UP_LOG"
+    break
+  fi
+  cat "$UP_LOG" >&2
+  if ! acceptance_is_registry_failure "$(cat "$UP_LOG")"; then
+    echo "FAIL: $CLIENT/$CHANNEL: stack did not come up" >&2
+    exit 1
+  fi
+  if [ "$attempt" -eq "$UP_ATTEMPTS" ]; then
+    echo "INFRA: $CLIENT/$CHANNEL: registry unavailable after $UP_ATTEMPTS attempts" >&2
+    exit "$ACCEPTANCE_EX_INFRA"
+  fi
+  # Docker Hub's quota windows are minute-scale, so back off in tens of seconds.
+  BACKOFF=$((attempt * 30))
+  echo "==> registry failure (attempt $attempt/$UP_ATTEMPTS); retrying in ${BACKOFF}s" >&2
+  "${COMPOSE[@]}" down -v >/dev/null 2>&1 || true
+  sleep "$BACKOFF"
+done
 
 # Resolve per-client credentials.
 USERNAME=admin; PASSWORD=""
