@@ -456,28 +456,30 @@ isolated `marauder-acceptance` Compose project (so it never touches a running
 succeeds — i.e. the plugin `Test()` passed. The `latest` channel overrides the
 client image tag via `MARAUDER_TEST_*_TAG=latest`.
 
-The canary has **three** outcomes, not two, because every image is pulled on the
-anonymous Docker Hub quota shared by all GitHub-hosted runners and a
-`toomanyrequests` there says nothing about the client under test.
+The canary has **three** outcomes, not two. Images come from two registries and
+either can throttle a GitHub-hosted runner, whose egress IP is shared with
+thousands of jobs: **Docker Hub** (postgres, nginx, and the golang/node/alpine
+build bases) and **lscr.io** (the linuxserver client image under test).
 `acceptance.sh` retries the bring-up 3x (30s/60s backoff) and, if the images
 still never arrive, exits **75** (`EX_TEMPFAIL`) instead of `1`; the workflow
-turns 75 into a run annotation and files nothing, and only exit 1 — the stack
-came up and the client rejected the handshake — files or comments on a deduped
-`client-canary` issue. 75 also does not redden the `pinned` job, which runs on
-release tags against immutable tags. The classifier that decides which it was
-lives in `deploy/acceptance/lib.sh` (`acceptance_is_registry_failure`, pure
-text) and is unit-tested by `lib_test.sh` — CI job `Acceptance helper tests` —
-against the real log lines from the run that mis-filed. **Keep its patterns
-narrow**: a broad match reclassifies a genuine upstream regression as
-infrastructure and silences the canary entirely. Both jobs additionally
-`docker login` when `DOCKERHUB_USERNAME`/`DOCKERHUB_TOKEN` secrets exist, for an
-authenticated per-account quota; those secrets have never been set, so that step
-has been skipped on every run since it was added — which is why the exit-code
-split, not the login, is what actually stopped the noise. The `latest` job still
-runs only after a green `pinned` baseline, but that gate is not an infra
-detector on its own: the quota is time-based, and on 2026-08-28 it hit only the
-canary legs after the pinned legs had passed, filing false issues #166-#168 (a
-repeat of #119-#121).
+turns 75 into a run annotation and files nothing, and only exit 1 — the images
+arrived, the stack came up, and the client rejected the handshake — files or
+comments on a deduped `client-canary` issue. 75 also does not redden the
+`pinned` job, which runs on release tags against immutable tags. The classifier
+that decides which it was lives in `deploy/acceptance/lib.sh`
+(`acceptance_is_registry_failure`, pure text) and is unit-tested by
+`lib_test.sh` — CI job `Acceptance helper tests` — against the real log lines
+from the run that mis-filed. **Keep its patterns narrow**: a broad match
+reclassifies a genuine upstream regression as infrastructure and silences the
+canary entirely. Both jobs also `docker login` to Docker Hub when
+`DOCKERHUB_USERNAME`/`DOCKERHUB_TOKEN` exist, but treat that as a hedge, not a
+fix — those secrets have never been set, and Docker Hub was **not** the culprit
+in #166-#168: it served `db` and `gateway` in the same jobs seconds before
+lscr.io refused the client images. Do not "solve" a recurrence by buying a
+Docker Hub account without first reading which registry the log names. The
+`latest` job still runs only after a green `pinned` baseline, but that gate is
+not an infra detector on its own: quotas are time-based, and on 2026-08-28 the
+limit was hit only by the canary legs, after the pinned legs had passed.
 
 ### Release automation (no manual version/tag)
 

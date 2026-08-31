@@ -63,12 +63,14 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# Bring the stack up, retrying registry failures. Every image here is pulled on
-# the anonymous Docker Hub quota shared by all GitHub-hosted runners, so a
-# `toomanyrequests` reports the busy hour, not the client under test. Retrying
-# clears most of them; the ones that survive exit EX_INFRA so the caller can
-# tell "could not fetch the images" from "the client rejected us" instead of
-# filing an upstream-regression issue about a registry (issues #119-#121, #166-#168).
+# Bring the stack up, retrying registry failures. Images come from Docker Hub
+# (postgres, nginx, the golang/node/alpine build bases) and lscr.io (the client
+# under test), and either can throttle a GitHub-hosted runner whose egress IP is
+# shared with thousands of other jobs — so a `toomanyrequests` reports the busy
+# hour, not the client. Retrying clears most of them; the ones that survive exit
+# EX_INFRA so the caller can tell "could not fetch the images" from "the client
+# rejected us" instead of filing an upstream-regression issue about a registry
+# (issues #119-#121, then #166-#168).
 UP_ATTEMPTS=3
 echo "==> $CLIENT/$CHANNEL: bringing up base stack + $SERVICE"
 for attempt in $(seq 1 "$UP_ATTEMPTS"); do

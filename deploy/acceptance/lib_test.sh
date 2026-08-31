@@ -49,8 +49,10 @@ check "registry gateway error" 0 \
   'received unexpected HTTP status: 502 Bad Gateway'
 check "registry TLS timeout" 0 \
   'net/http: TLS handshake timeout'
-check "registry DNS failure" 0 \
+check "docker hub DNS failure" 0 \
   'dial tcp: lookup registry-1.docker.io on 127.0.0.53:53: server misbehaving'
+check "lscr.io DNS failure" 0 \
+  'dial tcp: lookup lscr.io on 127.0.0.53:53: no such host'
 check "buildkit layer fetch" 0 \
   'failed to copy: httpReadSeeker: failed open: unexpected status code 429'
 check "engine config blob fetch" 0 \

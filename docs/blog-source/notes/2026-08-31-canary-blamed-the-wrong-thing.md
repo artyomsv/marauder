@@ -17,9 +17,8 @@ related:
 # My canary filed three bug reports about software it never contacted
 
 **Why interesting:** A nightly job accused qBittorrent, Transmission and Deluge
-of breaking their APIs. All three were innocent. The runner had been refused the
-container images by a registry rate limit, so not one of those programs was ever
-started. The test harness had a single exit code for "the thing under test is
+of breaking their APIs. All three were innocent. The registry that serves those images had refused them
+to the runner, so not one of those programs was ever started. The test harness had a single exit code for "the thing under test is
 broken" and "I could not obtain the thing under test", and a monitor that cannot
 tell those apart does not report faults — it manufactures them.
 
@@ -40,3 +39,11 @@ real regressions, converting a noisy monitor into a useless one.
 - `deploy/acceptance/lib_test.sh` — tested against the real log lines that mis-filed
 - `.github/workflows/client-acceptance.yml` — three outcomes: pass, fail, infra
 - commit `ba86f42` — the earlier fix whose guard silently no-opped
+
+**Second twist, found by the reviewer:** the "fix" that was never wired was a
+*Docker Hub* login — and Docker Hub was not the registry that refused us. The
+same job had pulled two Docker Hub images successfully seconds before a
+different registry rejected the one image that mattered. So even if the missing
+credential had been created, it would have changed nothing. A plausible cause,
+an unread log, and a fix aimed at the wrong system: the debugging failure and
+the monitoring failure had the same shape.
