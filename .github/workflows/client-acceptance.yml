@@ -27,7 +27,7 @@ jobs:
   pinned:
     name: pinned / ${{ matrix.client }}
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
@@ -35,26 +35,41 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # Authenticated pulls get a per-account quota instead of the anonymous
-      # per-IP pool shared by all GitHub-hosted runners, which rate-limited an
-      # entire nightly run (issues #119-#121). No-op until the secrets exist.
+      # A hedge for the Docker Hub half of our pulls (postgres, nginx, and the
+      # golang/node/alpine build bases): an authenticated per-account quota
+      # instead of the per-IP pool shared by all GitHub-hosted runners. It is
+      # NOT what fixed the false canary issues — #166-#168 were lscr.io
+      # refusals, and Docker Hub served `db` and `gateway` in the same jobs
+      # seconds earlier. No-op until the secrets exist, which they never have;
+      # acceptance.sh retrying and reporting EX_INFRA (75) is the real defence.
       - name: Docker Hub login (higher pull quota)
         if: env.DOCKERHUB_TOKEN != ''
         run: echo "$DOCKERHUB_TOKEN" | docker login -u "$DOCKERHUB_USERNAME" --password-stdin
+      # A registry outage must not redden the baseline: this job also runs on
+      # release tags, and the pinned tags are immutable, so exit 75 says
+      # nothing about this client.
       - name: Acceptance (pinned baseline)
-        run: bash deploy/acceptance/acceptance.sh ${{ matrix.client }} pinned
+        run: |
+          set +e
+          bash deploy/acceptance/acceptance.sh ${{ matrix.client }} pinned
+          code=$?
+          set -e
+          if [ "$code" -eq 75 ]; then
+            echo "::warning::${{ matrix.client }} pinned baseline could not fetch its images (registry rate limit or outage) — not a client regression"
+            exit 0
+          fi
+          exit "$code"
 
   latest:
     name: latest-canary / ${{ matrix.client }}
     # Canary only — never gate releases, so skip on tag pushes. Requiring a
     # green pinned baseline keeps the canary honest: pinned tags are immutable,
-    # so a red baseline means broken infrastructure (registry rate limits,
-    # runner trouble), not an upstream release — filing issues would be noise.
-    # Sequencing after pinned also halves the concurrent pull burst.
+    # so a red baseline means a real break in the harness, not an upstream
+    # release. Sequencing after pinned also halves the concurrent pull burst.
     needs: pinned
     if: github.event_name != 'push' && needs.pinned.result == 'success'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     permissions:
       contents: read
       issues: write
@@ -68,12 +83,29 @@ jobs:
       - name: Docker Hub login (higher pull quota)
         if: env.DOCKERHUB_TOKEN != ''
         run: echo "$DOCKERHUB_TOKEN" | docker login -u "$DOCKERHUB_USERNAME" --password-stdin
+      # Three outcomes, not two. A green pinned baseline does NOT prove the
+      # registries stayed healthy for this job — quotas are time-based, and on
+      # 2026-08-28 lscr.io refused all three canary legs after the pinned legs
+      # had passed, filing #166-#168 against clients never contacted. Exit 75
+      # means the images never arrived, so there is no upstream signal at all.
       - name: Acceptance (latest image)
         id: acc
-        continue-on-error: true
-        run: bash deploy/acceptance/acceptance.sh ${{ matrix.client }} latest
+        run: |
+          set +e
+          bash deploy/acceptance/acceptance.sh ${{ matrix.client }} latest
+          code=$?
+          set -e
+          case "$code" in
+            0)  echo "result=pass"  >> "$GITHUB_OUTPUT" ;;
+            75) echo "result=infra" >> "$GITHUB_OUTPUT" ;;
+            *)  echo "result=fail"  >> "$GITHUB_OUTPUT" ;;
+          esac
+      - name: Note registry failure (no issue filed)
+        if: steps.acc.outputs.result == 'infra'
+        run: |
+          echo "::warning::${{ matrix.client }} latest canary could not fetch its images (registry rate limit or outage) — the client was never contacted, so no canary issue was filed"
       - name: File deduped canary issue on failure
-        if: steps.acc.outcome == 'failure'
+        if: steps.acc.outputs.result == 'fail'
         env:
           GH_TOKEN: ${{ github.token }}
           CLIENT: ${{ matrix.client }}
@@ -92,10 +124,10 @@ jobs:
               --body "Still failing on the latest image. Run: ${RUN_URL}"
           else
             gh issue create --title "${TITLE}" --label client-canary --body \
-          "The acceptance test for \`${CLIENT}\` against its **latest** image failed while the pinned baseline is expected green. A new upstream release likely changed the client's API contract. Investigate and, if confirmed, adapt the plugin and bump the pinned baseline. Run: ${RUN_URL}"
+          "The acceptance test for \`${CLIENT}\` against its **latest** image failed while the pinned baseline is expected green. The images were fetched, the stack came up, and the client rejected the plugin handshake — so a new upstream release likely changed the client's API contract. Investigate and, if confirmed, adapt the plugin and bump the pinned baseline. Run: ${RUN_URL}"
           fi
       - name: Surface canary failure as a red (non-blocking) check
-        if: steps.acc.outcome == 'failure'
+        if: steps.acc.outputs.result == 'fail'
         run: |
           echo "::warning::${{ matrix.client }} latest canary failed — issue filed"
           exit 1

@@ -454,12 +454,32 @@ baseline). The runner brings up the base stack plus one client under the
 isolated `marauder-acceptance` Compose project (so it never touches a running
 `deploy` dev stack or `deploy/.env`) and asserts `POST /api/v1/clients`
 succeeds — i.e. the plugin `Test()` passed. The `latest` channel overrides the
-client image tag via `MARAUDER_TEST_*_TAG=latest`; on failure the workflow files
-a deduped `client-canary` GitHub issue. The `latest` job runs only after a green
-`pinned` baseline (immutable tags — a red baseline means infra, not upstream; see
-issues #119-#121, a Docker Hub rate-limit false alarm), and both jobs
-`docker login` when `DOCKERHUB_USERNAME`/`DOCKERHUB_TOKEN` secrets exist to use
-an authenticated pull quota instead of the runners' shared anonymous pool.
+client image tag via `MARAUDER_TEST_*_TAG=latest`.
+
+The canary has **three** outcomes, not two. Images come from two registries and
+either can throttle a GitHub-hosted runner, whose egress IP is shared with
+thousands of jobs: **Docker Hub** (postgres, nginx, and the golang/node/alpine
+build bases) and **lscr.io** (the linuxserver client image under test).
+`acceptance.sh` retries the bring-up 3x (30s/60s backoff) and, if the images
+still never arrive, exits **75** (`EX_TEMPFAIL`) instead of `1`; the workflow
+turns 75 into a run annotation and files nothing, and only exit 1 — the images
+arrived, the stack came up, and the client rejected the handshake — files or
+comments on a deduped `client-canary` issue. 75 also does not redden the
+`pinned` job, which runs on release tags against immutable tags. The classifier
+that decides which it was lives in `deploy/acceptance/lib.sh`
+(`acceptance_is_registry_failure`, pure text) and is unit-tested by
+`lib_test.sh` — CI job `Acceptance helper tests` — against the real log lines
+from the run that mis-filed. **Keep its patterns narrow**: a broad match
+reclassifies a genuine upstream regression as infrastructure and silences the
+canary entirely. Both jobs also `docker login` to Docker Hub when
+`DOCKERHUB_USERNAME`/`DOCKERHUB_TOKEN` exist, but treat that as a hedge, not a
+fix — those secrets have never been set, and Docker Hub was **not** the culprit
+in #166-#168: it served `db` and `gateway` in the same jobs seconds before
+lscr.io refused the client images. Do not "solve" a recurrence by buying a
+Docker Hub account without first reading which registry the log names. The
+`latest` job still runs only after a green `pinned` baseline, but that gate is
+not an infra detector on its own: quotas are time-based, and on 2026-08-28 the
+limit was hit only by the canary legs, after the pinned legs had passed.
 
 ### Release automation (no manual version/tag)
 
