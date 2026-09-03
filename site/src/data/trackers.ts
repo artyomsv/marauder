@@ -114,11 +114,11 @@ export const trackers: Tracker[] = [
     slug: "toloka",
     name: "Toloka.to",
     description:
-      "Ukrainian phpBB tracker. Sign-in is saved but cannot be confirmed automatically.",
+      "Ukrainian tracker (Гуртом). Everything is behind login, so an account is required — Marauder confirms the session and delivers the real .torrent file. Verified end-to-end against a live account.",
     category: "forum-cis",
     region: "UA",
     auth: "account",
-    status: "alpha",
+    status: "validated",
   },
   {
     slug: "tapochek",

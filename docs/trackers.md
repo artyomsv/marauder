@@ -293,6 +293,63 @@ egress does get challenged, but it is not part of normal setup.
 infohash and title from a public release topic, `Download` produced a
 magnet, and `ResolveMetadata` returned the title and poster.
 
+### Toloka.to (Гуртом)
+
+| | |
+|---|---|
+| **Plugin name** | `toloka` |
+| **Account required** | **Yes — nothing at all is visible without one** |
+| **Quality selection** | No |
+| **Episode filter** | No |
+| **Cloudflare** | Site is behind Cloudflare, but no solver is needed |
+| **URL format** | `https://toloka.to/t<id>` |
+
+Ukrainian tracker. Unlike every other plugin here, Toloka shows a guest
+**nothing**: a release page returns a ~7 KB stub with an empty `<title>`
+and no download link, `tracker.php` echoes your query and returns zero
+rows with no error message, forum listings render their chrome with no
+topic rows, and `download.php` answers with HTML instead of a torrent.
+Add an account under **Accounts** before adding any Toloka topic.
+
+`toloka.to` is the only live domain (probed 2026-09-03), so there is no
+mirror to fail over to. `hurtom.com` is the sister community portal — it
+links to Toloka topics but does not serve the tracker.
+
+**How Marauder detects updates.** Toloka publishes neither an infohash
+nor a magnet on its release pages. So, exactly as with AniDub, the change
+token is derived from the torrent block — the download id, the `.torrent`
+filename, the size, and the registration timestamp the uploader's
+re-upload moves. Seeder counts are deliberately excluded: they drift on
+their own and would make every check look like a new release.
+
+**How Marauder knows it is signed in.** The server keeps a `toloka_data`
+cookie carrying a `userid` — `-1` for a guest, your account id once
+logged in — and re-issues it on every response. That single
+server-supplied signal drives both `Login` and `Verify`, so an expired
+session is detected rather than guessed at. It replaced a body-text check
+that searched for the words "помилка" or "error": the real failure page
+("Такий псевдонім не існує, або не збігається пароль") contains neither,
+and a successful login answers `302` with an **empty** body, so a wrong
+password used to be saved and reported as a working account.
+
+> **Toloka rate-limits hard.** Roughly a dozen requests inside twenty
+> seconds was enough to earn an `HTTP 429` (measured 2026-09-03). Marauder
+> reports that as a rate limit rather than as a tracker outage, so if you
+> see it, back off rather than go looking for a broken selector.
+
+**Validation status:** verified end-to-end against the live site with a
+real account on 2026-09-03 — login, rejection of a wrong password,
+session verification in both directions, change detection with a stable
+token, search, and a real `.torrent` download whose bytes parse as a
+torrent. The check is re-runnable and reads credentials from the
+environment, so none are stored in the repo:
+
+```bash
+docker run --rm -v "$PWD/backend:/backend" -w //backend \
+  -e MARAUDER_TOLOKA_USERNAME=... -e MARAUDER_TOLOKA_PASSWORD=... \
+  golang:1.25 go test -tags=live -run TestLive -v ./internal/plugins/trackers/toloka/...
+```
+
 ---
 
 ## Rutor (anonymous, no account)
@@ -364,7 +421,6 @@ docker run --rm -v "$PWD/backend:/backend" -w //backend golang:1.25 \
 |---|---|---|---|---|---|
 | `anidub` | AniDub | Yes | Yes | No | No |
 | `anilibria` | AniLiberty | No (public API) | No | No | No |
-| `toloka` | Toloka | Yes | No | No | No |
 | `tapochek` | Tapochek | Yes | No | No | No |
 
 > **Removed 2026-08-03.** `hdclub`, `unionpeer` and `freetorrents` were
@@ -381,10 +437,9 @@ for the guide on adding new ones or fixing selector drift.
 
 **Not every plugin can confirm a login.** `Verify` is the second,
 independent signal that a session is really authenticated — it fetches
-a page and looks for a positive logged-in marker. `toloka` has no known
-marker yet, so it returns
-`registry.ErrVerifyUnsupported` rather than claiming a check they did
-not make. Adding or testing an account for those trackers saves the
+a page and looks for a positive logged-in marker. `anidub` returns
+`registry.ErrVerifyUnsupported` for a page it cannot classify, rather
+than claiming a check it did not make. Adding or testing an account for those trackers saves the
 credential and shows an amber **"could not be verified"** notice
 instead of a green tick. The credential still works; Marauder is only
 declining to imply it validated something it could not. See
