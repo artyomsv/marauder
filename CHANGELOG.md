@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.19.8] - 2026-09-03
+
 ### Added
 
 - **Toloka works, and is now searchable.** The plugin gains `WithSearch`
