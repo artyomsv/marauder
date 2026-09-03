@@ -21,6 +21,7 @@ import (
 	"strings"
 
 	"github.com/artyomsv/marauder/backend/internal/domain"
+	"github.com/artyomsv/marauder/backend/internal/plugins/cfclearance"
 	"github.com/artyomsv/marauder/backend/internal/plugins/registry"
 	"github.com/artyomsv/marauder/backend/internal/plugins/trackers/forumcommon"
 )
@@ -364,7 +365,38 @@ func (p *plugin) Download(ctx context.Context, topic *domain.Topic, _ *domain.Ch
 	return &domain.Payload{TorrentFile: body, FileName: fmt.Sprintf("kinozal-%d.torrent", id)}, nil
 }
 
+var _ registry.WithCloudflare = (*plugin)(nil)
+
+// UsesCloudflare implements registry.WithCloudflare. Measured 2026-09-03:
+// kinozal.me answers /browse.php, /details.php and /get_srv_details.php with
+// a 403 Cf-Mitigated interstitial — i.e. search, change detection AND
+// infohash resolution were all blocked, not just search. The site root still
+// returns 200, which is why the tracker looked reachable while every topic
+// failed.
+//
+// Declaring this marks the tracker as needing a clearance, which fetch mints
+// via the configured provider and replays with the User-Agent that earned it.
+func (p *plugin) UsesCloudflare() bool { return true }
+
+// ChallengeProbeURL must name a genuinely challenged page. A clearance is
+// scoped to the Cloudflare RULE that issued it, not to the host, so minting
+// from the unchallenged root would yield a cookie that still 403s on
+// /details.php — the mistake that made RuTracker's first wiring useless.
+func (p *plugin) ChallengeProbeURL() string {
+	return "https://" + p.effectiveDomain() + "/browse.php"
+}
+
 func (p *plugin) fetch(ctx context.Context, target string, creds *domain.TrackerCredential) ([]byte, error) {
+	return cfclearance.RetryOnChallenge(p.ChallengeProbeURL(), func() ([]byte, error) {
+		return p.fetchOnce(ctx, target, creds)
+	})
+}
+
+func (p *plugin) fetchOnce(ctx context.Context, target string, creds *domain.TrackerCredential) ([]byte, error) {
+	u, err := url.Parse(strings.TrimSpace(target))
+	if err != nil {
+		return nil, fmt.Errorf("kinozal: invalid URL: %w", err)
+	}
 	key := pluginName + ":nocreds"
 	if creds != nil {
 		key = forumcommon.SessionKey(pluginName, creds.UserID.String())
@@ -373,16 +405,25 @@ func (p *plugin) fetch(ctx context.Context, target string, creds *domain.Tracker
 	if p.transport != nil {
 		sess.Client.Transport = p.transport
 	}
+	clearance, clearErr := cfclearance.Apply(ctx, pluginName, sess.Client.Jar, u, p.ChallengeProbeURL())
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", userAgent)
+	req.Header.Set("User-Agent", cfclearance.UserAgent(clearance, userAgent))
+	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
 	resp, err := sess.Client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("kinozal GET: %w", err)
 	}
 	defer resp.Body.Close()
+	// Before the status check: a challenge is a 403, and reporting it as a
+	// bare status tells the user the tracker refused them when in fact
+	// nothing of theirs was ever looked at.
+	if cfclearance.IsChallenge(resp) {
+		return nil, fmt.Errorf("kinozal GET %s: %w", target, cfclearance.Cause(clearErr))
+	}
 	if resp.StatusCode != 200 {
 		return nil, fmt.Errorf("kinozal GET %s -> %d", target, resp.StatusCode)
 	}

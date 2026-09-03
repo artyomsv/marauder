@@ -84,3 +84,35 @@ func TestSearch_NonJSONResponse_Errors(t *testing.T) {
 		t.Fatal("non-JSON body must error, not silently return zero results")
 	}
 }
+
+// TestSearch_NoMatches_IsEmptyNotAnError pins the shape LostFilm returns
+// when nothing matches. The API changes the TYPE of `data` with the result
+// count: {"data":{"series":[…]}} when it matches, {"data":[],"result":"ok"}
+// when it does not, because PHP encodes an empty associative array as a JSON
+// array. Decoding straight into the object form made every zero-result query
+// report "search failed" — the user was told the tracker broke when in fact
+// their query simply matched nothing. Body captured from the live API
+// 2026-09-03.
+func TestSearch_NoMatches_IsEmptyNotAnError(t *testing.T) {
+	p := newSearchTestPlugin(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"data":[],"result":"ok"}`))
+	})
+	results, err := p.Search(context.Background(), "no such series", nil)
+	if err != nil {
+		t.Fatalf("a zero-result search must not be an error: %v", err)
+	}
+	if len(results) != 0 {
+		t.Errorf("results = %d, want 0", len(results))
+	}
+}
+
+// TestSearch_MalformedDataObject_StillErrors: tolerating the array form must
+// not turn every decode problem into a silent empty result.
+func TestSearch_MalformedDataObject_StillErrors(t *testing.T) {
+	p := newSearchTestPlugin(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"data":{"series":"not-an-array"}}`))
+	})
+	if _, err := p.Search(context.Background(), "x", nil); err == nil {
+		t.Fatal("a malformed data object must still be an error")
+	}
+}
