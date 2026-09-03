@@ -52,6 +52,6 @@ export const homeFaq: FaqItem[] = [
   {
     question: "Does Marauder handle Cloudflare-protected trackers?",
     answer:
-      "Yes. A separate cfsolver sidecar service runs headless Chromium via chromedp, drives the target URL through any Cloudflare interstitial, and returns the resulting cookies. Tracker plugins that opt into the WithCloudflare capability automatically route through the solver.",
+      "Yes. A FlareSolverr container solves the challenge once and returns a clearance cookie plus the browser User-Agent it was issued for; Marauder then replays that pair on its own requests rather than proxying through the browser, which is what lets it submit a login and carry a binary .torrent instead of degrading to a magnet. Start it with the solver overlay, which runs FlareSolverr and points Marauder at it in one step. RuTracker needs this. NNM-Club sits behind Cloudflare too but is not challenged in practice, so it needs no solver at all — and because Cloudflare policy is per-IP, the clearance path stays available if your server does get challenged.",
   },
 ];

@@ -150,7 +150,7 @@ export const trackerPages: TrackerPageContent[] = [
   {
     slug: "nnmclub",
     description:
-      "Monitor NNM-Club.to topics behind Cloudflare — no account needed. Marauder routes through a headless-Chromium solver to pass the interstitial and auto-downloads new torrents anonymously.",
+      "Monitor NNM-Club.to topics with no account and, in practice, no solver. Marauder scrapes the topic page anonymously, spots the new torrent, and hands it to your client.",
     keywords: [
       "nnm-club monitor",
       "nnmclub auto download",
@@ -159,27 +159,28 @@ export const trackerPages: TrackerPageContent[] = [
       "nnm club tracker",
     ],
     intro:
-      "NNM-Club.to is a Russian-language phpBB tracker sitting behind a Cloudflare interstitial — which makes it hard for conventional tools to reach. Marauder pairs a dedicated Cloudflare solver sidecar with its NNM-Club plugin to pass the challenge and watch topics for new releases. No account is required: NNM-Club's magnet flow works anonymously, so you can add topic URLs and start monitoring straight away.",
+      "NNM-Club.to is a Russian-language phpBB tracker sitting behind Cloudflare. That sounds like it needs a browser in the loop, but it does not: as of August 2026 NNM-Club serves the real topic HTML to an ordinary request, so Marauder watches it with no solver running. No account either — NNM-Club's magnet flow is public, and its login is Turnstile-gated, so Marauder does not support logging in at all. Paste a topic URL and it starts monitoring.",
     howItWorks: [
-      "Routes requests through the cfsolver sidecar (headless Chromium via chromedp) to clear the Cloudflare interstitial and collect the necessary cookies.",
-      "Scrapes the topic page anonymously for magnet link changes — no login or account needed.",
+      "Scrapes the topic page anonymously for magnet-link changes — no login, no account, and no solver in the normal case.",
+      "Resolves the real release title and poster from the topic page, so a new topic shows a proper name rather than an id.",
+      "Reads the release author's latest reply in the thread and includes it in the update notification, so you see why a torrent was replaced.",
       "Hands new releases to your configured client like any other Marauder topic.",
     ],
     setup: [
-      "Enable the cfsolver compose profile (Cloudflare solver sidecar).",
-      "Paste the topic URL directly as a new topic — no credentials to add.",
-      "Marauder handles the Cloudflare challenge transparently on each check.",
+      "Nothing to configure — no credentials, and no solver needed for normal use.",
+      "Paste the topic URL directly as a new topic.",
+      "If your server's address does start getting challenged, run the FlareSolverr solver overlay; Cloudflare policy is per-IP, so the clearance path stays available.",
     ],
     faq: [
       {
         question: "Do I need an NNM-Club account to use this plugin?",
         answer:
-          "No. NNM-Club's magnet flow is publicly accessible, so Marauder monitors topics without logging in. You do not need to add any credentials — just paste the topic URL.",
+          "No, and you cannot add one. NNM-Club's magnet flow is publicly accessible, so Marauder monitors topics without logging in. Its login form is gated by Cloudflare Turnstile, which blocks automated sign-in, so the plugin deliberately does not offer credentials — do not add an NNM-Club account under Accounts.",
       },
       {
-        question: "How does Marauder get past Cloudflare on NNM-Club?",
+        question: "Does NNM-Club need a Cloudflare solver?",
         answer:
-          "A separate cfsolver service runs headless Chromium, drives the target URL through the Cloudflare interstitial, and returns the resulting cookies. The NNM-Club plugin opts into this via the WithCloudflare capability — no global browser dependency in the main binary.",
+          "Not in practice. Verified against the live site on 3 August 2026 with no credentials and no solver: Marauder resolved a real infohash and title from a public release topic, produced a magnet, and fetched the title and poster. Cloudflare policy is dynamic and per-IP, so if your server's address does get challenged you can start the FlareSolverr solver overlay and Marauder will replay the resulting clearance — but that is a fallback, not part of normal setup. RuTracker is the tracker that genuinely requires it.",
       },
     ],
   },
