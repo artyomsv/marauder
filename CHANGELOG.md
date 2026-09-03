@@ -85,6 +85,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is the value `Check` trusts and the `.torrent` is verified against. It now
   forces `https`.
 
+- **One stalled rutor mirror could starve every other download host.** The
+  scheduler hands `Download` a single `TrackerHTTPTimeout` (30s) for the page
+  fetch *and* all four `.torrent` candidates together, and the loop passed that
+  one context to each attempt. A host that stalls rather than refusing — a
+  blackholed mirror, which is what a dying one does — consumed the entire
+  budget, and the reachable canonical host then failed instantly on an expired
+  context. The magnet fallback was still correct, but it was taken while a
+  working `.torrent` was one request away. Each candidate now gets its own 8s
+  slice of the caller's context (`context.WithTimeout` takes the earlier
+  deadline, so this can never extend the parent), and the loop stops early on
+  an already-dead parent rather than blaming the mirrors for our own expired
+  budget in the exhaustion warning.
+
 - **A rutor poster URL was passed through with any scheme.** `ResolveMetadata`
   returned the uploader-controlled `src` verbatim into `topics.image_url`,
   which the frontend renders as an `<img src>`. Only `http(s)` and relative

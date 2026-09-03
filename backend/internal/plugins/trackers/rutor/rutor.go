@@ -77,7 +77,18 @@ const (
 	// re-checked against the same host allowlist, so this is a cost bound,
 	// not a security one.
 	maxRedirects = 5
-	userAgent    = "Marauder/0.4 (+https://marauder.cc)"
+	// torrentAttemptTimeout caps ONE download-host attempt. The scheduler
+	// hands Download a single TrackerHTTPTimeout budget (30s by default) for
+	// the page fetch and every torrent candidate together, so without a
+	// per-attempt cap a host that stalls rather than refusing — a blackholed
+	// mirror, which is exactly what a dying one does — burns the whole
+	// budget, and the reachable canonical host then fails instantly on an
+	// expired context. The magnet fallback would still be correct, but it
+	// would be taken while a working `.torrent` was one request away.
+	// 8s is generous for a ~20KB file and keeps four attempts in the same
+	// order as the parent budget rather than starving the last one.
+	torrentAttemptTimeout = 8 * time.Second
+	userAgent             = "Marauder/0.4 (+https://marauder.cc)"
 )
 
 // urlPattern is host-agnostic; CanParse gates the captured host against the
@@ -105,6 +116,19 @@ var parseDomains = []string{defaultDomain, "new-rutor.org", "rutor.org"}
 type plugin struct {
 	httpClient *http.Client
 	domain     string
+	// attemptTimeout overrides torrentAttemptTimeout. Zero means the
+	// constant; only tests set it, so a stalled-host test need not sleep for
+	// the real budget. A field rather than a package var so parallel tests
+	// cannot race on it.
+	attemptTimeout time.Duration
+}
+
+// torrentTimeout is the per-attempt cap for one download-host request.
+func (p *plugin) torrentTimeout() time.Duration {
+	if p.attemptTimeout > 0 {
+		return p.attemptTimeout
+	}
+	return torrentAttemptTimeout
 }
 
 // newHTTPClient builds the plugin's client. The CheckRedirect hook re-runs
@@ -368,7 +392,15 @@ func (p *plugin) torrentURLs(id string) []string {
 // will see it at the default level.
 func (p *plugin) fetchTorrentFile(ctx context.Context, id, want string) []byte {
 	for _, target := range p.torrentURLs(id) {
-		body, err := p.fetch(ctx, target)
+		// Stop rather than burn the remaining candidates on an already-dead
+		// parent: each would fail instantly and the Warn below would blame
+		// the mirrors for our own expired budget.
+		if err := ctx.Err(); err != nil {
+			log.Debug().Str("tracker", pluginName).Err(err).
+				Msg("rutor: budget exhausted before every download host was tried")
+			break
+		}
+		body, err := p.fetchWithin(ctx, target, p.torrentTimeout())
 		if err != nil {
 			log.Debug().Str("tracker", pluginName).Str("url", target).Err(err).
 				Msg("rutor: torrent fetch failed, trying next host")
@@ -390,7 +422,7 @@ func (p *plugin) fetchTorrentFile(ctx context.Context, id, want string) []byte {
 		}
 		return body
 	}
-	log.Warn().Str("tracker", pluginName).Str("topic_id", id).
+	log.Warn().Str("tracker", pluginName).Str("topic_id", id).AnErr("ctx", ctx.Err()).
 		Msg("rutor: no mirror served a matching .torrent; delivering the magnet instead")
 	return nil
 }
@@ -527,6 +559,15 @@ func checkTarget(u *url.URL) error {
 		return fmt.Errorf("rutor: refusing to fetch off-site host %q", u.Hostname())
 	}
 	return nil
+}
+
+// fetchWithin is fetch under its own bounded slice of ctx. context.WithTimeout
+// takes the earlier of the two deadlines, so a caller with less budget left
+// than d still wins and this can never extend the parent.
+func (p *plugin) fetchWithin(ctx context.Context, target string, d time.Duration) ([]byte, error) {
+	attemptCtx, cancel := context.WithTimeout(ctx, d)
+	defer cancel()
+	return p.fetch(attemptCtx, target)
 }
 
 func (p *plugin) fetch(ctx context.Context, target string) ([]byte, error) {

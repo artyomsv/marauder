@@ -8,7 +8,10 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/artyomsv/marauder/backend/internal/domain"
 	"github.com/artyomsv/marauder/backend/internal/infohash"
@@ -642,6 +645,95 @@ func TestDownload_FallsBackToCanonicalDownloadHost(t *testing.T) {
 	want := []string{"d.new-rutor.org", "new-rutor.org", "d.rutor.info"}
 	if !reflect.DeepEqual(served, want) {
 		t.Errorf("download hosts tried = %v, want %v", served, want)
+	}
+}
+
+// TestDownload_StalledHostDoesNotStarveTheFallback covers the difference
+// between a host that refuses and one that hangs. The scheduler hands
+// Download a single TrackerHTTPTimeout budget for the page fetch and every
+// torrent candidate together, so without a per-attempt cap a blackholed
+// mirror consumes all of it and the reachable canonical host then fails
+// instantly on an expired context — falling back to a magnet while a working
+// .torrent was one request away.
+func TestDownload_StalledHostDoesNotStarveTheFallback(t *testing.T) {
+	registry.SetDomainResolver(func(name string) registry.DomainConfig {
+		if name == "rutor" {
+			return registry.DomainConfig{Active: "new-rutor.org"}
+		}
+		return registry.DomainConfig{}
+	})
+	t.Cleanup(func() { registry.SetDomainResolver(nil) })
+
+	hash := torrentInfohash(t)
+	page := topicPage(hash)
+	var mu sync.Mutex
+	var served []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(r.URL.Path, "/download/") {
+			_, _ = w.Write([]byte(page))
+			return
+		}
+		orig := r.Header.Get("X-Orig-Host")
+		mu.Lock()
+		served = append(served, orig)
+		mu.Unlock()
+		if orig == "d.new-rutor.org" {
+			<-r.Context().Done() // hang until the per-attempt cap cancels us
+			return
+		}
+		_, _ = w.Write([]byte(realTorrent))
+	}))
+	t.Cleanup(srv.Close)
+
+	rec := &hostRecordingRewrite{target: strings.TrimPrefix(srv.URL, "http://")}
+	p := &plugin{
+		httpClient:     &http.Client{Transport: rec},
+		attemptTimeout: 150 * time.Millisecond,
+	}
+
+	// A parent budget far larger than one attempt: the point is that the
+	// stalled host must not be allowed to consume all of it.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	payload, err := p.Download(ctx, &domain.Topic{URL: "https://new-rutor.org/torrent/12345/a"}, nil, nil)
+	if err != nil {
+		t.Fatalf("Download: %v", err)
+	}
+	mu.Lock()
+	tried := append([]string(nil), served...)
+	mu.Unlock()
+	if len(payload.TorrentFile) == 0 {
+		t.Fatalf("a stalled first host starved the fallback; hosts tried: %v", tried)
+	}
+	if len(tried) < 2 || tried[0] != "d.new-rutor.org" {
+		t.Errorf("hosts tried = %v, want the stalled host first then a fallback", tried)
+	}
+}
+
+// TestFetchTorrentFile_ExhaustedParentStopsEarly: once the caller's budget is
+// gone every remaining candidate would fail instantly, and the exhaustion
+// warning would blame the mirrors for our own expired deadline.
+func TestFetchTorrentFile_ExhaustedParentStopsEarly(t *testing.T) {
+	registry.SetDomainResolver(nil)
+	var hits int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		atomic.AddInt32(&hits, 1)
+		_, _ = w.Write([]byte(realTorrent))
+	}))
+	t.Cleanup(srv.Close)
+
+	rec := &hostRecordingRewrite{target: strings.TrimPrefix(srv.URL, "http://")}
+	p := &plugin{httpClient: &http.Client{Transport: rec}}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // already dead before the first attempt
+
+	if got := p.fetchTorrentFile(ctx, "12345", torrentInfohash(t)); got != nil {
+		t.Error("a dead context must not yield a torrent")
+	}
+	if n := atomic.LoadInt32(&hits); n != 0 {
+		t.Errorf("made %d request(s) on a dead context, want 0", n)
 	}
 }
 
