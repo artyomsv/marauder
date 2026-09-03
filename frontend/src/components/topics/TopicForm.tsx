@@ -124,10 +124,24 @@ export function TopicForm({
     queryKey: QK.trackerPreview(debouncedUrl),
     queryFn: () => api.previewTracker(debouncedUrl),
     enabled: !isEdit && debouncedUrl.length >= 8 && !!match,
-    staleTime: 60_000,
+    // Deliberately short. The match lookup is a pure function of the URL and
+    // can be cached for a minute, but a preview is resolved from the live
+    // page: a poster that appears, or a tracker plugin that learns to read
+    // one, should show on the next paste rather than after the cache ages
+    // out. Re-resolving costs one request the form already makes.
+    staleTime: 5_000,
     retry: false,
   });
   const preview = previewQuery.data ?? null;
+
+  // "Something is happening" flags for the two lookups the URL field
+  // triggers. Both key off isFetching rather than isLoading so a re-resolve
+  // after editing the URL also shows, and both require the debounce to have
+  // caught up (debouncedUrl === effectiveUrl) so the spinner doesn't flash
+  // on every keystroke.
+  const urlSettled = debouncedUrl === effectiveUrl && debouncedUrl.length >= 8;
+  const matchPending = urlSettled && trackerMatchQuery.isFetching && !match;
+  const previewPending = urlSettled && !!match && previewQuery.isFetching && !preview;
 
   const seasonsQuery = useQuery({
     queryKey: QK.trackerSeasons(debouncedUrl),
@@ -253,6 +267,12 @@ export function TopicForm({
             placeholder="magnet:?xt=urn:btih:... or https://tracker.example.com/.../file.torrent"
           />
         )}
+        {matchPending && !isEdit && (
+          <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+            <Loader2 className="size-3 animate-spin" />
+            Identifying tracker…
+          </p>
+        )}
         {match && !isEdit && (
           <p className="text-xs text-success">
             ✓ Detected: <span className="font-medium">{match.display_name}</span>
@@ -261,17 +281,42 @@ export function TopicForm({
         {matchError && <p className="text-xs text-muted-foreground">{matchError}</p>}
       </div>
 
-      {!isEdit && preview && (preview.title || preview.image_url) && (
+      {/* One card, two states. Resolving a preview can take seconds — a
+          login-gated tracker has to warm a session first — and with nothing
+          on screen the form looked inert, so users retyped or gave up. The
+          skeleton occupies the same box the result will, so nothing jumps
+          when it arrives. */}
+      {!isEdit && (previewPending || (preview && (preview.title || preview.image_url))) && (
         <div className="flex items-center gap-3 rounded-md border border-border/60 bg-muted/30 p-3">
-          <PosterImage
-            src={preview.image_url}
-            alt={preview.title || "preview"}
-            className="h-16 w-12 shrink-0 rounded object-cover"
-          />
-          <div className="min-w-0">
-            <div className="text-xs text-muted-foreground">Preview</div>
-            <div className="truncate text-sm font-medium">{preview.title || "—"}</div>
-          </div>
+          {previewPending ? (
+            <>
+              <div className="h-16 w-12 shrink-0 animate-pulse rounded bg-muted" />
+              <div className="min-w-0 flex-1 space-y-2">
+                <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                  <Loader2 className="size-3 animate-spin" />
+                  Resolving title and poster…
+                </div>
+                <div className="h-4 w-2/3 animate-pulse rounded bg-muted" />
+              </div>
+            </>
+          ) : (
+            <>
+              {/* ghost: show a same-sized "no image" box rather than nothing.
+                  A silently absent poster and a poster that failed to load
+                  look identical when the element just disappears, which made
+                  a real bug hard to tell from a tracker that has no artwork. */}
+              <PosterImage
+                ghost
+                src={preview!.image_url}
+                alt={preview!.title || "preview"}
+                className="h-16 w-12 shrink-0 rounded object-cover"
+              />
+              <div className="min-w-0">
+                <div className="text-xs text-muted-foreground">Preview</div>
+                <div className="truncate text-sm font-medium">{preview!.title || "—"}</div>
+              </div>
+            </>
+          )}
         </div>
       )}
 

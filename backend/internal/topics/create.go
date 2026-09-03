@@ -75,6 +75,13 @@ type CreateInput struct {
 	// fields below are applied. Callers must not supply tracker routing keys
 	// such as "provider", "alias", or "slug"; those remain owned by Parse.
 	Extra map[string]any
+	// Credentials optionally supplies the creator's warmed tracker credential
+	// for metadata resolution. Nil resolves anonymously, which is correct for
+	// every tracker whose pages are public and useless for one that gates
+	// them. A function rather than a value so the credential is only loaded
+	// and its session only warmed when a tracker actually implements
+	// WithMetadata.
+	Credentials func(context.Context, registry.Tracker) *domain.TrackerCredential
 }
 
 // Result reports what happened. Created is false (with a nil Topic) when an
@@ -186,7 +193,15 @@ func resolveMetadata(ctx context.Context, tracker registry.Tracker, in CreateInp
 	}
 	mctx, cancel := context.WithTimeout(ctx, metadataTimeout)
 	defer cancel()
-	meta, err := wm.ResolveMetadata(mctx, in.URL, nil)
+	// Credentials matter for a tracker that gates its pages: an anonymous
+	// read of a Toloka topic returns a stub, so the topic was stored with no
+	// poster and never got one — the scheduler self-heals a placeholder
+	// display name on the first check, but nothing backfills an image.
+	var creds *domain.TrackerCredential
+	if in.Credentials != nil {
+		creds = in.Credentials(mctx, tracker)
+	}
+	meta, err := wm.ResolveMetadata(mctx, in.URL, creds)
 	if err != nil || meta == nil {
 		return ""
 	}

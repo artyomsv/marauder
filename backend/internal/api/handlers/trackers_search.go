@@ -166,7 +166,7 @@ func (h *Trackers) Search(w http.ResponseWriter, r *http.Request) {
 			ctx, cancel := context.WithTimeout(r.Context(), h.perTrackerBudget())
 			defer cancel()
 			name := ws.Name()
-			creds, loginFailed, loginErr := h.warmCredentials(ctx, uid, ws)
+			creds, loginFailed, loginErr := warmCredentials(ctx, h.Creds, h.Master, uid, ws)
 			results, err := ws.Search(ctx, q, creds)
 			switch {
 			case errors.Is(err, registry.ErrSearchRequiresCredentials):
@@ -257,18 +257,23 @@ func (h *Trackers) perTrackerBudget() time.Duration {
 // trip. (Deliberately neither loginAndVerify — Login→Verify always, right
 // for validating fresh credentials, wasteful per search — nor the
 // scheduler's Login-only loadCredentials.)
-func (h *Trackers) warmCredentials(ctx context.Context, uid uuid.UUID, t registry.Tracker) (creds *domain.TrackerCredential, loginFailed bool, loginErr error) {
+// It is a package-level function rather than a method because three paths
+// need it and they live on different handlers: search, the AddTopic preview,
+// and topic creation. All three read a tracker page as the user, and a
+// login-gated tracker answers an anonymous caller with a stub rather than an
+// error — which is how a Toloka topic came to be created with no poster.
+func warmCredentials(ctx context.Context, store credentialStore, master configDecryptor, uid uuid.UUID, t registry.Tracker) (creds *domain.TrackerCredential, loginFailed bool, loginErr error) {
 	wc, needsCreds := t.(registry.WithCredentials)
-	if !needsCreds || h.Creds == nil || h.Master == nil {
+	if !needsCreds || store == nil || master == nil {
 		return nil, false, nil
 	}
-	stored, err := h.Creds.GetForTracker(ctx, uid, t.Name())
+	stored, err := store.GetForTracker(ctx, uid, t.Name())
 	if err != nil || stored == nil {
 		return nil, false, nil
 	}
 	// Decrypt secret + session like Credentials.Test does — session-cookie
 	// trackers validate the session blob, not the password.
-	plain, err := h.Master.Decrypt(stored.SecretEnc, stored.SecretNonce)
+	plain, err := master.Decrypt(stored.SecretEnc, stored.SecretNonce)
 	if err != nil {
 		log.Warn().Str("tracker", t.Name()).Err(err).Msg("search credential decrypt failed; searching anonymously")
 		return nil, true, err
@@ -281,7 +286,7 @@ func (h *Trackers) warmCredentials(ctx context.Context, uid uuid.UUID, t registr
 		SecretEnc:   plain,
 	}
 	if len(stored.SessionEnc) > 0 {
-		sess, derr := h.Master.Decrypt(stored.SessionEnc, stored.SessionNonce)
+		sess, derr := master.Decrypt(stored.SessionEnc, stored.SessionNonce)
 		if derr != nil {
 			log.Warn().Str("tracker", t.Name()).Err(derr).Msg("search session decrypt failed; searching anonymously")
 			return nil, true, derr

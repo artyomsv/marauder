@@ -126,7 +126,7 @@ func (h *Trackers) Preview(w http.ResponseWriter, r *http.Request) {
 	uid, uerr := currentUserID(r)
 	var creds *domain.TrackerCredential
 	if uerr == nil {
-		creds, _, _ = h.warmCredentials(ctx, uid, t)
+		creds, _, _ = warmCredentials(ctx, h.Creds, h.Master, uid, t)
 	}
 	meta, err := wm.ResolveMetadata(ctx, rawURL, creds)
 	if err != nil || meta == nil {

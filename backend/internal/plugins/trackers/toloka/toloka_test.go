@@ -41,7 +41,10 @@ const fixtureTorrentBlock = `<table width="95%" border="0" cellpadding="2" cells
 
 const fixtureTopicTitle = `Поплавлений метал (Покручений метал) (Сезон 2) / Twisted Metal (Season 2) (2026) WEB-DL 1080p Ukr/Eng | Sub Eng — HD українською`
 
-var fixtureTopicHTML = `<html><head><title>` + fixtureTopicTitle + `</title></head><body>
+var fixtureTopicHTML = `<html><head><title>` + fixtureTopicTitle + `</title>
+<meta property="og:image" content="https://thumb.hurtom.com/image/w250/toloka.to/photos/120227013255132137_f0_0.jpg">
+<link rel="image_src" href="https://thumb.hurtom.com/image/w250/toloka.to/photos/120227013255132137_f0_0.jpg">
+</head><body>
 <div class="postbody">Опис релізу</div>
 ` + fixtureTorrentBlock + `
 </body></html>`

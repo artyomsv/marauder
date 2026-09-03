@@ -287,6 +287,12 @@ func (p *plugin) Verify(ctx context.Context, creds *domain.TrackerCredential) (b
 var (
 	titleRe = regexp.MustCompile(`(?s)<title>([^<]*)</title>`)
 
+	// ogImageRe reads the poster from the <head>. Toloka serves it through
+	// thumb.hurtom.com and never renders it as an <img> in the post body, so
+	// this is the only place it appears. Attribute order is not guaranteed,
+	// hence the two alternatives.
+	ogImageRe = regexp.MustCompile(`<meta[^>]+(?:property="og:image"[^>]+content="([^"]+)"|content="([^"]+)"[^>]+property="og:image")`)
+
 	// torrentBlockOpenRe opens the release's torrent table. Everything Check
 	// and Download need lives inside it, and anchoring there keeps quoted
 	// posts elsewhere in the thread from contributing to the change token.
@@ -493,15 +499,16 @@ func (p *plugin) gateError(_ context.Context, creds *domain.TrackerCredential, f
 
 var _ registry.WithMetadata = (*plugin)(nil)
 
-// ResolveMetadata returns the release name for the AddTopic preview and for
-// the topic's stored display name, so a new Toloka topic shows a real title
-// instead of "Toloka topic 33571" until its first check.
+// ResolveMetadata returns the release name and poster for the AddTopic
+// preview and for the topic's stored display name, so a new Toloka topic
+// shows a real title instead of "Toloka topic 33571" until its first check.
 //
-// It returns no image, and that is not an omission: Toloka release pages
-// carry no poster. Eight live releases were inspected on 2026-09-03 across
-// music, film, series and anime sections — every <img> on them is site
-// chrome, a user avatar or a smiley. Do not add a "poster" selector here
-// without first finding a release that actually has one.
+// The poster comes from the <head>'s og:image, not from the post body. That
+// is worth stating because searching the body for an <img> finds nothing —
+// every image there is site chrome, an avatar or a smiley — and concluding
+// "this tracker has no posters" from that is wrong: all five releases
+// re-checked on 2026-09-03 carry an og:image, served through
+// thumb.hurtom.com.
 //
 // creds are required, unlike every other WithMetadata tracker: a guest gets
 // a stub with an empty <title>, so resolving anonymously would silently
@@ -525,7 +532,33 @@ func (p *plugin) ResolveMetadata(ctx context.Context, rawURL string, creds *doma
 		// back an empty name that looks like a parsing failure.
 		return nil, p.gateError(ctx, creds, errors.New("toloka: the page carried no title"))
 	}
-	return &registry.Metadata{Title: title}, nil
+	return &registry.Metadata{Title: title, ImageURL: ogImage(body)}, nil
+}
+
+// ogImage returns the absolute poster URL from the page head, or "" when the
+// release has none. The two capture groups are the two attribute orders; only
+// one of them is populated per match.
+func ogImage(body []byte) string {
+	m := ogImageRe.FindSubmatch(body)
+	if m == nil {
+		return ""
+	}
+	raw := string(m[1])
+	if raw == "" {
+		raw = string(m[2])
+	}
+	src := html.UnescapeString(strings.TrimSpace(raw))
+	switch {
+	case src == "":
+		return ""
+	case strings.HasPrefix(src, "//"):
+		return "https:" + src
+	case strings.HasPrefix(src, "https://"), strings.HasPrefix(src, "http://"):
+		return src
+	default:
+		// Anything else is not a URL a browser should be handed.
+		return ""
+	}
 }
 
 // --- WithSearch ---------------------------------------------------------

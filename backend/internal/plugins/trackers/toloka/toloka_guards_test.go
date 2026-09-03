@@ -248,3 +248,26 @@ func TestSearch_UnknownSeedersIsMinusOne(t *testing.T) {
 		t.Errorf("Seeders = %d, want -1 (unknown)", results[0].Seeders)
 	}
 }
+
+// TestOGImage covers the poster source. Searching the post body for an <img>
+// finds only site chrome, avatars and smilies — which is how this was first
+// missed and written off as "Toloka has no posters". The poster is in the
+// <head>, served through thumb.hurtom.com.
+func TestOGImage(t *testing.T) {
+	tests := []struct{ name, body, want string }{
+		{"real captured head", fixtureTopicHTML, "https://thumb.hurtom.com/image/w250/toloka.to/photos/120227013255132137_f0_0.jpg"},
+		{"reversed attribute order", `<meta content="https://thumb.hurtom.com/x.jpg" property="og:image">`, "https://thumb.hurtom.com/x.jpg"},
+		{"protocol-relative", `<meta property="og:image" content="//thumb.hurtom.com/x.jpg">`, "https://thumb.hurtom.com/x.jpg"},
+		{"entities decoded", `<meta property="og:image" content="https://h/x.jpg?a=1&amp;b=2">`, "https://h/x.jpg?a=1&b=2"},
+		{"no tag at all", `<html><head></head><body></body></html>`, ""},
+		// Never hand the browser something that is not a web URL.
+		{"non-web scheme dropped", `<meta property="og:image" content="javascript:alert(1)">`, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := ogImage([]byte(tt.body)); got != tt.want {
+				t.Errorf("ogImage = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}

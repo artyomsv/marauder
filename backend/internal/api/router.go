@@ -96,6 +96,7 @@ func NewRouter(d Deps) http.Handler {
 		BaseURL: d.Cfg.PublicBaseURL,
 	}
 	topicsH := &handlers.Topics{
+		Creds:      d.Creds,
 		Topics:     d.Topics,
 		Deliveries: d.Deliveries,
 		Clients:    d.Clients,
