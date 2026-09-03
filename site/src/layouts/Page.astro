@@ -46,7 +46,7 @@ const sitewideSchemas = [organizationSchema(), websiteSchema(), ...schemas];
           Marauder v1.0 is young: the core is validated end-to-end.
           {alphaCount > 0 && (
             <Fragment>
-              {alphaCount} of {trackerCount} tracker plugins are still alpha —
+              {alphaCount} of {trackerCount} tracker plugins {alphaCount === 1 ? "is" : "are"} still alpha —
               structurally complete and unit-tested, not yet validated against
               live services.
             </Fragment>

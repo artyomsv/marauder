@@ -1,6 +1,7 @@
 package lostfilm
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -44,16 +45,38 @@ func (p *plugin) Search(ctx context.Context, query string, creds *domain.Tracker
 	if err != nil {
 		return nil, fmt.Errorf("lostfilm search: %w", err)
 	}
+	// `data` is decoded in two steps because LostFilm changes its SHAPE with
+	// the result count: a search that matches returns
+	// {"data":{"series":[…]}}, one that matches nothing returns
+	// {"data":[],"result":"ok"} — PHP encodes an empty associative array as
+	// a JSON array. Decoding straight into the object form made every
+	// zero-result query fail with "cannot unmarshal array into Go struct
+	// field .data", so the user was told the search broke when in fact
+	// nothing matched.
 	var resp struct {
-		Data struct {
-			Series []searchSeriesEntry `json:"series"`
-		} `json:"data"`
+		Data json.RawMessage `json:"data"`
 	}
 	if err := json.Unmarshal(body, &resp); err != nil {
 		return nil, fmt.Errorf("lostfilm search: decode response: %w", err)
 	}
+	var payload struct {
+		Series []searchSeriesEntry `json:"series"`
+	}
+	// Only those two shapes are tolerated. Anything else — a bare string, a
+	// number, null, a missing key — is the endpoint having changed or errored,
+	// and swallowing it would report "nothing matched" for a search that never
+	// ran.
+	switch trimmed := bytes.TrimSpace(resp.Data); {
+	case len(trimmed) > 0 && trimmed[0] == '{': // the matched-results object
+		if err := json.Unmarshal(trimmed, &payload); err != nil {
+			return nil, fmt.Errorf("lostfilm search: decode response: %w", err)
+		}
+	case len(trimmed) > 0 && trimmed[0] == '[': // PHP's empty associative array
+	default:
+		return nil, fmt.Errorf("lostfilm search: unexpected data shape %.20q", trimmed)
+	}
 	var out []registry.SearchResult
-	for _, s := range resp.Data.Series {
+	for _, s := range payload.Series {
 		if !strings.HasPrefix(s.Link, "/series/") {
 			continue // defensive: never emit a URL CanParse would reject
 		}

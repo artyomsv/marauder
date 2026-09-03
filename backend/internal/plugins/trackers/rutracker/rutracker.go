@@ -37,6 +37,7 @@ import (
 	"github.com/artyomsv/marauder/backend/internal/domain"
 	"github.com/artyomsv/marauder/backend/internal/infohash"
 	"github.com/artyomsv/marauder/backend/internal/plugins/captchalogin"
+	"github.com/artyomsv/marauder/backend/internal/plugins/cfclearance"
 	"github.com/artyomsv/marauder/backend/internal/plugins/registry"
 	"github.com/artyomsv/marauder/backend/internal/plugins/trackers/forumcommon"
 )
@@ -125,10 +126,7 @@ func (p *plugin) effectiveTransport() http.RoundTripper { return p.transport }
 // a valid cf_clearance returns 403 (measured 2026-08-01). Without a clearance
 // there is nothing to match, so we identify ourselves honestly.
 func (p *plugin) requestUA(c registry.Clearance) string {
-	if c.Valid() {
-		return c.UserAgent
-	}
-	return userAgent
+	return cfclearance.UserAgent(c, userAgent)
 }
 
 // session returns the per-user (or anonymous) session with the test transport
@@ -164,14 +162,6 @@ func (p *plugin) ChallengeProbeURL() string {
 	return "https://" + p.effectiveDomain() + "/forum/login.php"
 }
 
-// errUnusableClearance marks a provider that answered but supplied a clearance
-// missing its cookie or its User-Agent. It never reaches the user: challengeCause
-// wraps it in registry.ErrClearanceUnavailable, which is what "a configured
-// solver could not supply a clearance" already means. It exists only so
-// applyClearance can report that state distinctly from having no provider,
-// since both otherwise return the zero Clearance with a nil error.
-var errUnusableClearance = errors.New("clearance provider returned a clearance without both a cookie and a user-agent")
-
 // applyClearance seeds the session jar with the Cloudflare clearance cookie
 // for u's host and returns it so the caller can match the User-Agent, plus the
 // provider's error if the mint failed.
@@ -180,61 +170,10 @@ var errUnusableClearance = errors.New("clearance provider returned a clearance w
 // ungated, so the caller proceeds without a clearance. It is fatal to the
 // DIAGNOSIS, which is why the error comes back instead of being logged and
 // dropped. A caller that then hits a challenge must blame the solver rather
-// than report ErrCloudflareChallenge — see challengeCause.
+// than report ErrCloudflareChallenge — see cfclearance.Cause, which makes that
+// three-way split.
 func (p *plugin) applyClearance(ctx context.Context, sess *forumcommon.Session, u *url.URL) (registry.Clearance, error) {
-	c, err := registry.ClearanceFor(ctx, p.ChallengeProbeURL())
-	if err != nil {
-		log.Warn().Str("plugin", pluginName).Err(err).
-			Msg("cloudflare clearance unavailable; requesting without one")
-		return registry.Clearance{}, err
-	}
-	if !c.Valid() {
-		// Valid() demands BOTH a cookie and the User-Agent it was issued for;
-		// either alone still yields a challenge. A provider that answered with
-		// half a clearance has therefore failed, and saying so is the only way
-		// the caller can tell this apart from having no provider at all —
-		// which is the state that returns the same zero value below. Without
-		// the split, challengeCause fell through to ErrCloudflareChallenge and
-		// told the user their solver's clearance had been rejected over an
-		// egress-IP mismatch, when nothing had been minted to reject.
-		if registry.ClearanceConfigured() {
-			return registry.Clearance{}, errUnusableClearance
-		}
-		return registry.Clearance{}, nil
-	}
-	jarCookies := make([]*http.Cookie, 0, len(c.Cookies))
-	for name, val := range c.Cookies {
-		jarCookies = append(jarCookies, &http.Cookie{Name: name, Value: val, Path: "/"})
-	}
-	root := &url.URL{Scheme: u.Scheme, Host: u.Host, Path: "/"}
-	sess.Client.Jar.SetCookies(root, jarCookies)
-	return c, nil
-}
-
-// challengeCause names the culprit for a request the tracker just blocked.
-//
-// Three outcomes, because three different people have to do three different
-// things about them:
-//
-//   - No provider installed: the operator never configured a solver, so this
-//     request — and every gated one after it — was doomed before it was made.
-//     Blaming the tracker here produced issue #158, where the message told the
-//     user the tracker "needs a browser to get through" while nothing in the
-//     deployment had ever been asked to run one.
-//   - clearErr non-nil: a configured solver could not mint, so this request
-//     was always going to be challenged and the tracker's wall says nothing
-//     about the tracker. That was the 2026-08-05 boot race, where
-//     FlareSolverr's ~9s Chrome startup parked two topics on a 30-minute
-//     backoff.
-//   - Neither: the solver answered and the tracker is genuinely gated.
-func challengeCause(clearErr error) error {
-	if clearErr != nil {
-		return fmt.Errorf("%w: %w", registry.ErrClearanceUnavailable, clearErr)
-	}
-	if !registry.ClearanceConfigured() {
-		return registry.ErrClearanceNotConfigured
-	}
-	return registry.ErrCloudflareChallenge
+	return cfclearance.Apply(ctx, pluginName, sess.Client.Jar, u, p.ChallengeProbeURL())
 }
 
 // SupportsAnonymousDownload implements registry.WithAnonymousDownload: the
@@ -287,22 +226,6 @@ func (p *plugin) Parse(_ context.Context, rawURL string) (*domain.Topic, error) 
 		DisplayName: fmt.Sprintf("RuTracker topic %d", topicID),
 		Extra:       map[string]any{"topic_id": topicID},
 	}, nil
-}
-
-// isCloudflareChallenge reports whether a response is a Cloudflare
-// interstitial rather than the page we asked for. Cloudflare labels these
-// with Cf-Mitigated (403 for the challenge, 503 for the legacy "checking
-// your browser" page), which is a far more reliable signal than sniffing the
-// body — and, unlike the body, it is available before reading it.
-func isCloudflareChallenge(resp *http.Response) bool {
-	if resp == nil {
-		return false
-	}
-	if resp.Header.Get("Cf-Mitigated") == "" {
-		return false
-	}
-	return resp.StatusCode == http.StatusForbidden ||
-		resp.StatusCode == http.StatusServiceUnavailable
 }
 
 // --- WithCredentials ---------------------------------------------------
@@ -370,8 +293,8 @@ func (p *plugin) loginOnce(ctx context.Context, creds *domain.TrackerCredential)
 	// Check for the interstitial BEFORE testing for the logged-in marker: a
 	// challenge page naturally lacks that marker, and reporting it as bad
 	// credentials is the misdiagnosis this guard exists to prevent.
-	if isCloudflareChallenge(resp) {
-		return fmt.Errorf("rutracker login: %w", challengeCause(clearErr))
+	if cfclearance.IsChallenge(resp) {
+		return fmt.Errorf("rutracker login: %w", cfclearance.Cause(clearErr))
 	}
 	// Same reasoning as the guard above, for a different failure: an error page
 	// has no logged-in marker either, so falling through to the marker check
@@ -657,12 +580,7 @@ func (p *plugin) fetchTopicPage(ctx context.Context, topic *domain.Topic, creds 
 // retry and Login did not, so a rotated clearance healed itself for checks
 // while wedging every login permanently behind "blocked by Cloudflare".
 func retryOnChallenge[T any](p *plugin, attempt func() (T, error)) (T, error) {
-	out, err := attempt()
-	if !errors.Is(err, registry.ErrCloudflareChallenge) {
-		return out, err
-	}
-	registry.InvalidateClearance(p.ChallengeProbeURL())
-	return attempt()
+	return cfclearance.RetryOnChallenge(p.ChallengeProbeURL(), attempt)
 }
 
 // fetchBytes GETs target, re-minting once if the clearance turns out to be dead.
@@ -703,8 +621,8 @@ func (p *plugin) fetchOnce(ctx context.Context, creds *domain.TrackerCredential,
 		return nil, err
 	}
 	defer resp.Body.Close()
-	if isCloudflareChallenge(resp) {
-		return nil, fmt.Errorf("rutracker GET %s: %w", target, challengeCause(clearErr))
+	if cfclearance.IsChallenge(resp) {
+		return nil, fmt.Errorf("rutracker GET %s: %w", target, cfclearance.Cause(clearErr))
 	}
 	if resp.StatusCode != 200 {
 		return nil, fmt.Errorf("rutracker GET %s -> %d", target, resp.StatusCode)

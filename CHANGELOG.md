@@ -7,6 +7,156 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Toloka works, and is now searchable.** The plugin gains `WithSearch`
+  (`tracker.php?nm=`, UTF-8 — this tracker is not cp1251 like RuTracker), so
+  Toloka releases can be found from **Topics → Add topic → Search trackers**
+  with title, size and seeder count. Search is login-gated on Toloka's side,
+  so without an account it reports "needs a tracker account" rather than an
+  empty result set — a guest gets the search form back with zero rows and no
+  error at all, and reporting that as "no matches" would be a lie.
+
+  `Login` and `Verify` now read the server's `toloka_data` cookie, which
+  carries a `userid` (`-1` for a guest, the account id once signed in) and is
+  re-issued on every response. One server-supplied signal, no language
+  matching. Because everything on Toloka is behind login, a missing torrent
+  block now asks `Verify` and reports `registry.ErrSessionExpired` instead of
+  a parse failure, `Download` refuses a body that is not bencoded (the login
+  gate answers `200` with HTML), and an `HTTP 429` is reported as the rate
+  limit it is — the tracker throttles after roughly a dozen requests in
+  twenty seconds.
+
+  Toloka moves from **alpha** to **validated**: login, rejection of a wrong
+  password, session verification in both directions, change detection with a
+  stable token, search, and a real `.torrent` download were all exercised
+  against the live site with a real account on 2026-09-03. The new
+  build-tagged `toloka_live_test.go` makes that re-runnable and reads
+  credentials from the environment, so none are stored in the repo.
+
+- **The Add-topic form now says when it is working.** Pasting a URL fires two
+  lookups — identify the tracker, then resolve its title and poster — and a
+  login-gated tracker has to warm a session before it can even read the page,
+  so both can take seconds. Until now the form showed nothing at all during
+  that, so it looked inert and users retyped the URL or gave up. There is now
+  an "Identifying tracker…" line under the field and a skeleton card that
+  occupies exactly the box the resolved preview will, so nothing jumps when it
+  arrives. Both wait for typing to settle, so neither flickers per keystroke.
+
+### Changed
+
+- **Docs and the marauder.cc site now say Kinozal needs a solver.** The
+  Cloudflare change was recorded in `docs/trackers.md` but had not reached the
+  site or the roadmap, so the Kinozal page — the one a search visitor lands on
+  — still described a plain login-and-scrape setup that no longer works at all.
+  The tracker table, the tracker page, the Cloudflare FAQ and `docs/ROADMAP.md`
+  all now name the requirement.
+
+- **`docs/ROADMAP.md` no longer calls validated plugins "alpha".** Kinozal,
+  LostFilm, AniDub, NNM-Club, Anilibria and Rutor were all verified against
+  live sites over the past months and the README and site said so, but the
+  roadmap still carried their original "alpha, fixture-tested" lines. Tapochek
+  is now the only tracker marked alpha there, which matches every other page.
+
+### Fixed
+
+- **Toloka had never worked at all.** `Check` looked for `Info hash:` followed
+  by 40 hex characters. That English label does not exist on this Ukrainian
+  site — and neither does an infohash or a magnet, on any release page (four
+  live releases checked). Every Toloka topic therefore failed with
+  "toloka: no infohash found", forever.
+
+  As with AniDub, which had the identical problem, the change token is now
+  derived from the release's torrent block: download id, `.torrent` filename,
+  size, and the registration timestamp that moves when an uploader replaces
+  the file. Seeder counts are deliberately excluded — they drift on their own
+  and would make every check look like a new release. Both the size and date
+  patterns step from the label cell straight into the value cell, because a
+  lazy match wanders into `<span title="Розмір частини: 2&nbsp;MB">` and
+  tracks the piece size instead of the release.
+
+- **A wrong Toloka password was reported as a successful login.** A
+  successful login answers `302` with an **empty body**, and the real failure
+  page ("Такий псевдонім не існує, або не збігається пароль") contains
+  neither "помилка" nor "error" — the two words `Login` searched for. So the
+  check could never fire: a typo'd password was saved and shown as working,
+  and `Verify` then declined to check it. Both signals failed at once. The
+  session cookie replaces both.
+
+- **The Toloka plugin dialled any host a stored URL named.** Only `CanParse`
+  consulted the domain allowlist; `fetch` had no guard at all, unlike
+  rutor/rutracker/nnmclub. Every request is now checked before it is dialled,
+  and again on each redirect hop, and `canonicalURL` forces `https` so a
+  stored `http://` topic cannot put the session cookie on the wire in
+  plaintext.
+
+- **The Toloka unit tests were built on an invented page.** The fixture used
+  a `Серіал :: Toloka.to` title and an English `Info hash:` label, neither of
+  which the site has ever served, so the tests proved only that the regexes
+  matched a page nobody had written. They are replaced with markup captured
+  verbatim from the live site, including the two traps that broke the first
+  draft of this rewrite.
+
+- **Kinozal was fully blocked by Cloudflare — search *and* monitoring.**
+  Kinozal started answering a plain Go client with a managed challenge on
+  `/browse.php`, `/details.php` and `/get_srv_details.php` (measured
+  2026-09-03; the site root still returns 200). The plugin sent no Cloudflare
+  clearance on any request, so search reported "search failed on this
+  tracker", and login, checks and downloads failed the same way behind it.
+  Every Kinozal request now replays the solver-minted `cf_clearance` cookie
+  together with the User-Agent it was issued for — the cookie is bound to the
+  User-Agent, so sending one without the other is the same as sending
+  neither — and a stale clearance is dropped and re-minted exactly once.
+
+  A Kinozal deployment without `MARAUDER_FLARESOLVERR_URL` set now says so
+  (`solver_missing`) instead of blaming the tracker. The shared logic moved
+  out of the RuTracker plugin into a new `cfclearance` package rather than
+  being copied, so both trackers get the same three-way "who is at fault"
+  split.
+
+- **A LostFilm search that matched nothing was reported as a broken search.**
+  LostFilm changes the SHAPE of its JSON with the result count: a search that
+  matches returns `{"data":{"series":[…]}}`, one that matches nothing returns
+  `{"data":[],"result":"ok"}` — PHP encodes an empty associative array as a
+  JSON array. Decoding straight into the object form made every zero-result
+  query fail with "cannot unmarshal array into Go struct field", so the user
+  was told the search broke when in fact nothing had matched. Only those two
+  shapes are now accepted; anything else is still a real error, so a changed
+  endpoint cannot quietly become "no results".
+
+- **A topic added by URL on a login-gated tracker got no name and no poster.**
+  The Add-topic preview and the topic-create path both resolved metadata
+  anonymously, and a fully gated tracker answers a guest with a stub — Toloka
+  serves an empty `<title>` — so the topic was stored with a placeholder name
+  and an empty image. The scheduler self-heals a placeholder name on the first
+  check, but nothing backfills an image, so the poster never appeared. Both
+  paths now resolve as the signed-in user, reusing the same warmed credential
+  the tracker search already used. Anonymous stays the fallback: no stored
+  account, or a login that fails, simply resolves less.
+
+  Toloka also gains `WithMetadata`, reading the release title and the `og:image`
+  poster the site publishes in its page head.
+
+- **A poster URL scraped off a tracker page is now scheme-checked before it is
+  stored.** The value is persisted once and then rendered into an `<img src>`
+  for everyone who later views the topic, so a hostile or compromised page
+  offering `javascript:` or `data:` would have been stored and replayed in
+  every viewer's browser. Only `http`/`https` with a host survive, applied
+  centrally so it covers every current and future tracker plus the preview
+  endpoint. `/trackers/preview` also gains the same per-user single-flight
+  gate `/trackers/search` has, so a burst of re-pastes cannot become a burst
+  of tracker logins.
+
+- **Topics auto-created by the Sonarr integration got no title and no poster
+  on a login-gated tracker.** The fix above reached the Add-topic form and the
+  `POST /topics` API but not the Sonarr poller, which still resolved metadata
+  anonymously — and a gated tracker answers a guest with a stub rather than an
+  error, so the resolve did not fail, it succeeded at reading nothing. The
+  poller now resolves as the topic's **owner**, using the same warmed
+  credential the search and preview paths use. Fail-open: a Sonarr grab still
+  becomes a topic when no account is stored or the login fails, and the name is
+  flagged a placeholder so the scheduler self-heals it on the first check.
+
 ## [1.19.7] - 2026-09-03
 
 ### Added

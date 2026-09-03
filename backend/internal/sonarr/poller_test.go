@@ -2,6 +2,7 @@ package sonarr
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -173,7 +174,10 @@ func baseInstance(serverURL string, owner uuid.UUID) domain.SonarrInstance {
 }
 
 func newTestPoller(s instancesStore, a adminResolver, ts topicsStore) *Poller {
-	return New(zerolog.Nop(), nil, s, a, ts, 5*time.Second)
+	// nil creds: these tests exercise the poll loop, not credential warming.
+	// A nil store resolves anonymously, which is what every fake tracker here
+	// does anyway.
+	return New(zerolog.Nop(), nil, s, a, ts, nil, 5*time.Second)
 }
 
 // --- single-instance behaviour (via pollOnce) ----------------------------
@@ -625,5 +629,152 @@ func TestPoller_PerInstanceIntervalDue(t *testing.T) {
 
 	if got := atomic.LoadInt32(hits); got != 1 {
 		t.Errorf("instance within its interval must not be re-polled: got %d hits, want 1", got)
+	}
+}
+
+// --- credential-aware metadata resolution --------------------------------
+
+// pollerGatedTracker is a login-gated WithMetadata tracker, like Toloka: it
+// resolves a real title and poster only when handed a credential, and answers
+// a guest with the empty stub the real site serves.
+type pollerGatedTracker struct {
+	gotCreds chan *domain.TrackerCredential
+}
+
+func (pollerGatedTracker) Name() string        { return "gatedtracker-test" }
+func (pollerGatedTracker) DisplayName() string { return "Gated Tracker" }
+func (pollerGatedTracker) CanParse(u string) bool {
+	return strings.HasPrefix(u, "https://gatedtracker.test/")
+}
+func (pollerGatedTracker) Parse(context.Context, string) (*domain.Topic, error) {
+	return &domain.Topic{DisplayName: "Gated topic 9"}, nil
+}
+func (pollerGatedTracker) Check(context.Context, *domain.Topic, *domain.TrackerCredential) (*domain.Check, error) {
+	return nil, nil
+}
+func (pollerGatedTracker) Download(context.Context, *domain.Topic, *domain.Check, *domain.TrackerCredential) (*domain.Payload, error) {
+	return nil, nil
+}
+func (pollerGatedTracker) Login(context.Context, *domain.TrackerCredential) error { return nil }
+func (pollerGatedTracker) Verify(context.Context, *domain.TrackerCredential) (bool, error) {
+	return true, nil
+}
+func (g pollerGatedTracker) ResolveMetadata(_ context.Context, _ string, creds *domain.TrackerCredential) (*registry.Metadata, error) {
+	g.gotCreds <- creds
+	if creds == nil {
+		return &registry.Metadata{}, nil // the guest stub: empty title, no poster
+	}
+	return &registry.Metadata{Title: "Real Release Name", ImageURL: "https://img.test/p.jpg"}, nil
+}
+
+var gatedTrackerCreds = make(chan *domain.TrackerCredential, 4)
+
+func init() { registry.RegisterTracker(pollerGatedTracker{gotCreds: gatedTrackerCreds}) }
+
+// fakeCredStore satisfies trackercreds.Store.
+type fakeCredStore struct{ cred *domain.TrackerCredential }
+
+func (f *fakeCredStore) GetForTracker(context.Context, uuid.UUID, string) (*domain.TrackerCredential, error) {
+	return f.cred, nil
+}
+
+// pollerMasterKey is a real key: the poller's master field is the concrete
+// *crypto.MasterKey the instances store also needs, so the warm cannot be
+// handed a stub decryptor here.
+func pollerMasterKey(t *testing.T) *crypto.MasterKey {
+	t.Helper()
+	mk, err := crypto.LoadMasterKey(base64.StdEncoding.EncodeToString([]byte(strings.Repeat("k", 32))))
+	if err != nil {
+		t.Fatalf("load master key: %v", err)
+	}
+	return mk
+}
+
+func drainCreds(t *testing.T) *domain.TrackerCredential {
+	t.Helper()
+	select {
+	case c := <-gatedTrackerCreds:
+		return c
+	default:
+		t.Fatal("ResolveMetadata was never called")
+		return nil
+	}
+}
+
+// TestPoller_ResolvesMetadataAsTheOwner. A login-gated tracker answers a guest
+// with a stub rather than an error, so an anonymous resolve does not fail — it
+// succeeds at reading nothing, and the topic lands with a placeholder name and
+// no image. The scheduler self-heals a placeholder name on the first check;
+// nothing ever backfills the image.
+func TestPoller_ResolvesMetadataAsTheOwner(t *testing.T) {
+	const gatedURL = "https://gatedtracker.test/t9"
+	srv := historyServer([]HistoryRecord{
+		{ID: 1, Date: time.Now().UTC(), Data: HistoryData{NzbInfoURL: gatedURL}},
+	})
+	defer srv.Close()
+
+	owner := uuid.New()
+	past := time.Now().Add(-time.Hour).UTC()
+	inst := baseInstance(srv.URL, owner)
+	inst.LastSeenAt = &past
+	ts := &fakeTopics{}
+	mk := pollerMasterKey(t)
+	enc, nonce, err := mk.Encrypt([]byte("hunter2"))
+	if err != nil {
+		t.Fatalf("encrypt: %v", err)
+	}
+	cred := &domain.TrackerCredential{
+		ID: uuid.New(), UserID: owner, TrackerName: "gatedtracker-test",
+		Username: "user", SecretEnc: enc, SecretNonce: nonce,
+	}
+
+	p := New(zerolog.Nop(), mk, &fakeInstances{}, fakeAdmin{}, ts, &fakeCredStore{cred: cred}, 5*time.Second)
+	p.pollOnce(context.Background(), inst)
+
+	if got := drainCreds(t); got == nil {
+		t.Fatal("the resolve ran anonymously; a gated tracker returns a stub to a guest")
+	} else if got.Username != "user" {
+		t.Errorf("resolved as %q, want the topic owner's credential", got.Username)
+	}
+	if len(ts.created) != 1 {
+		t.Fatalf("want 1 created, got %d", len(ts.created))
+	}
+	if ts.created[0].DisplayName != "Real Release Name" {
+		t.Errorf("DisplayName = %q, want the resolved title", ts.created[0].DisplayName)
+	}
+	if ts.created[0].ImageURL != "https://img.test/p.jpg" {
+		t.Errorf("ImageURL = %q, want the resolved poster", ts.created[0].ImageURL)
+	}
+	if ts.created[0].DisplayNameIsPlaceholder {
+		t.Error("a resolved name must not be flagged a placeholder")
+	}
+}
+
+// TestPoller_NoCredentialStored_StillCreatesTheTopic: a Sonarr grab must become
+// a topic even when the poster cannot be fetched. Fail-open, not fail-closed.
+func TestPoller_NoCredentialStored_StillCreatesTheTopic(t *testing.T) {
+	const gatedURL = "https://gatedtracker.test/t10"
+	srv := historyServer([]HistoryRecord{
+		{ID: 1, Date: time.Now().UTC(), Data: HistoryData{NzbInfoURL: gatedURL}},
+	})
+	defer srv.Close()
+
+	owner := uuid.New()
+	past := time.Now().Add(-time.Hour).UTC()
+	inst := baseInstance(srv.URL, owner)
+	inst.LastSeenAt = &past
+	ts := &fakeTopics{}
+
+	p := New(zerolog.Nop(), pollerMasterKey(t), &fakeInstances{}, fakeAdmin{}, ts, &fakeCredStore{}, 5*time.Second)
+	p.pollOnce(context.Background(), inst)
+
+	if got := drainCreds(t); got != nil {
+		t.Errorf("resolved with %+v, want nil when nothing is stored", got)
+	}
+	if len(ts.created) != 1 {
+		t.Fatalf("want the topic created anyway, got %d", len(ts.created))
+	}
+	if !ts.created[0].DisplayNameIsPlaceholder {
+		t.Error("an unresolved name must be flagged a placeholder so the scheduler self-heals it")
 	}
 }

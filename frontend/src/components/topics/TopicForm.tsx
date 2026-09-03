@@ -9,7 +9,7 @@ import { Label } from "@/components/ui/label";
 import { QK } from "@/lib/queryKeys";
 import { useDebouncedValue } from "@/lib/hooks/useDebouncedValue";
 import { SeasonEpisodePicker, SELECT_CLASS } from "./SeasonEpisodePicker";
-import { PosterImage } from "./PosterImage";
+import { TopicPreviewCard } from "./TopicPreviewCard";
 import { NotifierSelect } from "./NotifierSelect";
 import { CategoryField } from "./CategoryField";
 
@@ -124,10 +124,26 @@ export function TopicForm({
     queryKey: QK.trackerPreview(debouncedUrl),
     queryFn: () => api.previewTracker(debouncedUrl),
     enabled: !isEdit && debouncedUrl.length >= 8 && !!match,
-    staleTime: 60_000,
+    // Deliberately short. The match lookup is a pure function of the URL and
+    // can be cached for a minute, but a preview is resolved from the live
+    // page: a poster that appears, or a tracker plugin that learns to read
+    // one, should show on the next paste rather than after the cache ages
+    // out. The cost is bounded on the server side instead — /trackers/preview
+    // carries a per-user single-flight gate, so a burst of re-pastes cannot
+    // turn into a burst of tracker logins.
+    staleTime: 5_000,
     retry: false,
   });
   const preview = previewQuery.data ?? null;
+
+  // "Something is happening" flags for the two lookups the URL field
+  // triggers. Both key off isFetching rather than isLoading so a re-resolve
+  // after editing the URL also shows, and both require the debounce to have
+  // caught up (debouncedUrl === effectiveUrl) so the spinner doesn't flash
+  // on every keystroke.
+  const urlSettled = debouncedUrl === effectiveUrl && debouncedUrl.length >= 8;
+  const matchPending = urlSettled && trackerMatchQuery.isFetching && !match;
+  const previewPending = urlSettled && !!match && previewQuery.isFetching && !preview;
 
   const seasonsQuery = useQuery({
     queryKey: QK.trackerSeasons(debouncedUrl),
@@ -253,6 +269,12 @@ export function TopicForm({
             placeholder="magnet:?xt=urn:btih:... or https://tracker.example.com/.../file.torrent"
           />
         )}
+        {matchPending && !isEdit && (
+          <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+            <Loader2 className="size-3 animate-spin" />
+            Identifying tracker…
+          </p>
+        )}
         {match && !isEdit && (
           <p className="text-xs text-success">
             ✓ Detected: <span className="font-medium">{match.display_name}</span>
@@ -261,19 +283,7 @@ export function TopicForm({
         {matchError && <p className="text-xs text-muted-foreground">{matchError}</p>}
       </div>
 
-      {!isEdit && preview && (preview.title || preview.image_url) && (
-        <div className="flex items-center gap-3 rounded-md border border-border/60 bg-muted/30 p-3">
-          <PosterImage
-            src={preview.image_url}
-            alt={preview.title || "preview"}
-            className="h-16 w-12 shrink-0 rounded object-cover"
-          />
-          <div className="min-w-0">
-            <div className="text-xs text-muted-foreground">Preview</div>
-            <div className="truncate text-sm font-medium">{preview.title || "—"}</div>
-          </div>
-        </div>
-      )}
+      {!isEdit && <TopicPreviewCard preview={preview} pending={previewPending} />}
 
       <div className="space-y-1.5">
         <Label htmlFor="display">Display name (optional)</Label>

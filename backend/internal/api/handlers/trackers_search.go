@@ -18,6 +18,7 @@ import (
 	"github.com/artyomsv/marauder/backend/internal/metrics"
 	"github.com/artyomsv/marauder/backend/internal/plugins/registry"
 	"github.com/artyomsv/marauder/backend/internal/problem"
+	"github.com/artyomsv/marauder/backend/internal/trackercreds"
 )
 
 const (
@@ -166,7 +167,7 @@ func (h *Trackers) Search(w http.ResponseWriter, r *http.Request) {
 			ctx, cancel := context.WithTimeout(r.Context(), h.perTrackerBudget())
 			defer cancel()
 			name := ws.Name()
-			creds, loginFailed, loginErr := h.searchCredentials(ctx, uid, ws)
+			creds, loginFailed, loginErr := warmCredentials(ctx, h.Creds, h.Master, uid, ws)
 			results, err := ws.Search(ctx, q, creds)
 			switch {
 			case errors.Is(err, registry.ErrSearchRequiresCredentials):
@@ -244,56 +245,9 @@ func (h *Trackers) perTrackerBudget() time.Duration {
 	return defaultSearchPerTrackerBudget
 }
 
-// searchCredentials loads, decrypts, and warms the user's credential for a
-// login-gated searchable tracker. Every failure degrades to nil creds
-// (the plugin then reports ErrSearchRequiresCredentials) — search must
-// never hard-fail on credential trouble. The second return distinguishes
-// "no stored credential" (false) from "stored credential exists but could
-// not be warmed" (true) so the caller can report login_failed instead of
-// telling a user with an account to go add one.
-//
-// Ordering is Verify-first, Login-on-miss: on a warm in-process session
-// Verify is one cheap GET; only a cold/dead session pays the Login round-
-// trip. (Deliberately neither loginAndVerify — Login→Verify always, right
-// for validating fresh credentials, wasteful per search — nor the
-// scheduler's Login-only loadCredentials.)
-func (h *Trackers) searchCredentials(ctx context.Context, uid uuid.UUID, t registry.Tracker) (creds *domain.TrackerCredential, loginFailed bool, loginErr error) {
-	wc, needsCreds := t.(registry.WithCredentials)
-	if !needsCreds || h.Creds == nil || h.Master == nil {
-		return nil, false, nil
-	}
-	stored, err := h.Creds.GetForTracker(ctx, uid, t.Name())
-	if err != nil || stored == nil {
-		return nil, false, nil
-	}
-	// Decrypt secret + session like Credentials.Test does — session-cookie
-	// trackers validate the session blob, not the password.
-	plain, err := h.Master.Decrypt(stored.SecretEnc, stored.SecretNonce)
-	if err != nil {
-		log.Warn().Str("tracker", t.Name()).Err(err).Msg("search credential decrypt failed; searching anonymously")
-		return nil, true, err
-	}
-	transient := &domain.TrackerCredential{
-		ID:          stored.ID,
-		UserID:      uid,
-		TrackerName: stored.TrackerName,
-		Username:    stored.Username,
-		SecretEnc:   plain,
-	}
-	if len(stored.SessionEnc) > 0 {
-		sess, derr := h.Master.Decrypt(stored.SessionEnc, stored.SessionNonce)
-		if derr != nil {
-			log.Warn().Str("tracker", t.Name()).Err(derr).Msg("search session decrypt failed; searching anonymously")
-			return nil, true, derr
-		}
-		transient.SessionEnc = sess
-	}
-	if ok, verr := wc.Verify(ctx, transient); verr == nil && ok {
-		return transient, false, nil
-	}
-	if lerr := wc.Login(ctx, transient); lerr != nil {
-		log.Debug().Str("tracker", t.Name()).Err(lerr).Msg("search credential login failed; searching anonymously")
-		return nil, true, lerr
-	}
-	return transient, false, nil
+// warmCredentials is the handlers-local name for trackercreds.Warm. It is a
+// shim, not logic: the sequence lives in one package because the Sonarr poller
+// needs it too and must not import handlers.
+func warmCredentials(ctx context.Context, store credentialStore, master configDecryptor, uid uuid.UUID, t registry.Tracker) (*domain.TrackerCredential, bool, error) {
+	return trackercreds.Warm(ctx, store, master, uid, t)
 }

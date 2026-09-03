@@ -82,8 +82,12 @@ type Topics struct {
 	Clients    clientsLookup
 	Notifiers  notifiersLookup
 	Master     configDecryptor
-	Audit      *audit.Logger
-	BaseURL    string
+	// Creds lets topic creation resolve metadata as the user. Nil-safe:
+	// without it a login-gated tracker is read anonymously and stores no
+	// poster.
+	Creds   credentialStore
+	Audit   *audit.Logger
+	BaseURL string
 	// Emit is an optional hook called after a topic is successfully created.
 	// Nil-safe: existing handler tests that don't set Emit continue to pass.
 	Emit func(ctx context.Context, ev events.Event)
@@ -164,14 +168,23 @@ func (h *Topics) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	res, err := topics.BuildAndCreate(r.Context(), h.Topics, topics.CreateInput{
-		UserID:            uid,
-		URL:               req.URL,
-		DisplayName:       req.DisplayName,
-		ClientID:          req.ClientID,
-		NotifierID:        req.NotifierID,
-		DownloadDir:       req.DownloadDir,
-		Category:          req.Category,
-		CheckIntervalSec:  req.CheckIntervalSec,
+		UserID:           uid,
+		URL:              req.URL,
+		DisplayName:      req.DisplayName,
+		ClientID:         req.ClientID,
+		NotifierID:       req.NotifierID,
+		DownloadDir:      req.DownloadDir,
+		Category:         req.Category,
+		CheckIntervalSec: req.CheckIntervalSec,
+		Credentials: func(cctx context.Context, t registry.Tracker) *domain.TrackerCredential {
+			// The two dropped returns say WHY there is no credential — no
+			// account stored, versus one that would not warm. Both mean the
+			// same thing here: resolve anonymously. Creating the topic must
+			// not fail because a poster could not be fetched, and the
+			// distinction only exists for search, which reports it to the user.
+			c, _, _ := warmCredentials(cctx, h.Creds, h.Master, uid, t)
+			return c
+		},
 		ReplaceOnUpdate:   req.ReplaceOnUpdate,
 		ReplaceDeleteData: req.ReplaceDeleteData,
 		Quality:           req.Quality,

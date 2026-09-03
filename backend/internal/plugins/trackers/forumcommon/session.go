@@ -48,14 +48,7 @@ func New() *SessionStore {
 // GetOrCreate returns the existing session for the key, or builds a fresh
 // one with its own cookie jar.
 func (s *SessionStore) GetOrCreate(key string, userAgent string) *Session {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if existing, ok := s.sessions[key]; ok && time.Now().Before(existing.ExpiresAt) {
-		return existing
-	}
-	sess := NewSession(userAgent)
-	s.sessions[key] = sess
-	return sess
+	return s.GetOrCreateWith(key, userAgent, nil)
 }
 
 // Invalidate forgets a session — used when a tracker returns a login page
@@ -71,6 +64,29 @@ func (s *SessionStore) Invalidate(key string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.sessions, key)
+}
+
+// GetOrCreateWith is GetOrCreate for plugins that must configure the client
+// itself — a CheckRedirect hook, a test transport — rather than only use it.
+//
+// Configuring after GetOrCreate returns is a data race: the store hands the
+// same *Session to every topic of one user, and the scheduler's worker pool
+// calls into them concurrently, so one goroutine can write Client.CheckRedirect
+// while another is inside Client.Do reading it. init runs once, under the same
+// lock that publishes the session, which gives every later reader a
+// happens-before edge to it.
+func (s *SessionStore) GetOrCreateWith(key string, userAgent string, init func(*Session)) *Session {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if existing, ok := s.sessions[key]; ok && time.Now().Before(existing.ExpiresAt) {
+		return existing
+	}
+	sess := NewSession(userAgent)
+	if init != nil {
+		init(sess)
+	}
+	s.sessions[key] = sess
+	return sess
 }
 
 // NewSession builds a session with its own cookie jar WITHOUT storing it, for

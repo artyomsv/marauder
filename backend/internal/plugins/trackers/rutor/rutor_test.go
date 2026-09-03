@@ -350,6 +350,8 @@ func TestFetch_RejectsOffSiteHost(t *testing.T) {
 		"https://evil.com/torrent/1",
 		"https://rutor.info.evil.com/torrent/1",
 		"ftp://rutor.info/torrent/1",
+		// A redirect hop is the only way plaintext could be dialled.
+		"http://rutor.info/torrent/1",
 		"://malformed",
 		// The download-host allowance strips one "d." prefix and re-checks
 		// the base, so it must not become a way in for an unrelated host.
@@ -377,7 +379,9 @@ func TestFetch_RejectsOffSiteHost(t *testing.T) {
 func TestFetch_RefusesOffSiteRedirect(t *testing.T) {
 	registry.SetDomainResolver(nil)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, "http://169.254.169.254/latest/meta-data/", http.StatusFound)
+		// https, so the scheme guard cannot be what stops it — this test is
+		// about the host.
+		http.Redirect(w, r, "https://169.254.169.254/latest/meta-data/", http.StatusFound)
 	}))
 	t.Cleanup(srv.Close)
 
@@ -937,5 +941,32 @@ func TestSearch_CapsAtFiftyResults(t *testing.T) {
 	}
 	if len(results) != 50 {
 		t.Errorf("results = %d, want capped at 50", len(results))
+	}
+}
+
+// TestFetch_RefusesPlaintextRedirect covers the other half of the redirect
+// guard: a downgrade to http on a host that IS ours. Every URL the plugin
+// builds is https, so a plaintext hop can only come from the mirror, and an
+// on-path attacker could then rewrite the page that both change detection and
+// the .torrent infohash check trust.
+func TestFetch_RefusesPlaintextRedirect(t *testing.T) {
+	registry.SetDomainResolver(nil)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "http://rutor.info/torrent/1/x", http.StatusFound)
+	}))
+	t.Cleanup(srv.Close)
+
+	c := newHTTPClient()
+	c.Transport = &e2etest.HostRewriteTransport{
+		From: defaultDomain, To: strings.TrimPrefix(srv.URL, "http://"), StripSubdomain: true,
+	}
+	p := &plugin{httpClient: c}
+
+	_, err := p.fetch(context.Background(), "https://rutor.info/torrent/1/x")
+	if err == nil {
+		t.Fatal("a plaintext redirect hop must be refused")
+	}
+	if !strings.Contains(err.Error(), "refusing non-https URL scheme") {
+		t.Errorf("error = %v, want the non-https scheme refusal", err)
 	}
 }

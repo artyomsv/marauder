@@ -48,8 +48,9 @@ const indexers = trackers.filter((t) => t.category === "indexer");
       <p class="mt-4 max-w-3xl text-lg text-muted-foreground">
         Marauder ships with {trackerCount} tracker plugins covering CIS forum-style
         sites, public magnet/torrent feeds, and the entire *arr-stack
-        ecosystem via Torznab and Newznab. {validatedCount} are
-        E2E-validated against real services. {alphaCount} are alpha —
+        ecosystem via Torznab and Newznab. {validatedCount}
+        {validatedCount === 1 ? "is" : "are"} E2E-validated against real
+        services. {alphaCount} {alphaCount === 1 ? "is" : "are"} alpha —
         structurally complete with fixture-based tests and awaiting
         live-account validation by community members.
       </p>

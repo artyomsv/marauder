@@ -21,6 +21,7 @@ import (
 	"strings"
 
 	"github.com/artyomsv/marauder/backend/internal/domain"
+	"github.com/artyomsv/marauder/backend/internal/plugins/cfclearance"
 	"github.com/artyomsv/marauder/backend/internal/plugins/registry"
 	"github.com/artyomsv/marauder/backend/internal/plugins/trackers/forumcommon"
 )
@@ -42,6 +43,8 @@ const (
 	// without the dead host becoming a fetch or rotation candidate again.
 	defaultDomain = "kinozal.me"
 	userAgent     = "Marauder/0.3 (+https://marauder.cc)"
+	// downloadHostPrefix is the subdomain Download fetches .torrent bytes from.
+	downloadHostPrefix = "dl."
 )
 
 // knownDomains are the hosts Marauder is willing to *fetch from*. Returned by
@@ -128,26 +131,48 @@ func (p *plugin) Login(ctx context.Context, creds *domain.TrackerCredential) err
 	if creds == nil || creds.Username == "" {
 		return errors.New("kinozal credentials are required")
 	}
-	sess := p.sessions.GetOrCreate(forumcommon.SessionKey(pluginName, creds.UserID.String()), userAgent)
-	if p.transport != nil {
-		sess.Client.Transport = p.transport
-	}
+	_, err := cfclearance.RetryOnChallenge(p.ChallengeProbeURL(), func() (struct{}, error) {
+		return struct{}{}, p.loginOnce(ctx, creds)
+	})
+	return err
+}
+
+func (p *plugin) loginOnce(ctx context.Context, creds *domain.TrackerCredential) error {
+	sess := p.session(creds)
 	form := url.Values{
 		"username": {creds.Username},
 		"password": {string(creds.SecretEnc)},
 	}
 	endpoint := "https://" + p.effectiveDomain() + "/takelogin.php"
+	u, err := url.Parse(endpoint)
+	if err != nil {
+		return fmt.Errorf("kinozal login: %w", err)
+	}
+	// The credentialed paths need the clearance too. Wiring it into fetch
+	// alone left Login reading a Cloudflare interstitial: its body carries no
+	// "Неверный", and there was no status check, so a 403 set LoggedIn = true
+	// and the account was reported as authenticated when nothing had
+	// authenticated. Verify had the mirror-image bug — no "Выход" in an
+	// interstitial, so it reported a dead session instead of a blocked one.
+	clearance, clearErr := cfclearance.Apply(ctx, pluginName, sess.Client.Jar, u, p.ChallengeProbeURL())
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(form.Encode()))
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("User-Agent", userAgent)
+	req.Header.Set("User-Agent", cfclearance.UserAgent(clearance, userAgent))
 	resp, err := sess.Client.Do(req)
 	if err != nil {
 		return fmt.Errorf("kinozal login: %w", err)
 	}
 	defer resp.Body.Close()
+	if cfclearance.IsChallenge(resp) {
+		return fmt.Errorf("kinozal login: %w", cfclearance.Cause(clearErr))
+	}
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusFound {
+		return fmt.Errorf("kinozal login -> %d", resp.StatusCode)
+	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
 	if err != nil {
 		return fmt.Errorf("kinozal login: read body: %w", err)
@@ -161,18 +186,56 @@ func (p *plugin) Login(ctx context.Context, creds *domain.TrackerCredential) err
 	return nil
 }
 
+// session returns the per-user session with the plugin's test transport
+// installed once, at creation. Assigning Client.Transport on an
+// already-published session races the scheduler's worker pool, which drives
+// one user's topics concurrently through the same *Session.
+func (p *plugin) session(creds *domain.TrackerCredential) *forumcommon.Session {
+	key := pluginName + ":nocreds"
+	if creds != nil {
+		key = forumcommon.SessionKey(pluginName, creds.UserID.String())
+	}
+	return p.sessions.GetOrCreateWith(key, userAgent, func(s *forumcommon.Session) {
+		if p.transport != nil {
+			s.Client.Transport = p.transport
+		}
+	})
+}
+
+// Verify reports whether the stored session is still signed in. A Cloudflare
+// interstitial must be an ERROR here, not a false: the page carries no
+// "Выход" either way, and reporting a blocked request as a dead session sends
+// the user to re-enter perfectly good credentials when the fix is a solver.
 func (p *plugin) Verify(ctx context.Context, creds *domain.TrackerCredential) (bool, error) {
-	sess := p.sessions.GetOrCreate(forumcommon.SessionKey(pluginName, creds.UserID.String()), userAgent)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://"+p.effectiveDomain()+"/", nil)
+	return cfclearance.RetryOnChallenge(p.ChallengeProbeURL(), func() (bool, error) {
+		return p.verifyOnce(ctx, creds)
+	})
+}
+
+func (p *plugin) verifyOnce(ctx context.Context, creds *domain.TrackerCredential) (bool, error) {
+	sess := p.session(creds)
+	target := "https://" + p.effectiveDomain() + "/"
+	u, err := url.Parse(target)
+	if err != nil {
+		return false, fmt.Errorf("kinozal verify: %w", err)
+	}
+	clearance, clearErr := cfclearance.Apply(ctx, pluginName, sess.Client.Jar, u, p.ChallengeProbeURL())
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
 		return false, err
 	}
-	req.Header.Set("User-Agent", userAgent)
+	req.Header.Set("User-Agent", cfclearance.UserAgent(clearance, userAgent))
 	resp, err := sess.Client.Do(req)
 	if err != nil {
 		return false, fmt.Errorf("kinozal verify: %w", err)
 	}
 	defer resp.Body.Close()
+	if cfclearance.IsChallenge(resp) {
+		return false, fmt.Errorf("kinozal verify: %w", cfclearance.Cause(clearErr))
+	}
+	if resp.StatusCode != http.StatusOK {
+		return false, fmt.Errorf("kinozal verify -> %d", resp.StatusCode)
+	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 16*1024))
 	if err != nil {
 		return false, fmt.Errorf("kinozal verify: read body: %w", err)
@@ -364,27 +427,95 @@ func (p *plugin) Download(ctx context.Context, topic *domain.Topic, _ *domain.Ch
 	return &domain.Payload{TorrentFile: body, FileName: fmt.Sprintf("kinozal-%d.torrent", id)}, nil
 }
 
+var (
+	_ registry.WithCloudflare = (*plugin)(nil)
+	// Asserted so a signature typo is a compile error: ChallengeProbeURL is
+	// discovered by a runtime type assertion at boot, and a silent miss would
+	// drop kinozal from the clearance warm-up with nothing to notice.
+	_ registry.WithChallengeProbe = (*plugin)(nil)
+)
+
+// UsesCloudflare implements registry.WithCloudflare. Measured 2026-09-03:
+// kinozal.me answers /browse.php, /details.php and /get_srv_details.php with
+// a 403 Cf-Mitigated interstitial — i.e. search, change detection AND
+// infohash resolution were all blocked, not just search. The site root still
+// returns 200, which is why the tracker looked reachable while every topic
+// failed.
+//
+// Declaring this marks the tracker as needing a clearance, which fetch mints
+// via the configured provider and replays with the User-Agent that earned it.
+func (p *plugin) UsesCloudflare() bool { return true }
+
+// ChallengeProbeURL must name a genuinely challenged page. A clearance is
+// scoped to the Cloudflare RULE that issued it, not to the host, so minting
+// from the unchallenged root would yield a cookie that still 403s on
+// /details.php — the mistake that made RuTracker's first wiring useless.
+func (p *plugin) ChallengeProbeURL() string {
+	return "https://" + p.effectiveDomain() + "/browse.php"
+}
+
 func (p *plugin) fetch(ctx context.Context, target string, creds *domain.TrackerCredential) ([]byte, error) {
-	key := pluginName + ":nocreds"
-	if creds != nil {
-		key = forumcommon.SessionKey(pluginName, creds.UserID.String())
+	return cfclearance.RetryOnChallenge(p.ChallengeProbeURL(), func() ([]byte, error) {
+		return p.fetchOnce(ctx, target, creds)
+	})
+}
+
+func (p *plugin) fetchOnce(ctx context.Context, target string, creds *domain.TrackerCredential) ([]byte, error) {
+	u, err := url.Parse(strings.TrimSpace(target))
+	if err != nil {
+		return nil, fmt.Errorf("kinozal: invalid URL: %w", err)
 	}
-	sess := p.sessions.GetOrCreate(key, userAgent)
-	if p.transport != nil {
-		sess.Client.Transport = p.transport
+	// The guard fetch never had. It matters more now: Apply writes the minted
+	// cf_clearance into the jar for u's origin BEFORE the request goes out, so
+	// an off-site target would be handed the clearance rather than merely
+	// fetched. dl.<domain> is allowed because Download uses it.
+	if u.Scheme != "https" && u.Scheme != "http" {
+		return nil, fmt.Errorf("kinozal: refusing URL scheme %q", u.Scheme)
 	}
+	if !p.hostAllowed(u) {
+		return nil, fmt.Errorf("kinozal: refusing to fetch off-site host %q", u.Hostname())
+	}
+	sess := p.session(creds)
+	clearance, clearErr := cfclearance.Apply(ctx, pluginName, sess.Client.Jar, u, p.ChallengeProbeURL())
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", userAgent)
+	req.Header.Set("User-Agent", cfclearance.UserAgent(clearance, userAgent))
+	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
 	resp, err := sess.Client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("kinozal GET: %w", err)
 	}
 	defer resp.Body.Close()
+	// Before the status check: a challenge is a 403, and reporting it as a
+	// bare status tells the user the tracker refused them when in fact
+	// nothing of theirs was ever looked at.
+	if cfclearance.IsChallenge(resp) {
+		return nil, fmt.Errorf("kinozal GET %s: %w", target, cfclearance.Cause(clearErr))
+	}
 	if resp.StatusCode != 200 {
 		return nil, fmt.Errorf("kinozal GET %s -> %d", target, resp.StatusCode)
 	}
 	return io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+}
+
+// hostAllowed is the SSRF barrier for outgoing requests. It accepts the
+// resolved effective domain (compared on Host, WITH any port, so a
+// test-injected 127.0.0.1:port still matches), a known/admin-configured
+// kinozal domain, and either of those under the `dl.` download subdomain that
+// Download uses. The `dl.` prefix is stripped and the base re-checked, so
+// dl.evil.com is refused exactly like evil.com is.
+func (p *plugin) hostAllowed(u *url.URL) bool {
+	base := p.effectiveDomain()
+	if u.Host == base || u.Host == downloadHostPrefix+base {
+		return true
+	}
+	h := u.Hostname()
+	if registry.DomainAllowed(pluginName, h, knownDomains) {
+		return true
+	}
+	stripped, ok := strings.CutPrefix(h, downloadHostPrefix)
+	return ok && stripped != "" && registry.DomainAllowed(pluginName, stripped, knownDomains)
 }
