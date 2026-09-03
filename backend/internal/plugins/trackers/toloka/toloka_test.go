@@ -3,6 +3,7 @@ package toloka
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -205,7 +206,7 @@ func TestCheckTarget_RejectsOffSiteHost(t *testing.T) {
 	}
 }
 
-func TestSessionUserID(t *testing.T) {
+func TestSessionUserID_CookieVariants_ReportTheServersView(t *testing.T) {
 	tests := []struct {
 		name    string
 		cookie  string
@@ -301,7 +302,9 @@ func TestPageFingerprint_ChangesOnlyWithTheRelease(t *testing.T) {
 			t.Error("token did not change for a re-uploaded torrent")
 		}
 	}
-	// Seeder counts move on their own and must NOT move the token.
+	// A counter the uploader did not touch must NOT move the token. The
+	// trimmed fixture keeps the "Подякували" (thanks) row rather than the
+	// seeder row, but both are the same class of drifting value.
 	seeded := strings.ReplaceAll(fixtureTopicHTML, `<span id="VT714902">2</span>`, `<span id="VT714902">99</span>`)
 	sb, _ := torrentBlock([]byte(seeded))
 	if got := pageFingerprint(sb); got != base {
@@ -342,8 +345,9 @@ func TestCheck_GuestPage_BlamesTheSession(t *testing.T) {
 	if err == nil {
 		t.Fatal("Check on a guest stub must fail")
 	}
-	if !strings.Contains(err.Error(), "session") {
-		t.Errorf("error = %v, want it to blame the session", err)
+	// The sentinel is what the scheduler acts on; wording is not a contract.
+	if !errors.Is(err, registry.ErrSessionExpired) {
+		t.Errorf("error = %v, want registry.ErrSessionExpired", err)
 	}
 }
 
@@ -388,6 +392,9 @@ func TestDownload_HTMLBodyIsNotATorrent(t *testing.T) {
 	_, err := p.Download(context.Background(), &domain.Topic{URL: "https://toloka.to/t699998"}, nil, testCreds())
 	if err == nil {
 		t.Fatal("an HTML body must not be returned as a torrent")
+	}
+	if !errors.Is(err, registry.ErrSessionExpired) {
+		t.Errorf("error = %v, want registry.ErrSessionExpired — the gate page means a dead session", err)
 	}
 }
 
@@ -532,5 +539,81 @@ func TestDo_RateLimitIsNamed(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "rate limited") {
 		t.Errorf("error = %v, want it to name the rate limit", err)
+	}
+}
+
+// TestFetch_RefusesOffSiteRedirect proves the redirect half of the SSRF
+// barrier is actually wired onto the session's client, not merely that
+// checkTarget rejects the URL when called directly.
+func TestFetch_RefusesOffSiteRedirect(t *testing.T) {
+	registry.SetDomainResolver(nil)
+	p, _ := newTestPlugin(t, func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "https://evil.example/x", http.StatusFound)
+	})
+	_, err := p.fetch(context.Background(), "https://toloka.to/t699998", testCreds())
+	if err == nil {
+		t.Fatal("an off-site redirect must be refused")
+	}
+	if !strings.Contains(err.Error(), "refusing to fetch off-site host") {
+		t.Errorf("error = %v, want the off-site host refusal", err)
+	}
+}
+
+// TestFingerprintInput_WithoutDownloadID_IsEmpty: the download id is the one
+// structurally stable field, so losing it must fail the check rather than
+// quietly move every stored token and re-deliver every topic.
+func TestFingerprintInput_WithoutDownloadID_IsEmpty(t *testing.T) {
+	block := strings.ReplaceAll(fixtureTorrentBlock, "download.php?id=714902", "somewhere.php")
+	inner, ok := torrentBlock([]byte(block))
+	if !ok {
+		t.Fatal("fixture block not found")
+	}
+	if got := fingerprintInput(inner); got != "" {
+		t.Errorf("fingerprintInput without a download id = %q, want empty", got)
+	}
+}
+
+// TestDo_OversizedBodyIsRefused: io.ReadAll on a bare LimitReader cannot tell
+// a body that ended from one that was cut off, so a truncated .torrent would
+// still pass isTorrent's first-byte check on its way to a client.
+func TestDo_OversizedBodyIsRefused(t *testing.T) {
+	registry.SetDomainResolver(nil)
+	p, _ := newTestPlugin(t, func(w http.ResponseWriter, _ *http.Request) {
+		big := make([]byte, maxBodyBytes+1024)
+		for i := range big {
+			big[i] = 'd'
+		}
+		_, _ = w.Write(big)
+	})
+	_, err := p.fetch(context.Background(), "https://toloka.to/t1", testCreds())
+	if err == nil {
+		t.Fatal("an oversized body must be refused, not silently truncated")
+	}
+	if !strings.Contains(err.Error(), "exceeds") {
+		t.Errorf("error = %v, want it to name the size limit", err)
+	}
+}
+
+// TestDo_RateLimitCarriesTheStatusMarker: the scheduler's classifyError reads
+// the status out of the message text, so a Toloka 429 must carry the same
+// "-> 429" marker every other tracker's does or it classifies as "unknown".
+// The search query must NOT appear — it is the user's own text.
+func TestDo_RateLimitCarriesTheStatusMarker(t *testing.T) {
+	registry.SetDomainResolver(nil)
+	p, _ := newTestPlugin(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+	})
+	_, err := p.Search(context.Background(), "секретний запит", testCreds())
+	if err == nil {
+		t.Fatal("a 429 must be an error")
+	}
+	if !strings.Contains(err.Error(), "-> 429") {
+		t.Errorf("error = %v, want the -> 429 marker classifyError looks for", err)
+	}
+	if !strings.Contains(err.Error(), "rate limited") {
+		t.Errorf("error = %v, want it to name the rate limit", err)
+	}
+	if strings.Contains(err.Error(), "секретний") {
+		t.Errorf("the search query leaked into the error: %v", err)
 	}
 }

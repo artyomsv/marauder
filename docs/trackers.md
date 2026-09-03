@@ -332,10 +332,11 @@ that searched for the words "помилка" or "error": the real failure page
 and a successful login answers `302` with an **empty** body, so a wrong
 password used to be saved and reported as a working account.
 
-> **Toloka rate-limits hard.** Roughly a dozen requests inside twenty
-> seconds was enough to earn an `HTTP 429` (measured 2026-09-03). Marauder
-> reports that as a rate limit rather than as a tracker outage, so if you
-> see it, back off rather than go looking for a broken selector.
+> **Toloka rate-limits hard.** Measured 2026-09-03: six requests inside three
+> seconds earned an `HTTP 429`, and so did roughly a dozen spread over twenty
+> seconds. Treat the tighter figure as the budget. Marauder reports a 429 as a
+> rate limit rather than as a tracker outage, so if you see one, back off
+> rather than go looking for a broken selector.
 
 **Validation status:** verified end-to-end against the live site with a
 real account on 2026-09-03 — login, rejection of a wrong password,
@@ -439,12 +440,12 @@ for the guide on adding new ones or fixing selector drift.
 independent signal that a session is really authenticated — it fetches
 a page and looks for a positive logged-in marker. `anidub` returns
 `registry.ErrVerifyUnsupported` for a page it cannot classify, rather
-than claiming a check it did not make. Adding or testing an account for those trackers saves the
-credential and shows an amber **"could not be verified"** notice
-instead of a green tick. The credential still works; Marauder is only
-declining to imply it validated something it could not. See
-[`docs/plugin-development.md`](plugin-development.md) if you can
-identify a logged-in marker for one of them.
+than claiming a check it did not make. Adding or testing an account for
+such a tracker saves the credential and shows an amber **"could not be
+verified"** notice instead of a green tick. The credential still works;
+Marauder is only declining to imply it validated something it could not.
+See [`docs/plugin-development.md`](plugin-development.md) if you can
+identify a logged-in marker for it.
 
 **AniDub validation status:** verified end-to-end against the live
 tracker with a real account on 2026-08-02 — login rejection detection,

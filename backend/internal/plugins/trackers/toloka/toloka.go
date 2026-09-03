@@ -70,7 +70,13 @@ const (
 	// one. Login relies on following one redirect: a successful POST answers
 	// 302 with an empty body.
 	maxRedirects = 5
-	userAgent    = "Marauder/0.4 (+https://marauder.cc)"
+	// maxBodyBytes bounds a single response. A Toloka .torrent for a season
+	// pack measured 227KB, so this is generous; the cap exists to stop a
+	// hostile or broken response from being read into memory unbounded.
+	maxBodyBytes = 8 << 20
+	// maxSearchResults matches registry.WithSearch's first-page contract.
+	maxSearchResults = 50
+	userAgent        = "Marauder/0.4 (+https://marauder.cc)"
 )
 
 // urlPattern is host-agnostic; CanParse gates the captured host against the
@@ -142,7 +148,7 @@ func (p *plugin) Parse(_ context.Context, rawURL string) (*domain.Topic, error) 
 	if m == nil {
 		return nil, errors.New("not a toloka topic URL")
 	}
-	id, _ := strconv.Atoi(m[2])
+	id, _ := strconv.Atoi(m[2]) // urlPattern guarantees a digit-only match
 	return &domain.Topic{
 		TrackerName: pluginName, URL: rawURL,
 		DisplayName: fmt.Sprintf("Toloka topic %d", id),
@@ -188,12 +194,21 @@ func sessionUserID(sess *forumcommon.Session, base string) (int, bool) {
 	return id, id > 0
 }
 
-func (p *plugin) newSession() *forumcommon.Session {
-	sess := forumcommon.NewSession(userAgent)
+// configure installs the plugin's redirect guard (and any test transport) on
+// a freshly built session. It must run exactly once, at creation: the store
+// hands one *Session to every topic of a user and the scheduler's worker pool
+// drives them concurrently, so assigning Client.CheckRedirect on each use
+// would race a reader inside Client.Do.
+func (p *plugin) configure(sess *forumcommon.Session) {
 	sess.Client.CheckRedirect = p.checkRedirect
 	if p.transport != nil {
 		sess.Client.Transport = p.transport
 	}
+}
+
+func (p *plugin) newSession() *forumcommon.Session {
+	sess := forumcommon.NewSession(userAgent)
+	p.configure(sess)
 	return sess
 }
 
@@ -202,12 +217,7 @@ func (p *plugin) session(creds *domain.TrackerCredential) *forumcommon.Session {
 	if creds != nil {
 		key = forumcommon.SessionKey(pluginName, creds.UserID.String())
 	}
-	sess := p.sessions.GetOrCreate(key, userAgent)
-	sess.Client.CheckRedirect = p.checkRedirect
-	if p.transport != nil {
-		sess.Client.Transport = p.transport
-	}
-	return sess
+	return p.sessions.GetOrCreateWith(key, userAgent, p.configure)
 }
 
 // wrongCredentialsRe matches the message the live site returns on a bad
@@ -291,8 +301,14 @@ var (
 	// size value sits in <span title="Розмір частини: 2&nbsp;MB">, so the
 	// first size-shaped text after the cell opens is the piece size, and the
 	// change token would track that rather than the release.
-	regDateRe = regexp.MustCompile(`(?s)Зареєстрований:.*?</td>\s*<td[^>]*>(?:&nbsp;|\s)*([0-9]{4}-[0-9]{2}-[0-9]{2}[^<]*?)(?:&nbsp;|\s)*</td>`)
-	sizeRe    = regexp.MustCompile(`(?s)Розмір:.*?</td>\s*<td[^>]*>\s*(?:<span[^>]*>)?(?:&nbsp;|\s)*([0-9][0-9.,]*(?:&nbsp;|\s)*[KMGT]?B)`)
+	// `[^<]*` rather than a lazy `.*?`: lazy is not anchored, so if a value
+	// cell ever stops matching (label kept, value reworded), the engine
+	// backtracks past its </td> and attaches ANOTHER row's date or size to
+	// the token — silently, and in the wrong direction. `[^<]*` cannot cross
+	// a tag boundary, so a reworded cell drops the field instead of
+	// borrowing a neighbour's.
+	regDateRe = regexp.MustCompile(`Зареєстрований:[^<]*</td>\s*<td[^>]*>(?:&nbsp;|\s)*([0-9]{4}-[0-9]{2}-[0-9]{2}[^<]*?)(?:&nbsp;|\s)*</td>`)
+	sizeRe    = regexp.MustCompile(`Розмір:[^<]*</td>\s*<td[^>]*>\s*(?:<span[^>]*>)?(?:&nbsp;|\s)*([0-9][0-9.,]*(?:&nbsp;|\s)*[KMGT]?B)`)
 
 	// siteTitleSuffixRe strips the forum section Toloka appends to every
 	// page title ("Release name — HD українською"). Anchored to the end and
@@ -313,6 +329,15 @@ func cleanTitle(raw string) string {
 // torrentBlock returns the inner HTML of the release's torrent table, or
 // ("", false) when the page has none — which is what a guest gets, and what
 // a discussion thread looks like.
+//
+// Taking only the FIRST match is deliberate and measured. A Toloka release
+// page carries two `class="btTbl"` tables: the torrent metadata (filename,
+// size, registration date, download link) and, below it, the torrent's file
+// listing — "Папка: <name>" followed by every file and its own size. All four
+// live releases inspected on 2026-09-03 had exactly that shape and exactly
+// one `download.php?id=` link, i.e. one torrent per topic, unlike anidub
+// where a page carries one block per quality variant. Anchoring here is what
+// keeps the per-file sizes in the second table out of the change token.
 func torrentBlock(body []byte) (string, bool) {
 	return forumcommon.TagBlockInner(string(body), torrentBlockOpenRe, "table")
 }
@@ -329,9 +354,16 @@ func torrentBlock(body []byte) (string, bool) {
 // boundary.
 func fingerprintInput(block string) string {
 	var parts []string
-	if m := dlHrefRe.FindStringSubmatch(block); m != nil {
-		parts = append(parts, "id="+m[2])
+	m := dlHrefRe.FindStringSubmatch(block)
+	if m == nil {
+		// The download id is the one structurally stable field — every other
+		// one hangs off a Ukrainian label that a template change could
+		// rename. Requiring it means such a change surfaces as a failed
+		// check rather than as a silently moved token, which would re-deliver
+		// every Toloka topic at once.
+		return ""
 	}
+	parts = append(parts, "id="+m[2])
 	if m := fileNameRe.FindStringSubmatch(block); m != nil {
 		parts = append(parts, "name="+normalizeCell(m[1]))
 	}
@@ -440,14 +472,21 @@ func isTorrent(body []byte) bool { return len(body) > 0 && body[0] == 'd' }
 // Toloka is login-gated, so a missing torrent block is far more often an
 // expired session than a changed page — but only Verify can tell, so it is
 // asked before making the claim.
-func (p *plugin) gateError(ctx context.Context, creds *domain.TrackerCredential, fallback error) error {
+// It answers from the jar rather than making a request. The fetch that just
+// produced fallback already refreshed toloka_data — the server sets it on
+// every response, authenticated or not (measured 2026-09-03 on both) — so a
+// Verify call here would spend a round-trip on an answer already in hand.
+// That matters because an expired session is a persistent state: every topic
+// would then make two requests per check against a tracker that 429s at six
+// requests in three seconds.
+func (p *plugin) gateError(_ context.Context, creds *domain.TrackerCredential, fallback error) error {
 	if creds == nil {
 		return fallback
 	}
-	if ok, err := p.Verify(ctx, creds); err == nil && !ok {
-		return fmt.Errorf("%w: toloka session is no longer signed in", registry.ErrSessionExpired)
+	if _, ok := sessionUserID(p.session(creds), p.baseURL()); ok {
+		return fallback
 	}
-	return fallback
+	return fmt.Errorf("%w: toloka session is no longer signed in", registry.ErrSessionExpired)
 }
 
 // --- WithSearch ---------------------------------------------------------
@@ -455,7 +494,7 @@ func (p *plugin) gateError(ctx context.Context, creds *domain.TrackerCredential,
 var _ registry.WithSearch = (*plugin)(nil)
 
 var (
-	searchRowRe = regexp.MustCompile(`(?s)<tr[^>]*class="prow[^"]*"[^>]*>(.*?)</tr>`)
+	searchRowRe = regexp.MustCompile(`(?s)<tr[^>]*class="[^"]*prow[^"]*"[^>]*>(.*?)</tr>`)
 	// The topic anchor wraps the title in <b>, and the row's next </a>
 	// belongs to the uploader's profile link — so the title must be taken
 	// from the bold element, not from "everything up to </a>".
@@ -515,7 +554,7 @@ func (p *plugin) Search(ctx context.Context, query string, creds *domain.Tracker
 			}
 		}
 		out = append(out, r)
-		if len(out) == 50 {
+		if len(out) == maxSearchResults {
 			break
 		}
 	}
@@ -592,12 +631,28 @@ func (p *plugin) do(ctx context.Context, sess *forumcommon.Session, method, targ
 	if resp.StatusCode == http.StatusTooManyRequests {
 		// Toloka throttles aggressively — six requests inside three seconds
 		// was enough to trigger it (measured 2026-09-03). Saying so plainly
-		// matters because the generic status message reads like the tracker
-		// is broken, and the fix is to back off rather than to investigate.
-		return nil, fmt.Errorf("toloka: rate limited by the tracker (HTTP 429) on %s; back off and retry later", target)
+		// matters because the bare status reads like the tracker is broken,
+		// and the fix is to back off rather than to investigate. The
+		// "-> 429" marker is kept because the scheduler's classifyError
+		// reads the status out of the message text; without it a Toloka 429
+		// would classify as "unknown" while every other tracker's is
+		// "unreachable". Only the path is named: a search target carries the
+		// user's own query string, which has no business in an error or a log.
+		return nil, fmt.Errorf("toloka %s %s -> %d: rate limited by the tracker; back off and retry later",
+			method, u.Path, resp.StatusCode)
 	}
 	if resp.StatusCode != 200 {
 		return nil, fmt.Errorf("toloka %s %s -> %d", method, target, resp.StatusCode)
 	}
-	return io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	// limit+1: io.ReadAll on a bare LimitReader cannot tell a body that ended
+	// from one that was cut off, so an oversized .torrent would be truncated
+	// and still pass isTorrent's first-byte check on its way to a client.
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("toloka: reading %s: %w", u.Path, err)
+	}
+	if len(body) > maxBodyBytes {
+		return nil, fmt.Errorf("toloka %s %s: response exceeds %d bytes", method, u.Path, maxBodyBytes)
+	}
+	return body, nil
 }

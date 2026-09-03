@@ -114,7 +114,7 @@ touching config files.
       retains compatibility with legacy Anilibria v3 topic URLs
 - [x] `anidub` tracker plugin — alpha, with WithQuality
 - [x] `rutor` tracker plugin — public, no auth
-- [x] `toloka` tracker plugin — alpha
+- [x] `toloka` tracker plugin — **validated 2026-09-03 against a live account**
 - [x] `unionpeer` tracker plugin — alpha — **removed 2026-08-03, site defunct**
 - [x] `tapochek` tracker plugin — alpha
 - [x] `hdclub` — TBDev/Gazelle-style private tracker plugin (alpha) —
