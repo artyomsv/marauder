@@ -170,28 +170,11 @@ func (p *plugin) ChallengeProbeURL() string {
 // ungated, so the caller proceeds without a clearance. It is fatal to the
 // DIAGNOSIS, which is why the error comes back instead of being logged and
 // dropped. A caller that then hits a challenge must blame the solver rather
-// than report ErrCloudflareChallenge — see challengeCause.
+// than report ErrCloudflareChallenge — see cfclearance.Cause, which makes that
+// three-way split.
 func (p *plugin) applyClearance(ctx context.Context, sess *forumcommon.Session, u *url.URL) (registry.Clearance, error) {
 	return cfclearance.Apply(ctx, pluginName, sess.Client.Jar, u, p.ChallengeProbeURL())
 }
-
-// challengeCause names the culprit for a request the tracker just blocked.
-//
-// Three outcomes, because three different people have to do three different
-// things about them:
-//
-//   - No provider installed: the operator never configured a solver, so this
-//     request — and every gated one after it — was doomed before it was made.
-//     Blaming the tracker here produced issue #158, where the message told the
-//     user the tracker "needs a browser to get through" while nothing in the
-//     deployment had ever been asked to run one.
-//   - clearErr non-nil: a configured solver could not mint, so this request
-//     was always going to be challenged and the tracker's wall says nothing
-//     about the tracker. That was the 2026-08-05 boot race, where
-//     FlareSolverr's ~9s Chrome startup parked two topics on a 30-minute
-//     backoff.
-//   - Neither: the solver answered and the tracker is genuinely gated.
-func challengeCause(clearErr error) error { return cfclearance.Cause(clearErr) }
 
 // SupportsAnonymousDownload implements registry.WithAnonymousDownload: the
 // topic page exposes a magnet without login (Download falls back to it when
@@ -244,13 +227,6 @@ func (p *plugin) Parse(_ context.Context, rawURL string) (*domain.Topic, error) 
 		Extra:       map[string]any{"topic_id": topicID},
 	}, nil
 }
-
-// isCloudflareChallenge reports whether a response is a Cloudflare
-// interstitial rather than the page we asked for. Cloudflare labels these
-// with Cf-Mitigated (403 for the challenge, 503 for the legacy "checking
-// your browser" page), which is a far more reliable signal than sniffing the
-// body — and, unlike the body, it is available before reading it.
-func isCloudflareChallenge(resp *http.Response) bool { return cfclearance.IsChallenge(resp) }
 
 // --- WithCredentials ---------------------------------------------------
 
@@ -317,8 +293,8 @@ func (p *plugin) loginOnce(ctx context.Context, creds *domain.TrackerCredential)
 	// Check for the interstitial BEFORE testing for the logged-in marker: a
 	// challenge page naturally lacks that marker, and reporting it as bad
 	// credentials is the misdiagnosis this guard exists to prevent.
-	if isCloudflareChallenge(resp) {
-		return fmt.Errorf("rutracker login: %w", challengeCause(clearErr))
+	if cfclearance.IsChallenge(resp) {
+		return fmt.Errorf("rutracker login: %w", cfclearance.Cause(clearErr))
 	}
 	// Same reasoning as the guard above, for a different failure: an error page
 	// has no logged-in marker either, so falling through to the marker check
@@ -645,8 +621,8 @@ func (p *plugin) fetchOnce(ctx context.Context, creds *domain.TrackerCredential,
 		return nil, err
 	}
 	defer resp.Body.Close()
-	if isCloudflareChallenge(resp) {
-		return nil, fmt.Errorf("rutracker GET %s: %w", target, challengeCause(clearErr))
+	if cfclearance.IsChallenge(resp) {
+		return nil, fmt.Errorf("rutracker GET %s: %w", target, cfclearance.Cause(clearErr))
 	}
 	if resp.StatusCode != 200 {
 		return nil, fmt.Errorf("rutracker GET %s -> %d", target, resp.StatusCode)

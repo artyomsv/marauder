@@ -9,7 +9,7 @@ import { Label } from "@/components/ui/label";
 import { QK } from "@/lib/queryKeys";
 import { useDebouncedValue } from "@/lib/hooks/useDebouncedValue";
 import { SeasonEpisodePicker, SELECT_CLASS } from "./SeasonEpisodePicker";
-import { PosterImage } from "./PosterImage";
+import { TopicPreviewCard } from "./TopicPreviewCard";
 import { NotifierSelect } from "./NotifierSelect";
 import { CategoryField } from "./CategoryField";
 
@@ -128,7 +128,9 @@ export function TopicForm({
     // can be cached for a minute, but a preview is resolved from the live
     // page: a poster that appears, or a tracker plugin that learns to read
     // one, should show on the next paste rather than after the cache ages
-    // out. Re-resolving costs one request the form already makes.
+    // out. The cost is bounded on the server side instead — /trackers/preview
+    // carries a per-user single-flight gate, so a burst of re-pastes cannot
+    // turn into a burst of tracker logins.
     staleTime: 5_000,
     retry: false,
   });
@@ -281,44 +283,7 @@ export function TopicForm({
         {matchError && <p className="text-xs text-muted-foreground">{matchError}</p>}
       </div>
 
-      {/* One card, two states. Resolving a preview can take seconds — a
-          login-gated tracker has to warm a session first — and with nothing
-          on screen the form looked inert, so users retyped or gave up. The
-          skeleton occupies the same box the result will, so nothing jumps
-          when it arrives. */}
-      {!isEdit && (previewPending || (preview && (preview.title || preview.image_url))) && (
-        <div className="flex items-center gap-3 rounded-md border border-border/60 bg-muted/30 p-3">
-          {previewPending ? (
-            <>
-              <div className="h-16 w-12 shrink-0 animate-pulse rounded bg-muted" />
-              <div className="min-w-0 flex-1 space-y-2">
-                <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                  <Loader2 className="size-3 animate-spin" />
-                  Resolving title and poster…
-                </div>
-                <div className="h-4 w-2/3 animate-pulse rounded bg-muted" />
-              </div>
-            </>
-          ) : (
-            <>
-              {/* ghost: show a same-sized "no image" box rather than nothing.
-                  A silently absent poster and a poster that failed to load
-                  look identical when the element just disappears, which made
-                  a real bug hard to tell from a tracker that has no artwork. */}
-              <PosterImage
-                ghost
-                src={preview!.image_url}
-                alt={preview!.title || "preview"}
-                className="h-16 w-12 shrink-0 rounded object-cover"
-              />
-              <div className="min-w-0">
-                <div className="text-xs text-muted-foreground">Preview</div>
-                <div className="truncate text-sm font-medium">{preview!.title || "—"}</div>
-              </div>
-            </>
-          )}
-        </div>
-      )}
+      {!isEdit && <TopicPreviewCard preview={preview} pending={previewPending} />}
 
       <div className="space-y-1.5">
         <Label htmlFor="display">Display name (optional)</Label>

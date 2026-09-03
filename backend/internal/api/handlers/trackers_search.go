@@ -244,19 +244,21 @@ func (h *Trackers) perTrackerBudget() time.Duration {
 	return defaultSearchPerTrackerBudget
 }
 
-// searchCredentials loads, decrypts, and warms the user's credential for a
-// login-gated searchable tracker. Every failure degrades to nil creds
-// (the plugin then reports ErrSearchRequiresCredentials) — search must
-// never hard-fail on credential trouble. The second return distinguishes
-// "no stored credential" (false) from "stored credential exists but could
-// not be warmed" (true) so the caller can report login_failed instead of
-// telling a user with an account to go add one.
+// warmCredentials loads, decrypts, and warms the user's credential for a
+// login-gated tracker. Every failure degrades to nil creds and the caller
+// proceeds anonymously — none of the three consumers may hard-fail on
+// credential trouble (search reports ErrSearchRequiresCredentials, the
+// preview and the create path simply resolve less metadata). The second
+// return distinguishes "no stored credential" (false) from "stored credential
+// exists but could not be warmed" (true) so the caller can report
+// login_failed instead of telling a user with an account to go add one.
 //
 // Ordering is Verify-first, Login-on-miss: on a warm in-process session
 // Verify is one cheap GET; only a cold/dead session pays the Login round-
 // trip. (Deliberately neither loginAndVerify — Login→Verify always, right
-// for validating fresh credentials, wasteful per search — nor the
+// for validating fresh credentials, wasteful per call — nor the
 // scheduler's Login-only loadCredentials.)
+//
 // It is a package-level function rather than a method because three paths
 // need it and they live on different handlers: search, the AddTopic preview,
 // and topic creation. All three read a tracker page as the user, and a
@@ -275,7 +277,7 @@ func warmCredentials(ctx context.Context, store credentialStore, master configDe
 	// trackers validate the session blob, not the password.
 	plain, err := master.Decrypt(stored.SecretEnc, stored.SecretNonce)
 	if err != nil {
-		log.Warn().Str("tracker", t.Name()).Err(err).Msg("search credential decrypt failed; searching anonymously")
+		log.Warn().Str("tracker", t.Name()).Err(err).Msg("tracker credential decrypt failed; continuing anonymously")
 		return nil, true, err
 	}
 	transient := &domain.TrackerCredential{
@@ -288,7 +290,7 @@ func warmCredentials(ctx context.Context, store credentialStore, master configDe
 	if len(stored.SessionEnc) > 0 {
 		sess, derr := master.Decrypt(stored.SessionEnc, stored.SessionNonce)
 		if derr != nil {
-			log.Warn().Str("tracker", t.Name()).Err(derr).Msg("search session decrypt failed; searching anonymously")
+			log.Warn().Str("tracker", t.Name()).Err(derr).Msg("tracker session decrypt failed; continuing anonymously")
 			return nil, true, derr
 		}
 		transient.SessionEnc = sess
@@ -297,7 +299,7 @@ func warmCredentials(ctx context.Context, store credentialStore, master configDe
 		return transient, false, nil
 	}
 	if lerr := wc.Login(ctx, transient); lerr != nil {
-		log.Debug().Str("tracker", t.Name()).Err(lerr).Msg("search credential login failed; searching anonymously")
+		log.Debug().Str("tracker", t.Name()).Err(lerr).Msg("tracker credential login failed; continuing anonymously")
 		return nil, true, lerr
 	}
 	return transient, false, nil

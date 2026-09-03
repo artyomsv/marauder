@@ -4,7 +4,7 @@
 |-------|-------|
 | Criticality | Low |
 | Complexity | Medium |
-| Location | `frontend/src/components/topics/TopicForm.tsx` (~412 lines) |
+| Location | `frontend/src/components/topics/TopicForm.tsx` (~460 lines) |
 | Found during | Code review of issue #91 (qBittorrent category dropdown), rules-compliance agent |
 | Date | 2026-06-27 |
 
@@ -18,7 +18,13 @@ shared add/edit form and owns several cohesive but separable blocks:
 - the delivery fields (client picker + `NotifierSelect` + download-dir input +
   `CategoryField`)
 - the credential-hint banners (requires / optional / satisfied)
-- the quality select and the preview card
+- the quality select
+
+**Update 2026-09-03.** The preview card was extracted to
+`TopicPreviewCard.tsx` while adding the resolving indicator, which is why it no
+longer appears in that list. The file still grew on net (412 → ~460 lines) —
+the indicator added the two pending flags and the URL-settled gate — so the two
+remaining extractions below are unchanged.
 
 It is a sibling of the already-acknowledged `Clients.tsx` pre-existing size
 debt noted in `CLAUDE.md` (`Topics.tsx`, the third member of that group, was

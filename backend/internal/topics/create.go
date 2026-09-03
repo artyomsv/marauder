@@ -23,6 +23,14 @@ import (
 // metadataTimeout bounds the best-effort title/poster lookup at add time.
 const metadataTimeout = 8 * time.Second
 
+// credentialWarmTimeout bounds the session warm-up that precedes that lookup.
+// It is a SEPARATE budget, not a slice of metadataTimeout: warming means a
+// login round-trip against the same tracker that is about to be fetched, so
+// sharing one deadline lets a slow login spend the whole of it and leave the
+// page fetch to fail instantly on an expired context — the exact failure the
+// warm exists to prevent.
+const credentialWarmTimeout = 5 * time.Second
+
 // defaultCheckIntervalSec is used when the caller doesn't specify one.
 const defaultCheckIntervalSec = 900 // 15 min
 
@@ -191,16 +199,18 @@ func resolveMetadata(ctx context.Context, tracker registry.Tracker, in CreateInp
 	if !ok {
 		return ""
 	}
-	mctx, cancel := context.WithTimeout(ctx, metadataTimeout)
-	defer cancel()
 	// Credentials matter for a tracker that gates its pages: an anonymous
 	// read of a Toloka topic returns a stub, so the topic was stored with no
 	// poster and never got one — the scheduler self-heals a placeholder
 	// display name on the first check, but nothing backfills an image.
 	var creds *domain.TrackerCredential
 	if in.Credentials != nil {
-		creds = in.Credentials(mctx, tracker)
+		cctx, ccancel := context.WithTimeout(ctx, credentialWarmTimeout)
+		creds = in.Credentials(cctx, tracker)
+		ccancel()
 	}
+	mctx, cancel := context.WithTimeout(ctx, metadataTimeout)
+	defer cancel()
 	meta, err := wm.ResolveMetadata(mctx, in.URL, creds)
 	if err != nil || meta == nil {
 		return ""
@@ -209,7 +219,30 @@ func resolveMetadata(ctx context.Context, tracker registry.Tracker, in CreateInp
 		*displayName = meta.Title
 		*resolved = true
 	}
-	return meta.ImageURL
+	return SafeImageURL(meta.ImageURL)
+}
+
+// SafeImageURL drops a poster URL that is not plain http(s). The value is
+// scraped off a tracker page, persisted, and later rendered straight into an
+// <img src> for everyone who views the topic, so a hostile or compromised page
+// offering javascript:/data:/file: would be stored once and replayed in every
+// viewer's browser. Enforced here rather than per plugin so the rule covers
+// every current and future WithMetadata tracker. Exported because the preview
+// endpoint hands the same scraped value straight to the browser without going
+// through BuildAndCreate, so it must apply the identical rule.
+func SafeImageURL(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return ""
+	}
+	u, err := url.Parse(trimmed)
+	if err != nil || u.Host == "" {
+		return ""
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return ""
+	}
+	return trimmed
 }
 
 // CanonicalTopicURL rewrites a mirror-host topic URL onto the tracker's

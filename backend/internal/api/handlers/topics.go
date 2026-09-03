@@ -177,6 +177,11 @@ func (h *Topics) Create(w http.ResponseWriter, r *http.Request) {
 		Category:         req.Category,
 		CheckIntervalSec: req.CheckIntervalSec,
 		Credentials: func(cctx context.Context, t registry.Tracker) *domain.TrackerCredential {
+			// The two dropped returns say WHY there is no credential — no
+			// account stored, versus one that would not warm. Both mean the
+			// same thing here: resolve anonymously. Creating the topic must
+			// not fail because a poster could not be fetched, and the
+			// distinction only exists for search, which reports it to the user.
 			c, _, _ := warmCredentials(cctx, h.Creds, h.Master, uid, t)
 			return c
 		},

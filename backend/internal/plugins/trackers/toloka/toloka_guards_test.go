@@ -203,7 +203,7 @@ func TestGuards_RejectBadInput(t *testing.T) {
 	// Without credentials gateError cannot consult a session, so it must
 	// return the caller's error rather than claim the session expired.
 	base := errors.New("boom")
-	if got := p.gateError(context.Background(), nil, base); !errors.Is(got, base) {
+	if got := p.gateError(nil, base); !errors.Is(got, base) {
 		t.Errorf("gateError with nil creds = %v, want the original error", got)
 	}
 }

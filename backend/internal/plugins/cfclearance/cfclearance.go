@@ -34,7 +34,7 @@ import (
 // not supply a clearance" already means. It exists only so Apply can report
 // that state distinctly from having no provider at all, which returns the
 // same zero value.
-var errUnusable = errors.New("clearance provider returned an unusable clearance")
+var errUnusable = errors.New("clearance provider returned a clearance without both a cookie and a user-agent")
 
 // Apply seeds jar with the clearance cookie for u's origin and returns the
 // clearance so the caller can send the matching User-Agent. A nil error with
@@ -65,7 +65,10 @@ func Apply(ctx context.Context, plugin string, jar http.CookieJar, u *url.URL, p
 	}
 	cookies := make([]*http.Cookie, 0, len(c.Cookies))
 	for name, val := range c.Cookies {
-		cookies = append(cookies, &http.Cookie{Name: name, Value: val, Path: "/"})
+		// Secure on an https origin so the jar will not replay the clearance on
+		// a plain-http hop. Conditional rather than always-true so the plugins'
+		// httptest servers, which are http, still work.
+		cookies = append(cookies, &http.Cookie{Name: name, Value: val, Path: "/", Secure: u.Scheme == "https"})
 	}
 	jar.SetCookies(&url.URL{Scheme: u.Scheme, Host: u.Host, Path: "/"}, cookies)
 	return c, nil

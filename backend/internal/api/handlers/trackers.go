@@ -11,6 +11,7 @@ import (
 	"github.com/artyomsv/marauder/backend/internal/domain"
 	"github.com/artyomsv/marauder/backend/internal/plugins/registry"
 	"github.com/artyomsv/marauder/backend/internal/problem"
+	"github.com/artyomsv/marauder/backend/internal/topics"
 )
 
 // Trackers handles /trackers/* — capability discovery for the AddTopic
@@ -25,9 +26,17 @@ type Trackers struct {
 	// means the 15s default.
 	SearchBudget time.Duration
 
-	searchInFlight sync.Map // userID -> struct{}; per-user single-flight search gate
-	searchLast     sync.Map // userID -> time.Time; sequential-search cooldown gate
+	searchInFlight  sync.Map // userID -> struct{}; per-user single-flight search gate
+	previewInFlight sync.Map // userID -> struct{}; per-user single-flight preview gate
+	searchLast      sync.Map // userID -> time.Time; sequential-search cooldown gate
 }
+
+const (
+	// previewTimeout bounds one metadata fetch for GET /trackers/preview.
+	previewTimeout = 15 * time.Second
+	// previewWarmTimeout bounds the credential warm that may precede it.
+	previewWarmTimeout = 5 * time.Second
+)
 
 // trackerMatch is the response shape for GET /api/v1/trackers/match.
 type trackerMatch struct {
@@ -114,8 +123,6 @@ func (h *Trackers) Preview(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, registry.Metadata{})
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
-	defer cancel()
 	// Pass the user's stored credential (warmed Verify-first/Login-on-miss)
 	// rather than nil. Most trackers expose a title and poster publicly and
 	// ignore it, but a fully login-gated one — Toloka serves a guest a stub
@@ -126,14 +133,40 @@ func (h *Trackers) Preview(w http.ResponseWriter, r *http.Request) {
 	uid, uerr := currentUserID(r)
 	var creds *domain.TrackerCredential
 	if uerr == nil {
-		creds, _, _ = warmCredentials(ctx, h.Creds, h.Master, uid, t)
+		// Per-user single-flight, same shape as /trackers/search. The form
+		// fires a preview on every settled URL edit, so a user pasting,
+		// correcting and re-pasting queues several — each of which may warm a
+		// session by logging in. Serialising them keeps one user from
+		// hammering a tracker's login form from one browser tab.
+		if _, busy := h.previewInFlight.LoadOrStore(uid, struct{}{}); busy {
+			problem.Write(w, r, h.BaseURL, problem.ErrTooManyRequests("a preview is already running; wait for it to finish"))
+			return
+		}
+		defer h.previewInFlight.Delete(uid)
+
+		// The warm gets its own budget rather than a slice of the fetch's:
+		// warming is a login round-trip against the same tracker the fetch is
+		// about to hit, so one shared deadline lets a slow login consume it
+		// all and leave ResolveMetadata to fail instantly on a dead context.
+		wctx, wcancel := context.WithTimeout(r.Context(), previewWarmTimeout)
+		// Dropping the two diagnostic returns: "no account stored" and "an
+		// account that would not warm" both mean "preview anonymously" here.
+		// The preview is cosmetic and never an error, so neither is reportable.
+		creds, _, _ = warmCredentials(wctx, h.Creds, h.Master, uid, t)
+		wcancel()
 	}
+	ctx, cancel := context.WithTimeout(r.Context(), previewTimeout)
+	defer cancel()
 	meta, err := wm.ResolveMetadata(ctx, rawURL, creds)
 	if err != nil || meta == nil {
 		// Fail-open: the preview is cosmetic, never a hard error for the user.
 		writeJSON(w, http.StatusOK, registry.Metadata{})
 		return
 	}
+	// The poster is scraped off a tracker page and the browser renders it
+	// straight into an <img src>, so apply the same scheme allowlist the
+	// create path applies before it stores one.
+	meta.ImageURL = topics.SafeImageURL(meta.ImageURL)
 	writeJSON(w, http.StatusOK, meta)
 }
 

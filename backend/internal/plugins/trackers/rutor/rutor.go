@@ -552,8 +552,12 @@ func fetchHostAllowed(host string) bool {
 // checkTarget is the guard applied to every URL before it is dialed — the
 // initial request and each redirect hop alike.
 func checkTarget(u *url.URL) error {
-	if u.Scheme != "https" && u.Scheme != "http" {
-		return fmt.Errorf("rutor: refusing URL scheme %q", u.Scheme)
+	// https only. Every URL the plugin builds is already https, so the only
+	// way to dial plaintext is a redirect hop — where an on-path attacker
+	// could rewrite the page that both change detection and the .torrent
+	// infohash check trust.
+	if u.Scheme != "https" {
+		return fmt.Errorf("rutor: refusing non-https URL scheme %q", u.Scheme)
 	}
 	if !fetchHostAllowed(u.Hostname()) {
 		return fmt.Errorf("rutor: refusing to fetch off-site host %q", u.Hostname())

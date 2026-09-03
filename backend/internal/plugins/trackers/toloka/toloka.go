@@ -376,9 +376,15 @@ func fingerprintInput(block string) string {
 	if m := sizeRe.FindStringSubmatch(block); m != nil {
 		parts = append(parts, "size="+normalizeCell(m[1]))
 	}
-	if m := regDateRe.FindStringSubmatch(block); m != nil {
-		parts = append(parts, "registered="+normalizeCell(m[1]))
+	// Required, like the id. This is the field Toloka moves when an uploader
+	// replaces a torrent, so if its label ever changes a same-name, same-size
+	// replacement would keep the old token and silently never download.
+	// Failing the check instead makes the template drift visible.
+	d := regDateRe.FindStringSubmatch(block)
+	if d == nil {
+		return ""
 	}
+	parts = append(parts, "registered="+normalizeCell(d[1]))
 	if len(parts) == 0 {
 		return ""
 	}
@@ -424,7 +430,7 @@ func (p *plugin) Check(ctx context.Context, topic *domain.Topic, creds *domain.T
 	}
 	block, ok := torrentBlock(body)
 	if !ok {
-		return nil, p.gateError(ctx, creds, errors.New("toloka: no torrent block on the topic page"))
+		return nil, p.gateError(creds, errors.New("toloka: no torrent block on the topic page"))
 	}
 	fp := pageFingerprint(block)
 	if fp == "" {
@@ -445,7 +451,7 @@ func (p *plugin) Download(ctx context.Context, topic *domain.Topic, _ *domain.Ch
 	}
 	block, ok := torrentBlock(body)
 	if !ok {
-		return nil, p.gateError(ctx, creds, errors.New("toloka: no torrent block on the topic page"))
+		return nil, p.gateError(creds, errors.New("toloka: no torrent block on the topic page"))
 	}
 	m := dlHrefRe.FindStringSubmatch(block)
 	if m == nil {
@@ -459,7 +465,7 @@ func (p *plugin) Download(ctx context.Context, topic *domain.Topic, _ *domain.Ch
 	// accept, so a status check alone would hand that page to a torrent
 	// client as if it were a file.
 	if !isTorrent(torrent) {
-		return nil, p.gateError(ctx, creds, errors.New("toloka: download did not return a .torrent"))
+		return nil, p.gateError(creds, errors.New("toloka: download did not return a .torrent"))
 	}
 	name := "toloka.torrent"
 	if fm := fileNameRe.FindStringSubmatch(block); fm != nil {
@@ -485,7 +491,7 @@ func isTorrent(body []byte) bool { return len(body) > 0 && body[0] == 'd' }
 // That matters because an expired session is a persistent state: every topic
 // would then make two requests per check against a tracker that 429s at six
 // requests in three seconds.
-func (p *plugin) gateError(_ context.Context, creds *domain.TrackerCredential, fallback error) error {
+func (p *plugin) gateError(creds *domain.TrackerCredential, fallback error) error {
 	if creds == nil {
 		return fallback
 	}
@@ -530,7 +536,7 @@ func (p *plugin) ResolveMetadata(ctx context.Context, rawURL string, creds *doma
 	if title == "" {
 		// The guest stub renders <title></title>. Saying so beats handing
 		// back an empty name that looks like a parsing failure.
-		return nil, p.gateError(ctx, creds, errors.New("toloka: the page carried no title"))
+		return nil, p.gateError(creds, errors.New("toloka: the page carried no title"))
 	}
 	return &registry.Metadata{Title: title, ImageURL: ogImage(body)}, nil
 }
@@ -714,7 +720,7 @@ func (p *plugin) do(ctx context.Context, sess *forumcommon.Session, method, targ
 			method, u.Path, resp.StatusCode)
 	}
 	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("toloka %s %s -> %d", method, target, resp.StatusCode)
+		return nil, fmt.Errorf("toloka %s %s -> %d", method, u.Path, resp.StatusCode)
 	}
 	// limit+1: io.ReadAll on a bare LimitReader cannot tell a body that ended
 	// from one that was cut off, so an oversized .torrent would be truncated

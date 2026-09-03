@@ -62,7 +62,8 @@ Searchable trackers today:
 | Rutor | No | Public search; works with zero configuration |
 | RuTracker | **Yes** | `tracker.php` is login-gated. Add a RuTracker account under **Accounts** first; without one the search reports "needs a tracker account" and other trackers still return results |
 | LostFilm | No | Searches the public series catalog (the site's own search box endpoint). Results are **series** to subscribe to, not individual releases — seeders show as "—" |
-| Kinozal | No | Public `browse.php` search (works anonymously; a stored account's session is reused when present). Cyrillic queries are cp1251-encoded |
+| Kinozal | No — but a **FlareSolverr instance is required** | Public `browse.php` search (works anonymously; a stored account's session is reused when present). Cyrillic queries are cp1251-encoded. Since 2026-09-03 Cloudflare challenges this endpoint, so without `MARAUDER_FLARESOLVERR_URL` the search reports that no solver is configured |
+| Toloka | **Yes** | `tracker.php` is login-gated — a guest gets the search form back with zero rows and no error at all. Add a Toloka account under **Accounts** first; without one the search reports "needs a tracker account" |
 | Anilibria | No | Searches the AniLiberty v1 API. Results are **release pages** to subscribe to — seeders show as "—" |
 
 Per-tracker failures never block the rest: a tracker that is down,
@@ -241,7 +242,7 @@ binary `.torrent` instead of degrading to a magnet.
 | **Account required** | Yes (free) |
 | **Quality selection** | No |
 | **Episode filter** | No |
-| **Cloudflare** | No |
+| **Cloudflare** | **Yes — a FlareSolverr instance is required** |
 | **URL format** | `https://kinozal.me/details.php?id=<id>` |
 
 > **Default domain changed 2026-08-03.** The original `kinozal.tv` stopped
@@ -258,9 +259,23 @@ RuTracker. The infohash is read from the authenticated
 doesn't expose it); the display title + poster come from the details
 page `<title>` (cp1251-decoded) and `og:image`.
 
+> **Cloudflare arrived 2026-09-03.** Kinozal began answering a plain Go
+> client with a managed challenge on `/browse.php`, `/details.php` and
+> `/get_srv_details.php` — the site root still returns 200, which is why the
+> failure looked like a login problem rather than a block. Every Kinozal
+> request now replays a solver-minted `cf_clearance` cookie together with the
+> User-Agent it was issued for, so **`MARAUDER_FLARESOLVERR_URL` must be set**
+> or search, login, checks and downloads all fail. The easiest way is the
+> solver overlay:
+>
+> ```bash
+> docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.solver.yml up -d
+> ```
+
 **Validation status:** verified end-to-end against a live Kinozal account
 (2026-06) — login, infohash resolution, metadata, and download → client
-delivery all confirmed.
+delivery all confirmed. The Cloudflare clearance path was added and
+re-verified against the live site on **2026-09-03**.
 
 ---
 
@@ -331,6 +346,13 @@ that searched for the words "помилка" or "error": the real failure page
 ("Такий псевдонім не існує, або не збігається пароль") contains neither,
 and a successful login answers `302` with an **empty** body, so a wrong
 password used to be saved and reported as a working account.
+
+**Title and poster.** Toloka publishes an `og:image` in its page head, so a
+Toloka topic gets the real release name and its cover art instead of a
+"Toloka topic 33571" placeholder. Both are read as **you**, using the account
+stored under **Accounts** — a guest sees the stub, which has an empty title
+and no image, so an anonymous resolve would silently store a topic with
+neither.
 
 > **Toloka rate-limits hard.** Measured 2026-09-03: six requests inside three
 > seconds earned an `HTTP 429`, and so did roughly a dozen spread over twenty

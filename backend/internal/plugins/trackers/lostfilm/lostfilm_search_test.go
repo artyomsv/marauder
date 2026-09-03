@@ -116,3 +116,25 @@ func TestSearch_MalformedDataObject_StillErrors(t *testing.T) {
 		t.Fatal("a malformed data object must still be an error")
 	}
 }
+
+// TestSearch_UnexpectedDataShape_Errors: only the object and array forms are
+// LostFilm's. Anything else is the endpoint having changed or errored, and
+// treating it as "nothing matched" would report a broken search as an empty
+// one — the same class of lie the array tolerance was added to remove.
+func TestSearch_UnexpectedDataShape_Errors(t *testing.T) {
+	for _, tc := range []struct{ name, body string }{
+		{"string", `{"data":"unauthorized"}`},
+		{"number", `{"data":0}`},
+		{"null", `{"data":null}`},
+		{"key absent", `{"result":"ok"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := newSearchTestPlugin(t, func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = w.Write([]byte(tc.body))
+			})
+			if _, err := p.Search(context.Background(), "x", nil); err == nil {
+				t.Fatal("an unexpected data shape must be an error, not an empty result")
+			}
+		})
+	}
+}

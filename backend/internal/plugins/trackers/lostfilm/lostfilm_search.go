@@ -62,10 +62,18 @@ func (p *plugin) Search(ctx context.Context, query string, creds *domain.Tracker
 	var payload struct {
 		Series []searchSeriesEntry `json:"series"`
 	}
-	if trimmed := bytes.TrimSpace(resp.Data); len(trimmed) > 0 && trimmed[0] == '{' {
+	// Only those two shapes are tolerated. Anything else — a bare string, a
+	// number, null, a missing key — is the endpoint having changed or errored,
+	// and swallowing it would report "nothing matched" for a search that never
+	// ran.
+	switch trimmed := bytes.TrimSpace(resp.Data); {
+	case len(trimmed) > 0 && trimmed[0] == '{': // the matched-results object
 		if err := json.Unmarshal(trimmed, &payload); err != nil {
 			return nil, fmt.Errorf("lostfilm search: decode response: %w", err)
 		}
+	case len(trimmed) > 0 && trimmed[0] == '[': // PHP's empty associative array
+	default:
+		return nil, fmt.Errorf("lostfilm search: unexpected data shape %.20q", trimmed)
 	}
 	var out []registry.SearchResult
 	for _, s := range payload.Series {

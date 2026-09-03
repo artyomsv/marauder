@@ -34,6 +34,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   build-tagged `toloka_live_test.go` makes that re-runnable and reads
   credentials from the environment, so none are stored in the repo.
 
+- **The Add-topic form now says when it is working.** Pasting a URL fires two
+  lookups — identify the tracker, then resolve its title and poster — and a
+  login-gated tracker has to warm a session before it can even read the page,
+  so both can take seconds. Until now the form showed nothing at all during
+  that, so it looked inert and users retyped the URL or gave up. There is now
+  an "Identifying tracker…" line under the field and a skeleton card that
+  occupies exactly the box the resolved preview will, so nothing jumps when it
+  arrives. Both wait for typing to settle, so neither flickers per keystroke.
+
 ### Fixed
 
 - **Toloka had never worked at all.** `Check` looked for `Info hash:` followed
@@ -72,6 +81,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   matched a page nobody had written. They are replaced with markup captured
   verbatim from the live site, including the two traps that broke the first
   draft of this rewrite.
+
+- **Kinozal was fully blocked by Cloudflare — search *and* monitoring.**
+  Kinozal started answering a plain Go client with a managed challenge on
+  `/browse.php`, `/details.php` and `/get_srv_details.php` (measured
+  2026-09-03; the site root still returns 200). The plugin sent no Cloudflare
+  clearance on any request, so search reported "search failed on this
+  tracker", and login, checks and downloads failed the same way behind it.
+  Every Kinozal request now replays the solver-minted `cf_clearance` cookie
+  together with the User-Agent it was issued for — the cookie is bound to the
+  User-Agent, so sending one without the other is the same as sending
+  neither — and a stale clearance is dropped and re-minted exactly once.
+
+  A Kinozal deployment without `MARAUDER_FLARESOLVERR_URL` set now says so
+  (`solver_missing`) instead of blaming the tracker. The shared logic moved
+  out of the RuTracker plugin into a new `cfclearance` package rather than
+  being copied, so both trackers get the same three-way "who is at fault"
+  split.
+
+- **A LostFilm search that matched nothing was reported as a broken search.**
+  LostFilm changes the SHAPE of its JSON with the result count: a search that
+  matches returns `{"data":{"series":[…]}}`, one that matches nothing returns
+  `{"data":[],"result":"ok"}` — PHP encodes an empty associative array as a
+  JSON array. Decoding straight into the object form made every zero-result
+  query fail with "cannot unmarshal array into Go struct field", so the user
+  was told the search broke when in fact nothing had matched. Only those two
+  shapes are now accepted; anything else is still a real error, so a changed
+  endpoint cannot quietly become "no results".
+
+- **A topic added by URL on a login-gated tracker got no name and no poster.**
+  The Add-topic preview and the topic-create path both resolved metadata
+  anonymously, and a fully gated tracker answers a guest with a stub — Toloka
+  serves an empty `<title>` — so the topic was stored with a placeholder name
+  and an empty image. The scheduler self-heals a placeholder name on the first
+  check, but nothing backfills an image, so the poster never appeared. Both
+  paths now resolve as the signed-in user, reusing the same warmed credential
+  the tracker search already used. Anonymous stays the fallback: no stored
+  account, or a login that fails, simply resolves less.
+
+  Toloka also gains `WithMetadata`, reading the release title and the `og:image`
+  poster the site publishes in its page head.
+
+- **A poster URL scraped off a tracker page is now scheme-checked before it is
+  stored.** The value is persisted once and then rendered into an `<img src>`
+  for everyone who later views the topic, so a hostile or compromised page
+  offering `javascript:` or `data:` would have been stored and replayed in
+  every viewer's browser. Only `http`/`https` with a host survive, applied
+  centrally so it covers every current and future tracker plus the preview
+  endpoint. `/trackers/preview` also gains the same per-user single-flight
+  gate `/trackers/search` has, so a burst of re-pastes cannot become a burst
+  of tracker logins.
 
 ## [1.19.7] - 2026-09-03
 

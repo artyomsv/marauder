@@ -179,3 +179,112 @@ func TestRetryOnChallenge_DoesNotRetryOtherErrors(t *testing.T) {
 		t.Errorf("attempts = %d, want 1", calls)
 	}
 }
+
+// countingProvider records the probe URLs InvalidateClearance was called with.
+// It is not concurrency-safe; the tests using it are single-goroutine.
+type countingProvider struct {
+	stubProvider
+	invalidated []string
+}
+
+func (p *countingProvider) InvalidateClearance(probeURL string) {
+	p.invalidated = append(p.invalidated, probeURL)
+}
+
+// TestRetryOnChallenge_DropsTheCachedClearance asserts the half of the retry
+// that the attempt counter cannot see. Retrying WITHOUT invalidating replays
+// the same rejected cookie and is guaranteed to fail the same way, so the
+// second attempt would be pure cost.
+func TestRetryOnChallenge_DropsTheCachedClearance(t *testing.T) {
+	p := &countingProvider{stubProvider: stubProvider{c: registry.Clearance{
+		Cookies: map[string]string{"cf_clearance": "x"}, UserAgent: "UA",
+	}}}
+	withProvider(t, p)
+	probe := "https://kinozal.me/browse.php"
+	_, _ = RetryOnChallenge(probe, func() (int, error) {
+		return 0, registry.ErrCloudflareChallenge
+	})
+	if len(p.invalidated) != 1 || p.invalidated[0] != probe {
+		t.Errorf("invalidated = %v, want exactly [%s]", p.invalidated, probe)
+	}
+}
+
+// TestRetryOnChallenge_NoInvalidateWithoutAChallenge is the inverse guard: a
+// plain failure must leave a working clearance alone, or one flaky request
+// would force a fresh 10-20s solve on the next one.
+func TestRetryOnChallenge_NoInvalidateWithoutAChallenge(t *testing.T) {
+	p := &countingProvider{stubProvider: stubProvider{c: registry.Clearance{
+		Cookies: map[string]string{"cf_clearance": "x"}, UserAgent: "UA",
+	}}}
+	withProvider(t, p)
+	_, _ = RetryOnChallenge("https://kinozal.me/browse.php", func() (int, error) {
+		return 0, errors.New("connection refused")
+	})
+	if len(p.invalidated) != 0 {
+		t.Errorf("invalidated = %v, want none", p.invalidated)
+	}
+}
+
+// TestApply_ProviderErrorIsReturnedNotSwallowed locks the reason Apply returns
+// an error at all. The request can still proceed unadorned — plenty of paths
+// are ungated — but if it IS challenged, only this error lets Cause blame the
+// solver instead of the tracker (issue #158).
+func TestApply_ProviderErrorIsReturnedNotSwallowed(t *testing.T) {
+	boom := errors.New("flaresolverr: connection refused")
+	withProvider(t, stubProvider{err: boom})
+	jar, _ := cookiejar.New(nil)
+	u, _ := url.Parse("https://kinozal.me/browse.php")
+
+	c, err := Apply(context.Background(), "kinozal", jar, u, u.String())
+	if !errors.Is(err, boom) {
+		t.Fatalf("err = %v, want the provider's error", err)
+	}
+	if c.Valid() {
+		t.Error("a failed mint must not yield a usable clearance")
+	}
+	if got := len(jar.Cookies(u)); got != 0 {
+		t.Errorf("jar got %d cookies, want 0", got)
+	}
+	// And the caller can still tell the tracker apart from the solver.
+	if !errors.Is(Cause(err), registry.ErrClearanceUnavailable) {
+		t.Error("Cause must blame the solver for a provider error")
+	}
+}
+
+// TestApply_SecureOnlyOnHTTPS pins the cookie flag. Marking it Secure keeps
+// the jar from replaying the clearance on a plaintext redirect hop; leaving it
+// unset on http is what keeps the plugins' httptest servers working.
+func TestApply_SecureOnlyOnHTTPS(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		raw        string
+		wantSecure bool
+	}{
+		{"https origin", "https://kinozal.me/browse.php", true},
+		{"http test server", "http://127.0.0.1:1/browse.php", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			withProvider(t, stubProvider{c: registry.Clearance{
+				Cookies: map[string]string{"cf_clearance": "x"}, UserAgent: "UA",
+			}})
+			jar := &recordingJar{}
+			u, _ := url.Parse(tc.raw)
+			if _, err := Apply(context.Background(), "kinozal", jar, u, tc.raw); err != nil {
+				t.Fatalf("Apply: %v", err)
+			}
+			if len(jar.set) != 1 {
+				t.Fatalf("set %d cookies, want 1", len(jar.set))
+			}
+			if jar.set[0].Secure != tc.wantSecure {
+				t.Errorf("Secure = %v, want %v", jar.set[0].Secure, tc.wantSecure)
+			}
+		})
+	}
+}
+
+// recordingJar captures what Apply sets; net/http/cookiejar drops the Secure
+// flag on read, so a real jar cannot answer this question.
+type recordingJar struct{ set []*http.Cookie }
+
+func (j *recordingJar) SetCookies(_ *url.URL, cs []*http.Cookie) { j.set = append(j.set, cs...) }
+func (j *recordingJar) Cookies(*url.URL) []*http.Cookie          { return nil }

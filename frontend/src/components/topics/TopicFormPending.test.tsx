@@ -119,3 +119,39 @@ describe("TopicForm resolving indicators", () => {
     );
   });
 });
+
+describe("TopicForm debounce gate", () => {
+  // Both spinners require the debounce to have caught up (urlSettled), so a
+  // half-typed URL does not flash "Identifying tracker…" on every keystroke.
+  it("shows no spinner for a URL too short to be looked up", async () => {
+    mockApi.previewTracker.mockImplementation(() => new Promise(() => {}));
+    renderForm();
+
+    await userEvent.type(screen.getByLabelText(/url or magnet link/i), "https:/");
+
+    expect(screen.queryByText(/identifying tracker/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/resolving title and poster/i)).not.toBeInTheDocument();
+    expect(mockApi.previewTracker).not.toHaveBeenCalled();
+  });
+
+  // The preview is gated on a tracker having claimed the URL, so a recognised
+  // shape that no plugin owns costs no page fetch at all.
+  it("does not fetch a preview when no tracker matches", async () => {
+    mockApi.get.mockImplementation((path: string) => {
+      if (path.startsWith("/trackers/match")) return Promise.reject(new Error("404"));
+      if (path.startsWith("/clients")) return Promise.resolve({ clients: [] });
+      if (path.startsWith("/credentials")) return Promise.resolve({ credentials: [] });
+      return Promise.resolve({});
+    });
+    renderForm();
+
+    await userEvent.type(
+      screen.getByLabelText(/url or magnet link/i),
+      "https://unknown.example/t/1",
+    );
+
+    await waitFor(() => expect(mockApi.get).toHaveBeenCalled());
+    expect(mockApi.previewTracker).not.toHaveBeenCalled();
+    expect(screen.queryByText(/resolving title and poster/i)).not.toBeInTheDocument();
+  });
+});

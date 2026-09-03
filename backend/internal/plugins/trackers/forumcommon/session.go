@@ -48,14 +48,7 @@ func New() *SessionStore {
 // GetOrCreate returns the existing session for the key, or builds a fresh
 // one with its own cookie jar.
 func (s *SessionStore) GetOrCreate(key string, userAgent string) *Session {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if existing, ok := s.sessions[key]; ok && time.Now().Before(existing.ExpiresAt) {
-		return existing
-	}
-	sess := NewSession(userAgent)
-	s.sessions[key] = sess
-	return sess
+	return s.GetOrCreateWith(key, userAgent, nil)
 }
 
 // Invalidate forgets a session — used when a tracker returns a login page
