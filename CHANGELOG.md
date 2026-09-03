@@ -7,7 +7,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Rutor now delivers the real `.torrent` file, plus title and poster.**
+  `Download` reads the release magnet from the topic page as before, then
+  upgrades it to the actual torrent bytes from the mirror's download host
+  (`https://d.rutor.info/download/<id>`) — a magnet has to find DHT/PEX peers
+  before a client can resolve its metadata, and the file does not. The file is
+  accepted **only** when its infohash matches the page magnet, because `Check`
+  derives the topic hash from that magnet and a mismatched file would record a
+  delivery that never matches the check; any failure falls open to the magnet,
+  so a download-host outage degrades rather than breaks. It is returned
+  *without* a magnet alongside it, since qBittorrent's `Add` prefers
+  `MagnetURI` whenever it is set and would otherwise throw the file away.
+
+  The plugin also implements `WithMetadata` now: the AddTopic preview and the
+  stored topic get the real release name and poster instead of a
+  "Rutor torrent 1104877" placeholder. Titles are stripped of the mirror's own
+  branding — every mirror renders `<title>` as `rutor.info :: Real Name`, and
+  that prefix was previously stored as part of the display name.
+
 ### Fixed
+
+- **Rutor pointed at a dead mirror, so every check, search and download
+  failed.** The compiled default domain was `rutor.org`, which is a **stale
+  clone**: measured 2026-09-03 its newest front-page release was id 1087871
+  while the live mirrors were already at 1104882 — roughly 17,000 releases
+  behind — and it answers every current topic id with
+  `404 Раздача не существует` from behind Cloudflare. Because `canonicalURL`
+  rewrites each request onto the active domain, a topic added from a working
+  mirror was still fetched from `rutor.org` and reported as a bare 404, which
+  reads like the tracker being down rather than a wrong-host bug.
+
+  `defaultDomain` and `knownDomains` move to `rutor.info` (canonical) and
+  `new-rutor.org`. `rutor.org` survives in a new `parseDomains` list so topics
+  added before this release still parse, but no request is ever built against
+  it and domain rotation can no longer land there — rotation never migrates
+  back, so a dead host in the ring is a one-way trip. The two live mirrors
+  share one id space, so a topic URL from either resolves against the other;
+  only `rutor.info` serves `.torrent` bytes, so `torrentURLs` tries the active
+  domain's `d.` host and then falls back to the canonical one.
+
+  The plugin's SSRF guard was extended to allow exactly one shape beyond the
+  mirrors themselves — a single `d.` prefix on an allowed host — by stripping
+  the prefix and re-checking the base, so `d.evil.com` is refused exactly like
+  `evil.com` is.
+
+  Rutor is now **validated** rather than alpha: verified end-to-end against the
+  live site with no account on 2026-09-03 (change detection, a real `.torrent`
+  for topics on both mirrors, metadata, and search), and the check is
+  re-runnable via the new build-tagged `rutor_live_test.go`
+  (`go test -tags=live -run TestLive ./internal/plugins/trackers/rutor/...`),
+  which is excluded from CI because it touches the real site.
 
 - **The nightly client canary blamed torrent clients for a registry outage**
   (issues #166, #167, #168 — a repeat of #119-#121). On 2026-08-28 all three
