@@ -43,6 +43,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   occupies exactly the box the resolved preview will, so nothing jumps when it
   arrives. Both wait for typing to settle, so neither flickers per keystroke.
 
+### Changed
+
+- **Docs and the marauder.cc site now say Kinozal needs a solver.** The
+  Cloudflare change was recorded in `docs/trackers.md` but had not reached the
+  site or the roadmap, so the Kinozal page — the one a search visitor lands on
+  — still described a plain login-and-scrape setup that no longer works at all.
+  The tracker table, the tracker page, the Cloudflare FAQ and `docs/ROADMAP.md`
+  all now name the requirement.
+
+- **`docs/ROADMAP.md` no longer calls validated plugins "alpha".** Kinozal,
+  LostFilm, AniDub, NNM-Club, Anilibria and Rutor were all verified against
+  live sites over the past months and the README and site said so, but the
+  roadmap still carried their original "alpha, fixture-tested" lines. Tapochek
+  is now the only tracker marked alpha there, which matches every other page.
+
 ### Fixed
 
 - **Toloka had never worked at all.** `Check` looked for `Info hash:` followed

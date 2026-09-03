@@ -126,15 +126,18 @@ export const trackerPages: TrackerPageContent[] = [
       "kinozal автоскачивание",
       "kinozal tv tracker",
       "kinozal sonarr alternative",
+      "kinozal cloudflare",
     ],
     intro:
-      "Kinozal is a popular Russian-language tracker for movies and TV, reachable at kinozal.me and kinozal.guru since the original kinozal.tv domain stopped resolving. Like other forum trackers, it gates content behind a login and serves it from topic threads rather than an indexer API. Marauder logs in with your Kinozal account and monitors the topic for new .torrent attachments, and can switch between the mirrors from Settings → Tracker domains.",
+      "Kinozal is a popular Russian-language tracker for movies and TV, reachable at kinozal.me and kinozal.guru since the original kinozal.tv domain stopped resolving. Like other forum trackers, it gates content behind a login and serves it from topic threads rather than an indexer API. Since September 2026 it also answers plain HTTP clients with a Cloudflare challenge, so Marauder needs a FlareSolverr instance to reach it at all. With one running, Marauder logs in with your Kinozal account and monitors the topic for new .torrent attachments, and can switch between the mirrors from Settings → Tracker domains.",
     howItWorks: [
+      "Solves the Cloudflare challenge once through FlareSolverr, then replays the resulting clearance cookie with the User-Agent it was issued for — Marauder's own requests, so they can carry your login and a binary .torrent.",
       "Authenticates with your Kinozal account and reuses the encrypted session for each scheduled check.",
       "Detects in-place .torrent replacements on the topic page and forwards them to your download client.",
       "Runs on the same per-topic schedule and backoff as every other Marauder tracker.",
     ],
     setup: [
+      "Start the solver overlay: `docker compose -f docker-compose.yml -f docker-compose.solver.yml up -d`. It runs FlareSolverr and points Marauder at it in one step — a solver that nothing points at behaves exactly like no solver at all. Already run FlareSolverr elsewhere? Set MARAUDER_FLARESOLVERR_URL instead.",
       "Add your Kinozal credentials under Credentials (encrypted at rest).",
       "Paste the topic URL as a new topic and pick your client.",
       "Marauder resolves the display title and starts watching on the next tick.",
@@ -143,7 +146,12 @@ export const trackerPages: TrackerPageContent[] = [
       {
         question: "Is the Kinozal integration ready to use?",
         answer:
-          "Yes. The Kinozal plugin is verified end-to-end against a live account — login, infohash detection (read from Kinozal's get_srv_details endpoint), metadata (title + poster), and download to your torrent client are all confirmed working as of June 2026.",
+          "Yes. The Kinozal plugin is verified end-to-end against a live account — login, infohash detection (read from Kinozal's get_srv_details endpoint), metadata (title + poster), and download to your torrent client are all confirmed working. Validated June 2026, and re-verified in September 2026 after Cloudflare started challenging the site.",
+      },
+      {
+        question: "Why does Kinozal need FlareSolverr now?",
+        answer:
+          "Cloudflare began challenging Kinozal's browse, details and get_srv_details endpoints in September 2026. The site root still answers normally, which makes the tracker look reachable while every topic check quietly fails. Without a solver Marauder cannot log in, detect updates, or download — so search, monitoring and delivery all stop together. Marauder now says so plainly instead of blaming the tracker: an install with no MARAUDER_FLARESOLVERR_URL set reports a missing solver, which is the only thing that actually fixes it.",
       },
     ],
   },

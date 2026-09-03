@@ -78,9 +78,14 @@ scaffold into a usable product.
       search, and the real `.torrent` from `dl.php`. Cloudflare-gated, so it
       needs a FlareSolverr instance to mint a clearance (see
       `MARAUDER_FLARESOLVERR_URL`)
-- [x] `kinozal` tracker plugin — alpha, fixture-tested
-- [x] `nnmclub` tracker plugin — alpha, fixture-tested, opts into
-      `WithCloudflare`
+- [x] `kinozal` tracker plugin — **validated against a live account**
+      (2026-06; re-verified 2026-09-03). Cloudflare began challenging
+      `/browse.php`, `/details.php` and `/get_srv_details.php` on 2026-09-03
+      while the site root kept answering 200, so it now needs a FlareSolverr
+      instance like RuTracker does (see `MARAUDER_FLARESOLVERR_URL`)
+- [x] `nnmclub` tracker plugin — **validated end-to-end against a live
+      release topic**, anonymous. Opts into `WithCloudflare`, but is not
+      challenged in practice, so it needs no solver
 - [x] Cloudflare solver sidecar (`chromedp`-based) — separate Go service
       `cfsolver/`, Debian-slim image with chromium, exposed via the
       `cfsolver` compose profile, in-process client at
@@ -109,11 +114,16 @@ touching config files.
 **Goal:** close the gap on the remaining CIS forum trackers and legacy clients.
 
 - [x] `lostfilm` tracker plugin (with quality selection via WithQuality
-      capability) — alpha, structurally complete
-- [x] `anilibria` tracker plugin — uses the current AniLiberty v1 API and
-      retains compatibility with legacy Anilibria v3 topic URLs
-- [x] `anidub` tracker plugin — alpha, with WithQuality
-- [x] `rutor` tracker plugin — public, no auth
+      capability) — **validated end-to-end against a live account**,
+      including interactive captcha login
+- [x] `anilibria` tracker plugin — **validated read-only against the live
+      AniLiberty v1 API**; retains compatibility with legacy Anilibria v3
+      topic URLs
+- [x] `anidub` tracker plugin — **validated end-to-end against a live
+      account**, with WithQuality
+- [x] `rutor` tracker plugin — public, no auth — **validated 2026-09-03**
+      against the live site (Check, Download of a real `.torrent`, metadata
+      and search, on both live mirrors)
 - [x] `toloka` tracker plugin — **validated 2026-09-03 against a live account**
 - [x] `unionpeer` tracker plugin — alpha — **removed 2026-08-03, site defunct**
 - [x] `tapochek` tracker plugin — alpha
