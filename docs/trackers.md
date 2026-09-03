@@ -309,10 +309,15 @@ magnet, and `ResolveMetadata` returned the title and poster.
 Public Russian-language tracker. One page = one release. Marauder reads
 the release magnet from the topic page, then upgrades it to the real
 `.torrent` file from the mirror's download host
-(`https://d.rutor.info/download/<id>`) — a magnet needs DHT peers to
+(`https://d.rutor.info/download/<id>`, falling back to
+`https://rutor.info/download/<id>`) — a magnet needs peer discovery to
 resolve its metadata, the file does not. The file is only accepted when
 its infohash matches the page magnet; otherwise Marauder falls back to
-the magnet rather than delivering a mismatched torrent.
+the magnet rather than delivering a mismatched torrent. That fallback
+magnet keeps the announce URLs the page published, so it does not depend
+on DHT alone. When no mirror serves a usable file Marauder logs a
+warning — a permanently broken download host would otherwise downgrade
+every rutor delivery silently.
 
 > **Default domain changed 2026-09-03.** The original `rutor.org` is a
 > **stale clone**: its newest release was id 1087871 while the live mirrors
@@ -324,11 +329,11 @@ the magnet rather than delivering a mismatched torrent.
 > but Marauder no longer sends requests to it and domain rotation can no
 > longer land there.
 >
-> Only `rutor.info` serves `.torrent` bytes. `d.new-rutor.org` presents a
-> certificate that does not cover it, and `new-rutor.org`'s own
-> `/parse/d.rutor.org/download/<id>` link returns an HTML page rather than a
-> torrent — so a topic stored against `new-rutor.org` fetches its file from
-> `d.rutor.info` instead.
+> Only `rutor.info` serves `.torrent` bytes, on both `d.rutor.info/download/<id>`
+> and plain `rutor.info/download/<id>`. `new-rutor.org` serves neither:
+> `d.new-rutor.org` presents a certificate that does not cover it, and its own
+> `/download/<id>` answers 200 with an HTML page. A topic stored against
+> `new-rutor.org` therefore fetches its file from `rutor.info` instead.
 
 **Validation status:** verified end-to-end against the live site on
 2026-09-03 with no account — change detection, a real `.torrent` delivered

@@ -2,7 +2,8 @@
 
 // Live verification of the rutor plugin against the real site. Skipped by
 // every ordinary `go test` run; opt in with `-tags=live`. It makes real
-// requests to rutor mirrors, so it is deliberately not part of CI.
+// requests to rutor mirrors, so it is deliberately not part of CI — no
+// workflow sets this tag (ci.yml runs untagged, e2e.yml uses `-tags=e2e`).
 //
 //	go test -tags=live -run TestLive -v ./internal/plugins/trackers/rutor/...
 //
@@ -13,12 +14,10 @@ package rutor
 
 import (
 	"context"
-	"net/http"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/artyomsv/marauder/backend/internal/domain"
 	"github.com/artyomsv/marauder/backend/internal/infohash"
 )
 
@@ -33,10 +32,12 @@ var liveTopics = []struct {
 }
 
 func livePlugin() *plugin {
-	return &plugin{httpClient: &http.Client{Timeout: 30 * time.Second}}
+	c := newHTTPClient()
+	c.Timeout = 30 * time.Second
+	return &plugin{httpClient: c}
 }
 
-func TestLiveCanParse(t *testing.T) {
+func TestLive_CanParse_AcceptsLiveAndRetiredHosts(t *testing.T) {
 	p := livePlugin()
 	for _, tc := range liveTopics {
 		if !p.CanParse(tc.url) {
@@ -49,7 +50,7 @@ func TestLiveCanParse(t *testing.T) {
 	}
 }
 
-func TestLiveCheckAndDownload(t *testing.T) {
+func TestLive_CheckAndDownload_DeliversRealTorrent(t *testing.T) {
 	for _, tc := range liveTopics {
 		t.Run(tc.name, func(t *testing.T) {
 			p := livePlugin()
@@ -97,7 +98,39 @@ func TestLiveCheckAndDownload(t *testing.T) {
 	}
 }
 
-func TestLiveResolveMetadata(t *testing.T) {
+// TestLive_MagnetFallback_CarriesTrackers checks the degraded path against
+// real markup: the unit tests use a fixture, and the fallback magnet is
+// never observed by TestLive_CheckAndDownload (the file wins there).
+func TestLive_MagnetFallback_CarriesTrackers(t *testing.T) {
+	p := livePlugin()
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	target, err := p.canonicalURL(liveTopics[0].url)
+	if err != nil {
+		t.Fatalf("canonicalURL: %v", err)
+	}
+	body, err := p.fetch(ctx, target)
+	if err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+	magnet := magnetFrom(body)
+	t.Logf("magnet: %s", magnet)
+	if magnet == "" {
+		t.Fatal("no magnet found on a live topic page")
+	}
+	if !strings.Contains(magnet, "&tr=") {
+		t.Errorf("magnet carries no tracker; a hash-only magnet needs DHT to resolve: %q", magnet)
+	}
+	if strings.Contains(magnet, "&amp;") {
+		t.Errorf("magnet is still HTML-escaped: %q", magnet)
+	}
+	if _, err := infohash.FromMagnet(magnet); err != nil {
+		t.Errorf("magnet infohash unreadable: %v", err)
+	}
+}
+
+func TestLive_ResolveMetadata_ReturnsTitleAndPoster(t *testing.T) {
 	for _, tc := range liveTopics {
 		t.Run(tc.name, func(t *testing.T) {
 			p := livePlugin()
@@ -122,7 +155,7 @@ func TestLiveResolveMetadata(t *testing.T) {
 	}
 }
 
-func TestLiveSearch(t *testing.T) {
+func TestLive_Search_ReturnsResults(t *testing.T) {
 	p := livePlugin()
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -141,6 +174,10 @@ func TestLiveSearch(t *testing.T) {
 	if len(results) == 0 {
 		t.Error("Search returned no results")
 	}
+	// A search result must feed straight back into the create pipeline.
+	for _, r := range results {
+		if !p.CanParse(r.URL) {
+			t.Errorf("search result URL %q does not parse", r.URL)
+		}
+	}
 }
-
-var _ = domain.Topic{}

@@ -25,7 +25,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stored topic get the real release name and poster instead of a
   "Rutor torrent 1104877" placeholder. Titles are stripped of the mirror's own
   branding — every mirror renders `<title>` as `rutor.info :: Real Name`, and
-  that prefix was previously stored as part of the display name.
+  that prefix was previously stored as part of the display name. Only a name
+  that matches a mirror Marauder actually knows is stripped, so a release
+  called `Halo.3::ODST` or `S.W.A.T :: Season 8` keeps its own title.
+
+  Both the magnet and the poster are now read from the block that holds them
+  (`<div id="download">` and `<table id="details">`) rather than from the first
+  match on the page: a rutor topic page also lists "similar releases" with
+  magnets of their own, and matching the first one would have monitored a
+  different release. Nested tables are handled by the shared depth-balanced
+  scanner, and both anchors fail open to the previous whole-page behaviour.
 
 ### Fixed
 
@@ -51,7 +60,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The plugin's SSRF guard was extended to allow exactly one shape beyond the
   mirrors themselves — a single `d.` prefix on an allowed host — by stripping
   the prefix and re-checking the base, so `d.evil.com` is refused exactly like
-  `evil.com` is.
+  `evil.com` is. The same guard now also runs on **every redirect hop**, not
+  just the first URL: previously a mirror operator (or whoever picks up a
+  lapsed mirror domain — rutor.org is already a stale clone) could 302 a topic
+  page at an internal address and have its `<title>` surfaced in the UI.
+
+- **The rutor magnet lost its trackers.** The magnet regex stopped at the bare
+  `&` of the page's HTML-escaped `&amp;`, so every `&tr=` announce URL and the
+  `&dn=` name were cut off, leaving a hash-only magnet that can only be
+  resolved through DHT. That is the payload the new `.torrent` path falls back
+  to — i.e. it was weakest exactly when the download host was broken. The
+  escaped form is now matched and unescaped, verified against live markup.
+
+- **A rutor infohash could be silently truncated.** The btih pattern accepted
+  any run of hex characters, so a base32 magnet (`urn:btih:ABCDEF2345MNOP…`)
+  yielded a 10-character partial match that `Check` recorded as the topic hash
+  and reported as success. The hash is now parsed by `infohash.FromMagnet`,
+  which accepts 40-hex or 32-base32 and rejects anything else, so a malformed
+  magnet fails loudly. Deriving it there instead of from a second regex also
+  guarantees `Check` and `Download` agree on what the topic is.
+
+- **A stored `http://` rutor topic was fetched in plaintext.** `canonicalURL`
+  re-pointed the host but kept the stored scheme, and the magnet on that page
+  is the value `Check` trusts and the `.torrent` is verified against. It now
+  forces `https`.
+
+- **A rutor poster URL was passed through with any scheme.** `ResolveMetadata`
+  returned the uploader-controlled `src` verbatim into `topics.image_url`,
+  which the frontend renders as an `<img src>`. Only `http(s)` and relative
+  forms are accepted now; a bare-relative `src` is resolved against the mirror
+  rather than reaching the browser unresolved.
 
   Rutor is now **validated** rather than alpha: verified end-to-end against the
   live site with no account on 2026-09-03 (change detection, a real `.torrent`
