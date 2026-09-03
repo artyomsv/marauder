@@ -339,7 +339,17 @@ every rutor delivery silently.
 2026-09-03 with no account — change detection, a real `.torrent` delivered
 for topics on **both** live mirrors, title and poster resolution, and
 search. On every topic tested the page magnet's infohash matched the
-downloaded `.torrent` exactly. The check is re-runnable:
+downloaded `.torrent` exactly.
+
+The same day it was also exercised through a running Marauder instance
+rather than the plugin alone: `GET /trackers/match` reported no credentials
+required, `GET /trackers/preview` returned the real release title and
+poster, and `GET /trackers/search` returned live results with sizes and
+seeder counts and an empty `errors` array. Every search result URL parses
+back into a topic, which is the part that matters — picking a result has to
+feed the normal add-topic flow.
+
+The plugin-level check is re-runnable:
 
 ```bash
 docker run --rm -v "$PWD/backend:/backend" -w //backend golang:1.25 \

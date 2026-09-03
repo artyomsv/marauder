@@ -183,6 +183,56 @@ export const trackerPages: TrackerPageContent[] = [
       },
     ],
   },
+  {
+    slug: "rutor",
+    description:
+      "Monitor Rutor topics with no account and no solver. Marauder searches Rutor, watches a release page for changes, and hands the real .torrent file to your client — not just a magnet.",
+    keywords: [
+      "rutor monitor",
+      "rutor auto download",
+      "rutor автоскачивание",
+      "rutor поиск",
+      "rutor tracker watcher",
+      "rutor не работает",
+      "rutor зеркало",
+    ],
+    intro:
+      "Rutor is a public Russian-language tracker, and it is the one plugin in Marauder that needs no setup at all — no account, no Cloudflare solver, no API key. Paste a release URL, or search Rutor from inside Marauder, and it watches that page for a new torrent. When one appears, Marauder fetches the real .torrent file from Rutor's download host and hands it straight to qBittorrent, Transmission, Deluge or µTorrent.",
+    howItWorks: [
+      "Reads the release magnet from the topic page's download block, so the 'similar releases' list further down the page can never be mistaken for the release you are watching.",
+      "Upgrades that magnet to the real .torrent file from Rutor's download host, accepting it only when its infohash matches the page magnet — and falling back to the magnet, trackers intact, if no mirror serves a usable file.",
+      "Resolves the real release name and poster from the topic page, so a new topic shows a proper title instead of an id.",
+      "Searches Rutor by free text from the Add topic screen and hands the chosen result straight into the normal add-topic flow.",
+      "Follows Rutor's live mirrors automatically: rutor.info is canonical, new-rutor.org is the fallback, and topics saved against the retired rutor.org are re-pointed for you.",
+    ],
+    setup: [
+      "Nothing to configure — Rutor needs no account, so there is no credential to add.",
+      "Paste a Rutor release URL as a new topic, or use the Search trackers tab and pick a result.",
+      "Choose the client and category you want, and Marauder does the rest on its normal check schedule.",
+    ],
+    faq: [
+      {
+        question: "Do I need a Rutor account?",
+        answer:
+          "No. Rutor's release pages, .torrent downloads and search are all publicly accessible, so Marauder never asks you for credentials. Verified end to end against the live site on 3 September 2026 with no account: change detection, the real .torrent file, title and poster resolution, and search.",
+      },
+      {
+        question: "Does Marauder give my client a magnet or a real .torrent file?",
+        answer:
+          "A real .torrent file whenever Rutor serves one, because a magnet has to find peers before a client can even read what it contains. Marauder only accepts the file when its infohash matches the magnet on the release page, so it can never deliver a different torrent than the one it is watching. If no mirror serves a usable file it falls back to the page magnet, announce URLs included.",
+      },
+      {
+        question: "Which Rutor domain does Marauder use?",
+        answer:
+          "rutor.info by default, with new-rutor.org as a mirror. The old rutor.org is a frozen clone — as of 3 September 2026 it was roughly 17,000 releases behind and answered current topic ids with a 'release does not exist' page — so Marauder no longer sends requests there. Topics you saved against it keep working: they are transparently re-pointed at the live mirror.",
+      },
+      {
+        question: "Can I search Rutor from inside Marauder?",
+        answer:
+          "Yes. Open Topics, choose Add topic, and switch to the Search trackers tab. Rutor needs no account, so its results appear with no configuration at all — title, size and seeder count — and clicking one prefills the add-topic form.",
+      },
+    ],
+  },
 ];
 
 export const trackerPageSlugs = trackerPages.map((p) => p.slug);
