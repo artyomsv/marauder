@@ -7,7 +7,109 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Rutor now delivers the real `.torrent` file, plus title and poster.**
+  `Download` reads the release magnet from the topic page as before, then
+  upgrades it to the actual torrent bytes from the mirror's download host
+  (`https://d.rutor.info/download/<id>`) — a magnet has to find DHT/PEX peers
+  before a client can resolve its metadata, and the file does not. The file is
+  accepted **only** when its infohash matches the page magnet, because `Check`
+  derives the topic hash from that magnet and a mismatched file would record a
+  delivery that never matches the check; any failure falls open to the magnet,
+  so a download-host outage degrades rather than breaks. It is returned
+  *without* a magnet alongside it, since qBittorrent's `Add` prefers
+  `MagnetURI` whenever it is set and would otherwise throw the file away.
+
+  The plugin also implements `WithMetadata` now: the AddTopic preview and the
+  stored topic get the real release name and poster instead of a
+  "Rutor torrent 1104877" placeholder. Titles are stripped of the mirror's own
+  branding — every mirror renders `<title>` as `rutor.info :: Real Name`, and
+  that prefix was previously stored as part of the display name. Only a name
+  that matches a mirror Marauder actually knows is stripped, so a release
+  called `Halo.3::ODST` or `S.W.A.T :: Season 8` keeps its own title.
+
+  Both the magnet and the poster are now read from the block that holds them
+  (`<div id="download">` and `<table id="details">`) rather than from the first
+  match on the page: a rutor topic page also lists "similar releases" with
+  magnets of their own, and matching the first one would have monitored a
+  different release. Nested tables are handled by the shared depth-balanced
+  scanner, and both anchors fail open to the previous whole-page behaviour.
+
 ### Fixed
+
+- **Rutor pointed at a dead mirror, so every check, search and download
+  failed.** The compiled default domain was `rutor.org`, which is a **stale
+  clone**: measured 2026-09-03 its newest front-page release was id 1087871
+  while the live mirrors were already at 1104882 — roughly 17,000 releases
+  behind — and it answers every current topic id with
+  `404 Раздача не существует` from behind Cloudflare. Because `canonicalURL`
+  rewrites each request onto the active domain, a topic added from a working
+  mirror was still fetched from `rutor.org` and reported as a bare 404, which
+  reads like the tracker being down rather than a wrong-host bug.
+
+  `defaultDomain` and `knownDomains` move to `rutor.info` (canonical) and
+  `new-rutor.org`. `rutor.org` survives in a new `parseDomains` list so topics
+  added before this release still parse, but no request is ever built against
+  it and domain rotation can no longer land there — rotation never migrates
+  back, so a dead host in the ring is a one-way trip. The two live mirrors
+  share one id space, so a topic URL from either resolves against the other;
+  only `rutor.info` serves `.torrent` bytes, so `torrentURLs` tries the active
+  domain's `d.` host and then falls back to the canonical one.
+
+  The plugin's SSRF guard was extended to allow exactly one shape beyond the
+  mirrors themselves — a single `d.` prefix on an allowed host — by stripping
+  the prefix and re-checking the base, so `d.evil.com` is refused exactly like
+  `evil.com` is. The same guard now also runs on **every redirect hop**, not
+  just the first URL: previously a mirror operator (or whoever picks up a
+  lapsed mirror domain — rutor.org is already a stale clone) could 302 a topic
+  page at an internal address and have its `<title>` surfaced in the UI.
+
+- **The rutor magnet lost its trackers.** The magnet regex stopped at the bare
+  `&` of the page's HTML-escaped `&amp;`, so every `&tr=` announce URL and the
+  `&dn=` name were cut off, leaving a hash-only magnet that can only be
+  resolved through DHT. That is the payload the new `.torrent` path falls back
+  to — i.e. it was weakest exactly when the download host was broken. The
+  escaped form is now matched and unescaped, verified against live markup.
+
+- **A rutor infohash could be silently truncated.** The btih pattern accepted
+  any run of hex characters, so a base32 magnet (`urn:btih:ABCDEF2345MNOP…`)
+  yielded a 10-character partial match that `Check` recorded as the topic hash
+  and reported as success. The hash is now parsed by `infohash.FromMagnet`,
+  which accepts 40-hex or 32-base32 and rejects anything else, so a malformed
+  magnet fails loudly. Deriving it there instead of from a second regex also
+  guarantees `Check` and `Download` agree on what the topic is.
+
+- **A stored `http://` rutor topic was fetched in plaintext.** `canonicalURL`
+  re-pointed the host but kept the stored scheme, and the magnet on that page
+  is the value `Check` trusts and the `.torrent` is verified against. It now
+  forces `https`.
+
+- **One stalled rutor mirror could starve every other download host.** The
+  scheduler hands `Download` a single `TrackerHTTPTimeout` (30s) for the page
+  fetch *and* all four `.torrent` candidates together, and the loop passed that
+  one context to each attempt. A host that stalls rather than refusing — a
+  blackholed mirror, which is what a dying one does — consumed the entire
+  budget, and the reachable canonical host then failed instantly on an expired
+  context. The magnet fallback was still correct, but it was taken while a
+  working `.torrent` was one request away. Each candidate now gets its own 8s
+  slice of the caller's context (`context.WithTimeout` takes the earlier
+  deadline, so this can never extend the parent), and the loop stops early on
+  an already-dead parent rather than blaming the mirrors for our own expired
+  budget in the exhaustion warning.
+
+- **A rutor poster URL was passed through with any scheme.** `ResolveMetadata`
+  returned the uploader-controlled `src` verbatim into `topics.image_url`,
+  which the frontend renders as an `<img src>`. Only `http(s)` and relative
+  forms are accepted now; a bare-relative `src` is resolved against the mirror
+  rather than reaching the browser unresolved.
+
+  Rutor is now **validated** rather than alpha: verified end-to-end against the
+  live site with no account on 2026-09-03 (change detection, a real `.torrent`
+  for topics on both mirrors, metadata, and search), and the check is
+  re-runnable via the new build-tagged `rutor_live_test.go`
+  (`go test -tags=live -run TestLive ./internal/plugins/trackers/rutor/...`),
+  which is excluded from CI because it touches the real site.
 
 - **The nightly client canary blamed torrent clients for a registry outage**
   (issues #166, #167, #168 — a repeat of #119-#121). On 2026-08-28 all three

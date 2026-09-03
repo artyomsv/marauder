@@ -295,13 +295,75 @@ magnet, and `ResolveMetadata` returned the title and poster.
 
 ---
 
+## Rutor (anonymous, no account)
+
+| | |
+|---|---|
+| **Plugin name** | `rutor` |
+| **Account required** | No (anonymous) |
+| **Quality selection** | No |
+| **Episode filter** | No |
+| **Cloudflare** | No |
+| **URL format** | `https://rutor.info/torrent/<id>/<slug>` |
+
+Public Russian-language tracker. One page = one release. Marauder reads
+the release magnet from the topic page, then upgrades it to the real
+`.torrent` file from the mirror's download host
+(`https://d.rutor.info/download/<id>`, falling back to
+`https://rutor.info/download/<id>`) — a magnet needs peer discovery to
+resolve its metadata, the file does not. The file is only accepted when
+its infohash matches the page magnet; otherwise Marauder falls back to
+the magnet rather than delivering a mismatched torrent. That fallback
+magnet keeps the announce URLs the page published, so it does not depend
+on DHT alone. When no mirror serves a usable file Marauder logs a
+warning — a permanently broken download host would otherwise downgrade
+every rutor delivery silently.
+
+> **Default domain changed 2026-09-03.** The original `rutor.org` is a
+> **stale clone**: its newest release was id 1087871 while the live mirrors
+> were already at 1104882 — roughly 17,000 releases behind — and it answers
+> current topic ids with `404 Раздача не существует`. The plugin default is
+> now `rutor.info`, with `new-rutor.org` as the mirror. Both live mirrors
+> share one id space, so a topic URL from either resolves against the other.
+> `rutor.org` still parses so topics added before the change keep working,
+> but Marauder no longer sends requests to it and domain rotation can no
+> longer land there.
+>
+> Only `rutor.info` serves `.torrent` bytes, on both `d.rutor.info/download/<id>`
+> and plain `rutor.info/download/<id>`. `new-rutor.org` serves neither:
+> `d.new-rutor.org` presents a certificate that does not cover it, and its own
+> `/download/<id>` answers 200 with an HTML page. A topic stored against
+> `new-rutor.org` therefore fetches its file from `rutor.info` instead.
+
+**Validation status:** verified end-to-end against the live site on
+2026-09-03 with no account — change detection, a real `.torrent` delivered
+for topics on **both** live mirrors, title and poster resolution, and
+search. On every topic tested the page magnet's infohash matched the
+downloaded `.torrent` exactly.
+
+The same day it was also exercised through a running Marauder instance
+rather than the plugin alone: `GET /trackers/match` reported no credentials
+required, `GET /trackers/preview` returned the real release title and
+poster, and `GET /trackers/search` returned live results with sizes and
+seeder counts and an empty `errors` array. Every search result URL parses
+back into a topic, which is the part that matters — picking a result has to
+feed the normal add-topic flow.
+
+The plugin-level check is re-runnable:
+
+```bash
+docker run --rm -v "$PWD/backend:/backend" -w //backend golang:1.25 \
+  go test -tags=live -run TestLive -v ./internal/plugins/trackers/rutor/...
+```
+
+---
+
 ## Other CIS trackers
 
 | Plugin name | Display name | Account | Quality | Episode filter | Cloudflare |
 |---|---|---|---|---|---|
 | `anidub` | AniDub | Yes | Yes | No | No |
 | `anilibria` | AniLiberty | No (public API) | No | No | No |
-| `rutor` | Rutor | No | No | No | No |
 | `toloka` | Toloka | Yes | No | No | No |
 | `tapochek` | Tapochek | Yes | No | No | No |
 

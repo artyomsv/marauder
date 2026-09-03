@@ -12,6 +12,10 @@ import Header from "@/components/Header.astro";
 import Footer from "@/components/Footer.astro";
 import { organizationSchema, websiteSchema } from "@/data/schemas";
 import { SITE, type Page } from "@/data/seo";
+// The maturity banner counts plugins rather than asserting "many are still
+// alpha": that claim was written when most were, and it does not stop being
+// rendered on every page of the site once it stops being true.
+import { alphaCount, trackerCount } from "@/data/trackers";
 
 interface Props extends Page {
   /** Optional extra JSON-LD documents specific to the page. */
@@ -39,9 +43,15 @@ const sitewideSchemas = [organizationSchema(), websiteSchema(), ...schemas];
         <span class="inline-flex size-5 shrink-0 items-center justify-center rounded-full border border-warning/40 bg-warning/15 font-bold text-warning">!</span>
         <span class="text-foreground/90">
           <strong class="font-semibold text-warning">Early days.</strong>
-          Marauder v1.0 is young: the core is validated end-to-end, but many
-          tracker plugins are still alpha — structurally complete and unit-tested,
-          not yet validated against live services. Expect rough edges.
+          Marauder v1.0 is young: the core is validated end-to-end.
+          {alphaCount > 0 && (
+            <Fragment>
+              {alphaCount} of {trackerCount} tracker plugins are still alpha —
+              structurally complete and unit-tested, not yet validated against
+              live services.
+            </Fragment>
+          )}
+          Expect rough edges.
           <a href="/trackers/" class="underline decoration-warning/50 underline-offset-4 hover:decoration-warning">See plugin status →</a>
         </span>
       </div>

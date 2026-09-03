@@ -102,12 +102,13 @@ export const trackers: Tracker[] = [
   },
   {
     slug: "rutor",
-    name: "Rutor.org",
-    description: "Public Russian-language tracker, magnet only.",
+    name: "Rutor",
+    description:
+      "Public Russian-language tracker — no account needed. Delivers the real .torrent file, plus title and poster.",
     category: "forum-cis",
     region: "RU",
     auth: "public",
-    status: "alpha",
+    status: "validated",
   },
   {
     slug: "toloka",

@@ -1,17 +1,51 @@
-// Package rutor implements a tracker plugin for rutor.org/info pages.
+// Package rutor implements a tracker plugin for rutor topic pages.
 //
 // Rutor is a public no-account-required tracker. The flow is simple:
-// fetch the topic page, extract the magnet URI, return it. Updates are
-// detected by the magnet's BTIH changing.
+// fetch the topic page, read the release magnet, then upgrade that to the
+// real .torrent bytes from the mirror's download host. Updates are detected
+// by the magnet's BTIH changing.
 //
-// **Validation status:** structurally complete; should validate cleanly
-// against the live site since no auth is required.
+// # Domains (measured 2026-09-03)
+//
+// The historical default, rutor.org, is a **stale clone** and is no longer
+// a fetch target: its newest front-page release was id 1087871 while the
+// live mirrors were already at 1104882 — roughly 17,000 releases behind —
+// and it answers current topic ids with `404 Раздача не существует` from
+// behind Cloudflare. Its download host d.rutor.org 404s in the same way.
+// It survives in parseDomains so topics stored against it still parse and
+// are transparently re-pointed by canonicalURL.
+//
+// rutor.info and new-rutor.org are live and share one id space, so a topic
+// URL from either resolves against the other. Only rutor.info serves
+// .torrent bytes — on both `d.rutor.info/download/<id>` and plain
+// `rutor.info/download/<id>`. new-rutor.org serves neither: d.new-rutor.org
+// presents a certificate that does not cover it, and its own
+// /download/<id> answers 200 with an HTML page.
+//
+// # Encoding
+//
+// Unlike kinozal and rutracker, rutor serves UTF-8 (measured 2026-09-03 on
+// both live mirrors: `Content-Type: text/html; charset=UTF-8`, and Cyrillic
+// titles decode cleanly without transcoding). Two decisions rest on that:
+// Search percent-escapes the query as UTF-8 rather than calling
+// forumcommon.EncodeWindows1251Query, and titles need no transcoding.
+// cleanTitle still runs DecodeWindows1251 anyway — it is a no-op on valid
+// UTF-8, and undecoded cp1251 is invalid UTF-8 that Postgres rejects
+// outright (SQLSTATE 22021), so the guard is free insurance against a
+// future mirror that does not share this one's encoding.
+//
+// **Validation status:** verified end-to-end against the live site on
+// 2026-09-03 with no account — Check, Download (real .torrent),
+// ResolveMetadata and Search, on topics served by both live mirrors. The
+// page magnet's infohash matched the downloaded .torrent exactly on every
+// topic tested. See rutor_live_test.go (build tag `live`).
 package rutor
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"html"
 	"io"
 	"net/http"
 	"net/url"
@@ -20,16 +54,41 @@ import (
 	"strings"
 	"time"
 
+	"github.com/rs/zerolog/log"
+
 	"github.com/artyomsv/marauder/backend/internal/domain"
+	"github.com/artyomsv/marauder/backend/internal/infohash"
 	"github.com/artyomsv/marauder/backend/internal/plugins/registry"
 	"github.com/artyomsv/marauder/backend/internal/plugins/trackers/forumcommon"
 )
 
 const (
-	pluginName    = "rutor"
-	displayName   = "Rutor.org"
-	defaultDomain = "rutor.org"
-	userAgent     = "Marauder/0.4 (+https://marauder.cc)"
+	pluginName  = "rutor"
+	displayName = "Rutor"
+	// defaultDomain is rutor.info, not the original rutor.org: as of
+	// 2026-09-03 rutor.org is a frozen clone that 404s every current topic
+	// id (see the package doc), so a fresh install starting there could
+	// never reach a release.
+	defaultDomain = "rutor.info"
+	// torrentHostPrefix is the subdomain a mirror serves .torrent bytes
+	// from — https://d.<domain>/download/<id>.
+	torrentHostPrefix = "d."
+	// maxRedirects bounds the redirect chain fetch will follow. Every hop is
+	// re-checked against the same host allowlist, so this is a cost bound,
+	// not a security one.
+	maxRedirects = 5
+	// torrentAttemptTimeout caps ONE download-host attempt. The scheduler
+	// hands Download a single TrackerHTTPTimeout budget (30s by default) for
+	// the page fetch and every torrent candidate together, so without a
+	// per-attempt cap a host that stalls rather than refusing — a blackholed
+	// mirror, which is exactly what a dying one does — burns the whole
+	// budget, and the reachable canonical host then fails instantly on an
+	// expired context. The magnet fallback would still be correct, but it
+	// would be taken while a working `.torrent` was one request away.
+	// 8s is generous for a ~20KB file and keeps four attempts in the same
+	// order as the parent budget rather than starving the last one.
+	torrentAttemptTimeout = 8 * time.Second
+	userAgent             = "Marauder/0.4 (+https://marauder.cc)"
 )
 
 // urlPattern is host-agnostic; CanParse gates the captured host against the
@@ -37,16 +96,64 @@ const (
 // registry.DomainAllowed).
 var urlPattern = regexp.MustCompile(`^https?://(?:www\.)?([^/]+)/torrent/(\d+)`)
 
-var knownDomains = []string{"rutor.org", "rutor.info"}
+// knownDomains are the hosts Marauder is willing to *fetch from*. Returned by
+// Domains(), which feeds the admin's active-domain picker and the automatic
+// rotation ring. The stale rutor.org is deliberately absent: listing it would
+// let rotation land on a mirror that 404s every current release, and rotation
+// never migrates back. knownDomains[0] must stay equal to defaultDomain —
+// enforced by TestDomains_CanonicalMatchesDefault.
+var knownDomains = []string{defaultDomain, "new-rutor.org"}
+
+// parseDomains are the hosts a stored topic URL may legitimately carry. It is
+// knownDomains plus the retired rutor.org, and is used by CanParse and by
+// cleanTitle's branding check — never to build a request. rutor.org was the
+// compiled default for the whole life of the plugin, so dropping it outright
+// would orphan every topic added before 2026-09-03; keeping it here is safe
+// because canonicalURL rewrites every request onto effectiveDomain(), and the
+// id space is shared.
+var parseDomains = []string{defaultDomain, "new-rutor.org", "rutor.org"}
 
 type plugin struct {
 	httpClient *http.Client
 	domain     string
+	// attemptTimeout overrides torrentAttemptTimeout. Zero means the
+	// constant; only tests set it, so a stalled-host test need not sleep for
+	// the real budget. A field rather than a package var so parallel tests
+	// cannot race on it.
+	attemptTimeout time.Duration
+}
+
+// torrentTimeout is the per-attempt cap for one download-host request.
+func (p *plugin) torrentTimeout() time.Duration {
+	if p.attemptTimeout > 0 {
+		return p.attemptTimeout
+	}
+	return torrentAttemptTimeout
+}
+
+// newHTTPClient builds the plugin's client. The CheckRedirect hook re-runs
+// fetch's host guard on every hop: without it the guard would only cover the
+// first URL, and a mirror operator (or whoever picks up a lapsed mirror
+// domain — rutor.org is already a stale clone) could 302 a topic page at an
+// internal address and have its <title> surfaced in the UI.
+func newHTTPClient() *http.Client {
+	return &http.Client{
+		Timeout: 30 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= maxRedirects {
+				return fmt.Errorf("rutor: stopped after %d redirects", maxRedirects)
+			}
+			if err := checkTarget(req.URL); err != nil {
+				return err
+			}
+			return nil
+		},
+	}
 }
 
 func init() {
 	registry.RegisterTracker(&plugin{
-		httpClient: &http.Client{Timeout: 30 * time.Second},
+		httpClient: newHTTPClient(),
 		domain:     defaultDomain,
 	})
 }
@@ -77,7 +184,7 @@ func (p *plugin) effectiveDomain() string {
 
 func (p *plugin) CanParse(rawURL string) bool {
 	m := urlPattern.FindStringSubmatch(strings.TrimSpace(rawURL))
-	return m != nil && registry.DomainAllowed(pluginName, m[1], knownDomains)
+	return m != nil && registry.DomainAllowed(pluginName, m[1], parseDomains)
 }
 
 func (p *plugin) Parse(_ context.Context, rawURL string) (*domain.Topic, error) {
@@ -94,14 +201,74 @@ func (p *plugin) Parse(_ context.Context, rawURL string) (*domain.Topic, error) 
 
 var (
 	titleRe = regexp.MustCompile(`(?s)<title>([^<]+)</title>`)
-	btihRe  = regexp.MustCompile(`magnet:\?xt=urn:btih:([A-Fa-f0-9]+)`)
+
+	// magnetLinkRe matches a magnet href in its HTML-escaped page form. The
+	// `&amp;` alternative is what keeps &dn= and every &tr= tracker: stopping
+	// at a bare `&` yields a hash-only magnet that can only be resolved
+	// through DHT, which is exactly the wrong outcome on the fallback path
+	// that runs when the download host is broken. The btih token is left
+	// loose ([A-Za-z0-9]+) and validated by infohash.FromMagnet, which
+	// accepts 40-hex or 32-base32 and rejects everything else — so a
+	// malformed hash fails loudly instead of being silently truncated.
+	magnetLinkRe = regexp.MustCompile(`magnet:\?xt=urn:btih:[A-Za-z0-9]+(?:&amp;|[^"'<>&\s])*`)
+
+	// downloadBlockRe opens the block holding the topic's own magnet and
+	// .torrent links. Anchoring to it matters: the "similar releases" list
+	// further down a rutor page carries magnets for OTHER releases, and
+	// Check derives the topic hash from the magnet it finds.
+	downloadBlockRe = regexp.MustCompile(`<div id="download"[^>]*>`)
+
+	// siteTitlePrefixRe captures a leading "<token> :: " from the page
+	// <title>. Every mirror renders "rutor.info :: Real Release Name".
+	// cleanTitle strips it only when <token> is a mirror we actually know —
+	// release names are routinely dotted ("Halo.3::ODST", "S.W.A.T :: S08"),
+	// so a bare hostname *shape* test would eat them.
+	siteTitlePrefixRe = regexp.MustCompile(`^\s*([A-Za-z0-9.-]+)\s*::\s*`)
+
+	// detailsTableOpenRe opens the release description table, which is where
+	// the poster lives. Anchoring the image search to it keeps the site
+	// chrome (logo, magnet/download icons, analytics pixels) out.
+	detailsTableOpenRe = regexp.MustCompile(`<table id="details"[^>]*>`)
+	imgSrcRe           = regexp.MustCompile(`<img[^>]+src="([^"]+)"`)
 )
+
+// cleanTitle turns "rutor.info :: Ирек Гильмутдинов - Привет магия!" into
+// the release name alone, leaving a title that merely *looks* host-shaped
+// ("Halo.3::ODST (2009) RePack") untouched. A brand-new mirror absent from
+// parseDomains keeps its branding until it is added — a complete but branded
+// title beats a truncated one.
+func cleanTitle(raw string) string {
+	s := strings.TrimSpace(forumcommon.DecodeWindows1251(raw))
+	m := siteTitlePrefixRe.FindStringSubmatch(s)
+	if m == nil || !registry.DomainAllowed(pluginName, m[1], parseDomains) {
+		return s
+	}
+	return strings.TrimSpace(s[len(m[0]):])
+}
+
+// magnetFrom returns the topic's own magnet link, unescaped. It looks inside
+// the download block first and falls open to the whole page, so a markup
+// change costs the anchor rather than the plugin.
+func magnetFrom(body []byte) string {
+	scope := body
+	if inner, ok := forumcommon.TagBlockInner(string(body), downloadBlockRe, "div"); ok {
+		scope = []byte(inner)
+	}
+	m := magnetLinkRe.Find(scope)
+	if m == nil {
+		return ""
+	}
+	return html.UnescapeString(string(m))
+}
 
 // canonicalURL rewrites rawURL's host to p.effectiveDomain() when that
 // differs from the URL's own host — the nnmclub canonicalURL approach
 // adapted to rutor. Rutor has no id-based rebuild (Download/Check just
 // re-fetch the stored topic URL), so this is the only place an active-
-// domain override or mirror switch actually takes effect.
+// domain override or mirror switch actually takes effect. The scheme is
+// forced to https: urlPattern accepts http, and a stored http:// topic
+// would otherwise put the magnet — the value Check trusts and the .torrent
+// is verified against — on the wire in plaintext.
 func (p *plugin) canonicalURL(rawURL string) (string, error) {
 	u, err := url.Parse(strings.TrimSpace(rawURL))
 	if err != nil {
@@ -110,7 +277,18 @@ func (p *plugin) canonicalURL(rawURL string) (string, error) {
 	if eff := p.effectiveDomain(); eff != "" && eff != u.Hostname() {
 		u.Host = eff
 	}
+	u.Scheme = "https"
 	return u.String(), nil
+}
+
+// topicID pulls the numeric topic id back out of a topic URL. Download
+// re-derives it rather than trusting topic.Extra, which survives a JSON
+// round-trip as an untyped value.
+func topicID(rawURL string) string {
+	if m := urlPattern.FindStringSubmatch(strings.TrimSpace(rawURL)); m != nil {
+		return m[2]
+	}
+	return ""
 }
 
 func (p *plugin) Check(ctx context.Context, topic *domain.Topic, _ *domain.TrackerCredential) (*domain.Check, error) {
@@ -124,13 +302,20 @@ func (p *plugin) Check(ctx context.Context, topic *domain.Topic, _ *domain.Track
 	}
 	check := &domain.Check{}
 	if m := titleRe.FindSubmatch(body); m != nil {
-		check.DisplayName = strings.TrimSpace(string(m[1]))
+		check.DisplayName = cleanTitle(string(m[1]))
 	}
-	if m := btihRe.FindSubmatch(body); m != nil {
-		check.Hash = strings.ToLower(string(m[1]))
-		return check, nil
+	magnet := magnetFrom(body)
+	if magnet == "" {
+		return nil, errors.New("rutor: no infohash found")
 	}
-	return nil, errors.New("rutor: no infohash found")
+	// Deriving the hash through FromMagnet rather than a second regex is
+	// what guarantees Check and Download agree on what this topic is.
+	hash, err := infohash.FromMagnet(magnet)
+	if err != nil {
+		return nil, fmt.Errorf("rutor: unreadable magnet: %w", err)
+	}
+	check.Hash = hash
+	return check, nil
 }
 
 func (p *plugin) Download(ctx context.Context, topic *domain.Topic, _ *domain.Check, _ *domain.TrackerCredential) (*domain.Payload, error) {
@@ -142,10 +327,160 @@ func (p *plugin) Download(ctx context.Context, topic *domain.Topic, _ *domain.Ch
 	if err != nil {
 		return nil, err
 	}
-	if m := regexp.MustCompile(`(magnet:\?xt=urn:btih:[A-Fa-f0-9]+[^"'&\s]*)`).Find(body); m != nil {
-		return &domain.Payload{MagnetURI: string(m)}, nil
+	magnet := magnetFrom(body)
+	if magnet == "" {
+		return nil, errors.New("rutor: no magnet link")
 	}
-	return nil, errors.New("rutor: no magnet link")
+	// The magnet is the authority for what this topic *is* — Check derives
+	// the topic hash from the same link — so a .torrent is only accepted
+	// when it carries that exact infohash.
+	want, err := infohash.FromMagnet(magnet)
+	if err != nil {
+		return nil, fmt.Errorf("rutor: unreadable magnet: %w", err)
+	}
+	if id := topicID(target); id != "" {
+		if file := p.fetchTorrentFile(ctx, id, want); file != nil {
+			// domain.Payload's contract is that exactly one of TorrentFile
+			// or MagnetURI is set; every client plugin resolves a magnet
+			// first when both are present, which would throw the file away.
+			return &domain.Payload{
+				TorrentFile: file,
+				FileName:    fmt.Sprintf("rutor-%s.torrent", id),
+			}, nil
+		}
+	}
+	// Fail open to the magnet. It carries the same infohash and its tracker
+	// list, so it just costs a round of peer discovery the file does not.
+	return &domain.Payload{MagnetURI: magnet}, nil
+}
+
+// torrentURLs lists the .torrent endpoints to try, in order: both download
+// shapes on the active domain, then both on the canonical one. Measured
+// 2026-09-03: rutor.info serves the bytes on d.rutor.info/download/<id> AND
+// on rutor.info/download/<id>, while new-rutor.org serves neither (bad
+// certificate on its d.* host, HTML from its own /download/<id>).
+//
+// The active domain is tried first even though it may be the broken mirror:
+// an admin who pinned a mirror should have it consulted, a TLS or 404
+// failure there is fast rather than a timeout, and every candidate is
+// gated by the infohash check anyway. The canonical fallback is what makes
+// a topic stored against new-rutor.org deliver a real file.
+func (p *plugin) torrentURLs(id string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, d := range []string{p.effectiveDomain(), defaultDomain} {
+		if d == "" {
+			continue
+		}
+		for _, host := range []string{torrentHostPrefix + d, d} {
+			if seen[host] {
+				continue
+			}
+			seen[host] = true
+			out = append(out, "https://"+host+"/download/"+id)
+		}
+	}
+	return out
+}
+
+// fetchTorrentFile returns the .torrent bytes whose infohash is want, or nil
+// when no mirror serves a usable file. Every per-host failure is deliberately
+// soft: the caller falls back to the magnet, which is always present and
+// carries the same hash, so a download-host outage degrades rather than
+// fails. Exhausting every host is different — that is a silent, permanent
+// downgrade of every rutor delivery, so it logs at Warn where an operator
+// will see it at the default level.
+func (p *plugin) fetchTorrentFile(ctx context.Context, id, want string) []byte {
+	for _, target := range p.torrentURLs(id) {
+		// Stop rather than burn the remaining candidates on an already-dead
+		// parent: each would fail instantly and the Warn below would blame
+		// the mirrors for our own expired budget.
+		if err := ctx.Err(); err != nil {
+			log.Debug().Str("tracker", pluginName).Err(err).
+				Msg("rutor: budget exhausted before every download host was tried")
+			break
+		}
+		body, err := p.fetchWithin(ctx, target, p.torrentTimeout())
+		if err != nil {
+			log.Debug().Str("tracker", pluginName).Str("url", target).Err(err).
+				Msg("rutor: torrent fetch failed, trying next host")
+			continue
+		}
+		got, ierr := infohash.FromTorrent(body)
+		if ierr != nil {
+			// A mirror that proxies its download link can answer 200 with an
+			// HTML page; new-rutor.org's /download/<id> does exactly that.
+			log.Debug().Str("tracker", pluginName).Str("url", target).Err(ierr).
+				Msg("rutor: download host did not return a torrent")
+			continue
+		}
+		if got != want {
+			log.Debug().Str("tracker", pluginName).Str("url", target).
+				Str("got", got).Str("want", want).
+				Msg("rutor: torrent infohash does not match the topic magnet")
+			continue
+		}
+		return body
+	}
+	log.Warn().Str("tracker", pluginName).Str("topic_id", id).AnErr("ctx", ctx.Err()).
+		Msg("rutor: no mirror served a matching .torrent; delivering the magnet instead")
+	return nil
+}
+
+// --- WithMetadata -------------------------------------------------------
+
+var _ registry.WithMetadata = (*plugin)(nil)
+
+// ResolveMetadata returns the real release name and poster from the public
+// topic page. Rutor needs no account, so creds is ignored.
+func (p *plugin) ResolveMetadata(ctx context.Context, rawURL string, _ *domain.TrackerCredential) (*registry.Metadata, error) {
+	target, err := p.canonicalURL(rawURL)
+	if err != nil {
+		return nil, fmt.Errorf("resolve metadata: %w", err)
+	}
+	body, err := p.fetch(ctx, target)
+	if err != nil {
+		return nil, fmt.Errorf("resolve metadata: %w", err)
+	}
+	meta := &registry.Metadata{}
+	if m := titleRe.FindSubmatch(body); m != nil {
+		meta.Title = cleanTitle(string(m[1]))
+	}
+	meta.ImageURL = extractImageURL(body, p.effectiveDomain())
+	return meta, nil
+}
+
+// extractImageURL returns the release poster: the first image inside the
+// description table. Returns "" when the release has no poster — an empty
+// string renders as no image rather than as a broken one. The scheme is
+// allowlisted rather than passed through: the value is uploader-controlled,
+// persisted to topics.image_url and rendered as an <img src>, so a
+// javascript:/data: src has no business reaching the browser.
+func extractImageURL(body []byte, host string) string {
+	details, ok := forumcommon.TagBlockInner(string(body), detailsTableOpenRe, "table")
+	if !ok {
+		return ""
+	}
+	m := imgSrcRe.FindStringSubmatch(details)
+	if m == nil {
+		return ""
+	}
+	src := strings.TrimSpace(m[1])
+	switch {
+	case src == "":
+		return ""
+	case strings.HasPrefix(src, "//"):
+		return "https:" + src
+	case strings.HasPrefix(src, "/"):
+		return "https://" + host + src
+	case strings.HasPrefix(src, "https://"), strings.HasPrefix(src, "http://"):
+		return src
+	case strings.Contains(src, ":"):
+		// Any other scheme (javascript:, data:, …) is not a poster.
+		return ""
+	default:
+		return "https://" + host + "/" + src
+	}
 }
 
 // --- WithSearch ---------------------------------------------------------
@@ -162,7 +497,8 @@ var (
 // Search implements registry.WithSearch (issue #129). Rutor's search is
 // public; the query is a path segment (page 0, category 0, filter 000,
 // sort 0), so it needs url.PathEscape — QueryEscape's `+` for space is
-// wrong inside a path.
+// wrong inside a path. UTF-8 escaping is correct here (see the package
+// doc's Encoding section); rutracker needs cp1251 instead.
 func (p *plugin) Search(ctx context.Context, query string, _ *domain.TrackerCredential) ([]registry.SearchResult, error) {
 	q := strings.TrimSpace(query)
 	if q == "" {
@@ -201,20 +537,51 @@ func (p *plugin) Search(ctx context.Context, query string, _ *domain.TrackerCred
 	return out, nil
 }
 
+// fetchHostAllowed is the SSRF barrier for outgoing requests. It accepts a
+// known/admin-configured rutor host, or that same host prefixed with the
+// download subdomain (d.rutor.info). The prefix is stripped and the base
+// re-checked, so d.evil.com is refused exactly like evil.com is.
+func fetchHostAllowed(host string) bool {
+	if registry.DomainAllowed(pluginName, host, knownDomains) {
+		return true
+	}
+	base, ok := strings.CutPrefix(host, torrentHostPrefix)
+	return ok && base != "" && registry.DomainAllowed(pluginName, base, knownDomains)
+}
+
+// checkTarget is the guard applied to every URL before it is dialed — the
+// initial request and each redirect hop alike.
+func checkTarget(u *url.URL) error {
+	if u.Scheme != "https" && u.Scheme != "http" {
+		return fmt.Errorf("rutor: refusing URL scheme %q", u.Scheme)
+	}
+	if !fetchHostAllowed(u.Hostname()) {
+		return fmt.Errorf("rutor: refusing to fetch off-site host %q", u.Hostname())
+	}
+	return nil
+}
+
+// fetchWithin is fetch under its own bounded slice of ctx. context.WithTimeout
+// takes the earlier of the two deadlines, so a caller with less budget left
+// than d still wins and this can never extend the parent.
+func (p *plugin) fetchWithin(ctx context.Context, target string, d time.Duration) ([]byte, error) {
+	attemptCtx, cancel := context.WithTimeout(ctx, d)
+	defer cancel()
+	return p.fetch(attemptCtx, target)
+}
+
 func (p *plugin) fetch(ctx context.Context, target string) ([]byte, error) {
 	// SSRF guard: `target` has already been canonicalized above, but fetch
 	// is the last line of defense before dialing — refuse any host that
 	// isn't a known or admin-configured rutor domain (closes rutor's
-	// previously-missing host guard).
+	// previously-missing host guard). Redirect hops are guarded by the
+	// client's CheckRedirect, see newHTTPClient.
 	u, err := url.Parse(strings.TrimSpace(target))
 	if err != nil {
 		return nil, fmt.Errorf("rutor: invalid URL: %w", err)
 	}
-	if u.Scheme != "https" && u.Scheme != "http" {
-		return nil, fmt.Errorf("rutor: refusing URL scheme %q", u.Scheme)
-	}
-	if !registry.DomainAllowed(pluginName, u.Hostname(), knownDomains) {
-		return nil, fmt.Errorf("rutor: refusing to fetch off-site host %q", u.Hostname())
+	if err := checkTarget(u); err != nil {
+		return nil, err
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
