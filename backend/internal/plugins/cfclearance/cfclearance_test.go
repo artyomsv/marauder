@@ -246,8 +246,14 @@ func TestApply_ProviderErrorIsReturnedNotSwallowed(t *testing.T) {
 		t.Errorf("jar got %d cookies, want 0", got)
 	}
 	// And the caller can still tell the tracker apart from the solver.
-	if !errors.Is(Cause(err), registry.ErrClearanceUnavailable) {
+	cause := Cause(err)
+	if !errors.Is(cause, registry.ErrClearanceUnavailable) {
 		t.Error("Cause must blame the solver for a provider error")
+	}
+	// %w, not %v: the sentinel says WHICH of the three stories this is, but
+	// only the wrapped provider error names what actually went wrong.
+	if !errors.Is(cause, boom) {
+		t.Error("Cause must keep the provider's own error reachable")
 	}
 }
 
@@ -288,3 +294,32 @@ type recordingJar struct{ set []*http.Cookie }
 
 func (j *recordingJar) SetCookies(_ *url.URL, cs []*http.Cookie) { j.set = append(j.set, cs...) }
 func (j *recordingJar) Cookies(*url.URL) []*http.Cookie          { return nil }
+
+// TestRetryOnChallenge_ReturnsTheRetrysOwnResult pins the half a call counter
+// cannot see: a version that runs the second attempt and then throws its value
+// away still makes two calls. Returning the FIRST attempt's result means the
+// retry is pure cost — the caller gets the challenge error either way.
+func TestRetryOnChallenge_ReturnsTheRetrysOwnResult(t *testing.T) {
+	p := &countingProvider{stubProvider: stubProvider{c: registry.Clearance{
+		Cookies: map[string]string{"cf_clearance": "x"}, UserAgent: "UA",
+	}}}
+	withProvider(t, p)
+	calls := 0
+	got, err := RetryOnChallenge("https://kinozal.me/browse.php", func() (string, error) {
+		calls++
+		if calls == 1 {
+			return "the challenge page", registry.ErrCloudflareChallenge
+		}
+		return "the real page", nil
+	})
+	if err != nil {
+		t.Fatalf("the retry succeeded, so the call must succeed: %v", err)
+	}
+	if got != "the real page" {
+		t.Errorf("got %q, want the retry's own result", got)
+	}
+	// And the retry only makes sense after dropping the clearance that failed.
+	if len(p.invalidated) != 1 {
+		t.Errorf("InvalidateClearance calls = %d, want 1", len(p.invalidated))
+	}
+}

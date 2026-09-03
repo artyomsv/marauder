@@ -17,6 +17,7 @@ import (
 	"github.com/artyomsv/marauder/backend/internal/metrics"
 	"github.com/artyomsv/marauder/backend/internal/plugins/registry"
 	"github.com/artyomsv/marauder/backend/internal/topics"
+	"github.com/artyomsv/marauder/backend/internal/trackercreds"
 )
 
 // minPollInterval floors a configured poll interval so a misconfiguration
@@ -61,19 +62,27 @@ type Poller struct {
 	instances instancesStore
 	admin     adminResolver
 	topics    topicsStore
+	// creds is the owner's stored tracker credential, used to resolve a new
+	// topic's title and poster AS that owner. Nil-safe: a nil store simply
+	// resolves anonymously, which is correct for a public tracker and useless
+	// for a gated one. Not optional in production — a Sonarr-created Toloka
+	// topic resolved anonymously stores a placeholder name and no image, and
+	// nothing ever backfills the image.
+	creds trackercreds.Store
 
 	// newClient is injectable so tests can point at an httptest server.
 	newClient func(baseURL, apiKey string) *Client
 }
 
 // New constructs a Poller.
-func New(log zerolog.Logger, master *crypto.MasterKey, instances instancesStore, admin adminResolver, topicsStore topicsStore, httpTimeout time.Duration) *Poller {
+func New(log zerolog.Logger, master *crypto.MasterKey, instances instancesStore, admin adminResolver, topicsStore topicsStore, creds trackercreds.Store, httpTimeout time.Duration) *Poller {
 	return &Poller{
 		log:       log.With().Str("component", "sonarr-poller").Logger(),
 		master:    master,
 		instances: instances,
 		admin:     admin,
 		topics:    topicsStore,
+		creds:     creds,
 		newClient: func(baseURL, apiKey string) *Client {
 			return NewClient(baseURL, apiKey, httpTimeout)
 		},
@@ -255,6 +264,17 @@ func (p *Poller) processURL(ctx context.Context, inst domain.SonarrInstance, own
 		DownloadDir: inst.DefaultDownloadDir,
 		Source:      topicSourceSonarr,
 		Extra:       sonarrTopicExtra(rec),
+		// Resolve the title and poster as the topic's OWNER. A login-gated
+		// tracker answers a guest with a stub rather than an error, so an
+		// anonymous resolve does not fail — it succeeds at reading nothing,
+		// and the topic is stored with a placeholder name and no image. The
+		// two dropped returns say WHY there is no credential; both mean
+		// "resolve anonymously" here, because a Sonarr grab must still become
+		// a topic when the poster cannot be fetched.
+		Credentials: func(cctx context.Context, tr registry.Tracker) *domain.TrackerCredential {
+			c, _, _ := trackercreds.Warm(cctx, p.creds, p.master, ownerID, tr)
+			return c
+		},
 	})
 	if err != nil {
 		p.log.Warn().Err(err).Str("url", url).Msg("auto-create topic failed")

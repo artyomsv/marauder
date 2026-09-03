@@ -18,6 +18,7 @@ import (
 	"github.com/artyomsv/marauder/backend/internal/metrics"
 	"github.com/artyomsv/marauder/backend/internal/plugins/registry"
 	"github.com/artyomsv/marauder/backend/internal/problem"
+	"github.com/artyomsv/marauder/backend/internal/trackercreds"
 )
 
 const (
@@ -244,63 +245,9 @@ func (h *Trackers) perTrackerBudget() time.Duration {
 	return defaultSearchPerTrackerBudget
 }
 
-// warmCredentials loads, decrypts, and warms the user's credential for a
-// login-gated tracker. Every failure degrades to nil creds and the caller
-// proceeds anonymously — none of the three consumers may hard-fail on
-// credential trouble (search reports ErrSearchRequiresCredentials, the
-// preview and the create path simply resolve less metadata). The second
-// return distinguishes "no stored credential" (false) from "stored credential
-// exists but could not be warmed" (true) so the caller can report
-// login_failed instead of telling a user with an account to go add one.
-//
-// Ordering is Verify-first, Login-on-miss: on a warm in-process session
-// Verify is one cheap GET; only a cold/dead session pays the Login round-
-// trip. (Deliberately neither loginAndVerify — Login→Verify always, right
-// for validating fresh credentials, wasteful per call — nor the
-// scheduler's Login-only loadCredentials.)
-//
-// It is a package-level function rather than a method because three paths
-// need it and they live on different handlers: search, the AddTopic preview,
-// and topic creation. All three read a tracker page as the user, and a
-// login-gated tracker answers an anonymous caller with a stub rather than an
-// error — which is how a Toloka topic came to be created with no poster.
-func warmCredentials(ctx context.Context, store credentialStore, master configDecryptor, uid uuid.UUID, t registry.Tracker) (creds *domain.TrackerCredential, loginFailed bool, loginErr error) {
-	wc, needsCreds := t.(registry.WithCredentials)
-	if !needsCreds || store == nil || master == nil {
-		return nil, false, nil
-	}
-	stored, err := store.GetForTracker(ctx, uid, t.Name())
-	if err != nil || stored == nil {
-		return nil, false, nil
-	}
-	// Decrypt secret + session like Credentials.Test does — session-cookie
-	// trackers validate the session blob, not the password.
-	plain, err := master.Decrypt(stored.SecretEnc, stored.SecretNonce)
-	if err != nil {
-		log.Warn().Str("tracker", t.Name()).Err(err).Msg("tracker credential decrypt failed; continuing anonymously")
-		return nil, true, err
-	}
-	transient := &domain.TrackerCredential{
-		ID:          stored.ID,
-		UserID:      uid,
-		TrackerName: stored.TrackerName,
-		Username:    stored.Username,
-		SecretEnc:   plain,
-	}
-	if len(stored.SessionEnc) > 0 {
-		sess, derr := master.Decrypt(stored.SessionEnc, stored.SessionNonce)
-		if derr != nil {
-			log.Warn().Str("tracker", t.Name()).Err(derr).Msg("tracker session decrypt failed; continuing anonymously")
-			return nil, true, derr
-		}
-		transient.SessionEnc = sess
-	}
-	if ok, verr := wc.Verify(ctx, transient); verr == nil && ok {
-		return transient, false, nil
-	}
-	if lerr := wc.Login(ctx, transient); lerr != nil {
-		log.Debug().Str("tracker", t.Name()).Err(lerr).Msg("tracker credential login failed; continuing anonymously")
-		return nil, true, lerr
-	}
-	return transient, false, nil
+// warmCredentials is the handlers-local name for trackercreds.Warm. It is a
+// shim, not logic: the sequence lives in one package because the Sonarr poller
+// needs it too and must not import handlers.
+func warmCredentials(ctx context.Context, store credentialStore, master configDecryptor, uid uuid.UUID, t registry.Tracker) (*domain.TrackerCredential, bool, error) {
+	return trackercreds.Warm(ctx, store, master, uid, t)
 }

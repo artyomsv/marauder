@@ -155,3 +155,43 @@ describe("TopicForm debounce gate", () => {
     expect(screen.queryByText(/resolving title and poster/i)).not.toBeInTheDocument();
   });
 });
+
+describe("TopicForm tracker-identification indicator", () => {
+  // The match lookup is the FIRST of the two the URL field triggers, and on a
+  // slow network it is the one the user waits on with nothing on screen.
+  it("shows 'Identifying tracker…' while the match lookup is in flight", async () => {
+    mockApi.get.mockImplementation((path: string) => {
+      if (path.startsWith("/trackers/match")) return new Promise(() => {}); // never resolves
+      if (path.startsWith("/clients")) return Promise.resolve({ clients: [] });
+      if (path.startsWith("/credentials")) return Promise.resolve({ credentials: [] });
+      return Promise.resolve({});
+    });
+    renderForm();
+
+    await userEvent.type(
+      screen.getByLabelText(/url or magnet link/i),
+      "https://toloka.to/t33571",
+    );
+
+    expect(await screen.findByText(/identifying tracker/i)).toBeInTheDocument();
+    // The preview is gated on a match, so it must not have fired yet.
+    expect(mockApi.previewTracker).not.toHaveBeenCalled();
+  });
+
+  it("replaces it with the detected tracker name once the match lands", async () => {
+    mockApi.previewTracker.mockResolvedValue({ title: "", image_url: "" });
+    renderForm();
+
+    await userEvent.type(
+      screen.getByLabelText(/url or magnet link/i),
+      "https://toloka.to/t33571",
+    );
+
+    // "Toloka.to" also appears in the add-an-account hint, so match the
+    // detected-tracker chip specifically.
+    expect(await screen.findByText(/Detected:/)).toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.queryByText(/identifying tracker/i)).not.toBeInTheDocument(),
+    );
+  });
+});

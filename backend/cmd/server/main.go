@@ -294,7 +294,7 @@ func run() error {
 	// Sonarr integration poller. Self-gates on the DB-stored instances
 	// (sonarr_instances.enabled), so it's always started; it no-ops while no
 	// instance is enabled. See issues #86, #92.
-	sonarrPoller := sonarr.New(logger, master, sonarrInstancesRepo, users, topicsRepo, cfg.TrackerHTTPTimeout)
+	sonarrPoller := sonarr.New(logger, master, sonarrInstancesRepo, users, topicsRepo, credsRepo, cfg.TrackerHTTPTimeout)
 	go func() {
 		if err := sonarrPoller.Start(rootCtx); err != nil {
 			logger.Error().Err(err).Msg("sonarr poller exited with error")

@@ -620,3 +620,68 @@ func TestDo_RateLimitCarriesTheStatusMarker(t *testing.T) {
 		t.Errorf("the search query leaked into the error: %v", err)
 	}
 }
+
+// TestResolveMetadata_ReadsTitleAndOgImage. The poster was twice reported
+// missing and twice written off as "Toloka has none", because searching the
+// post BODY for an <img> finds only site chrome, avatars and smilies. It is in
+// the <head>, as og:image, served through thumb.hurtom.com. This pins that,
+// offline — the function was previously reachable only under `-tags=live`,
+// which is exactly the test nobody may run.
+func TestResolveMetadata_ReadsTitleAndOgImage(t *testing.T) {
+	p, _ := newTestPlugin(t, func(w http.ResponseWriter, _ *http.Request) {
+		http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: userCookie})
+		_, _ = w.Write([]byte(fixtureTopicHTML))
+	})
+
+	meta, err := p.ResolveMetadata(context.Background(), "https://toloka.to/t699998", testCreds())
+	if err != nil {
+		t.Fatalf("ResolveMetadata: %v", err)
+	}
+	if meta.Title != cleanTitle(fixtureTopicTitle) {
+		t.Errorf("Title = %q, want the cleaned page title", meta.Title)
+	}
+	const wantImage = "https://thumb.hurtom.com/image/w250/toloka.to/photos/120227013255132137_f0_0.jpg"
+	if meta.ImageURL != wantImage {
+		t.Errorf("ImageURL = %q, want %q", meta.ImageURL, wantImage)
+	}
+}
+
+// TestResolveMetadata_GuestStubReportsTheSessionNotAParseFailure. A guest gets
+// <title></title>. Reporting that as "no title on the page" points the user at
+// a broken selector; the honest answer is that the request was never signed
+// in, which is what nothing-visible-without-an-account means here.
+func TestResolveMetadata_GuestStubReportsTheSessionNotAParseFailure(t *testing.T) {
+	p, _ := newTestPlugin(t, func(w http.ResponseWriter, _ *http.Request) {
+		http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: guestCookie})
+		_, _ = w.Write([]byte(fixtureGuestHTML))
+	})
+
+	_, err := p.ResolveMetadata(context.Background(), "https://toloka.to/t699998", testCreds())
+	if !errors.Is(err, registry.ErrSessionExpired) {
+		t.Errorf("err = %v, want ErrSessionExpired", err)
+	}
+}
+
+// TestResolveMetadata_NoPoster_IsAnEmptyStringNotAnError. Not every release
+// carries artwork, and topics.SafeImageURL stores "" honestly rather than
+// inventing a placeholder — so a missing og:image must not fail the resolve
+// and cost the topic its real title too.
+func TestResolveMetadata_NoPoster_IsAnEmptyStringNotAnError(t *testing.T) {
+	page := `<html><head><title>` + fixtureTopicTitle + `</title></head><body>` +
+		fixtureTorrentBlock + `</body></html>`
+	p, _ := newTestPlugin(t, func(w http.ResponseWriter, _ *http.Request) {
+		http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: userCookie})
+		_, _ = w.Write([]byte(page))
+	})
+
+	meta, err := p.ResolveMetadata(context.Background(), "https://toloka.to/t699998", testCreds())
+	if err != nil {
+		t.Fatalf("a release with no poster must still resolve: %v", err)
+	}
+	if meta.ImageURL != "" {
+		t.Errorf("ImageURL = %q, want empty", meta.ImageURL)
+	}
+	if meta.Title == "" {
+		t.Error("the title must survive a missing poster")
+	}
+}

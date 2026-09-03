@@ -132,6 +132,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   gate `/trackers/search` has, so a burst of re-pastes cannot become a burst
   of tracker logins.
 
+- **Topics auto-created by the Sonarr integration got no title and no poster
+  on a login-gated tracker.** The fix above reached the Add-topic form and the
+  `POST /topics` API but not the Sonarr poller, which still resolved metadata
+  anonymously — and a gated tracker answers a guest with a stub rather than an
+  error, so the resolve did not fail, it succeeded at reading nothing. The
+  poller now resolves as the topic's **owner**, using the same warmed
+  credential the search and preview paths use. Fail-open: a Sonarr grab still
+  becomes a topic when no account is stored or the login fails, and the name is
+  flagged a placeholder so the scheduler self-heals it on the first check.
+
 ## [1.19.7] - 2026-09-03
 
 ### Added
