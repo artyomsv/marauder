@@ -289,3 +289,37 @@ func TestLive_Search_WithoutCredentials_ReportsTheRealReason(t *testing.T) {
 		t.Fatal("a search with no account must not report an empty result set")
 	}
 }
+
+func TestLive_ResolveMetadata_ReturnsTheReleaseName(t *testing.T) {
+	p, creds := liveLoggedIn(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	meta, err := p.ResolveMetadata(ctx, liveTopicURL(), creds)
+	if err != nil {
+		t.Fatalf("ResolveMetadata: %v", err)
+	}
+	t.Logf("Metadata: title=%q image=%q", meta.Title, meta.ImageURL)
+	if meta.Title == "" {
+		t.Error("Title is empty")
+	}
+	if strings.Contains(meta.Title, " — ") {
+		t.Errorf("Title still carries the forum section: %q", meta.Title)
+	}
+}
+
+// TestLive_ResolveMetadata_WithoutLogin_Fails: a guest gets a stub with an
+// empty <title>, so resolving anonymously must report that rather than hand
+// back an empty name that looks like a parsing failure.
+func TestLive_ResolveMetadata_WithoutLogin_Fails(t *testing.T) {
+	liveCreds(t)
+	time.Sleep(politeGap)
+	p := livePlugin()
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	anon := &domain.TrackerCredential{UserID: uuid.New(), Username: "nobody"}
+	if _, err := p.ResolveMetadata(ctx, liveTopicURL(), anon); err == nil {
+		t.Fatal("ResolveMetadata must fail without a session")
+	}
+}

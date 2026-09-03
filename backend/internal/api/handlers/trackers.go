@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/artyomsv/marauder/backend/internal/crypto"
+	"github.com/artyomsv/marauder/backend/internal/domain"
 	"github.com/artyomsv/marauder/backend/internal/plugins/registry"
 	"github.com/artyomsv/marauder/backend/internal/problem"
 )
@@ -115,7 +116,19 @@ func (h *Trackers) Preview(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
-	meta, err := wm.ResolveMetadata(ctx, rawURL, nil)
+	// Pass the user's stored credential (warmed Verify-first/Login-on-miss)
+	// rather than nil. Most trackers expose a title and poster publicly and
+	// ignore it, but a fully login-gated one — Toloka serves a guest a stub
+	// with an empty <title> — would otherwise resolve nothing at all, and
+	// the preview would stay blank for exactly the users who do have an
+	// account. Anonymous stays the fallback: no stored credential, or a
+	// login that fails, simply yields nil here.
+	uid, uerr := currentUserID(r)
+	var creds *domain.TrackerCredential
+	if uerr == nil {
+		creds, _, _ = h.warmCredentials(ctx, uid, t)
+	}
+	meta, err := wm.ResolveMetadata(ctx, rawURL, creds)
 	if err != nil || meta == nil {
 		// Fail-open: the preview is cosmetic, never a hard error for the user.
 		writeJSON(w, http.StatusOK, registry.Metadata{})

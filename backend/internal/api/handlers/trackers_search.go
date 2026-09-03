@@ -166,7 +166,7 @@ func (h *Trackers) Search(w http.ResponseWriter, r *http.Request) {
 			ctx, cancel := context.WithTimeout(r.Context(), h.perTrackerBudget())
 			defer cancel()
 			name := ws.Name()
-			creds, loginFailed, loginErr := h.searchCredentials(ctx, uid, ws)
+			creds, loginFailed, loginErr := h.warmCredentials(ctx, uid, ws)
 			results, err := ws.Search(ctx, q, creds)
 			switch {
 			case errors.Is(err, registry.ErrSearchRequiresCredentials):
@@ -257,7 +257,7 @@ func (h *Trackers) perTrackerBudget() time.Duration {
 // trip. (Deliberately neither loginAndVerify — Login→Verify always, right
 // for validating fresh credentials, wasteful per search — nor the
 // scheduler's Login-only loadCredentials.)
-func (h *Trackers) searchCredentials(ctx context.Context, uid uuid.UUID, t registry.Tracker) (creds *domain.TrackerCredential, loginFailed bool, loginErr error) {
+func (h *Trackers) warmCredentials(ctx context.Context, uid uuid.UUID, t registry.Tracker) (creds *domain.TrackerCredential, loginFailed bool, loginErr error) {
 	wc, needsCreds := t.(registry.WithCredentials)
 	if !needsCreds || h.Creds == nil || h.Master == nil {
 		return nil, false, nil

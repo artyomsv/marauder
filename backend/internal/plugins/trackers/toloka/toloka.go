@@ -489,6 +489,45 @@ func (p *plugin) gateError(_ context.Context, creds *domain.TrackerCredential, f
 	return fmt.Errorf("%w: toloka session is no longer signed in", registry.ErrSessionExpired)
 }
 
+// --- WithMetadata -------------------------------------------------------
+
+var _ registry.WithMetadata = (*plugin)(nil)
+
+// ResolveMetadata returns the release name for the AddTopic preview and for
+// the topic's stored display name, so a new Toloka topic shows a real title
+// instead of "Toloka topic 33571" until its first check.
+//
+// It returns no image, and that is not an omission: Toloka release pages
+// carry no poster. Eight live releases were inspected on 2026-09-03 across
+// music, film, series and anime sections — every <img> on them is site
+// chrome, a user avatar or a smiley. Do not add a "poster" selector here
+// without first finding a release that actually has one.
+//
+// creds are required, unlike every other WithMetadata tracker: a guest gets
+// a stub with an empty <title>, so resolving anonymously would silently
+// return nothing at all rather than fail.
+func (p *plugin) ResolveMetadata(ctx context.Context, rawURL string, creds *domain.TrackerCredential) (*registry.Metadata, error) {
+	target, err := p.canonicalURL(rawURL)
+	if err != nil {
+		return nil, fmt.Errorf("resolve metadata: %w", err)
+	}
+	body, err := p.fetch(ctx, target, creds)
+	if err != nil {
+		return nil, fmt.Errorf("resolve metadata: %w", err)
+	}
+	m := titleRe.FindSubmatch(body)
+	if m == nil {
+		return nil, errors.New("toloka: no title on the page")
+	}
+	title := cleanTitle(string(m[1]))
+	if title == "" {
+		// The guest stub renders <title></title>. Saying so beats handing
+		// back an empty name that looks like a parsing failure.
+		return nil, p.gateError(ctx, creds, errors.New("toloka: the page carried no title"))
+	}
+	return &registry.Metadata{Title: title}, nil
+}
+
 // --- WithSearch ---------------------------------------------------------
 
 var _ registry.WithSearch = (*plugin)(nil)
