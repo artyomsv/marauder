@@ -375,6 +375,75 @@ docker run --rm -v "$PWD/backend:/backend" -w //backend \
 
 ---
 
+### Tapochek.net
+
+| | |
+|---|---|
+| **Plugin name** | `tapochek` |
+| **Account required** | **Yes — no release data is visible without one** |
+| **Quality selection** | No |
+| **Episode filter** | No |
+| **Cloudflare** | No |
+| **URL format** | `https://tapochek.net/viewtopic.php?t=<id>` |
+
+Russian-language phpBB-derived tracker. `tapochek.net` is the only domain.
+
+**A guest sees almost nothing.** Some forums are readable without an account
+and most are not — a gated topic answers `302` to `login.php?redirect=...`.
+Even on a readable topic the download box is replaced with a link to the
+registration page, and there is no size, no seeders, no registration date and
+no torrent table at all. `tracker.php` and `search.php` are gated outright.
+Add an account under **Accounts** before adding any Tapochek topic.
+
+**How Marauder detects updates.** Tapochek publishes neither an infohash nor
+a magnet — not to a guest, and not to a signed-in member either. So, exactly
+as with AniDub and Toloka, the change token is derived from the release's
+torrent block: the download id, the `.torrent` filename, the release size and
+the registration timestamp an uploader's re-upload moves. Download and thanks
+counts are deliberately excluded, since they drift on their own and would
+make every check look like a new release.
+
+Two traps in that block are pinned by tests. The download cell carries
+"Размер .torrent файла 9 KB" *above* the release's own `Размер:` row, so a
+loose match reports the size of the torrent file rather than of the release;
+and the registration `<span>` carries a `title` attribute holding a relative
+age ("10 часов") that changes every hour.
+
+**How Marauder knows it is signed in.** The server keeps a `bb_data` cookie
+holding a PHP-serialised array whose `uid` field is the account id. A guest
+is issued no `bb_data` at all, so its absence is as meaningful as a
+non-positive id. That single server-supplied signal drives both `Login` and
+`Verify`. It replaced a check for `logout.php?sid=` in the page — a string
+this site never emits, so `Verify` reported every live session as dead —
+paired with a `Login` that inspected neither status nor body and so reported
+a rejected password as a success. Both signals were broken at once, in
+opposite directions.
+
+**Title and poster.** The release cover is the first `postImgAligned` image
+in the opening post; a plain `postImg` is a banner, a screenshot or a rank
+badge. Not every release has a cover, and a missing one is stored honestly as
+empty rather than costing the topic its title.
+
+> **The site is windows-1251.** Every label the parser anchors on is Cyrillic,
+> so the page is transcoded before parsing — the `.torrent` bytes deliberately
+> are not, since decoding binary would corrupt the file. Titles arrive as HTML
+> numeric entities (`&#1086;`) and are unescaped after transcoding.
+
+**Validation status:** verified end-to-end against the live site with a real
+account on 2026-09-04 — login, rejection of a wrong password, session
+verification, change detection with a stable token, title and poster
+resolution, and a real `.torrent` download whose bytes parse as a torrent.
+The check is re-runnable and reads credentials from the environment, so none
+are stored in the repo:
+
+```bash
+docker run --rm -v "$PWD/backend:/backend" -w //backend \
+  -e MARAUDER_TAPOCHEK_USERNAME=... -e MARAUDER_TAPOCHEK_PASSWORD=... \
+  golang:1.25 go test -tags=live -run TestLive -v ./internal/plugins/trackers/tapochek/...
+```
+
+---
+
 ## Rutor (anonymous, no account)
 
 | | |
@@ -444,7 +513,6 @@ docker run --rm -v "$PWD/backend:/backend" -w //backend golang:1.25 \
 |---|---|---|---|---|---|
 | `anidub` | AniDub | Yes | Yes | No | No |
 | `anilibria` | AniLiberty | No (public API) | No | No | No |
-| `tapochek` | Tapochek | Yes | No | No | No |
 
 > **Removed 2026-08-03.** `hdclub`, `unionpeer` and `freetorrents` were
 > deleted after each of their domains was probed and found not to serve a

@@ -125,11 +125,12 @@ export const trackers: Tracker[] = [
   {
     slug: "tapochek",
     name: "Tapochek.net",
-    description: "Russian-language tracker for kids' content.",
+    description:
+      "Russian-language phpBB tracker. Login-gated end to end — a guest sees no torrent data at all — so an account is required. Verified end-to-end against a live account.",
     category: "forum-cis",
     region: "RU",
     auth: "account",
-    status: "alpha",
+    status: "validated",
   },
   // Indexers (Torznab/Newznab)
   {
