@@ -96,11 +96,6 @@ func (h *hostRecordingRewrite) RoundTrip(req *http.Request) (*http.Response, err
 	return http.DefaultTransport.RoundTrip(req)
 }
 
-const fixtureTapochekHTML = `<html><head><title>Мультсериал :: Tapochek.net</title></head>
-<body>
-<div>Info hash: 0123456789ABCDEF0123456789ABCDEF01234567</div>
-</body></html>`
-
 // TestCheck_RewritesToActiveDomain asserts that when the admin has
 // configured an active domain override, Check fetches that host instead of
 // the mirror recorded in the stored topic URL — tapochek has no id-based
@@ -109,7 +104,7 @@ const fixtureTapochekHTML = `<html><head><title>Мультсериал :: Tapoch
 func TestCheck_RewritesToActiveDomain(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(200)
-		_, _ = w.Write([]byte(fixtureTapochekHTML))
+		_, _ = w.Write([]byte(fixtureTopicHTML))
 	}))
 	t.Cleanup(srv.Close)
 

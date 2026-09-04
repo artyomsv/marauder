@@ -2424,6 +2424,20 @@ func TestClassifyCause_SentinelOutranksMessage(t *testing.T) {
 			errCodeSolverMissing,
 		},
 		{
+			// Every cookie-session plugin (tapochek, toloka, lostfilm,
+			// rutracker) reports a lost session as this sentinel. It happened
+			// to classify correctly by wording alone, because the sentinel's
+			// own text is "tracker session expired" and classifyError greps
+			// for "session expired" — a coincidence, not a contract. This
+			// message deliberately contains NEITHER phrase, so only the typed
+			// branch can produce auth; if it is removed, this reverts to
+			// `unknown` and the user is no longer told to re-authenticate.
+			"session-expired sentinel wins over unrelated wording",
+			"tapochek: no torrent block on the topic page",
+			fmt.Errorf("tapochek: %w", registry.ErrSessionExpired),
+			errCodeAuth,
+		},
+		{
 			"nil cause falls back to the message",
 			"tracker plugin not installed",
 			nil,

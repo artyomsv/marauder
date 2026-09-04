@@ -50,9 +50,14 @@ const indexers = trackers.filter((t) => t.category === "indexer");
         sites, public magnet/torrent feeds, and the entire *arr-stack
         ecosystem via Torznab and Newznab. {validatedCount}
         {validatedCount === 1 ? "is" : "are"} E2E-validated against real
-        services. {alphaCount} {alphaCount === 1 ? "is" : "are"} alpha —
-        structurally complete with fixture-based tests and awaiting
-        live-account validation by community members.
+        services{alphaCount > 0 ? "." : " — every bundled plugin, with no fixture-only \"alpha\" left."}
+        {alphaCount > 0 && (
+          <Fragment>
+            {" "}{alphaCount} {alphaCount === 1 ? "is" : "are"} alpha —
+            structurally complete with fixture-based tests and awaiting
+            live-account validation by community members.
+          </Fragment>
+        )}
       </p>
     </header>
 
@@ -151,6 +156,11 @@ const indexers = trackers.filter((t) => t.category === "indexer");
       </p>
     </section>
 
+    {/* Only while something is actually alpha. With every plugin validated,
+        the page would otherwise say "no fixture-only alpha left" and then
+        spend two paragraphs explaining alpha and asking for help validating
+        "one of the alpha trackers" — of which there are none. */}
+    {alphaCount > 0 && (
     <section aria-labelledby="alpha-heading" class="glass-card rounded-xl p-8">
       <h2 id="alpha-heading" class="text-xl font-semibold tracking-tight">
         What does "alpha" mean?
@@ -169,5 +179,6 @@ const indexers = trackers.filter((t) => t.category === "indexer");
         explains how to validate and graduate it to stable in a single PR.
       </p>
     </section>
+    )}
   </article>
 </Page>

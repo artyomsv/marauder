@@ -1193,6 +1193,15 @@ func classifyCause(msg string, cause error) string {
 	// evidence about our own infrastructure. That is the 2026-07-30 incident.
 	case errors.Is(cause, registry.ErrClearanceUnavailable):
 		return errCodeSolver
+	// Same reasoning again. This one classifies correctly today only by
+	// coincidence: the sentinel's own text is "tracker session expired", so
+	// the wrapped message happens to contain the "session expired" phrase
+	// classifyError greps for. Rewording the sentinel — a change nothing
+	// would flag as behavioural — would silently drop every cookie-session
+	// tracker's expiry from `auth` to `unknown`, and `auth` is what tells the
+	// user to re-authenticate instead of leaving them to guess.
+	case errors.Is(cause, registry.ErrSessionExpired):
+		return errCodeAuth
 	default:
 		return classifyError(msg)
 	}

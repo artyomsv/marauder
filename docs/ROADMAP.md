@@ -126,7 +126,9 @@ touching config files.
       and search, on both live mirrors)
 - [x] `toloka` tracker plugin — **validated 2026-09-03 against a live account**
 - [x] `unionpeer` tracker plugin — alpha — **removed 2026-08-03, site defunct**
-- [x] `tapochek` tracker plugin — alpha
+- [x] `tapochek` tracker plugin — **validated 2026-09-04 against a live
+      account**. Publishes no infohash and no magnet, so the change token is
+      derived from the release's torrent block like anidub and toloka
 - [x] `hdclub` — TBDev/Gazelle-style private tracker plugin (alpha) —
       **removed 2026-08-03, site shut down in 2017**
 - [x] `freetorrents` — phpBB Free-Torrents.org plugin (alpha) —

@@ -7,6 +7,85 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Tapochek works, and every bundled tracker is now validated.** Tapochek
+  was the last plugin left at fixture-only "alpha", and it turns out it had
+  never worked at all — the same failure Toloka had. It also gains a real
+  title and cover art (`WithMetadata`), so a new topic no longer shows as
+  "Tapochek topic 289113".
+
+  Verified end-to-end against the live site with a real account on
+  2026-09-04: login, rejection of a wrong password, session verification,
+  change detection with a stable token, title and poster resolution, and a
+  real `.torrent` download whose bytes parse as a torrent. The new
+  build-tagged `tapochek_live_test.go` makes that re-runnable and reads
+  credentials from the environment, so none are stored in the repo.
+
+### Fixed
+
+- **Tapochek had never worked at all.** `Check` looked for `Info hash:`
+  followed by 40 hex characters. That English label does not exist on this
+  Russian site — and neither does an infohash or a magnet, on any release
+  page, to a guest **or** to a signed-in member (five live releases checked).
+  Every Tapochek topic therefore failed with "no infohash found", forever.
+
+  As with AniDub and Toloka, the change token is now derived from the
+  release's torrent block: the download id, the `.torrent` filename, the
+  release size, and the registration timestamp an uploader's re-upload moves.
+  Download and thanks counts are deliberately excluded — they drift on their
+  own and would make every check look like a new release. Two traps in that
+  block are pinned by tests: the download cell carries "Размер .torrent файла
+  9 KB" *above* the release's own `Размер:` row, and the registration `<span>`
+  carries a `title` attribute holding a relative age ("10 часов") that changes
+  every hour.
+
+- **Tapochek reported a wrong password as a working account, and a live
+  session as dead.** `Login` inspected neither the status nor the body, so
+  any response counted as success. `Verify` looked for `logout.php?sid=`, a
+  string this site has never emitted, so it always answered "not signed in".
+  Both signals were broken at once, in opposite directions, which left the
+  credentials page unable to say anything true.
+
+  Both now read the server's `bb_data` cookie, whose `uid` field is the
+  account id and which a guest is issued **not at all**. A successful login
+  answers `302` with an empty body, so there is nothing in the page to match
+  on success — the cookie is the only honest signal.
+
+- **The Tapochek plugin dialled any host a stored URL named.** Only
+  `CanParse` consulted the domain allowlist; `fetch` had no guard at all,
+  unlike rutor/rutracker/nnmclub/toloka. Every request is now checked before
+  it is dialled, and again on each redirect hop, and `canonicalURL` forces
+  `https` so a stored `http://` topic cannot put the session cookie on the
+  wire in plaintext. The guard also trusts the admin's configured active
+  domain, which `registry.DomainAllowed` does not consult — without that the
+  plugin could build every URL against its own configured host and then
+  refuse to dial it.
+
+- **A Tapochek download could hand your torrent client an HTML login page.**
+  `download.php` answers a session it does not accept with **200** and a
+  login page, so the status check alone let it through. The bytes are now
+  required to be bencoded, and the failure is reported as an expired session
+  rather than as a parse error.
+
+- **The Tapochek plugin ignored the site's character set.** Every label the
+  parser anchors on is Cyrillic and the site serves `windows-1251`, so
+  against the raw bytes the regexes matched nothing — the live run found the
+  torrent block and then reported it as carrying no fields. Pages are now
+  transcoded before parsing while the `.torrent` bytes deliberately are not,
+  since decoding binary would corrupt the file. The login failure page needed
+  the same treatment: without it a rejected password degraded to a vague "no
+  session was established" instead of naming the credentials.
+
+- **The Tapochek unit tests were built on an invented page.** The fixture
+  used a `Мультсериал :: Tapochek.net` title and an English `Info hash:`
+  label, neither of which the site has ever served, so the tests proved only
+  that the regexes matched a page nobody had written. They are replaced with
+  markup captured from the live site, including both traps above. Every
+  account-scoped value in the new fixtures is invented — the `bb_data` `uk`
+  field is a persistent-login key that signs in without the password, and a
+  real `.torrent` embeds a per-account passkey in its announce URL.
+
 ## [1.19.8] - 2026-09-03
 
 ### Added

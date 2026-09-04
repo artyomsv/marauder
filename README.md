@@ -112,17 +112,14 @@ What works **today**:
 **Validated end-to-end**: the generic magnet and `.torrent`-URL paths,
 the Torznab/Newznab indexer adapters, the **RuTracker**, **LostFilm**
 (including interactive captcha login), **Kinozal**, **AniLiberty**
-(public API, read-only), **AniDub** and **Toloka** (Ukrainian; everything
-there is behind login, so an account is required) plugins, and the two
-anonymous ones — **NNM-Club** (its login is Cloudflare-Turnstile-gated, so
-accounts aren't supported) and **Rutor** (no account needed at all) — each
-against a live target.
+(public API, read-only), **AniDub**, **Toloka** (Ukrainian) and
+**Tapochek** — the last two are login-gated end to end, so an account is
+required — plus the two anonymous ones, **NNM-Club** (its login is
+Cloudflare-Turnstile-gated, so accounts aren't supported) and **Rutor**
+(no account needed at all). Each against a live target.
 
-What's still **alpha**: one CIS forum-tracker plugin, **Tapochek**, is
-structurally complete with fixture-based tests but has not been validated
-against a live site — that requires a real account and is a good first
-contribution. See
-[`docs/plugin-development.md`](docs/plugin-development.md).
+Every bundled tracker plugin is now validated against its real site; none
+is left at fixture-only "alpha".
 
 **Removed 2026-08-03** after every advertised domain was probed:
 **HD-Club** (the site shut down in 2017; `hdclub.org` now redirects to
