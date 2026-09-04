@@ -74,6 +74,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -325,14 +326,22 @@ var (
 	// need, so anchoring here keeps quoted posts and the "similar releases"
 	// chrome from contributing to the change token (verified on five live
 	// topics, 2026-09-04).
-	torrentBlockOpenRe = regexp.MustCompile(`<table[^>]+class="attach[^"]*"[^>]*>`)
+	//
+	// The class is matched as a TOKEN anywhere in the attribute, not as its
+	// prefix. Live markup is `class="attach bordered med"`, but CSS class
+	// order carries no meaning, so a template that reorders it to
+	// `class="bordered attach med"` would otherwise stop every Tapochek
+	// check — a cosmetic edit disabling the plugin.
+	torrentBlockOpenRe = openTagWithClass("table", "attach")
 
 	// dlHrefRe is the one structurally stable field in the block: a numeric
 	// attachment id, not a Russian label a template change could rename.
 	dlHrefRe = regexp.MustCompile(`href="(download\.php\?id=(\d+))"`)
 
 	// fileNameRe reads the .torrent filename from the block's header cell.
-	fileNameRe = regexp.MustCompile(`(?s)<th[^>]*class="genmed"[^>]*>([^<]+)</th>`)
+	// Same token match: today the cell is `class="genmed"` alone, but adding
+	// a second class to it must not lose the filename.
+	fileNameRe = regexp.MustCompile(`(?s)<th[^>]*` + classToken("genmed") + `[^>]*>([^<]+)</th>`)
 
 	// regDateRe steps from the "Зарегистрирован" label straight into the
 	// <span> holding the timestamp. It must not use a lazy `.*?` across the
@@ -345,16 +354,62 @@ var (
 	// size of the torrent file, not of the release.
 	sizeRe = regexp.MustCompile(`(?s)<td>Размер:</td>\s*<td>([^<]+)</td>`)
 
-	// posterRe reads the release cover. Tapochek marks it with an alignment
-	// class; plain `postImg` is an inline screenshot, a banner or a rank
-	// badge. img-center is excluded because it appears mid-description on
-	// decorated topics rather than as the cover.
-	posterRe = regexp.MustCompile(`<var\s+class="postImg\s+postImgAligned\s+img-(?:right|left)"\s+title="([^"]+)"`)
+	// posterVarRe finds every <var> tag; posterURL then inspects the tag's
+	// attributes rather than demanding a fixed class order and a `title` that
+	// immediately follows `class`. Live markup happens to be
+	// `class="postImg postImgAligned img-right" title="..."`, but neither CSS
+	// class order nor HTML attribute order carries meaning, so pinning them
+	// would let a purely cosmetic template edit silently drop cover art.
+	posterVarRe = regexp.MustCompile(`(?s)<var\b[^>]*>`)
+
+	// tagAttrRe reads one named attribute out of a tag. Single and double
+	// quotes are both accepted because the surrounding markup mixes them.
+	tagAttrRe = regexp.MustCompile(`(?s)\b([a-zA-Z_:][-\w:.]*)\s*=\s*(?:"([^"]*)"|'([^']*)')`)
 
 	// firstPostOpenRe scopes the poster search to the opening post. Replies
-	// have their own post_body and may quote images of their own.
-	firstPostOpenRe = regexp.MustCompile(`<div class="post_body"[^>]*>`)
+	// have their own post_body and may quote images of their own. Token
+	// match again: `class="post_body signed"` must still open the block.
+	firstPostOpenRe = openTagWithClass("div", "post_body")
 )
+
+// classToken builds the fragment matching a class ATTRIBUTE that contains
+// name as one of its whitespace-separated tokens, in any position.
+//
+// `class="[^"]*name[^"]*"` would be wrong in both directions: it matches
+// `class="unattached"` for the token `attach`, and a prefix-anchored
+// `class="name[^"]*"` misses `class="bordered name"`. The optional
+// whitespace-terminated prefix and whitespace-led suffix pin the token
+// boundaries exactly, with no lookaround (RE2 has none).
+func classToken(name string) string {
+	return `class="(?:[^"]*\s)?` + regexp.QuoteMeta(name) + `(?:\s[^"]*)?"`
+}
+
+// openTagWithClass builds an opening-tag pattern for TagBlockInner: the
+// named tag carrying class as one of its tokens, with the class attribute
+// anywhere among the tag's attributes.
+func openTagWithClass(tag, class string) *regexp.Regexp {
+	return regexp.MustCompile(`(?s)<` + tag + `\b[^>]*` + classToken(class) + `[^>]*>`)
+}
+
+// tagAttrs parses a tag's attributes into a map. Values keep their raw
+// (still entity-encoded) form; callers decode what they use.
+func tagAttrs(tag string) map[string]string {
+	out := map[string]string{}
+	for _, m := range tagAttrRe.FindAllStringSubmatch(tag, -1) {
+		value := m[2]
+		if value == "" {
+			value = m[3]
+		}
+		out[strings.ToLower(m[1])] = value
+	}
+	return out
+}
+
+// hasClassToken reports whether attrs' class attribute carries name as one of
+// its whitespace-separated tokens.
+func hasClassToken(attrs map[string]string, name string) bool {
+	return slices.Contains(strings.Fields(attrs["class"]), name)
+}
 
 // cleanTitle turns a raw <title> into a display name. Tapochek serves
 // windows-1251 and renders Cyrillic titles as HTML numeric entities, so both
@@ -387,11 +442,21 @@ func posterURL(body []byte) string {
 		// worst case is a cover taken from a reply, which is still a cover.
 		scope = string(body)
 	}
-	m := posterRe.FindStringSubmatch(scope)
-	if m == nil {
-		return ""
+	for _, tag := range posterVarRe.FindAllString(scope, -1) {
+		attrs := tagAttrs(tag)
+		if !hasClassToken(attrs, "postImgAligned") {
+			continue
+		}
+		// img-center is excluded: it appears mid-description on decorated
+		// topics rather than as the cover.
+		if !hasClassToken(attrs, "img-right") && !hasClassToken(attrs, "img-left") {
+			continue
+		}
+		if url := strings.TrimSpace(html.UnescapeString(attrs["title"])); url != "" {
+			return url
+		}
 	}
-	return strings.TrimSpace(html.UnescapeString(m[1]))
+	return ""
 }
 
 // fingerprintInput builds the human-readable string the change token

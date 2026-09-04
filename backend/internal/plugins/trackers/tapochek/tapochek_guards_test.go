@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -600,5 +601,140 @@ func TestLogin_WrongPasswordIsRejected_Cp1251(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "rejected") {
 		t.Errorf("err = %v, want the credentials named, not a generic failure", err)
+	}
+}
+
+// --- selector robustness (Greptile P2) ----------------------------------
+
+// TestClassToken_MatchesTokenNotSubstring. `class="[^"]*attach[^"]*"` would
+// match `class="unattached"`, and a prefix-anchored pattern would miss
+// `class="bordered attach"`. Both directions are wrong, so both are pinned.
+func TestClassToken_MatchesTokenNotSubstring(t *testing.T) {
+	re := regexp.MustCompile(classToken("attach"))
+	for _, tc := range []struct {
+		attr string
+		want bool
+	}{
+		{`class="attach"`, true},
+		{`class="attach bordered med"`, true},
+		{`class="bordered attach med"`, true},
+		{`class="bordered med attach"`, true},
+		{`class="unattached"`, false},
+		{`class="attachment"`, false},
+		{`class="no-attach"`, false},
+		{`class="bordered med"`, false},
+	} {
+		if got := re.MatchString(tc.attr); got != tc.want {
+			t.Errorf("classToken(attach) on %s = %v, want %v", tc.attr, got, tc.want)
+		}
+	}
+}
+
+// TestTorrentBlock_SurvivesReorderedClasses. CSS class order carries no
+// meaning, so a purely cosmetic template edit must not stop every Tapochek
+// check. The original selector required `attach` to be the FIRST class.
+func TestTorrentBlock_SurvivesReorderedClasses(t *testing.T) {
+	for _, class := range []string{
+		`attach bordered med`,
+		`bordered attach med`,
+		`bordered med attach`,
+		`attach`,
+	} {
+		page := strings.Replace(fixtureTopicHTML,
+			`<table class="attach bordered med">`,
+			`<table class="`+class+`">`, 1)
+		if page == fixtureTopicHTML && class != `attach bordered med` {
+			t.Fatalf("substitution for %q matched nothing", class)
+		}
+		if _, ok := torrentBlock([]byte(page)); !ok {
+			t.Errorf("class=%q: torrent block not found", class)
+		}
+	}
+}
+
+// TestTorrentBlock_SurvivesAttributesBeforeClass. HTML attribute order
+// carries no meaning either.
+func TestTorrentBlock_SurvivesAttributesBeforeClass(t *testing.T) {
+	page := strings.Replace(fixtureTopicHTML,
+		`<table class="attach bordered med">`,
+		`<table id="tor" cellpadding="0" class="attach bordered med" width="100%">`, 1)
+	if page == fixtureTopicHTML {
+		t.Fatal("substitution matched nothing")
+	}
+	if _, ok := torrentBlock([]byte(page)); !ok {
+		t.Error("torrent block not found when other attributes precede class")
+	}
+}
+
+// TestPosterURL_SurvivesReorderedClassesAndAttributes. The original selector
+// demanded `class="postImg postImgAligned img-right"` in that exact order,
+// with `title` immediately after it — so a cosmetic edit silently dropped
+// the cover art rather than failing loudly.
+func TestPosterURL_SurvivesReorderedClassesAndAttributes(t *testing.T) {
+	const want = "https://i1.imageban.ru/out/2026/09/03/cover.jpg"
+	const original = `<var class="postImg postImgAligned img-right" title="` + want + `"></var>`
+	for _, variant := range []string{
+		`<var class="postImgAligned img-right postImg" title="` + want + `"></var>`,
+		`<var class="img-left postImgAligned postImg" title="` + want + `"></var>`,
+		`<var title="` + want + `" class="postImg postImgAligned img-right"></var>`,
+		`<var id="cover" class="postImg  postImgAligned  img-right" data-x="1" title="` + want + `"></var>`,
+		`<var class='postImg postImgAligned img-right' title='` + want + `'></var>`,
+	} {
+		page := strings.Replace(fixtureTopicHTML, original, variant, 1)
+		if page == fixtureTopicHTML {
+			t.Fatalf("substitution matched nothing for %q", variant)
+		}
+		if got := posterURL([]byte(page)); got != want {
+			t.Errorf("variant %q: posterURL = %q, want %q", variant, got, want)
+		}
+	}
+}
+
+// TestPosterURL_StillRejectsUnalignedImages is the inverse guard: loosening
+// the match must not turn every banner and screenshot into a cover.
+func TestPosterURL_StillRejectsUnalignedImages(t *testing.T) {
+	page := `<html><body><div class="post_body">
+<var class="postImg" title="https://img.example/banner.png"></var>
+<var class="postImg img-center" title="https://img.example/inline.png"></var>
+<var class="postImgAlignedExtra img-right" title="https://img.example/nearly.png"></var>
+</div><!--/post_body--></body></html>`
+	if got := posterURL([]byte(page)); got != "" {
+		t.Errorf("posterURL = %q, want empty — none of these is a cover", got)
+	}
+}
+
+// TestFirstPostBody_SurvivesExtraClasses. `<div class="post_body">` was
+// matched literally, so `class="post_body signed"` would have silently
+// widened the poster search to the whole page, including replies.
+func TestFirstPostBody_SurvivesExtraClasses(t *testing.T) {
+	page := strings.Replace(fixtureTopicHTML,
+		`<div class="post_body">`,
+		`<div class="post_body signed" id="p1">`, 1)
+	if page == fixtureTopicHTML {
+		t.Fatal("substitution matched nothing")
+	}
+	scope, ok := firstPostBody([]byte(page))
+	if !ok {
+		t.Fatal("opening post body not found")
+	}
+	if strings.Contains(scope, "reply-image") {
+		t.Error("scope leaked into the reply")
+	}
+}
+
+// TestFileName_SurvivesExtraClasses on the block's header cell.
+func TestFileName_SurvivesExtraClasses(t *testing.T) {
+	block := strings.Replace(fixtureTorrentBlock,
+		`<th colspan="3" class="genmed">`,
+		`<th colspan="3" class="genmed bold">`, 1)
+	if block == fixtureTorrentBlock {
+		t.Fatal("substitution matched nothing")
+	}
+	m := fileNameRe.FindStringSubmatch(block)
+	if m == nil {
+		t.Fatal("filename not found with an extra class")
+	}
+	if !strings.HasSuffix(normalizeCell(m[1]), ".torrent") {
+		t.Errorf("filename = %q", m[1])
 	}
 }
