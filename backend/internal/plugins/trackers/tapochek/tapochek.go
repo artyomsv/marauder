@@ -73,6 +73,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"path"
 	"regexp"
 	"slices"
 	"strconv"
@@ -174,7 +175,14 @@ func (p *plugin) Parse(_ context.Context, rawURL string) (*domain.Topic, error) 
 	// topic_id stays an int: that is what this plugin has always stored, and
 	// changing the type would silently reshape the Extra blob of every topic
 	// added before this rewrite.
-	id, _ := strconv.Atoi(m[2])
+	//
+	// The error is handled rather than discarded: the capture is digits only,
+	// so the only reachable failure is overflow — and Atoi returns a CLAMPED
+	// value alongside it, which would key the topic to the wrong id.
+	id, err := strconv.Atoi(m[2])
+	if err != nil {
+		return nil, fmt.Errorf("tapochek: topic id %q is out of range: %w", m[2], err)
+	}
 	return &domain.Topic{
 		TrackerName: pluginName,
 		URL:         rawURL,
@@ -206,7 +214,10 @@ func sessionUserID(sess *forumcommon.Session, base string) (int, bool) {
 		return 0, false
 	}
 	decoded := raw
-	if s, uerr := url.QueryUnescape(raw); uerr == nil {
+	// PathUnescape, not QueryUnescape: the latter also turns "+" into a
+	// space, which would corrupt any future bb_data field that can contain
+	// one. Only digits are read today, so this is insurance, not a fix.
+	if s, uerr := url.PathUnescape(raw); uerr == nil {
 		decoded = s
 	}
 	m := cookieUserIDRe.FindStringSubmatch(decoded)
@@ -350,9 +361,13 @@ var (
 	regDateRe = regexp.MustCompile(`(?s)Зарегистрирован\s*(?:&nbsp;|\s)*\[\s*<span[^>]*>([^<]+)</span>`)
 
 	// sizeRe anchors on the whole label cell. A loose match on "Размер"
-	// would find "Размер .torrent файла 18 KB" in the download cell — the
+	// would find "Размер .torrent файла 9 KB" in the download cell — the
 	// size of the torrent file, not of the release.
-	sizeRe = regexp.MustCompile(`(?s)<td>Размер:</td>\s*<td>([^<]+)</td>`)
+	// The cells tolerate attributes: every sibling cell in the same table
+	// already carries one (`<td width="15%">`), so requiring an
+	// attribute-free <td> made this match luck of the template — and a
+	// dropped size moves every stored token at once.
+	sizeRe = regexp.MustCompile(`(?s)<td[^>]*>Размер:</td>\s*<td[^>]*>([^<]+)</td>`)
 
 	// posterVarRe finds every <var> tag; posterURL then inspects the tag's
 	// attributes rather than demanding a fixed class order and a `title` that
@@ -468,32 +483,32 @@ func posterURL(body []byte) string {
 // The NUL separator cannot occur in HTML text, so no value can forge a field
 // boundary.
 func fingerprintInput(block string) string {
-	m := dlHrefRe.FindStringSubmatch(block)
-	if m == nil {
-		// The download id is the one structurally stable field — every other
-		// one hangs off a Russian label a template change could rename.
-		// Requiring it means such a change surfaces as a failed check rather
-		// than as a silently moved token, which would re-deliver every
-		// Tapochek topic at once.
+	// EVERY field is required. A field that silently drops out of the token
+	// moves every stored token at once, and the next tick then treats every
+	// Tapochek topic as a new release — N spurious downloads, and a stacked
+	// duplicate torrent for each topic that is not on replace-on-update.
+	// Nothing in the logs would say a selector broke, because the checks all
+	// succeed. Returning "" instead turns that same drift into a visible
+	// failed check on one topic.
+	//
+	// The download id is the only structurally stable one; the other three
+	// hang off a Russian label a template edit could rename, which is exactly
+	// why none of them may be optional.
+	id := dlHrefRe.FindStringSubmatch(block)
+	name := fileNameRe.FindStringSubmatch(block)
+	size := sizeRe.FindStringSubmatch(block)
+	// The registration timestamp is the field Tapochek moves when an uploader
+	// replaces a torrent — the event being watched.
+	date := regDateRe.FindStringSubmatch(block)
+	if id == nil || name == nil || size == nil || date == nil {
 		return ""
 	}
-	parts := []string{"id=" + m[2]}
-	if fm := fileNameRe.FindStringSubmatch(block); fm != nil {
-		parts = append(parts, "name="+normalizeCell(fm[1]))
-	}
-	if sm := sizeRe.FindStringSubmatch(block); sm != nil {
-		parts = append(parts, "size="+normalizeCell(sm[1]))
-	}
-	// Required, like the id. This is the field Tapochek moves when an
-	// uploader replaces a torrent, so if its label ever changed, a same-name
-	// same-size replacement would keep the old token and silently never
-	// download. Failing the check instead makes the drift visible.
-	d := regDateRe.FindStringSubmatch(block)
-	if d == nil {
-		return ""
-	}
-	parts = append(parts, "registered="+normalizeCell(d[1]))
-	return strings.Join(parts, "\x00")
+	return strings.Join([]string{
+		"id=" + id[2],
+		"name=" + normalizeCell(name[1]),
+		"size=" + normalizeCell(size[1]),
+		"registered=" + normalizeCell(date[1]),
+	}, "\x00")
 }
 
 // normalizeCell decodes entities and collapses whitespace so the token
@@ -539,7 +554,12 @@ func (p *plugin) Check(ctx context.Context, topic *domain.Topic, creds *domain.T
 	}
 	fp := pageFingerprint(block)
 	if fp == "" {
-		return nil, errors.New("tapochek: torrent block carried no download id or registration date")
+		// Through gateError like every other "content is not there" path: a
+		// ratio-limited account still gets the table but with a register link
+		// where the download link was, and reporting that as a parse failure
+		// sends the user hunting for a broken selector instead of
+		// re-authenticating. With a live session it returns this unchanged.
+		return nil, p.gateError(creds, errors.New("tapochek: torrent block carried no usable fields"))
 	}
 	check.Hash = fp
 	return check, nil
@@ -560,7 +580,7 @@ func (p *plugin) Download(ctx context.Context, topic *domain.Topic, _ *domain.Ch
 	}
 	m := dlHrefRe.FindStringSubmatch(block)
 	if m == nil {
-		return nil, errors.New("tapochek: no download link in the torrent block")
+		return nil, p.gateError(creds, errors.New("tapochek: no download link in the torrent block"))
 	}
 	torrent, err := p.fetch(ctx, p.baseURL()+"/"+m[1], creds)
 	if err != nil {
@@ -574,7 +594,7 @@ func (p *plugin) Download(ctx context.Context, topic *domain.Topic, _ *domain.Ch
 	}
 	name := "tapochek.torrent"
 	if fm := fileNameRe.FindStringSubmatch(block); fm != nil {
-		if n := normalizeCell(fm[1]); n != "" {
+		if n := safeFileName(normalizeCell(fm[1])); n != "" {
 			name = n
 		}
 	}
@@ -670,7 +690,12 @@ func (p *plugin) checkTarget(u *url.URL) error {
 // also listed as custom would be built into every URL and then rejected
 // before it was dialled. Same shape as the kinozal guard.
 func (p *plugin) hostAllowed(host string) bool {
-	if h := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(host), "www.")); h != "" && h == strings.ToLower(p.effectiveDomain()) {
+	// ToLower BEFORE TrimPrefix, matching registry.DomainAllowed: the other
+	// order leaves "WWW." attached and the comparison silently misses.
+	normalize := func(s string) string {
+		return strings.TrimPrefix(strings.ToLower(strings.TrimSpace(s)), "www.")
+	}
+	if h := normalize(host); h != "" && h == normalize(p.effectiveDomain()) {
 		return true
 	}
 	return registry.DomainAllowed(pluginName, host, knownDomains)
@@ -736,7 +761,18 @@ func (p *plugin) do(ctx context.Context, sess *forumcommon.Session, method, targ
 	}
 	resp, err := sess.Client.Do(req)
 	if err != nil {
-		return nil, err
+		// A *url.Error renders the FULL request URL, and on a refused
+		// redirect Go rewrites its URL field to the Location header — so the
+		// bare error would put a query string, or the off-site host the guard
+		// just refused, into last_error and the UI tooltip. Unwrapping keeps
+		// this path to the same "path only" promise as the status branch
+		// below, and ue.Err preserves the wording classifyError matches on
+		// ("context deadline exceeded", "no such host").
+		var ue *url.Error
+		if errors.As(err, &ue) {
+			return nil, fmt.Errorf("tapochek %s %s: %w", method, u.Path, ue.Err)
+		}
+		return nil, fmt.Errorf("tapochek %s %s: %w", method, u.Path, err)
 	}
 	defer resp.Body.Close()
 	// Only the path is named in errors: a search or redirect target can
@@ -755,4 +791,22 @@ func (p *plugin) do(ctx context.Context, sess *forumcommon.Session, method, targ
 		return nil, fmt.Errorf("tapochek: response from %s exceeds %d bytes", u.Path, maxBodyBytes)
 	}
 	return body, nil
+}
+
+// safeFileName reduces the scraped .torrent name to a single path segment.
+//
+// The name comes from the page, so the release uploader controls it, and the
+// downloadfolder client turns Payload.FileName into a path. That client
+// sanitises too — which is where the guarantee for every plugin lives — but a
+// name carrying separators has no business travelling that far, and most
+// sibling plugins build their own name rather than passing one through.
+// Returning "" lets the caller keep its constant fallback.
+func safeFileName(name string) string {
+	name = strings.ReplaceAll(strings.TrimSpace(name), `\`, "/")
+	name = strings.ReplaceAll(name, "\x00", "")
+	base := path.Base(name)
+	if base == "." || base == ".." || base == "/" {
+		return ""
+	}
+	return base
 }

@@ -10,7 +10,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/artyomsv/marauder/backend/internal/domain"
@@ -84,7 +86,14 @@ func (p *plugin) Add(_ context.Context, rawConfig []byte, payload *domain.Payloa
 	const fileMode os.FileMode = 0o600
 	switch {
 	case len(payload.TorrentFile) > 0:
-		name := payload.FileName
+		// filepath.Base before the join: FileName is scraped off a tracker
+		// page by several plugins (the uploader controls it), and
+		// filepath.Join CLEANS its result, so a name carrying `../` resolves
+		// outside dir instead of being rejected. That would write
+		// attacker-chosen bytes anywhere the backend can reach — this is the
+		// only client that turns a payload into a file path, so the guard
+		// belongs here where it covers every tracker at once.
+		name := safeFileName(payload.FileName)
 		if name == "" {
 			name = stamp + ".torrent"
 		}
@@ -101,4 +110,26 @@ func (p *plugin) Add(_ context.Context, rawConfig []byte, payload *domain.Payloa
 		return errors.New("empty payload")
 	}
 	return nil
+}
+
+// safeFileName reduces a payload's file name to a single path segment, or ""
+// when nothing usable is left for the caller to fall back on.
+//
+// filepath.Base alone is not enough on Windows, where a backslash is also a
+// separator but a Linux-built binary's Base does not treat it as one; the
+// separators are folded first so the result is a bare name on either OS.
+// The `.`/`..` cases are what Base returns for input that was entirely
+// separators, and neither is a file name.
+func safeFileName(name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return ""
+	}
+	name = strings.ReplaceAll(name, "\\", "/")
+	name = strings.ReplaceAll(name, "\x00", "")
+	base := path.Base(name)
+	if base == "." || base == ".." || base == "/" {
+		return ""
+	}
+	return base
 }

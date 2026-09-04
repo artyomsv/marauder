@@ -95,6 +95,14 @@ func TestLive_LoginVerifyCheckDownload(t *testing.T) {
 	if check.DisplayName == "" || strings.Contains(check.DisplayName, "&#") {
 		t.Errorf("DisplayName = %q — the title must be decoded, not entity-encoded", check.DisplayName)
 	}
+	// Unlike nnmclub/rutracker/toloka, cleanTitle strips no site suffix,
+	// because this template serves none. Pin that: if one ever appears, every
+	// topic's name silently grows it and ResolveMetadata stores it.
+	for _, unwanted := range []string{" :: ", "Tapochek"} {
+		if strings.Contains(check.DisplayName, unwanted) {
+			t.Errorf("DisplayName = %q contains %q — the template gained a site suffix, so cleanTitle must now strip it", check.DisplayName, unwanted)
+		}
+	}
 	t.Logf("token=%s name=%q", check.Hash, check.DisplayName)
 	time.Sleep(politeGap)
 
@@ -144,6 +152,10 @@ func TestLive_LoginVerifyCheckDownload(t *testing.T) {
 // TestLive_WrongPasswordIsRejected is the check the old plugin could not make:
 // it inspected neither status nor body, so a typo was saved and reported as a
 // working account.
+//
+// It deliberately fails a login against the real account named in the
+// environment. Nothing is exposed, but repeated runs could get that account
+// throttled or captcha-locked by the tracker, so do not loop it.
 func TestLive_WrongPasswordIsRejected(t *testing.T) {
 	creds := liveCreds(t)
 	bad := &domain.TrackerCredential{

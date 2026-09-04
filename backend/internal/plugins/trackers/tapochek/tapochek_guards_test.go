@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"golang.org/x/text/encoding"
 	"golang.org/x/text/encoding/charmap"
 
 	"github.com/artyomsv/marauder/backend/internal/domain"
@@ -192,11 +193,38 @@ func TestPosterURL_PicksTheAlignedCoverNotTheBanner(t *testing.T) {
 	}
 }
 
-// TestPosterURL_IgnoresRepliesTheOpeningPostIsTheRelease. A reply carrying an
-// aligned image of its own must not become the topic's cover.
-func TestPosterURL_IgnoresRepliesTheOpeningPostIsTheRelease(t *testing.T) {
-	if got := posterURL([]byte(fixtureTopicHTML)); strings.Contains(got, "reply-image") {
-		t.Errorf("took the cover from a reply: %q", got)
+// TestPosterURL_IgnoresACoverOnlyAReplyCarries pins the first-post scoping.
+//
+// The main fixture CANNOT pin it: there the opening post's cover precedes the
+// reply's aligned image, so an unscoped whole-page scan finds the right one by
+// accident and the test passes with the scoping deleted. This fixture inverts
+// that — the opening post carries only a plain screenshot, and the only
+// aligned image is in a reply.
+func TestPosterURL_IgnoresACoverOnlyAReplyCarries(t *testing.T) {
+	page := `<html><body>
+<div class="post_body">
+<var class="postImg" title="https://img.example/screenshot.jpg"></var>
+</div><!--/post_body-->
+<div class="post_body">
+<var class="postImg postImgAligned img-right" title="https://img.example/reply-cover.jpg"></var>
+</div><!--/post_body-->
+</body></html>`
+	if got := posterURL([]byte(page)); got != "" {
+		t.Errorf("posterURL = %q, want empty — the opening post carries no cover", got)
+	}
+}
+
+// TestPosterURL_FailsOpenWhenTheScopeIsUnrecognisable covers the branch that
+// runs on genuine template drift: no post_body wrapper at all. A cover from
+// somewhere on the page beats no cover, because nothing backfills a stored
+// image once the topic exists.
+func TestPosterURL_FailsOpenWhenTheScopeIsUnrecognisable(t *testing.T) {
+	const want = "https://img.example/cover.jpg"
+	page := `<html><body><div class="renamed_body">
+<var class="postImg postImgAligned img-right" title="` + want + `"></var>
+</div></body></html>`
+	if got := posterURL([]byte(page)); got != want {
+		t.Errorf("posterURL = %q, want %q — the fail-open branch should still find a cover", got, want)
 	}
 }
 
@@ -323,6 +351,9 @@ func TestLogin_RejectsMissingCredentials(t *testing.T) {
 // user's topics an anonymous session.
 func TestLogin_FailureDoesNotPublishAnAnonymousSession(t *testing.T) {
 	p := newTestPlugin(t, func(w http.ResponseWriter, _ *http.Request) {
+		// A guest cookie: if the failed jar were published, this is what the
+		// user's other topics would inherit.
+		http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: guestCookie, Path: "/"})
 		_, _ = w.Write([]byte(wrongPasswordHTML))
 	})
 	creds := testCreds()
@@ -330,10 +361,17 @@ func TestLogin_FailureDoesNotPublishAnAnonymousSession(t *testing.T) {
 		t.Fatal("expected the login to fail")
 	}
 	key := forumcommon.SessionKey(pluginName, creds.UserID.String())
-	// GetOrCreateWith returns a FRESH session for an unknown key; if the
-	// failed login had published its jar, this would be that jar.
-	if p.sessions.GetOrCreateWith(key, userAgent, p.configure).LoggedIn {
-		t.Error("a failed login published a session")
+	// Assert on the JAR, not on LoggedIn. Login sets LoggedIn only after the
+	// cookie check passes, so a regression that published the failed jar
+	// early would publish it with LoggedIn false — and an assertion on that
+	// field would stay green through exactly the bug it is named for.
+	sess := p.sessions.GetOrCreateWith(key, userAgent, p.configure)
+	base, err := url.Parse(p.baseURL())
+	if err != nil {
+		t.Fatalf("parse base URL: %v", err)
+	}
+	if got := sess.Client.Jar.Cookies(base); len(got) != 0 {
+		t.Errorf("a failed login published its jar under the user's key: %v", got)
 	}
 }
 
@@ -736,5 +774,100 @@ func TestFileName_SurvivesExtraClasses(t *testing.T) {
 	}
 	if !strings.HasSuffix(normalizeCell(m[1]), ".torrent") {
 		t.Errorf("filename = %q", m[1])
+	}
+}
+
+// --- gaps a mutation probe found (round 1) -------------------------------
+
+// TestCheck_DecodesTheCp1251TopicPage serves the topic page the way the site
+// actually serves it: windows-1251 bytes, not UTF-8.
+//
+// Every fixture in this file is a Go string literal and therefore valid
+// UTF-8, and forumcommon.DecodeWindows1251 returns valid UTF-8 unchanged — so
+// deleting the decode from fetchPage leaves the whole rest of the suite
+// green. Only this test fails. That is not hypothetical: the decode was
+// missing in the first draft, and the first live run found the torrent block
+// and then reported it as carrying no fields, because every label the parser
+// anchors on is Cyrillic.
+func TestCheck_DecodesTheCp1251TopicPage(t *testing.T) {
+	// ReplaceUnsupported: the fixture's download button carries "⇩", which has
+	// no windows-1251 code point. It is not what this test is about.
+	encoded, err := encoding.ReplaceUnsupported(charmap.Windows1251.NewEncoder()).Bytes([]byte(fixtureTopicHTML))
+	if err != nil {
+		t.Fatalf("encode fixture to cp1251: %v", err)
+	}
+	if bytes.Equal(encoded, []byte(fixtureTopicHTML)) {
+		t.Fatal("the fixture round-tripped unchanged; this test would prove nothing")
+	}
+	p := newTestPlugin(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=windows-1251")
+		http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: userCookie, Path: "/"})
+		_, _ = w.Write(encoded)
+	})
+
+	check, err := p.Check(context.Background(), &domain.Topic{
+		URL: "https://tapochek.net/viewtopic.php?t=289113",
+	}, testCreds())
+	if err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	if want := pageFingerprint(fixtureTorrentBlock); check.Hash != want {
+		t.Errorf("Hash = %q, want %q — the cp1251 page was not decoded before parsing", check.Hash, want)
+	}
+}
+
+// TestFetch_RefusesAnOffSiteInitialURL covers the guard on the FIRST request,
+// not only on a redirect hop. Every other host test goes through
+// checkRedirect or calls checkTarget directly, so removing the checkTarget
+// call from do() leaves them all green — and a stored topic URL is precisely
+// an input the plugin does not control.
+func TestFetch_RefusesAnOffSiteInitialURL(t *testing.T) {
+	registry.SetDomainResolver(nil)
+	p := newTestPlugin(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(fixtureTopicHTML))
+	})
+	if _, err := p.fetch(context.Background(), "https://evil.example/viewtopic.php?t=1", nil); err == nil ||
+		!strings.Contains(err.Error(), "refusing to fetch off-site host") {
+		t.Errorf("err = %v, want the off-site refusal", err)
+	}
+	if _, err := p.fetch(context.Background(), "http://tapochek.net/viewtopic.php?t=1", nil); err == nil ||
+		!strings.Contains(err.Error(), "refusing non-https") {
+		t.Errorf("err = %v, want the non-https refusal", err)
+	}
+}
+
+// TestDownload_FileNameCannotEscapeAWatchFolder. The name is scraped off the
+// page, so the uploader controls it, and the downloadfolder client turns it
+// into a path. The client sanitises too — that is where the guarantee lives
+// for every plugin — but a name carrying separators should not travel that
+// far in the first place.
+func TestDownload_FileNameCannotEscapeAWatchFolder(t *testing.T) {
+	block := strings.Replace(fixtureTorrentBlock,
+		`<th colspan="3" class="genmed">Lady Death Demonicron [FitGirl Repack] [tapochek.net].torrent</th>`,
+		`<th colspan="3" class="genmed">../../../etc/cron.d/evil.torrent</th>`, 1)
+	if block == fixtureTorrentBlock {
+		t.Fatal("substitution matched nothing")
+	}
+	page := strings.Replace(fixtureTopicHTML, fixtureTorrentBlock, block, 1)
+	p := newTestPlugin(t, func(w http.ResponseWriter, r *http.Request) {
+		http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: userCookie, Path: "/"})
+		if strings.HasPrefix(r.URL.Path, "/download.php") {
+			_, _ = w.Write(fixtureTorrentBytes)
+			return
+		}
+		_, _ = w.Write([]byte(page))
+	})
+
+	payload, err := p.Download(context.Background(), &domain.Topic{
+		URL: "https://tapochek.net/viewtopic.php?t=289113",
+	}, nil, testCreds())
+	if err != nil {
+		t.Fatalf("Download: %v", err)
+	}
+	if strings.ContainsAny(payload.FileName, `/\`) {
+		t.Errorf("FileName = %q, want no path separators", payload.FileName)
+	}
+	if payload.FileName == "." || payload.FileName == ".." {
+		t.Errorf("FileName = %q, which is not a file name", payload.FileName)
 	}
 }

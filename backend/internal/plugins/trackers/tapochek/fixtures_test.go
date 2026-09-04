@@ -110,4 +110,4 @@ const (
 // fixtureTorrentBytes is a minimal bencoded dictionary. The real file's
 // announce URL embeds a per-account passkey, so a captured .torrent is a
 // credential and is never committed; the plugin only checks the first byte.
-var fixtureTorrentBytes = []byte("d8:announce30:https://bt.example.test/announce4:infod4:name4:teste")
+var fixtureTorrentBytes = []byte("d8:announce32:https://bt.example.test/announce4:infod4:name4:teste")
