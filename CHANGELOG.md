@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.19.10] - 2026-09-08
+
 ### Security
 
 - **The backend image no longer ships the 23 Trivy findings code scanning
