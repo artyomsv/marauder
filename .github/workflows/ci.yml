@@ -33,7 +33,7 @@ jobs:
     # "Backend". This job is a required status check, so a name carrying the Go version deadlocks
     # every pull request the moment the version moves. A single-valued matrix bought nothing.
     env:
-      GO_VERSION: '1.25'
+      GO_VERSION: '1.26'
     defaults:
       run:
         working-directory: backend
@@ -87,7 +87,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.25'
+          go-version: '1.26'
           cache: true
           cache-dependency-path: backend/go.sum
 
@@ -95,10 +95,10 @@ jobs:
         uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
           # Pinned for reproducible CI (the action's `latest` drifts the rule
-          # set). v2.12.2 is built with Go 1.25 to match the toolchain; the
+          # set). v2.13.2 is built with Go 1.26 to match the toolchain; the
           # gosec G124/G710 false positives it adds are excluded in
           # .golangci.yml (see the documented reasons there).
-          version: v2.12.2
+          version: v2.13.2
           working-directory: backend
           args: --timeout=5m
 
@@ -140,7 +140,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.25'
+          go-version: '1.26'
           cache: true
           cache-dependency-path: backend/go.sum
 

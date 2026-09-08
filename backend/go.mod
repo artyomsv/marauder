@@ -1,6 +1,6 @@
 module github.com/artyomsv/marauder/backend
 
-go 1.25.7
+go 1.26.0
 
 require (
 	github.com/caarlos0/env/v11 v11.4.1
@@ -14,7 +14,7 @@ require (
 	github.com/pressly/goose/v3 v3.27.3
 	github.com/prometheus/client_golang v1.24.1
 	github.com/rs/zerolog v1.35.1
-	golang.org/x/crypto v0.55.0
+	golang.org/x/crypto v0.56.0
 	golang.org/x/oauth2 v0.36.0
 	golang.org/x/text v0.41.0
 )

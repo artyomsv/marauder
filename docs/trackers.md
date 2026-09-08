@@ -370,7 +370,7 @@ environment, so none are stored in the repo:
 ```bash
 docker run --rm -v "$PWD/backend:/backend" -w //backend \
   -e MARAUDER_TOLOKA_USERNAME=... -e MARAUDER_TOLOKA_PASSWORD=... \
-  golang:1.25 go test -tags=live -run TestLive -v ./internal/plugins/trackers/toloka/...
+  golang:1.26 go test -tags=live -run TestLive -v ./internal/plugins/trackers/toloka/...
 ```
 
 ---
@@ -439,7 +439,7 @@ are stored in the repo:
 ```bash
 docker run --rm -v "$PWD/backend:/backend" -w //backend \
   -e MARAUDER_TAPOCHEK_USERNAME=... -e MARAUDER_TAPOCHEK_PASSWORD=... \
-  golang:1.25 go test -tags=live -run TestLive -v ./internal/plugins/trackers/tapochek/...
+  golang:1.26 go test -tags=live -run TestLive -v ./internal/plugins/trackers/tapochek/...
 ```
 
 ---
@@ -501,7 +501,7 @@ feed the normal add-topic flow.
 The plugin-level check is re-runnable:
 
 ```bash
-docker run --rm -v "$PWD/backend:/backend" -w //backend golang:1.25 \
+docker run --rm -v "$PWD/backend:/backend" -w //backend golang:1.26 \
   go test -tags=live -run TestLive -v ./internal/plugins/trackers/rutor/...
 ```
 

@@ -360,7 +360,7 @@ The **status poll fallback** (in `DeliveryStatus`) is now gated by `useSseStatus
 
 ```bash
 # Backend (Docker — never install Go locally)
-docker run --rm -v "E:/Projects/Stukans/Marauder/backend:/backend" -w //backend golang:1.25 sh -c "go build ./... && go vet ./... && go test -race ./..."
+docker run --rm -v "E:/Projects/Stukans/Marauder/backend:/backend" -w //backend golang:1.26 sh -c "go build ./... && go vet ./... && go test -race ./..."
 
 # Backend repo integration tests (real Postgres, real migrations). Build-tagged
 # `integration` and self-skipping when MARAUDER_TEST_DB_URL is unset, so the
@@ -374,7 +374,7 @@ docker run --rm -d --name marauder-itest-pg --network marauder-itest-net \
   -e POSTGRES_PASSWORD=test -e POSTGRES_DB=marauder_test postgres:17-alpine
 docker run --rm --network marauder-itest-net -v "E:/Projects/Stukans/Marauder/backend:/backend" -w //backend \
   -e MARAUDER_TEST_DB_URL="postgres://postgres:test@marauder-itest-pg:5432/marauder_test?sslmode=disable" \
-  golang:1.25 sh -c "go test -tags=integration -race ./internal/db/repo/..."
+  golang:1.26 sh -c "go test -tags=integration -race ./internal/db/repo/..."
 
 # Frontend — run from a container-local node_modules volume, NOT the bind mount.
 # node_modules is a linux-x64-musl install (alpine is correct; glibc node:22 and

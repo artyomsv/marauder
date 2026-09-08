@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **The backend image no longer ships the 23 Trivy findings code scanning
+  had open against it.** Every one had a published fix. Twenty-one were in
+  Alpine's `libssl3`/`libcrypto3` 3.5.7-r0 — one HIGH (CVE-2026-14456, QUIC
+  server memory exhaustion), four MEDIUM and the rest LOW, all in QUIC, CMP,
+  DTLS or CMS code paths. The Marauder binary is statically linked
+  (`CGO_ENABLED=0`) and never loads OpenSSL; the library is in the image only
+  because `wget` (the healthcheck) and `apk` depend on it. The other two were
+  in `golang.org/x/crypto` v0.55.0 (CVE-2026-56855, CVE-2026-78662), both in
+  its `ssh` package; Marauder imports only `argon2`. Low real exposure, but
+  the scanner blocks on HIGH and the fixes were free.
+
+  The runtime stage now runs `apk upgrade` before installing packages, so the
+  image picks up the v3.24 repo's 3.5.8-r0 instead of whatever the
+  `alpine:3.24` tag last baked in — a durable fix, not a one-off tag bump.
+  `golang.org/x/crypto` moves to v0.56.0, which requires Go 1.26, so the
+  backend's `go` directive, the Go toolchain in its CI jobs, the golangci-lint
+  pin (v2.13.2, built with Go 1.26) and the documented dev commands moved from
+  1.25 to 1.26 together.
+
 ## [1.19.9] - 2026-09-04
 
 ### Added

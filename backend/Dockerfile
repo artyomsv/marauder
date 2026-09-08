@@ -34,7 +34,11 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH:-amd64} \
 # --- Runtime stage ------------------------------------------------------
 FROM alpine:3.24
 
-RUN apk add --no-cache ca-certificates tzdata wget \
+# `apk upgrade` first: the alpine:3.24 tag lags the v3.24 package repo, so the
+# base image can ship a libssl3/libcrypto3 (or anything else) with an open CVE
+# whose fix is already published. Trivy scans the image, not the tag.
+RUN apk upgrade --no-cache \
+ && apk add --no-cache ca-certificates tzdata wget \
  && addgroup -S -g 10001 marauder \
  && adduser  -S -u 10001 -G marauder marauder
 

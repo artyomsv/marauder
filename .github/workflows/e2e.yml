@@ -93,7 +93,7 @@ jobs:
             -e MARAUDER_BASE_URL=http://gateway:6688 \
             -e MARAUDER_ADMIN_USER=admin -e MARAUDER_ADMIN_PASS=pleasechangeme \
             -e QBIT_URL=http://qbittorrent:6611 -e QBIT_PASSWORD \
-            golang:1.25 go test -tags=e2e -count=1 -v ./e2e/...
+            golang:1.26 go test -tags=e2e -count=1 -v ./e2e/...
 
       - name: Print stack logs on failure
         if: failure()
