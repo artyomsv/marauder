@@ -28,6 +28,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   pin (v2.13.2, built with Go 1.26) and the documented dev commands moved from
   1.25 to 1.26 together.
 
+  The frontend image had the same shape of problem one scan later: eight
+  findings (seven HIGH) in Alpine's `libuuid` 2.42.1-r0 under `nginx:1.31-alpine`,
+  fixed in 2.42.3. Its Dockerfile already ran `apk upgrade`, but only for
+  `libexpat`, so every new base-package CVE needed its own edit. It now
+  upgrades every package, like the backend.
+
 ## [1.19.9] - 2026-09-04
 
 ### Added

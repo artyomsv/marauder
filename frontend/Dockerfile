@@ -17,10 +17,11 @@ RUN npm run build
 # --- Runtime stage: nginx ----------------------------------------------
 FROM nginx:1.31-alpine AS runtime
 
-# Pull Alpine security fixes for base-image packages (e.g. libexpat
-# integer-overflow/UAF CVEs flagged by Trivy; nginx serving static assets
-# never reaches expat, but keep the OS layer patched).
-RUN apk upgrade --no-cache libexpat
+# Pull every Alpine security fix for base-image packages. This used to name
+# libexpat only, so each new base-package CVE (libuuid was next) needed its
+# own edit while the fix already sat in the repo. nginx serving static assets
+# reaches none of these libraries, but Trivy scans the image, not nginx.
+RUN apk upgrade --no-cache
 
 # Drop nginx default config and supply our own
 COPY nginx/default.conf /etc/nginx/conf.d/default.conf
