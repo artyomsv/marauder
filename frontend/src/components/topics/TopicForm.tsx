@@ -430,7 +430,7 @@ export function TopicForm({
           <p className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-400">
             This topic has no notifier and there is no default notifier, so it
             will be checked silently and you will never hear about it. Pick a
-            notifier above, or mark one as default on the Notifiers page.
+            notifier below, or mark one as default on the Notifiers page.
           </p>
         )}
 
