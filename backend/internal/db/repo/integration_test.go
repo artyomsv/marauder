@@ -123,3 +123,60 @@ func reload(t *testing.T, pool *pgxpool.Pool, id uuid.UUID) *domain.Topic {
 	}
 	return got
 }
+
+func TestTopicsNotifyOnlyRoundTrip(t *testing.T) {
+	pool := integrationPool(t)
+	topicsRepo := NewTopics(pool)
+	userID := seedUser(t, pool)
+	ctx := context.Background()
+
+	created, err := topicsRepo.Create(ctx, &domain.Topic{
+		UserID:                    userID,
+		TrackerName:               "faketracker",
+		URL:                       "https://example.com/notify-only-roundtrip",
+		DisplayName:               "Notify Only Round Trip",
+		NotifyOnly:                true,
+		NotifyOnlyAnnounceCurrent: true,
+		CheckIntervalSec:          900,
+		NextCheckAt:               time.Now().UTC(),
+		Status:                    domain.TopicStatusActive,
+		Extra:                     map[string]any{},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if !created.NotifyOnly || !created.NotifyOnlyAnnounceCurrent {
+		t.Fatalf("Create did not round-trip the flags: %+v", created)
+	}
+
+	// A plain topic must default to the historical behaviour.
+	plain, err := topicsRepo.Create(ctx, &domain.Topic{
+		UserID:           userID,
+		TrackerName:      "faketracker",
+		URL:              "https://example.com/notify-only-default",
+		DisplayName:      "Default",
+		CheckIntervalSec: 900,
+		NextCheckAt:      time.Now().UTC(),
+		Status:           domain.TopicStatusActive,
+		Extra:            map[string]any{},
+	})
+	if err != nil {
+		t.Fatalf("Create plain: %v", err)
+	}
+	if plain.NotifyOnly || plain.NotifyOnlyAnnounceCurrent {
+		t.Fatalf("expected both flags false by default, got %+v", plain)
+	}
+
+	// Update must persist both, and GetByID must read them back.
+	if _, err := topicsRepo.Update(ctx, plain.ID, userID, plain.DisplayName, nil, nil, "", "",
+		TopicFlags{NotifyOnly: true, NotifyOnlyAnnounceCurrent: false}, map[string]any{}); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	got, err := topicsRepo.GetByID(ctx, plain.ID, &userID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if !got.NotifyOnly || got.NotifyOnlyAnnounceCurrent {
+		t.Fatalf("Update did not persist the flags: %+v", got)
+	}
+}
