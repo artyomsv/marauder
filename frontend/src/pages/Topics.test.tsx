@@ -107,6 +107,8 @@ const EXISTING_TOPIC: Topic = {
   Category: "series",
   ReplaceOnUpdate: false,
   ReplaceDeleteData: true,
+  NotifyOnly: false,
+  NotifyOnlyAnnounceCurrent: false,
   Extra: { quality: "1080p", start_season: 2, start_episode: 3 },
   LastHash: "",
   LastCheckedAt: null,

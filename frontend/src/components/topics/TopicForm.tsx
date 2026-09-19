@@ -53,6 +53,10 @@ export interface TopicFormValues {
   // replaceOnUpdate is on.
   replaceOnUpdate: boolean;
   replaceDeleteData: boolean;
+  // Notify-only watch mode (issue #184). notifyOnlyAnnounceCurrent only
+  // applies when notifyOnly is on.
+  notifyOnly: boolean;
+  notifyOnlyAnnounceCurrent: boolean;
 }
 
 interface TopicFormProps {
@@ -217,6 +221,8 @@ export function TopicForm({
     category: initial.category,
     replaceOnUpdate: initial.replaceOnUpdate,
     replaceDeleteData: initial.replaceDeleteData,
+    notifyOnly: initial.notifyOnly,
+    notifyOnlyAnnounceCurrent: initial.notifyOnlyAnnounceCurrent,
   });
 
   // The category combobox suggests the categories of whichever client will
@@ -249,6 +255,8 @@ export function TopicForm({
       category: delivery.category,
       replaceOnUpdate: delivery.replaceOnUpdate,
       replaceDeleteData: delivery.replaceDeleteData,
+      notifyOnly: delivery.notifyOnly,
+      notifyOnlyAnnounceCurrent: delivery.notifyOnlyAnnounceCurrent,
     });
   };
 
@@ -367,79 +375,116 @@ export function TopicForm({
           </div>
         )}
 
-      <div className="space-y-1.5">
-        <Label htmlFor="client">Client (optional)</Label>
-        <select
-          id="client"
-          value={delivery.clientId}
-          onChange={(e) => setDelivery((d) => ({ ...d, clientId: e.target.value }))}
-          className={SELECT_CLASS}
-        >
-          <option value="">Use default client</option>
-          {clients.map((c) => (
-            <option key={c.id} value={c.id}>
-              {c.display_name}
-            </option>
-          ))}
-        </select>
+      <div className="space-y-2 rounded-md border border-border/60 bg-muted/20 p-3">
+        <label className="flex items-center gap-2 text-sm font-medium text-foreground">
+          <input
+            type="checkbox"
+            checked={delivery.notifyOnly}
+            onChange={(e) =>
+              setDelivery((d) => ({ ...d, notifyOnly: e.target.checked }))
+            }
+          />
+          <span>Notify only — do not download</span>
+        </label>
+        <p className="text-xs text-muted-foreground">
+          Keep checking this topic and send a notification when a new release
+          appears, without sending anything to a torrent client. No download
+          client is required.
+        </p>
+        {delivery.notifyOnly && (
+          <label className="flex items-center gap-2 pt-1 text-sm">
+            <input
+              type="checkbox"
+              checked={delivery.notifyOnlyAnnounceCurrent}
+              onChange={(e) =>
+                setDelivery((d) => ({
+                  ...d,
+                  notifyOnlyAnnounceCurrent: e.target.checked,
+                }))
+              }
+            />
+            <span>Also tell me about the release that is there now</span>
+          </label>
+        )}
       </div>
+
+      {!delivery.notifyOnly && (
+        <>
+          <div className="space-y-1.5">
+            <Label htmlFor="client">Client (optional)</Label>
+            <select
+              id="client"
+              value={delivery.clientId}
+              onChange={(e) => setDelivery((d) => ({ ...d, clientId: e.target.value }))}
+              className={SELECT_CLASS}
+            >
+              <option value="">Use default client</option>
+              {clients.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.display_name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="download-dir">Download folder (optional)</Label>
+              <Input
+                id="download-dir"
+                value={delivery.downloadDir}
+                onChange={(e) =>
+                  setDelivery((d) => ({ ...d, downloadDir: e.target.value }))
+                }
+                placeholder="/downloads/tv"
+              />
+              <p className="text-xs text-muted-foreground">
+                Full path; overrides the client folder and category below.
+              </p>
+            </div>
+            <CategoryField
+              value={delivery.category}
+              onChange={(v) => setDelivery((d) => ({ ...d, category: v }))}
+              suggestions={categorySuggestions}
+            />
+          </div>
+
+          <div className="space-y-2 rounded-md border border-border/60 bg-muted/20 p-3">
+            <label className="flex items-center gap-2 text-sm font-medium text-foreground">
+              <input
+                type="checkbox"
+                checked={delivery.replaceOnUpdate}
+                onChange={(e) =>
+                  setDelivery((d) => ({ ...d, replaceOnUpdate: e.target.checked }))
+                }
+              />
+              <span>Replace previous version on update</span>
+            </label>
+            <p className="text-xs text-muted-foreground">
+              When a new release is detected, remove the previously downloaded torrent
+              from the client instead of keeping every version. Best for single
+              releases (movies, repacked seasons) — not per-episode shows.
+            </p>
+            {delivery.replaceOnUpdate && (
+              <label className="flex items-center gap-2 pt-1 text-sm">
+                <input
+                  type="checkbox"
+                  checked={delivery.replaceDeleteData}
+                  onChange={(e) =>
+                    setDelivery((d) => ({ ...d, replaceDeleteData: e.target.checked }))
+                  }
+                />
+                <span>Also delete the old files from disk</span>
+              </label>
+            )}
+          </div>
+        </>
+      )}
 
       <NotifierSelect
         value={delivery.notifierId}
         onChange={(v) => setDelivery((d) => ({ ...d, notifierId: v }))}
       />
-
-      <div className="grid gap-4 sm:grid-cols-2">
-        <div className="space-y-1.5">
-          <Label htmlFor="download-dir">Download folder (optional)</Label>
-          <Input
-            id="download-dir"
-            value={delivery.downloadDir}
-            onChange={(e) =>
-              setDelivery((d) => ({ ...d, downloadDir: e.target.value }))
-            }
-            placeholder="/downloads/tv"
-          />
-          <p className="text-xs text-muted-foreground">
-            Full path; overrides the client folder and category below.
-          </p>
-        </div>
-        <CategoryField
-          value={delivery.category}
-          onChange={(v) => setDelivery((d) => ({ ...d, category: v }))}
-          suggestions={categorySuggestions}
-        />
-      </div>
-
-      <div className="space-y-2 rounded-md border border-border/60 bg-muted/20 p-3">
-        <label className="flex items-center gap-2 text-sm font-medium text-foreground">
-          <input
-            type="checkbox"
-            checked={delivery.replaceOnUpdate}
-            onChange={(e) =>
-              setDelivery((d) => ({ ...d, replaceOnUpdate: e.target.checked }))
-            }
-          />
-          <span>Replace previous version on update</span>
-        </label>
-        <p className="text-xs text-muted-foreground">
-          When a new release is detected, remove the previously downloaded torrent
-          from the client instead of keeping every version. Best for single
-          releases (movies, repacked seasons) — not per-episode shows.
-        </p>
-        {delivery.replaceOnUpdate && (
-          <label className="flex items-center gap-2 pt-1 text-sm">
-            <input
-              type="checkbox"
-              checked={delivery.replaceDeleteData}
-              onChange={(e) =>
-                setDelivery((d) => ({ ...d, replaceDeleteData: e.target.checked }))
-              }
-            />
-            <span>Also delete the old files from disk</span>
-          </label>
-        )}
-      </div>
 
       {error && (
         <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">

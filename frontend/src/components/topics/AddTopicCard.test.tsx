@@ -81,6 +81,29 @@ describe("AddTopicCard", () => {
   // jsdom (animations don't run), which makes CSS-visibility matchers lie.
   const inHiddenPane = (el: HTMLElement) => el.closest("div[hidden]") !== null;
 
+  it("sends notify_only and hides the client selector when notify-only is on", async () => {
+    const user = userEvent.setup();
+    mockApi.post.mockResolvedValue({});
+    render(<AddTopicCard onClose={() => {}} onCreated={() => {}} />, {
+      wrapper: wrap(),
+    });
+
+    await user.type(screen.getByLabelText(/URL or magnet link/i), "https://example.com/t/1");
+    await user.click(screen.getByLabelText(/Notify only/i));
+
+    // Download settings are irrelevant in this mode and must be out of the way.
+    expect(screen.queryByLabelText(/Client \(optional\)/i)).not.toBeInTheDocument();
+    // The notifier selector must stay — it is the whole point of the mode.
+    expect(screen.getByLabelText("Notifier (optional)")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /add topic/i }));
+
+    expect(mockApi.post).toHaveBeenCalledWith(
+      "/topics",
+      expect.objectContaining({ notify_only: true, notify_only_announce_current: false }),
+    );
+  });
+
   it("opens in URL mode with the topic form visible", () => {
     render(<AddTopicCard onClose={() => {}} onCreated={() => {}} />, {
       wrapper: wrap(),

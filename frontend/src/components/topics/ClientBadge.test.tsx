@@ -27,6 +27,8 @@ function topicWith(clientID: string | null): Topic {
     Category: "",
     ReplaceOnUpdate: false,
     ReplaceDeleteData: true,
+    NotifyOnly: false,
+    NotifyOnlyAnnounceCurrent: false,
     Extra: null,
     LastHash: "",
     LastCheckedAt: null,
