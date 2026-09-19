@@ -23,6 +23,9 @@ interface ClientBadgeProps {
 // (ClientID === null) falls back to the workspace default client — the
 // same resolution the scheduler performs at delivery time.
 export function ClientBadge({ topic, clientById, defaultClient }: ClientBadgeProps) {
+  // A notify-only topic never delivers, so naming a client — and especially
+  // rendering the red "no default client" error state — would be a lie.
+  if (topic.NotifyOnly) return null;
   const explicit = topic.ClientID ? clientById.get(topic.ClientID) : undefined;
 
   // Explicit client picked on the topic.

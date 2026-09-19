@@ -23,6 +23,7 @@ import { TopicHistoryDisclosure } from "@/components/topics/TopicHistoryDisclosu
 import { ClientBadge, type ClientRef } from "@/components/topics/ClientBadge";
 import { NotifierBadge, type NotifierRef } from "@/components/topics/NotifierBadge";
 import { SonarrBadge } from "@/components/topics/SonarrBadge";
+import { NotifyOnlyBadge } from "@/components/topics/NotifyOnlyBadge";
 import { StatusIndicator } from "@/components/topics/StatusIndicator";
 
 export interface TopicRowLookups {
@@ -101,6 +102,7 @@ export function TopicRow({
             {topic.TrackerName}
           </Badge>
           <SonarrBadge topic={topic} />
+          <NotifyOnlyBadge topic={topic} />
           <ClientBadge
             topic={topic}
             clientById={lookups.clientById}

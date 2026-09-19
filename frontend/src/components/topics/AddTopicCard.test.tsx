@@ -104,6 +104,50 @@ describe("AddTopicCard", () => {
     );
   });
 
+  it("forwards notify_only_announce_current when the sub-option is ticked", async () => {
+    const user = userEvent.setup();
+    mockApi.post.mockResolvedValue({});
+    render(<AddTopicCard onClose={() => {}} onCreated={() => {}} />, {
+      wrapper: wrap(),
+    });
+
+    await user.type(screen.getByLabelText(/URL or magnet link/i), "https://example.com/t/1");
+    await user.click(screen.getByLabelText(/Notify only/i));
+    // The sub-option only exists once notify-only is on.
+    await user.click(screen.getByLabelText(/release that is there now/i));
+    await user.click(screen.getByRole("button", { name: /add topic/i }));
+
+    expect(mockApi.post).toHaveBeenCalledWith(
+      "/topics",
+      expect.objectContaining({ notify_only: true, notify_only_announce_current: true }),
+    );
+  });
+
+  it.each([false, true])("checks the notifier list for a default (is_default=%s)", async (isDefault) => {
+    const user = userEvent.setup();
+    const routeGet = mockApi.get.getMockImplementation() as (path: string) => unknown;
+    mockApi.get.mockImplementation((path: string) =>
+      path === "/notifiers"
+        ? Promise.resolve({ notifiers: [{ id: "n1", display_name: "Alerts", is_default: isDefault }] })
+        : routeGet(path),
+    );
+    render(<AddTopicCard onClose={() => {}} onCreated={() => {}} />, {
+      wrapper: wrap(),
+    });
+    await screen.findByRole("option", { name: "Alerts" });
+    expect(screen.queryByText(/This topic has no notifier/)).not.toBeInTheDocument();
+
+    await user.click(screen.getByLabelText(/Notify only/i));
+    if (isDefault) {
+      expect(screen.queryByText(/This topic has no notifier/)).not.toBeInTheDocument();
+    } else {
+      expect(screen.getByText(/This topic has no notifier/)).toBeInTheDocument();
+    }
+
+    await user.selectOptions(screen.getByLabelText("Notifier (optional)"), "n1");
+    expect(screen.queryByText(/This topic has no notifier/)).not.toBeInTheDocument();
+  });
+
   it("opens in URL mode with the topic form visible", () => {
     render(<AddTopicCard onClose={() => {}} onCreated={() => {}} />, {
       wrapper: wrap(),

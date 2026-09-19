@@ -37,6 +37,14 @@ interface ClientOption {
   is_default: boolean;
 }
 
+interface NotifierDefault {
+  is_default: boolean;
+}
+
+interface NotifiersList {
+  notifiers: NotifierDefault[] | null;
+}
+
 // The mutable fields the user edits. Grouped into one object so the form
 // stays under the 8-useState component limit.
 export interface TopicFormValues {
@@ -107,6 +115,14 @@ export function TopicForm({
     staleTime: 60_000,
   });
   const clients = clientsQuery.data?.clients ?? [];
+
+  // Share NotifierSelect's cached list to check whether a default exists.
+  const notifiersQuery = useQuery({
+    queryKey: QK.notifiers,
+    queryFn: () => api.get<NotifiersList>("/notifiers"),
+    staleTime: 60_000,
+  });
+  const notifiers = notifiersQuery.data?.notifiers ?? [];
 
   // In edit mode the URL never changes, so the debounce is a no-op pass
   // through. In add mode it throttles the /trackers/match lookup.
@@ -407,6 +423,24 @@ export function TopicForm({
           </label>
         )}
       </div>
+
+      {delivery.notifyOnly &&
+        !delivery.notifierId &&
+        !notifiers.some((n) => n.is_default) && (
+          <p className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-400">
+            This topic has no notifier and there is no default notifier, so it
+            will be checked silently and you will never hear about it. Pick a
+            notifier above, or mark one as default on the Notifiers page.
+          </p>
+        )}
+
+      {isEdit && initial.notifyOnly && !delivery.notifyOnly && (
+        <p className="rounded-md border border-border/60 bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
+          Releases seen while this topic was notify-only will not be
+          downloaded — only the next change will. Use Reset on the topic if
+          you want the current release fetched now.
+        </p>
+      )}
 
       {!delivery.notifyOnly && (
         <>
