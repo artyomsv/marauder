@@ -117,6 +117,11 @@ type createTopicReq struct {
 	// delete-data default rather than false.
 	ReplaceOnUpdate   bool  `json:"replace_on_update,omitempty"`
 	ReplaceDeleteData *bool `json:"replace_delete_data,omitempty"`
+	// NotifyOnly makes the topic watch-only (issue #184). Plain bool, not a
+	// pointer: false is the correct default for a new topic, so there is no
+	// "omitted means something else" case to express.
+	NotifyOnly                bool `json:"notify_only,omitempty"`
+	NotifyOnlyAnnounceCurrent bool `json:"notify_only_announce_current,omitempty"`
 	// Optional capability-driven fields. The frontend learns whether a
 	// tracker accepts these via GET /api/v1/trackers/match. Plugins read
 	// them from topic.Extra in Check / Download.
@@ -185,11 +190,13 @@ func (h *Topics) Create(w http.ResponseWriter, r *http.Request) {
 			c, _, _ := warmCredentials(cctx, h.Creds, h.Master, uid, t)
 			return c
 		},
-		ReplaceOnUpdate:   req.ReplaceOnUpdate,
-		ReplaceDeleteData: req.ReplaceDeleteData,
-		Quality:           req.Quality,
-		StartSeason:       req.StartSeason,
-		StartEpisode:      req.StartEpisode,
+		ReplaceOnUpdate:           req.ReplaceOnUpdate,
+		ReplaceDeleteData:         req.ReplaceDeleteData,
+		NotifyOnly:                req.NotifyOnly,
+		NotifyOnlyAnnounceCurrent: req.NotifyOnlyAnnounceCurrent,
+		Quality:                   req.Quality,
+		StartSeason:               req.StartSeason,
+		StartEpisode:              req.StartEpisode,
 	})
 	if err != nil {
 		problem.Write(w, r, h.BaseURL, topicCreateProblem(err, req.URL))
@@ -247,11 +254,15 @@ type updateTopicReq struct {
 	Category    string     `json:"category"`
 	// ReplaceOnUpdate / ReplaceDeleteData are pointers so an omitted field
 	// preserves the topic's current value (issue #101).
-	ReplaceOnUpdate   *bool  `json:"replace_on_update,omitempty"`
-	ReplaceDeleteData *bool  `json:"replace_delete_data,omitempty"`
-	Quality           string `json:"quality,omitempty"`
-	StartSeason       *int   `json:"start_season,omitempty"`
-	StartEpisode      *int   `json:"start_episode,omitempty"`
+	ReplaceOnUpdate   *bool `json:"replace_on_update,omitempty"`
+	ReplaceDeleteData *bool `json:"replace_delete_data,omitempty"`
+	// Pointers so an omitted field preserves the topic's current value
+	// (issue #184), matching the replace-* flags above.
+	NotifyOnly                *bool  `json:"notify_only,omitempty"`
+	NotifyOnlyAnnounceCurrent *bool  `json:"notify_only_announce_current,omitempty"`
+	Quality                   string `json:"quality,omitempty"`
+	StartSeason               *int   `json:"start_season,omitempty"`
+	StartEpisode              *int   `json:"start_episode,omitempty"`
 }
 
 // Update handles PUT /topics/{id}.
@@ -332,10 +343,20 @@ func (h *Topics) Update(w http.ResponseWriter, r *http.Request) {
 	if req.ReplaceDeleteData != nil {
 		replaceDeleteData = *req.ReplaceDeleteData
 	}
+	notifyOnly := existing.NotifyOnly
+	if req.NotifyOnly != nil {
+		notifyOnly = *req.NotifyOnly
+	}
+	notifyOnlyAnnounceCurrent := existing.NotifyOnlyAnnounceCurrent
+	if req.NotifyOnlyAnnounceCurrent != nil {
+		notifyOnlyAnnounceCurrent = *req.NotifyOnlyAnnounceCurrent
+	}
 
 	updated, uerr := h.Topics.Update(r.Context(), id, uid, req.DisplayName, req.ClientID, req.NotifierID, req.DownloadDir, req.Category, repo.TopicFlags{
-		ReplaceOnUpdate:   replaceOnUpdate,
-		ReplaceDeleteData: replaceDeleteData,
+		ReplaceOnUpdate:           replaceOnUpdate,
+		ReplaceDeleteData:         replaceDeleteData,
+		NotifyOnly:                notifyOnly,
+		NotifyOnlyAnnounceCurrent: notifyOnlyAnnounceCurrent,
 	}, extra)
 	if uerr != nil {
 		if errors.Is(uerr, repo.ErrNotFound) {

@@ -83,6 +83,7 @@ type fakeTopicStore struct {
 	updateCategory          string
 	updateReplaceOnUpdate   bool
 	updateReplaceDeleteData bool
+	lastFlags               repo.TopicFlags
 	updateExtra             map[string]any
 	updateReturn            *domain.Topic
 
@@ -140,6 +141,7 @@ func (s *fakeTopicStore) Update(_ context.Context, _, _ uuid.UUID, displayName s
 	s.updateCategory = category
 	s.updateReplaceOnUpdate = flags.ReplaceOnUpdate
 	s.updateReplaceDeleteData = flags.ReplaceDeleteData
+	s.lastFlags = flags
 	s.updateExtra = extra
 	if s.updateReturn != nil {
 		return s.updateReturn, nil
@@ -267,6 +269,43 @@ func TestTopicsUpdate_OmittedReplaceFlags_PreserveExisting(t *testing.T) {
 	}
 	if store.updateReplaceDeleteData {
 		t.Error("omitted replace_delete_data should preserve the stored false")
+	}
+}
+
+// PUT /topics/{id} must persist notify_only when supplied, and must PRESERVE
+// the topic's current value when the field is omitted — the same pointer
+// semantics replace_on_update uses (issue #184).
+func TestUpdateTopic_NotifyOnlyPointerSemantics(t *testing.T) {
+	topicID, userID := uuid.New(), uuid.New()
+	store := &fakeTopicStore{getByID: &domain.Topic{
+		ID: topicID, UserID: userID, NotifyOnly: true, NotifyOnlyAnnounceCurrent: true,
+		Extra: map[string]any{},
+	}}
+	h := &Topics{Topics: store, BaseURL: "http://test"}
+
+	// Omitted → preserved.
+	w := httptest.NewRecorder()
+	req := withURLParam(authedReq(t, userID, map[string]any{"display_name": "x"}), "id", topicID.String())
+	h.Update(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if !store.lastFlags.NotifyOnly || !store.lastFlags.NotifyOnlyAnnounceCurrent {
+		t.Errorf("omitted flags must be preserved, got %+v", store.lastFlags)
+	}
+
+	// Supplied false → applied.
+	w = httptest.NewRecorder()
+	req = withURLParam(authedReq(t, userID, map[string]any{"display_name": "x", "notify_only": false}), "id", topicID.String())
+	h.Update(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if store.lastFlags.NotifyOnly {
+		t.Errorf("notify_only:false must be applied, got %+v", store.lastFlags)
+	}
+	if !store.lastFlags.NotifyOnlyAnnounceCurrent {
+		t.Errorf("announce_current was omitted and must still be preserved, got %+v", store.lastFlags)
 	}
 }
 
