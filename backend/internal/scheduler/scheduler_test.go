@@ -616,13 +616,56 @@ func TestRunCheck_NotifyOnly_EpisodicStopsOnStaleToken(t *testing.T) {
 	}
 	f := newFixture(t, tr)
 	f.topic.NotifyOnly = true
-	f.topics.markErr = repo.ErrStaleCheckResult
+	f.topics.markErr = fmt.Errorf("topics: mark episode: %w", repo.ErrStaleCheckResult)
 
 	f.s.runCheck(context.Background(), f.s.log, f.topic)
 
 	if len(f.topics.markCalls) != 1 {
 		t.Errorf("expected marking to stop after the first stale result, got %d calls",
 			len(f.topics.markCalls))
+	}
+}
+
+// A plain DB error while marking must NOT fail the check. This is deliberately
+// the opposite of the download path, where the same class of failure fails the
+// tick with errCodeInternal: there, nothing was delivered and a retry is the
+// point; here the user has already been told about the release, and refusing
+// the whole tick over a bookkeeping write would strand the topic. The cost is
+// bounded — an unmarked episode is re-downloaded once on a later toggle-back.
+func TestRunCheck_NotifyOnly_EpisodicPlainDBErrorDoesNotFailCheck(t *testing.T) {
+	tr := &fakeTracker{
+		name:     "faketracker",
+		episodic: true,
+		checks: []checkResult{
+			{check: &domain.Check{Hash: "new-hash", Extra: map[string]any{
+				"pending_episodes": []string{"1-1", "1-2", "1-3"},
+				"pending_human":    []string{"s01e01", "s01e02", "s01e03"},
+			}}, err: nil},
+		},
+	}
+	f := newFixture(t, tr)
+	f.topic.NotifyOnly = true
+	f.topics.markErr = errors.New("connection reset by peer")
+
+	f.s.runCheck(context.Background(), f.s.log, f.topic)
+
+	if len(f.topics.markCalls) != 1 {
+		t.Errorf("expected marking to stop after the first error, got %d calls", len(f.topics.markCalls))
+	}
+	rec := f.lastRecord(t)
+	if rec.errMsg != "" {
+		t.Errorf("a failed mark must not fail the check, got errMsg %q", rec.errMsg)
+	}
+	if rec.errCode != "" {
+		t.Errorf("a failed mark must not set an error code, got %q", rec.errCode)
+	}
+	if rec.hash != "new-hash" {
+		t.Errorf("the hash must still advance, got %q", rec.hash)
+	}
+	// The release was still announced — the user was told, which is why
+	// refusing the tick over the mark would be the wrong trade.
+	if got := f.emitter.ofType(events.ReleaseFound); len(got) != 1 {
+		t.Errorf("expected the release to still be announced, got %d", len(got))
 	}
 }
 
