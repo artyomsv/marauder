@@ -128,7 +128,7 @@ func (f *fakeTopics) GetByURL(_ context.Context, _ uuid.UUID, url string) (*doma
 }
 func (f *fakeTopics) Update(_ context.Context, id, _ uuid.UUID, displayName string,
 	clientID, notifierID *uuid.UUID, downloadDir, category string,
-	replaceOnUpdate, replaceDeleteData bool, extra map[string]any,
+	flags repo.TopicFlags, extra map[string]any,
 ) (*domain.Topic, error) {
 	updated := &domain.Topic{
 		ID:                id,
@@ -137,8 +137,8 @@ func (f *fakeTopics) Update(_ context.Context, id, _ uuid.UUID, displayName stri
 		NotifierID:        notifierID,
 		DownloadDir:       downloadDir,
 		Category:          category,
-		ReplaceOnUpdate:   replaceOnUpdate,
-		ReplaceDeleteData: replaceDeleteData,
+		ReplaceOnUpdate:   flags.ReplaceOnUpdate,
+		ReplaceDeleteData: flags.ReplaceDeleteData,
 		Extra:             extra,
 	}
 	f.updated = append(f.updated, updated)

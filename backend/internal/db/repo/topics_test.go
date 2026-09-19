@@ -455,7 +455,7 @@ func TestTopics_Update_HappyPath(t *testing.T) {
 		WillReturnRows(rows)
 
 	extra := map[string]any{"quality": "720p", "start_season": 2}
-	got, err := r.Update(context.Background(), id, userID, "Updated Name", nil, nil, "", "series", true, false, extra)
+	got, err := r.Update(context.Background(), id, userID, "Updated Name", nil, nil, "", "series", TopicFlags{ReplaceOnUpdate: true, ReplaceDeleteData: false}, extra)
 	if err != nil {
 		t.Fatalf("Update: unexpected error: %v", err)
 	}
@@ -480,7 +480,7 @@ func TestTopics_Update_NotFound(t *testing.T) {
 		WithArgs(id, userID, pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
 		WillReturnError(pgx.ErrNoRows)
 
-	_, err := r.Update(context.Background(), id, userID, "X", nil, nil, "", "", false, true, map[string]any{})
+	_, err := r.Update(context.Background(), id, userID, "X", nil, nil, "", "", TopicFlags{ReplaceOnUpdate: false, ReplaceDeleteData: true}, map[string]any{})
 	if !errors.Is(err, ErrNotFound) {
 		t.Fatalf("Update: want ErrNotFound, got %v", err)
 	}
@@ -500,7 +500,7 @@ func TestTopics_Update_DBError(t *testing.T) {
 		WithArgs(id, userID, pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
 		WillReturnError(dbErr)
 
-	_, err := r.Update(context.Background(), id, userID, "X", nil, nil, "", "", false, true, map[string]any{})
+	_, err := r.Update(context.Background(), id, userID, "X", nil, nil, "", "", TopicFlags{ReplaceOnUpdate: false, ReplaceDeleteData: true}, map[string]any{})
 	if err == nil {
 		t.Fatal("Update: want error, got nil")
 	}

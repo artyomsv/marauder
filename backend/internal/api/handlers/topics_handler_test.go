@@ -131,15 +131,15 @@ func (s *fakeTopicStore) QueueRecheck(_ context.Context, id, userID uuid.UUID) (
 	s.recheckCalls = append(s.recheckCalls, [2]uuid.UUID{id, userID})
 	return s.recheckOutcome, s.recheckErr
 }
-func (s *fakeTopicStore) Update(_ context.Context, _, _ uuid.UUID, displayName string, clientID, notifierID *uuid.UUID, downloadDir, category string, replaceOnUpdate, replaceDeleteData bool, extra map[string]any) (*domain.Topic, error) {
+func (s *fakeTopicStore) Update(_ context.Context, _, _ uuid.UUID, displayName string, clientID, notifierID *uuid.UUID, downloadDir, category string, flags repo.TopicFlags, extra map[string]any) (*domain.Topic, error) {
 	s.updateCalled = true
 	s.updateDisplayName = displayName
 	s.updateClientID = clientID
 	s.updateNotifierID = notifierID
 	s.updateDownloadDir = downloadDir
 	s.updateCategory = category
-	s.updateReplaceOnUpdate = replaceOnUpdate
-	s.updateReplaceDeleteData = replaceDeleteData
+	s.updateReplaceOnUpdate = flags.ReplaceOnUpdate
+	s.updateReplaceDeleteData = flags.ReplaceDeleteData
 	s.updateExtra = extra
 	if s.updateReturn != nil {
 		return s.updateReturn, nil

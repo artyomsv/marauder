@@ -489,7 +489,20 @@ SELECT EXISTS (SELECT 1 FROM target), EXISTS (SELECT 1 FROM updated)`
 // download dir, category, and the capability Extra map). It does NOT
 // touch url/tracker/status/hash/scheduling. Returns ErrNotFound when the
 // topic doesn't belong to the user.
-func (r *Topics) Update(ctx context.Context, id, userID uuid.UUID, displayName string, clientID, notifierID *uuid.UUID, downloadDir, category string, replaceOnUpdate, replaceDeleteData bool, extra map[string]any) (*domain.Topic, error) {
+// TopicFlags groups a topic's boolean delivery policies. They travel as a
+// struct rather than as positional parameters because Update would otherwise
+// take several adjacent bools, which the compiler cannot tell apart: a
+// transposed pair would silently swap two policies and no test that does not
+// assert on both would notice.
+type TopicFlags struct {
+	// ReplaceOnUpdate opts the topic into the "replace previous version"
+	// policy (issue #101); ReplaceDeleteData also deletes the old torrent's
+	// files from disk.
+	ReplaceOnUpdate   bool
+	ReplaceDeleteData bool
+}
+
+func (r *Topics) Update(ctx context.Context, id, userID uuid.UUID, displayName string, clientID, notifierID *uuid.UUID, downloadDir, category string, flags TopicFlags, extra map[string]any) (*domain.Topic, error) {
 	raw, err := json.Marshal(extra)
 	if err != nil {
 		return nil, fmt.Errorf("topics: marshal extra: %w", err)
@@ -503,7 +516,7 @@ func (r *Topics) Update(ctx context.Context, id, userID uuid.UUID, displayName s
 		display_name_is_placeholder = CASE WHEN display_name <> $3 THEN false ELSE display_name_is_placeholder END,
 		updated_at = now()
 	WHERE id = $1 AND user_id = $2
-	RETURNING `+topicColumns, id, userID, displayName, clientID, notifierID, downloadDir, category, raw, replaceOnUpdate, replaceDeleteData)
+	RETURNING `+topicColumns, id, userID, displayName, clientID, notifierID, downloadDir, category, raw, flags.ReplaceOnUpdate, flags.ReplaceDeleteData)
 	t, err := scanTopic(row)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound

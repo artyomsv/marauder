@@ -35,7 +35,7 @@ type topicStore interface {
 	ListForUser(ctx context.Context, userID uuid.UUID) ([]*domain.Topic, error)
 	Delete(ctx context.Context, id, userID uuid.UUID) error
 	UpdateStatus(ctx context.Context, id, userID uuid.UUID, status domain.TopicStatus) error
-	Update(ctx context.Context, id, userID uuid.UUID, displayName string, clientID, notifierID *uuid.UUID, downloadDir, category string, replaceOnUpdate, replaceDeleteData bool, extra map[string]any) (*domain.Topic, error)
+	Update(ctx context.Context, id, userID uuid.UUID, displayName string, clientID, notifierID *uuid.UUID, downloadDir, category string, flags repo.TopicFlags, extra map[string]any) (*domain.Topic, error)
 	ResetCheckState(ctx context.Context, id, userID uuid.UUID) error
 	QueueRecheck(ctx context.Context, id, userID uuid.UUID) (repo.RecheckOutcome, error)
 }
@@ -333,7 +333,10 @@ func (h *Topics) Update(w http.ResponseWriter, r *http.Request) {
 		replaceDeleteData = *req.ReplaceDeleteData
 	}
 
-	updated, uerr := h.Topics.Update(r.Context(), id, uid, req.DisplayName, req.ClientID, req.NotifierID, req.DownloadDir, req.Category, replaceOnUpdate, replaceDeleteData, extra)
+	updated, uerr := h.Topics.Update(r.Context(), id, uid, req.DisplayName, req.ClientID, req.NotifierID, req.DownloadDir, req.Category, repo.TopicFlags{
+		ReplaceOnUpdate:   replaceOnUpdate,
+		ReplaceDeleteData: replaceDeleteData,
+	}, extra)
 	if uerr != nil {
 		if errors.Is(uerr, repo.ErrNotFound) {
 			problem.Write(w, r, h.BaseURL, problem.ErrNotFound("topic not found"))
