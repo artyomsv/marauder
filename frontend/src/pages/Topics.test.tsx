@@ -483,6 +483,18 @@ describe("EditTopicCard — prefill + update", () => {
     vi.clearAllMocks();
   });
 
+  it("does not warn about missing notifiers while the notifier query is pending", () => {
+    mockApi.get.mockImplementation((path: string) =>
+      path === "/notifiers" ? new Promise(() => {}) : Promise.resolve({}),
+    );
+
+    renderEdit({ ...EXISTING_TOPIC, NotifyOnly: true, ClientID: null });
+
+    expect(screen.getByLabelText(/Notify only/i)).toBeChecked();
+    expect(mockApi.get).toHaveBeenCalledWith("/notifiers");
+    expect(screen.queryByText(/This topic has no notifier/)).not.toBeInTheDocument();
+  });
+
   it("prefills the form from the topic's current values", async () => {
     routeGetWithQuality(() =>
       Promise.resolve({ seasons: [{ number: 1, episodes: [1, 2] }, { number: 2, episodes: [1, 2, 3] }] }),

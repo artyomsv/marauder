@@ -123,6 +123,7 @@ export function TopicForm({
     staleTime: 60_000,
   });
   const notifiers = notifiersQuery.data?.notifiers ?? [];
+  const notifiersLoaded = notifiersQuery.isSuccess;
 
   // In edit mode the URL never changes, so the debounce is a no-op pass
   // through. In add mode it throttles the /trackers/match lookup.
@@ -425,6 +426,7 @@ export function TopicForm({
       </div>
 
       {delivery.notifyOnly &&
+        notifiersLoaded &&
         !delivery.notifierId &&
         !notifiers.some((n) => n.is_default) && (
           <p className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-400">
