@@ -148,9 +148,10 @@ func (f *fakeTopics) VerifyCheckState(_ context.Context, t *domain.Topic) error 
 // fakeClients records GetByID / GetDefault calls and always returns a
 // fixed Client whose ClientName matches the registered fakeClientPlugin.
 type fakeClients struct {
-	client       *domain.Client
-	getByIDCalls []uuid.UUID
-	getByIDErr   error
+	client          *domain.Client
+	getByIDCalls    []uuid.UUID
+	getDefaultCalls []uuid.UUID
+	getByIDErr      error
 }
 
 func (f *fakeClients) GetByID(_ context.Context, id uuid.UUID, _ uuid.UUID) (*domain.Client, error) {
@@ -161,7 +162,8 @@ func (f *fakeClients) GetByID(_ context.Context, id uuid.UUID, _ uuid.UUID) (*do
 	return f.client, nil
 }
 
-func (f *fakeClients) GetDefault(_ context.Context, _ uuid.UUID) (*domain.Client, error) {
+func (f *fakeClients) GetDefault(_ context.Context, userID uuid.UUID) (*domain.Client, error) {
+	f.getDefaultCalls = append(f.getDefaultCalls, userID)
 	return f.client, nil
 }
 
@@ -400,6 +402,126 @@ func (f *fixture) lastRecord(t *testing.T) recordCall {
 }
 
 // --- Tests --------------------------------------------------------------
+
+// A notify-only topic must announce the release, never touch a client, and
+// advance the persisted hash so the same release is not re-announced (#184).
+func TestRunCheck_NotifyOnly_AnnouncesAndSkipsClient(t *testing.T) {
+	tr := &fakeTracker{
+		name: "faketracker",
+		checks: []checkResult{
+			{check: &domain.Check{Hash: "new-hash", Extra: map[string]any{}}, err: nil},
+		},
+		downloads: []downloadResult{
+			{payload: &domain.Payload{MagnetURI: "magnet:?xt=urn:btih:abc"}, err: nil},
+		},
+	}
+	f := newFixture(t, tr)
+	f.topic.NotifyOnly = true
+	f.topic.ClientID = nil
+
+	f.s.runCheck(context.Background(), f.s.log, f.topic)
+
+	if f.clientPlugin.addCalls != 0 {
+		t.Errorf("notify-only must not submit to a client, got %d Add calls", f.clientPlugin.addCalls)
+	}
+	if n := len(f.clients.getDefaultCalls); n != 0 {
+		t.Errorf("notify-only must not resolve a client at all, got %d GetDefault calls", n)
+	}
+	if got := f.emitter.ofType(events.ReleaseFound); len(got) != 1 {
+		t.Fatalf("expected exactly 1 release.found, got %d", len(got))
+	}
+	if got := f.emitter.ofType(events.DownloadSubmitted); len(got) != 0 {
+		t.Errorf("notify-only must not emit download.submitted, got %d", len(got))
+	}
+	ev := f.emitter.ofType(events.ReleaseFound)[0]
+	if ev.SourceURL != f.topic.URL {
+		t.Errorf("expected SourceURL %q, got %q", f.topic.URL, ev.SourceURL)
+	}
+	if strings.Contains(ev.Body, "Sent to client") {
+		t.Errorf("body must not imply a download happened: %q", ev.Body)
+	}
+	rec := f.lastRecord(t)
+	if rec.hash != "new-hash" {
+		t.Errorf("notify-only must advance the hash, got %q", rec.hash)
+	}
+	if rec.errMsg != "" {
+		t.Errorf("notify-only is not a failure, got errMsg %q", rec.errMsg)
+	}
+}
+
+// The release.found emit must NOT be gated on ConsecutiveErrors. The download
+// path can afford that gate because it re-persists the OLD hash and replays
+// next tick; notify-only persists the NEW hash on this very tick, so a
+// suppressed event is lost for good.
+func TestRunCheck_NotifyOnly_EmitsDespitePriorErrors(t *testing.T) {
+	tr := &fakeTracker{
+		name: "faketracker",
+		checks: []checkResult{
+			{check: &domain.Check{Hash: "new-hash", Extra: map[string]any{}}, err: nil},
+		},
+		downloads: []downloadResult{
+			{payload: &domain.Payload{MagnetURI: "magnet:?xt=urn:btih:abc"}, err: nil},
+		},
+	}
+	f := newFixture(t, tr)
+	f.topic.NotifyOnly = true
+	f.topic.ConsecutiveErrors = 5
+
+	f.s.runCheck(context.Background(), f.s.log, f.topic)
+
+	if got := f.emitter.ofType(events.ReleaseFound); len(got) != 1 {
+		t.Fatalf("expected release.found despite prior errors, got %d", len(got))
+	}
+}
+
+// The first check of a notify-only topic (LastHash == "") is silent unless the
+// user opted in — adding a topic must not announce what is already there.
+func TestRunCheck_NotifyOnly_FirstCheckSilentByDefault(t *testing.T) {
+	tr := &fakeTracker{
+		name: "faketracker",
+		checks: []checkResult{
+			{check: &domain.Check{Hash: "first-hash", Extra: map[string]any{}}, err: nil},
+		},
+		downloads: []downloadResult{
+			{payload: &domain.Payload{MagnetURI: "magnet:?xt=urn:btih:abc"}, err: nil},
+		},
+	}
+	f := newFixture(t, tr)
+	f.topic.NotifyOnly = true
+	f.topic.LastHash = ""
+
+	f.s.runCheck(context.Background(), f.s.log, f.topic)
+
+	if got := f.emitter.ofType(events.ReleaseFound); len(got) != 0 {
+		t.Errorf("first check must be silent by default, got %d release.found", len(got))
+	}
+	// It must still baseline, or the NEXT check would announce this same release.
+	if rec := f.lastRecord(t); rec.hash != "first-hash" {
+		t.Errorf("first check must still persist the baseline hash, got %q", rec.hash)
+	}
+}
+
+func TestRunCheck_NotifyOnly_FirstCheckAnnouncesWhenOptedIn(t *testing.T) {
+	tr := &fakeTracker{
+		name: "faketracker",
+		checks: []checkResult{
+			{check: &domain.Check{Hash: "first-hash", Extra: map[string]any{}}, err: nil},
+		},
+		downloads: []downloadResult{
+			{payload: &domain.Payload{MagnetURI: "magnet:?xt=urn:btih:abc"}, err: nil},
+		},
+	}
+	f := newFixture(t, tr)
+	f.topic.NotifyOnly = true
+	f.topic.NotifyOnlyAnnounceCurrent = true
+	f.topic.LastHash = ""
+
+	f.s.runCheck(context.Background(), f.s.log, f.topic)
+
+	if got := f.emitter.ofType(events.ReleaseFound); len(got) != 1 {
+		t.Errorf("opted-in first check must announce, got %d release.found", len(got))
+	}
+}
 
 func TestRunCheck_HashUnchanged(t *testing.T) {
 	tr := &fakeTracker{

@@ -424,70 +424,79 @@ func (s *Scheduler) runCheck(ctx context.Context, log zerolog.Logger, t *domain.
 		// stamped onto both notifiable update events below.
 		authorComment = s.fetchAuthorComment(ctx, log, t, tr, creds)
 
-		// Emit release.found once per error episode, before draining episodes.
-		//
-		// Deduped by the pre-check ConsecutiveErrors snapshot, the same guard
-		// notifyError uses. A failed download persists the OLD hash on purpose
-		// (see the dlErr branch below), so every retry tick re-enters this
-		// branch with the same release. release.found is both persisted and
-		// notifiable, so without this guard one unreachable client turns a
-		// single release into an unbounded stream of history rows and user
-		// notifications. The trade-off is deliberate: a genuinely new release
-		// arriving while the topic is still stuck stays silent until the topic
-		// recovers — at which point the next tick announces it.
-		if s.emit != nil && t.ConsecutiveErrors == 0 {
-			s.emit.Emit(ctx, events.Event{
-				UserID: t.UserID, TopicID: &t.ID, NotifierID: t.NotifierID,
-				Type: events.ReleaseFound, Severity: "info",
-				Title: t.DisplayName, Body: "New release detected",
-				Link: s.cfg.PublicBaseURL + "/topics", SourceURL: t.URL,
-				AuthorComment: authorComment,
-			})
-		}
-
-		// For the "replace previous version" policy (issue #101) snapshot the
-		// topic's existing deliveries BEFORE this tick adds the new release, so
-		// the set is unambiguously "the previous versions" — never what we're
-		// about to deliver. Gated to single-release topics: per-episode trackers
-		// accumulate episodes legitimately, so removing prior deliveries there
-		// would wipe sibling episodes.
-		var priorDeliveries []*domain.TopicDelivery
-		if t.ReplaceOnUpdate && s.deliveries != nil && !isEpisodic(tr) {
-			priorDeliveries = s.listPriorDeliveries(ctx, log, t.ID)
-		}
-
-		var dlErr error
-		var deliveredHashes []string
-		delivered, deliveredHashes, dlErr = s.downloadAllPending(ctx, log, t, tr, check, creds)
-		anySubmitted = len(delivered) > 0
-		if dlErr != nil {
-			// A failed download loop must NOT advance the persisted hash.
-			// If it did, the next check would see check.Hash == LastHash,
-			// treat the topic as unchanged, skip the download forever, and
-			// a later no-op check would even clear the error — leaving the
-			// topic "active, no error, never updated" while silently never
-			// downloading. Persist the OLD hash so the change is re-detected
-			// and retried next tick. Any progress made before the failure
-			// was already persisted via MarkEpisodeDownloaded and is encoded
-			// into the recomputed hash, so keeping the old hash still
-			// re-triggers without losing that progress.
-			if anySubmitted {
-				log.Warn().Err(dlErr).Msg("download loop failed mid-progress")
-			} else {
-				log.Warn().Err(dlErr).Msg("download failed")
-				metrics.SchedulerTopicChecksTotal.WithLabelValues(t.TrackerName, "download_error").Inc()
+		if t.NotifyOnly {
+			// Watch-only topic (issue #184): announce, never deliver. No client
+			// is resolved, so this mode works with no download client at all.
+			// Control falls through to the shared tail below, which persists
+			// the NEW hash — there is no download to retry, so nothing is
+			// gained by replaying the change next tick.
+			s.notifyOnlyRelease(ctx, log, t, tr, check, authorComment)
+		} else {
+			// Emit release.found once per error episode, before draining episodes.
+			//
+			// Deduped by the pre-check ConsecutiveErrors snapshot, the same guard
+			// notifyError uses. A failed download persists the OLD hash on purpose
+			// (see the dlErr branch below), so every retry tick re-enters this
+			// branch with the same release. release.found is both persisted and
+			// notifiable, so without this guard one unreachable client turns a
+			// single release into an unbounded stream of history rows and user
+			// notifications. The trade-off is deliberate: a genuinely new release
+			// arriving while the topic is still stuck stays silent until the topic
+			// recovers — at which point the next tick announces it.
+			if s.emit != nil && t.ConsecutiveErrors == 0 {
+				s.emit.Emit(ctx, events.Event{
+					UserID: t.UserID, TopicID: &t.ID, NotifierID: t.NotifierID,
+					Type: events.ReleaseFound, Severity: "info",
+					Title: t.DisplayName, Body: "New release detected",
+					Link: s.cfg.PublicBaseURL + "/topics", SourceURL: t.URL,
+					AuthorComment: authorComment,
+				})
 			}
-			s.recordResult(ctx, log, t, t.LastHash, anySubmitted, s.backoff(t, true, dlErr), dlErr.Error(), dlErr)
-			s.notifyError(ctx, t, dlErr.Error())
-			s.recordChecked(true, true)
-			return
-		}
 
-		// The new release is fully delivered. Replace the previous version(s)
-		// when the topic opts in: remove the old torrent(s) from their client
-		// (deleting data per the topic's flag) so updates don't accumulate.
-		if anySubmitted && len(priorDeliveries) > 0 {
-			s.replacePrevious(ctx, log, t, priorDeliveries, deliveredHashes)
+			// For the "replace previous version" policy (issue #101) snapshot the
+			// topic's existing deliveries BEFORE this tick adds the new release, so
+			// the set is unambiguously "the previous versions" — never what we're
+			// about to deliver. Gated to single-release topics: per-episode trackers
+			// accumulate episodes legitimately, so removing prior deliveries there
+			// would wipe sibling episodes.
+			var priorDeliveries []*domain.TopicDelivery
+			if t.ReplaceOnUpdate && s.deliveries != nil && !isEpisodic(tr) {
+				priorDeliveries = s.listPriorDeliveries(ctx, log, t.ID)
+			}
+
+			var dlErr error
+			var deliveredHashes []string
+			delivered, deliveredHashes, dlErr = s.downloadAllPending(ctx, log, t, tr, check, creds)
+			anySubmitted = len(delivered) > 0
+			if dlErr != nil {
+				// A failed download loop must NOT advance the persisted hash.
+				// If it did, the next check would see check.Hash == LastHash,
+				// treat the topic as unchanged, skip the download forever, and
+				// a later no-op check would even clear the error — leaving the
+				// topic "active, no error, never updated" while silently never
+				// downloading. Persist the OLD hash so the change is re-detected
+				// and retried next tick. Any progress made before the failure
+				// was already persisted via MarkEpisodeDownloaded and is encoded
+				// into the recomputed hash, so keeping the old hash still
+				// re-triggers without losing that progress.
+				if anySubmitted {
+					log.Warn().Err(dlErr).Msg("download loop failed mid-progress")
+				} else {
+					log.Warn().Err(dlErr).Msg("download failed")
+					metrics.SchedulerTopicChecksTotal.WithLabelValues(t.TrackerName, "download_error").Inc()
+				}
+				s.recordResult(ctx, log, t, t.LastHash, anySubmitted, s.backoff(t, true, dlErr), dlErr.Error(), dlErr)
+				s.notifyError(ctx, t, dlErr.Error())
+				s.recordChecked(true, true)
+				return
+			}
+
+			// The new release is fully delivered. Replace the previous version(s)
+			// when the topic opts in: remove the old torrent(s) from their client
+			// (deleting data per the topic's flag) so updates don't accumulate.
+			if anySubmitted && len(priorDeliveries) > 0 {
+				s.replacePrevious(ctx, log, t, priorDeliveries, deliveredHashes)
+			}
 		}
 	}
 
@@ -554,6 +563,57 @@ func (s *Scheduler) notifyUpdated(ctx context.Context, t *domain.Topic, labels [
 		Link: s.cfg.PublicBaseURL + "/topics", SourceURL: t.URL,
 		AuthorComment: authorComment,
 	})
+}
+
+// notifyOnlyRelease handles a detected update on a notify-only topic: it
+// announces the release and never resolves or contacts a torrent client.
+// Task 5 extends it to mark a per-episode tracker's pending episodes seen.
+func (s *Scheduler) notifyOnlyRelease(ctx context.Context, log zerolog.Logger, t *domain.Topic, tr registry.Tracker, check *domain.Check, authorComment string) {
+	pendingHuman := extra.StringSlice(check.Extra, "pending_human")
+
+	// The first check of a topic — and the first after a reset, which also
+	// clears LastHash — has no baseline to compare against, so "changed" here
+	// only means "seen for the first time". Announce it only when the user
+	// opted in, so adding a topic stays silent.
+	announce := t.LastHash != "" || t.NotifyOnlyAnnounceCurrent
+
+	// Deliberately NOT gated on t.ConsecutiveErrors, unlike the download
+	// path's emit. That gate is safe there because a failed download
+	// re-persists the OLD hash and replays the same release next tick. This
+	// branch persists the NEW hash on this very tick, so a suppressed event is
+	// lost for good rather than delayed.
+	if announce && s.emit != nil {
+		s.emit.Emit(ctx, events.Event{
+			UserID: t.UserID, TopicID: &t.ID, NotifierID: t.NotifierID,
+			Type: events.ReleaseFound, Severity: "info",
+			Title: t.DisplayName, Body: notifyOnlyBody(pendingHuman),
+			Link: s.cfg.PublicBaseURL + "/topics", SourceURL: t.URL,
+			AuthorComment: authorComment,
+			Data:          map[string]any{"notify_only": true},
+		})
+	}
+}
+
+// notifyOnlyBody builds the release.found body for a watch-only topic. The
+// wording must never imply a download happened. Episode labels are capped the
+// same way notifyUpdated caps them, so one catch-up tick cannot produce a wall
+// of text in a Telegram message.
+func notifyOnlyBody(labels []string) string {
+	if len(labels) == 0 {
+		return "New release available — not downloaded (notify-only topic)"
+	}
+	const maxList = 10
+	shown := labels
+	overflow := 0
+	if len(shown) > maxList {
+		overflow = len(shown) - maxList
+		shown = shown[:maxList]
+	}
+	body := "New episodes available — not downloaded: " + strings.Join(shown, ", ")
+	if overflow > 0 {
+		body += fmt.Sprintf(" (+%d more)", overflow)
+	}
+	return body
 }
 
 // authorCommentMaxRunes caps the excerpt stamped into notification events;
