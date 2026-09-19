@@ -437,6 +437,9 @@ func TestRunCheck_NotifyOnly_AnnouncesAndSkipsClient(t *testing.T) {
 	if ev.SourceURL != f.topic.URL {
 		t.Errorf("expected SourceURL %q, got %q", f.topic.URL, ev.SourceURL)
 	}
+	if !strings.Contains(ev.Body, "not downloaded") {
+		t.Errorf("body must say the release was not downloaded, got %q", ev.Body)
+	}
 	if strings.Contains(ev.Body, "Sent to client") {
 		t.Errorf("body must not imply a download happened: %q", ev.Body)
 	}
@@ -520,6 +523,144 @@ func TestRunCheck_NotifyOnly_FirstCheckAnnouncesWhenOptedIn(t *testing.T) {
 
 	if got := f.emitter.ofType(events.ReleaseFound); len(got) != 1 {
 		t.Errorf("opted-in first check must announce, got %d release.found", len(got))
+	}
+	if f.clientPlugin.addCalls != 0 {
+		t.Errorf("notify-only must not submit even when announcing the current release, got %d Add calls", f.clientPlugin.addCalls)
+	}
+}
+
+// A notify-only episodic topic must mark every pending episode seen, so a
+// later switch back to download mode fetches only what appears afterwards
+// rather than the whole backlog (#184).
+func TestRunCheck_NotifyOnly_EpisodicMarksPendingSeen(t *testing.T) {
+	tr := &fakeTracker{
+		name:     "faketracker",
+		episodic: true,
+		checks: []checkResult{
+			{check: &domain.Check{Hash: "new-hash", Extra: map[string]any{
+				"pending_episodes": []string{"1-1", "1-2", "1-3"},
+				"pending_human":    []string{"s01e01", "s01e02", "s01e03"},
+			}}, err: nil},
+		},
+	}
+	f := newFixture(t, tr)
+	f.topic.NotifyOnly = true
+
+	f.s.runCheck(context.Background(), f.s.log, f.topic)
+
+	if f.clientPlugin.addCalls != 0 {
+		t.Errorf("notify-only must not submit, got %d Add calls", f.clientPlugin.addCalls)
+	}
+	if tr.callsDownload != 0 {
+		t.Errorf("notify-only must not call tr.Download, got %d", tr.callsDownload)
+	}
+	if len(f.topics.markCalls) != 3 {
+		t.Fatalf("expected 3 episodes marked seen, got %d", len(f.topics.markCalls))
+	}
+	for i, want := range []string{"1-1", "1-2", "1-3"} {
+		if f.topics.markCalls[i].packed != want {
+			t.Errorf("mark %d: expected %q, got %q", i, want, f.topics.markCalls[i].packed)
+		}
+	}
+	got := f.emitter.ofType(events.ReleaseFound)
+	if len(got) != 1 {
+		t.Fatalf("expected 1 release.found, got %d", len(got))
+	}
+	for _, label := range []string{"s01e01", "s01e02", "s01e03"} {
+		if !strings.Contains(got[0].Body, label) {
+			t.Errorf("body %q must name episode %s", got[0].Body, label)
+		}
+	}
+}
+
+// LostFilm's hash is derived from counts, so the tick AFTER marking sees a
+// changed hash with nothing pending. That must not produce a second, empty
+// "new release" message.
+func TestRunCheck_NotifyOnly_EpisodicSilentWhenNothingPending(t *testing.T) {
+	tr := &fakeTracker{
+		name:     "faketracker",
+		episodic: true,
+		checks: []checkResult{
+			{check: &domain.Check{Hash: "recounted-hash", Extra: map[string]any{
+				"pending_episodes": []string{},
+				"pending_human":    []string{},
+			}}, err: nil},
+		},
+	}
+	f := newFixture(t, tr)
+	f.topic.NotifyOnly = true
+
+	f.s.runCheck(context.Background(), f.s.log, f.topic)
+
+	if got := f.emitter.ofType(events.ReleaseFound); len(got) != 0 {
+		t.Errorf("no pending episodes means nothing to announce, got %d", len(got))
+	}
+	// The hash must still advance, or this recount repeats every tick forever.
+	if rec := f.lastRecord(t); rec.hash != "recounted-hash" {
+		t.Errorf("expected hash to advance to recounted-hash, got %q", rec.hash)
+	}
+}
+
+// A reset landing mid-check invalidates the state token. Marking must stop
+// rather than write episodes into state that no longer exists.
+func TestRunCheck_NotifyOnly_EpisodicStopsOnStaleToken(t *testing.T) {
+	tr := &fakeTracker{
+		name:     "faketracker",
+		episodic: true,
+		checks: []checkResult{
+			{check: &domain.Check{Hash: "new-hash", Extra: map[string]any{
+				"pending_episodes": []string{"1-1", "1-2", "1-3"},
+				"pending_human":    []string{"s01e01", "s01e02", "s01e03"},
+			}}, err: nil},
+		},
+	}
+	f := newFixture(t, tr)
+	f.topic.NotifyOnly = true
+	f.topics.markErr = repo.ErrStaleCheckResult
+
+	f.s.runCheck(context.Background(), f.s.log, f.topic)
+
+	if len(f.topics.markCalls) != 1 {
+		t.Errorf("expected marking to stop after the first stale result, got %d calls",
+			len(f.topics.markCalls))
+	}
+}
+
+// notifyOnlyBody caps its label list the same way notifyUpdated does, so one
+// catch-up tick cannot produce a wall of text in a Telegram message.
+func TestNotifyOnlyBody(t *testing.T) {
+	labels := func(n int) []string {
+		out := make([]string, n)
+		for i := range out {
+			out[i] = fmt.Sprintf("s01e%02d", i+1)
+		}
+		return out
+	}
+	cases := []struct {
+		name         string
+		in           []string
+		wantContains []string
+		wantOmits    []string
+	}{
+		{"none", nil, []string{"not downloaded"}, []string{"s01e", "more)"}},
+		{"one", labels(1), []string{"s01e01", "not downloaded"}, []string{"more)"}},
+		{"exactly ten", labels(10), []string{"s01e01", "s01e10"}, []string{"more)"}},
+		{"eleven caps at ten", labels(11), []string{"s01e01", "s01e10", "(+1 more)"}, []string{"s01e11"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := notifyOnlyBody(tc.in)
+			for _, want := range tc.wantContains {
+				if !strings.Contains(got, want) {
+					t.Errorf("body %q must contain %q", got, want)
+				}
+			}
+			for _, omit := range tc.wantOmits {
+				if strings.Contains(got, omit) {
+					t.Errorf("body %q must not contain %q", got, omit)
+				}
+			}
+		})
 	}
 }
 

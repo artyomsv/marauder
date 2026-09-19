@@ -567,15 +567,24 @@ func (s *Scheduler) notifyUpdated(ctx context.Context, t *domain.Topic, labels [
 
 // notifyOnlyRelease handles a detected update on a notify-only topic: it
 // announces the release and never resolves or contacts a torrent client.
-// Task 5 extends it to mark a per-episode tracker's pending episodes seen.
+// It also marks a per-episode tracker's pending episodes seen.
 func (s *Scheduler) notifyOnlyRelease(ctx context.Context, log zerolog.Logger, t *domain.Topic, tr registry.Tracker, check *domain.Check, authorComment string) {
+	pendingPacked := extra.StringSlice(check.Extra, "pending_episodes")
 	pendingHuman := extra.StringSlice(check.Extra, "pending_human")
+
+	// A per-episode tracker derives its hash from counts (LostFilm:
+	// "eps:N/done:D/pending:P"), so the tick AFTER we mark episodes seen
+	// reports a changed hash with nothing pending. Announcing on the hash
+	// alone would send a second, empty "new release" message.
+	announce := !isEpisodic(tr) || len(pendingPacked) > 0
 
 	// The first check of a topic — and the first after a reset, which also
 	// clears LastHash — has no baseline to compare against, so "changed" here
 	// only means "seen for the first time". Announce it only when the user
 	// opted in, so adding a topic stays silent.
-	announce := t.LastHash != "" || t.NotifyOnlyAnnounceCurrent
+	if t.LastHash == "" && !t.NotifyOnlyAnnounceCurrent {
+		announce = false
+	}
 
 	// Deliberately NOT gated on t.ConsecutiveErrors, unlike the download
 	// path's emit. That gate is safe there because a failed download
@@ -591,6 +600,27 @@ func (s *Scheduler) notifyOnlyRelease(ctx context.Context, log zerolog.Logger, t
 			AuthorComment: authorComment,
 			Data:          map[string]any{"notify_only": true},
 		})
+	}
+
+	// Mark every pending episode seen. Without this, switching the topic back
+	// to download mode fetches everything that appeared while notify-only was
+	// on — the accumulated backlog issue #184 explicitly asks us to avoid.
+	// Fail-open: a plain DB error stops the loop and lets the tick finish, so
+	// the worst case is that a later toggle-back re-downloads a few episodes,
+	// never that the check fails.
+	for _, packed := range pendingPacked {
+		if err := s.topics.MarkEpisodeDownloaded(ctx, t, packed); err != nil {
+			if errors.Is(err, repo.ErrStaleCheckResult) {
+				// A reset (or a delete) landed mid-check. Stop rather than
+				// write into state that no longer exists; recordResult below
+				// is guarded by the same token and will be dropped too.
+				log.Info().Str("packed", packed).
+					Msg("notify-only episode mark discarded: another write won the state guard")
+				return
+			}
+			log.Warn().Err(err).Str("packed", packed).Msg("notify-only episode mark failed")
+			return
+		}
 	}
 }
 
