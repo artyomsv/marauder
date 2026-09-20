@@ -275,7 +275,7 @@ const en: Record<string, string> = {
   "topics.reset.title": "Reset {name}",
   "topics.reset.titleBulk": "Reset {count} topics",
   "topics.reset.body":
-    "Discards delivery records, downloaded-episode progress and error state, then checks again immediately so the current release counts as new. Topics that download will fetch it again; notify-only topics will just notify you about it. Settings and event history are kept. A paused topic stays paused.",
+    "Discards delivery records, downloaded-episode progress and error state, then checks again immediately so the current release counts as new. Topics that download will fetch it again. Notify-only topics re-detect it silently unless you enabled announcing the release that is already there. Settings and event history are kept. A paused topic stays paused.",
   "topics.reset.deleteData": "Also delete the downloaded files from the client",
   "topics.reset.confirm": "Reset",
   "topics.reset.cancel": "Cancel",
