@@ -4,7 +4,7 @@
 |-------|-------|
 | Criticality | Low |
 | Complexity | Medium |
-| Location | `frontend/src/components/topics/TopicForm.tsx` (~460 lines) |
+| Location | `frontend/src/components/topics/TopicForm.tsx` (~541 lines) |
 | Found during | Code review of issue #91 (qBittorrent category dropdown), rules-compliance agent |
 | Date | 2026-06-27 |
 

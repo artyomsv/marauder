@@ -56,6 +56,12 @@ settings reappear, and only the **next** detected change is downloaded.
 Releases seen while notify-only was on are not fetched, including the episode
 backlog recorded as seen.
 
+**Warning — per-episode trackers:** for LostFilm, Reset also clears all recorded
+episode progress. After switching back to downloading, this makes the entire
+available back catalogue at or above your configured start season/episode
+eligible for download again, not just the latest release. Check that starting
+point before using Reset: it can queue dozens of episodes.
+
 If you want the current release fetched now, turn notify-only off, save the
 topic, then use **Reset**. Reset clears the recorded state and queues a fresh
 check; a paused topic must also be resumed. Reset while notify-only is still

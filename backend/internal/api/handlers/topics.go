@@ -766,7 +766,7 @@ func (h *Topics) Reset(w http.ResponseWriter, r *http.Request) {
 			Type:       events.TopicReset,
 			Severity:   "info",
 			Title:      topic.DisplayName,
-			Body:       "Topic reset — will re-download from scratch",
+			Body:       "Topic reset — the current release counts as new again",
 			Link:       h.BaseURL + "/topics",
 			SourceURL:  topic.URL,
 		})

@@ -131,15 +131,17 @@ func (f *fakeTopics) Update(_ context.Context, id, _ uuid.UUID, displayName stri
 	flags repo.TopicFlags, extra map[string]any,
 ) (*domain.Topic, error) {
 	updated := &domain.Topic{
-		ID:                id,
-		DisplayName:       displayName,
-		ClientID:          clientID,
-		NotifierID:        notifierID,
-		DownloadDir:       downloadDir,
-		Category:          category,
-		ReplaceOnUpdate:   flags.ReplaceOnUpdate,
-		ReplaceDeleteData: flags.ReplaceDeleteData,
-		Extra:             extra,
+		ID:                        id,
+		DisplayName:               displayName,
+		ClientID:                  clientID,
+		NotifierID:                notifierID,
+		DownloadDir:               downloadDir,
+		Category:                  category,
+		ReplaceOnUpdate:           flags.ReplaceOnUpdate,
+		ReplaceDeleteData:         flags.ReplaceDeleteData,
+		NotifyOnly:                flags.NotifyOnly,
+		NotifyOnlyAnnounceCurrent: flags.NotifyOnlyAnnounceCurrent,
+		Extra:                     extra,
 	}
 	f.updated = append(f.updated, updated)
 	return updated, nil
@@ -425,13 +427,20 @@ func TestPoller_UpdateExistingRealigns(t *testing.T) {
 	inst.UpdateExisting = true
 	inst.DefaultCategory = "tv-sonarr"
 	ts := &fakeTopics{byURL: map[string]*domain.Topic{
-		fakeURL: {ID: uuid.New(), URL: fakeURL, Category: "old-category"}, // differs
+		fakeURL: {
+			ID: uuid.New(), URL: fakeURL, Category: "old-category", // differs
+			NotifyOnly: true, NotifyOnlyAnnounceCurrent: true,
+		},
 	}}
 
 	newTestPoller(&fakeInstances{}, fakeAdmin{}, ts).pollOnce(context.Background(), inst)
 
 	if len(ts.updated) != 1 {
-		t.Errorf("want 1 realign update, got %d", len(ts.updated))
+		t.Fatalf("want 1 realign update, got %d", len(ts.updated))
+	}
+	if !ts.updated[0].NotifyOnly || !ts.updated[0].NotifyOnlyAnnounceCurrent {
+		t.Errorf("notify-only flags not preserved: NotifyOnly=%t NotifyOnlyAnnounceCurrent=%t",
+			ts.updated[0].NotifyOnly, ts.updated[0].NotifyOnlyAnnounceCurrent)
 	}
 }
 
