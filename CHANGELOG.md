@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.20.1] - 2026-09-21
+
 ### Fixed
 
 - **Tapochek TV-series topics now show their cover art.** Tapochek serves two
