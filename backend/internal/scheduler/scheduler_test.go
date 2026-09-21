@@ -164,9 +164,10 @@ func (f *fakeTopics) MarkEpisodesDownloaded(_ context.Context, _ *domain.Topic, 
 	return f.markBulkErr
 }
 
-// VerifyCheckState is the pre-submit read-only guard. verifyErr lets a test
-// stage a reset landing between Check and Add; the zero value means "token
-// still valid", so every existing test keeps submitting as before.
+// VerifyCheckState is the read-only guard run before each step a reset cannot
+// undo: the client submit, and the notify-only announcement. verifyErr lets a
+// test stage a reset landing after Check; the zero value means "token still
+// valid", so every existing test keeps submitting as before.
 func (f *fakeTopics) VerifyCheckState(_ context.Context, t *domain.Topic) error {
 	f.verifyCalls = append(f.verifyCalls, t.ID)
 	return f.verifyErr
@@ -715,15 +716,82 @@ func TestRunCheck_NotifyOnly_EpisodicStopsOnStaleToken(t *testing.T) {
 	if len(f.topics.markBulkCalls) != 1 {
 		t.Errorf("expected exactly 1 bulk mark attempt, got %d", len(f.topics.markBulkCalls))
 	}
+	// The mark runs before the announcement, so a rejected mark also means the
+	// user is never told about a release the reset discarded.
+	if got := f.emitter.ofType(events.ReleaseFound); len(got) != 0 {
+		t.Errorf("a discarded mark must announce nothing, got %d release.found", len(got))
+	}
+	// Nor may the discarded tick be recorded as an update.
+	if rec := f.lastRecord(t); rec.updated {
+		t.Errorf("a discarded mark must not mark the topic updated")
+	}
 }
 
-// A plain DB error while marking must NOT fail the check. This is deliberately
-// the opposite of the download path, where the same class of failure fails the
-// tick with errCodeInternal: there, nothing was delivered and a retry is the
-// point; here the user has already been told about the release, and refusing
-// the whole tick over a bookkeeping write would strand the topic. The cost is
-// bounded — an unmarked episode is re-downloaded once on a later toggle-back.
-func TestRunCheck_NotifyOnly_EpisodicPlainDBErrorDoesNotFailCheck(t *testing.T) {
+// A reset landing between tr.Check and the announcement must silence the tick
+// outright. A notification cannot be unsent, so the same read-only token guard
+// the submit path uses runs first — and it is the ONLY guard a non-episodic
+// topic has, since it marks no episodes.
+func TestRunCheck_NotifyOnly_StaleTokenSilencesTheTick(t *testing.T) {
+	tr := &fakeTracker{
+		name: "faketracker",
+		checks: []checkResult{
+			{check: &domain.Check{Hash: "new-hash", Extra: map[string]any{}}, err: nil},
+		},
+	}
+	f := newFixture(t, tr)
+	f.topic.NotifyOnly = true
+	f.topics.verifyErr = fmt.Errorf("topics: verify check state: %w", repo.ErrStaleCheckResult)
+
+	f.s.runCheck(context.Background(), f.s.log, f.topic)
+
+	if got := f.emitter.ofType(events.ReleaseFound); len(got) != 0 {
+		t.Errorf("a stale token must announce nothing, got %d release.found", len(got))
+	}
+	if len(f.topics.markBulkCalls) != 0 {
+		t.Errorf("a stale token must not mark episodes, got %d bulk marks", len(f.topics.markBulkCalls))
+	}
+	if len(f.topics.verifyCalls) != 1 {
+		t.Errorf("expected exactly 1 VerifyCheckState call, got %d", len(f.topics.verifyCalls))
+	}
+	// recordResult still runs and is rejected by the same token in the repo, so
+	// this is not a failed check — just one whose result goes nowhere.
+	if rec := f.lastRecord(t); rec.errMsg != "" {
+		t.Errorf("a stale token is not a check failure, got errMsg %q", rec.errMsg)
+	}
+}
+
+// A DB failure on the pre-announce verify is NOT evidence the topic moved on.
+// Going silent about a real release over an unrelated blip would be the wrong
+// trade, so the tick announces anyway — the same choice sendViaClient makes.
+func TestRunCheck_NotifyOnly_VerifyDBErrorStillAnnounces(t *testing.T) {
+	tr := &fakeTracker{
+		name: "faketracker",
+		checks: []checkResult{
+			{check: &domain.Check{Hash: "new-hash", Extra: map[string]any{}}, err: nil},
+		},
+	}
+	f := newFixture(t, tr)
+	f.topic.NotifyOnly = true
+	f.topics.verifyErr = errors.New("connection reset by peer")
+
+	f.s.runCheck(context.Background(), f.s.log, f.topic)
+
+	if got := f.emitter.ofType(events.ReleaseFound); len(got) != 1 {
+		t.Errorf("an unrelated DB blip must not silence the release, got %d", len(got))
+	}
+	if rec := f.lastRecord(t); rec.errMsg != "" {
+		t.Errorf("a verify blip must not fail the check, got errMsg %q", rec.errMsg)
+	}
+}
+
+// A plain DB error while marking MUST fail the check. The mark now runs before
+// the announcement, so the tick carried no release at all: there is no "the
+// user has already been told" to trade against, and swallowing it would advance
+// the hash with the episodes still pending. The tracker would then recompute the
+// SAME hash every later tick, `updated` would be false, the mark would never be
+// retried, and a later switch to download mode would fetch the whole backlog —
+// exactly what this mode exists to prevent, reached silently on one DB blip.
+func TestRunCheck_NotifyOnly_EpisodicPlainDBErrorFailsCheck(t *testing.T) {
 	tr := &fakeTracker{
 		name:     "faketracker",
 		episodic: true,
@@ -738,9 +806,8 @@ func TestRunCheck_NotifyOnly_EpisodicPlainDBErrorDoesNotFailCheck(t *testing.T) 
 	f.topic.NotifyOnly = true
 	f.topics.markBulkErr = errors.New("connection reset by peer")
 
-	// The check reports success, so the metric is the only trace a topic that
-	// silently stopped marking ever leaves. Measured as a delta because the
-	// collector is process-global and other tests share the tracker label.
+	// Measured as a delta because the collector is process-global and other
+	// tests share the tracker label.
 	failed := metrics.SchedulerTopicChecksTotal.WithLabelValues(f.topic.TrackerName, "notify_only_mark_error")
 	before := counterValue(t, failed)
 
@@ -752,20 +819,79 @@ func TestRunCheck_NotifyOnly_EpisodicPlainDBErrorDoesNotFailCheck(t *testing.T) 
 	if len(f.topics.markBulkCalls) != 1 {
 		t.Errorf("expected exactly 1 bulk mark attempt, got %d", len(f.topics.markBulkCalls))
 	}
+	// Nothing was announced, which is what makes failing the tick the right
+	// trade rather than a notification the retry would duplicate.
+	if got := f.emitter.ofType(events.ReleaseFound); len(got) != 0 {
+		t.Errorf("a failed mark must announce nothing, got %d release.found", len(got))
+	}
 	rec := f.lastRecord(t)
-	if rec.errMsg != "" {
-		t.Errorf("a failed mark must not fail the check, got errMsg %q", rec.errMsg)
+	if rec.errMsg == "" {
+		t.Errorf("a failed mark must fail the check, got an empty errMsg")
 	}
-	if rec.errCode != "" {
-		t.Errorf("a failed mark must not set an error code, got %q", rec.errCode)
+	// errStatePersist, not a bare error: without it the message ("connection
+	// reset by peer") is blamed on the tracker and can rotate its domain on
+	// evidence about our own database.
+	if rec.errCode != errCodeInternal {
+		t.Errorf("errCode = %q, want %q", rec.errCode, errCodeInternal)
 	}
-	if rec.hash != "new-hash" {
-		t.Errorf("the hash must still advance, got %q", rec.hash)
+	// The OLD hash: the tracker reports the same hash next tick, so keeping it
+	// is what makes the change re-detectable and the mark retryable.
+	if rec.hash != "old-hash" {
+		t.Errorf("a failed mark must keep the old hash, got %q", rec.hash)
 	}
-	// The release was still announced — the user was told, which is why
-	// refusing the tick over the mark would be the wrong trade.
+}
+
+// The retry closes the loop: the tick after a failed mark re-detects the same
+// release, marks it, and announces it — exactly once across both ticks. The
+// failing tick announced nothing, so there is no duplicate to suppress, which
+// is why the announce is safe to leave ungated on ConsecutiveErrors.
+func TestRunCheck_NotifyOnly_RetryAfterFailedMarkAnnouncesOnce(t *testing.T) {
+	batch := func() *domain.Check {
+		return &domain.Check{Hash: "batch-hash", Extra: map[string]any{
+			"pending_episodes": []string{"1-1", "1-2"},
+			"pending_human":    []string{"s01e01", "s01e02"},
+		}}
+	}
+	tr := &fakeTracker{
+		name:     "faketracker",
+		episodic: true,
+		// The tracker has not changed, so it recomputes the SAME hash.
+		checks: []checkResult{{check: batch()}, {check: batch()}},
+	}
+	f := newFixture(t, tr)
+	f.topic.NotifyOnly = true
+	f.topics.markBulkErr = errors.New("connection reset by peer")
+
+	f.s.runCheck(context.Background(), f.s.log, f.topic)
+
+	if got := f.emitter.ofType(events.ReleaseFound); len(got) != 0 {
+		t.Fatalf("the failing tick must announce nothing, got %d", len(got))
+	}
+	if first := f.lastRecord(t); first.hash != "old-hash" {
+		t.Fatalf("first hash = %q, want old-hash", first.hash)
+	}
+
+	// The scheduler re-reads the topic each tick: the old hash was persisted
+	// and the failure bumped the error count.
+	f.topic.ConsecutiveErrors = 1
+	f.topics.markBulkErr = nil
+	f.s.runCheck(context.Background(), f.s.log, f.topic)
+
 	if got := f.emitter.ofType(events.ReleaseFound); len(got) != 1 {
-		t.Errorf("expected the release to still be announced, got %d", len(got))
+		t.Errorf("expected exactly 1 announcement across both ticks, got %d", len(got))
+	}
+	if len(f.topics.markBulkCalls) != 2 {
+		t.Errorf("expected the mark to be retried, got %d attempts", len(f.topics.markBulkCalls))
+	}
+	second := f.lastRecord(t)
+	if second.hash != "batch-hash" {
+		t.Errorf("second hash = %q, want batch-hash", second.hash)
+	}
+	if second.errMsg != "" {
+		t.Errorf("the retry succeeded, got errMsg %q", second.errMsg)
+	}
+	if !second.updated {
+		t.Errorf("the announcing tick must be recorded as an update")
 	}
 }
 
