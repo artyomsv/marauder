@@ -377,6 +377,11 @@ var (
 	// would let a purely cosmetic template edit silently drop cover art.
 	posterVarRe = regexp.MustCompile(`(?s)<var\b[^>]*>`)
 
+	// posterImgRe finds every <img> tag, for the same reason posterVarRe
+	// finds every <var>: imgClassPoster inspects the attributes rather than
+	// pinning a class-and-attribute order the template is free to reshuffle.
+	posterImgRe = regexp.MustCompile(`(?s)<img\b[^>]*>`)
+
 	// tagAttrRe reads one named attribute out of a tag. Single and double
 	// quotes are both accepted because the surrounding markup mixes them.
 	tagAttrRe = regexp.MustCompile(`(?s)\b([a-zA-Z_:][-\w:.]*)\s*=\s*(?:"([^"]*)"|'([^']*)')`)
@@ -450,6 +455,14 @@ func firstPostBody(body []byte) (string, bool) {
 // posterURL returns the release cover, or "" when the topic has none. Not
 // every release carries one, and an absent cover must not fail a resolve and
 // cost the topic its real title too.
+//
+// Tapochek serves TWO templates and they mark the cover differently. The
+// aligned <var> is the one five live topics were verified against on
+// 2026-09-04; the TV-series template carries no aligned <var> at all and puts
+// the artwork in an <img class="poster"> instead (issue #186: every series
+// topic was stored with no image, and nothing backfills one afterwards). The
+// <var> form is tried first so a page carrying both keeps the image already
+// stored for it.
 func posterURL(body []byte) string {
 	scope, ok := firstPostBody(body)
 	if !ok {
@@ -457,6 +470,14 @@ func posterURL(body []byte) string {
 		// worst case is a cover taken from a reply, which is still a cover.
 		scope = string(body)
 	}
+	if u := alignedVarPoster(scope); u != "" {
+		return u
+	}
+	return imgClassPoster(scope)
+}
+
+// alignedVarPoster reads the cover from the aligned <var> template.
+func alignedVarPoster(scope string) string {
 	for _, tag := range posterVarRe.FindAllString(scope, -1) {
 		attrs := tagAttrs(tag)
 		if !hasClassToken(attrs, "postImgAligned") {
@@ -472,6 +493,73 @@ func posterURL(body []byte) string {
 		}
 	}
 	return ""
+}
+
+// imgClassPoster reads the cover from the TV-series template.
+//
+// The class is what separates the artwork from the screenshots, which are
+// plain <img> tags in the very same post — so "the first image in the opening
+// post" would store a screenshot as the release's cover.
+//
+// The reference is returned as written; absoluteURL resolves it. A relative
+// src must NOT be dropped here: that would leave the topic with no image and
+// nothing backfills one, which is the failure issue #186 is about.
+func imgClassPoster(scope string) string {
+	for _, tag := range posterImgRe.FindAllString(scope, -1) {
+		attrs := tagAttrs(tag)
+		if !hasClassToken(attrs, "poster") {
+			continue
+		}
+		src := strings.TrimSpace(html.UnescapeString(attrs["src"]))
+		if usablePosterRef(src) {
+			return src
+		}
+	}
+	return ""
+}
+
+// usablePosterRef reports whether ref could name an image at all. An http(s)
+// URL and a scheme-less reference both qualify; javascript:, data: and the
+// rest never do, and must be refused HERE rather than left to absoluteURL,
+// which would otherwise hand SafeImageURL an https URL with the payload in
+// its path.
+func usablePosterRef(ref string) bool {
+	if ref == "" {
+		return false
+	}
+	u, err := url.Parse(ref)
+	if err != nil {
+		return false
+	}
+	switch u.Scheme {
+	case "http", "https":
+		return u.Host != ""
+	case "":
+		return true
+	default:
+		return false
+	}
+}
+
+// absoluteURL resolves a cover reference against the active domain, leaving an
+// already-absolute one untouched — covers are hosted off-site (fastpic,
+// imageban) and must not be rewritten onto the tracker.
+//
+// It matters because image_url is persisted once and then rendered into an
+// <img src> for every later viewer: a relative fragment stored verbatim would
+// resolve against the FRONTEND's origin and show a broken image for the life
+// of the topic. ResolveReference also handles the protocol-relative `//host/…`
+// form, which a naive https:// prefix check would turn into a path.
+func (p *plugin) absoluteURL(ref string) string {
+	if ref == "" {
+		return ""
+	}
+	base, berr := url.Parse(p.baseURL())
+	u, uerr := url.Parse(ref)
+	if berr != nil || uerr != nil {
+		return ""
+	}
+	return base.ResolveReference(u).String()
 }
 
 // fingerprintInput builds the human-readable string the change token
@@ -494,21 +582,73 @@ func fingerprintInput(block string) string {
 	// The download id is the only structurally stable one; the other three
 	// hang off a Russian label a template edit could rename, which is exactly
 	// why none of them may be optional.
-	id := dlHrefRe.FindStringSubmatch(block)
-	name := fileNameRe.FindStringSubmatch(block)
-	size := sizeRe.FindStringSubmatch(block)
-	// The registration timestamp is the field Tapochek moves when an uploader
-	// replaces a torrent — the event being watched.
-	date := regDateRe.FindStringSubmatch(block)
-	if id == nil || name == nil || size == nil || date == nil {
+	parts, missing := fingerprintParts(block)
+	if len(missing) > 0 {
 		return ""
 	}
-	return strings.Join([]string{
-		"id=" + id[2],
-		"name=" + normalizeCell(name[1]),
-		"size=" + normalizeCell(size[1]),
-		"registered=" + normalizeCell(date[1]),
-	}, "\x00")
+	return strings.Join(parts, "\x00")
+}
+
+// fingerprintParts extracts the four token fields and names the ones the
+// block does not carry.
+//
+// Splitting the extraction from the wording is what lets Check tell a
+// PERMISSION state from template drift: a table that still carries the
+// filename, size and registration date but no download link means this
+// account may not download the release, and those two need different answers
+// from the user (issue #186).
+//
+// A field that matches but normalises to nothing counts as missing. An empty
+// value in the token is the same silent drift as an absent one.
+func fingerprintParts(block string) (parts, missing []string) {
+	add := func(label, value string) {
+		if value == "" {
+			missing = append(missing, label)
+			return
+		}
+		parts = append(parts, label+"="+value)
+	}
+	var id string
+	if m := dlHrefRe.FindStringSubmatch(block); m != nil {
+		id = m[2]
+	}
+	add("id", id)
+	add("name", cellValue(fileNameRe, block))
+	add("size", cellValue(sizeRe, block))
+	// The registration timestamp is the field Tapochek moves when an uploader
+	// replaces a torrent — the event being watched.
+	add("registered", cellValue(regDateRe, block))
+	return parts, missing
+}
+
+// cellValue returns re's first capture, normalised, or "" when it does not
+// match.
+func cellValue(re *regexp.Regexp, block string) string {
+	m := re.FindStringSubmatch(block)
+	if m == nil {
+		return ""
+	}
+	return normalizeCell(m[1])
+}
+
+// blockFieldsError words the failure for the fields the block actually lacks.
+//
+// The distinction is not cosmetic. Tapochek gates downloading on ratio, rank
+// and a daily cap, and a gated account still gets the whole table — only the
+// download.php link is replaced. Reporting that as "no usable fields" names
+// the parser for something the parser did not do, and issue #186 was filed as
+// a parsing bug because of it. The wording deliberately avoids the
+// scheduler's auth and parse keyword sets: the stored credentials are fine
+// and so is the template, so the raw detail is what the user needs to see.
+func blockFieldsError(block string) error {
+	_, missing := fingerprintParts(block)
+	if len(missing) == 1 && missing[0] == "id" {
+		return errors.New("tapochek: no download link in the torrent table — " +
+			"this account may not be allowed to download this release " +
+			"(ratio, rank or daily download limit)")
+	}
+	return fmt.Errorf("tapochek: torrent block carried no usable fields (missing: %s)",
+		strings.Join(missing, ", "))
 }
 
 // normalizeCell decodes entities and collapses whitespace so the token
@@ -554,12 +694,11 @@ func (p *plugin) Check(ctx context.Context, topic *domain.Topic, creds *domain.T
 	}
 	fp := pageFingerprint(block)
 	if fp == "" {
-		// Through gateError like every other "content is not there" path: a
-		// ratio-limited account still gets the table but with a register link
-		// where the download link was, and reporting that as a parse failure
-		// sends the user hunting for a broken selector instead of
-		// re-authenticating. With a live session it returns this unchanged.
-		return nil, p.gateError(creds, errors.New("tapochek: torrent block carried no usable fields"))
+		// Through gateError like every other "content is not there" path, so
+		// a dead session is still reported as one rather than as a parse
+		// failure. With a live session it returns blockFieldsError unchanged,
+		// which is where the download-gate wording comes from.
+		return nil, p.gateError(creds, blockFieldsError(block))
 	}
 	check.Hash = fp
 	return check, nil
@@ -580,7 +719,9 @@ func (p *plugin) Download(ctx context.Context, topic *domain.Topic, _ *domain.Ch
 	}
 	m := dlHrefRe.FindStringSubmatch(block)
 	if m == nil {
-		return nil, p.gateError(creds, errors.New("tapochek: no download link in the torrent block"))
+		// Same wording as Check's, from the same helper: a gated account hits
+		// both paths and must not be told two different stories about it.
+		return nil, p.gateError(creds, blockFieldsError(block))
 	}
 	torrent, err := p.fetch(ctx, p.baseURL()+"/"+m[1], creds)
 	if err != nil {
@@ -654,7 +795,7 @@ func (p *plugin) ResolveMetadata(ctx context.Context, rawURL string, creds *doma
 	if title == "" {
 		return nil, p.gateError(creds, errors.New("tapochek: the page carried no title"))
 	}
-	return &registry.Metadata{Title: title, ImageURL: posterURL(body)}, nil
+	return &registry.Metadata{Title: title, ImageURL: p.absoluteURL(posterURL(body))}, nil
 }
 
 // --- transport ----------------------------------------------------------

@@ -1,5 +1,7 @@
 package tapochek
 
+import "strings"
+
 // Fixtures captured from the live site on 2026-09-04 (topic t=289113) and
 // trimmed. The MARKUP is real — the previous fixtures were invented, using an
 // English "Info hash:" label this site has never served, so the old tests
@@ -111,3 +113,48 @@ const (
 // announce URL embeds a per-account passkey, so a captured .torrent is a
 // credential and is never committed; the plugin only checks the first byte.
 var fixtureTorrentBytes = []byte("d8:announce32:https://bt.example.test/announce4:infod4:name4:teste")
+
+// fixtureSeriesTopicHTML is the OTHER page template Tapochek serves, captured
+// from the live site on 2026-09-21 (topics t=288010, t=288620 and t=288645 —
+// the three in issue #186) and trimmed.
+//
+// TV-series topics carry no postImgAligned <var> at all. Their cover is a
+// plain `<img class="poster">`, and the only <var> tags on the page are the
+// Kinopoisk/IMDb rating badges and the per-track language flags — none of
+// them aligned, so the <var> selector alone finds nothing and every series
+// topic was stored with no image.
+//
+// The screenshots that follow the cover are the trap: they are <img> tags
+// too, and only the "poster" class separates them from the artwork.
+var fixtureSeriesTopicHTML = `<html><head><title>` + fixtureTopicTitle + `</title>
+<meta http-equiv="Content-Type" content="text/html; charset=windows-1251" />
+</head><body>
+<div class="post_body">
+<var class="postImg" title="https://rating.kinopoisk.ru/5310825.gif"></var>
+<var class="postImg" title="https://imdb.desol.one/tt27497393.png"></var>
+<img src="https://i128.fastpic.org/big/2026/0726/30/cover.jpg" class="poster" />
+<var class="postImg" title="https://tapochek.net/images/flags/mini/rus.jpg"></var>
+<img src="https://img.example/screenshot-1.png" border="0" style="max-width:150px;max-height:100px;" alt="https://img.example/screenshot-1.png" />
+<img src="https://img.example/screenshot-2.png" border="0" style="max-width:150px;max-height:100px;" alt="https://img.example/screenshot-2.png" />
+</div><!--/post_body-->
+` + fixtureTorrentBlock + `
+</body></html>`
+
+// fixtureGatedTorrentBlock is a MODELLED variant, not a capture: the real
+// block with its download anchor pointed elsewhere. No gated account was
+// available to capture from, so it stands on the site's documented behaviour
+// — Tapochek gates downloading on ratio, rank and a daily cap and answers a
+// gated account with the table intact and only the download.php link replaced
+// — rather than on an observation.
+//
+// What rests on that assumption is narrow: only the id-only branch of
+// blockFieldsError. If a real gated page also drops a labelled cell, the
+// generic "missing: id, size" wording is what the user sees instead, which is
+// still honest. Replace this fixture with a capture if a gated account is
+// ever to hand.
+var fixtureGatedTorrentBlock = strings.Replace(
+	fixtureTorrentBlock,
+	`<a href="download.php?id=189409" class="genmed">`,
+	`<a href="profile.php?mode=viewprofile" class="genmed">`,
+	1,
+)
