@@ -501,11 +501,9 @@ func alignedVarPoster(scope string) string {
 // plain <img> tags in the very same post — so "the first image in the opening
 // post" would store a screenshot as the release's cover.
 //
-// Unlike the <var> form, whose title is always a full URL, an <img src> may be
-// site-relative. The value is persisted once and then rendered into an
-// <img src> for every later viewer, so anything that is not an absolute
-// http(s) URL is dropped rather than stored: a bad cover outlives the check
-// that produced it.
+// The reference is returned as written; absoluteURL resolves it. A relative
+// src must NOT be dropped here: that would leave the topic with no image and
+// nothing backfills one, which is the failure issue #186 is about.
 func imgClassPoster(scope string) string {
 	for _, tag := range posterImgRe.FindAllString(scope, -1) {
 		attrs := tagAttrs(tag)
@@ -513,11 +511,55 @@ func imgClassPoster(scope string) string {
 			continue
 		}
 		src := strings.TrimSpace(html.UnescapeString(attrs["src"]))
-		if u, err := url.Parse(src); err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Host != "" {
+		if usablePosterRef(src) {
 			return src
 		}
 	}
 	return ""
+}
+
+// usablePosterRef reports whether ref could name an image at all. An http(s)
+// URL and a scheme-less reference both qualify; javascript:, data: and the
+// rest never do, and must be refused HERE rather than left to absoluteURL,
+// which would otherwise hand SafeImageURL an https URL with the payload in
+// its path.
+func usablePosterRef(ref string) bool {
+	if ref == "" {
+		return false
+	}
+	u, err := url.Parse(ref)
+	if err != nil {
+		return false
+	}
+	switch u.Scheme {
+	case "http", "https":
+		return u.Host != ""
+	case "":
+		return true
+	default:
+		return false
+	}
+}
+
+// absoluteURL resolves a cover reference against the active domain, leaving an
+// already-absolute one untouched — covers are hosted off-site (fastpic,
+// imageban) and must not be rewritten onto the tracker.
+//
+// It matters because image_url is persisted once and then rendered into an
+// <img src> for every later viewer: a relative fragment stored verbatim would
+// resolve against the FRONTEND's origin and show a broken image for the life
+// of the topic. ResolveReference also handles the protocol-relative `//host/…`
+// form, which a naive https:// prefix check would turn into a path.
+func (p *plugin) absoluteURL(ref string) string {
+	if ref == "" {
+		return ""
+	}
+	base, berr := url.Parse(p.baseURL())
+	u, uerr := url.Parse(ref)
+	if berr != nil || uerr != nil {
+		return ""
+	}
+	return base.ResolveReference(u).String()
 }
 
 // fingerprintInput builds the human-readable string the change token
@@ -753,7 +795,7 @@ func (p *plugin) ResolveMetadata(ctx context.Context, rawURL string, creds *doma
 	if title == "" {
 		return nil, p.gateError(creds, errors.New("tapochek: the page carried no title"))
 	}
-	return &registry.Metadata{Title: title, ImageURL: posterURL(body)}, nil
+	return &registry.Metadata{Title: title, ImageURL: p.absoluteURL(posterURL(body))}, nil
 }
 
 // --- transport ----------------------------------------------------------

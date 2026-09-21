@@ -913,18 +913,69 @@ func TestPosterURL_PrefersTheAlignedVarOverAnImgPoster(t *testing.T) {
 	}
 }
 
-// TestPosterURL_RejectsANonAbsolutePosterSrc. Unlike the <var> form, whose
-// title is always a full URL, an <img src> may be site-relative. The value is
-// stored once and then rendered into an <img src> for every later viewer, so
-// a fragment that is not an http(s) URL is dropped rather than persisted.
-func TestPosterURL_RejectsANonAbsolutePosterSrc(t *testing.T) {
-	for _, src := range []string{"images/cover.jpg", "/images/cover.jpg", "javascript:alert(1)"} {
+// TestPosterURL_KeepsARelativePosterSrcForResolution. Unlike the <var> form,
+// whose title is always a full URL, an <img src> may be site-relative.
+// Dropping it would leave the topic with no cover that nothing backfills —
+// the very failure issue #186 was filed for — so it is kept here and made
+// absolute by ResolveMetadata. Only a scheme that could never be an image is
+// refused outright.
+func TestPosterURL_KeepsARelativePosterSrcForResolution(t *testing.T) {
+	for src, want := range map[string]string{
+		"images/cover.jpg":           "images/cover.jpg",
+		"/images/cover.jpg":          "/images/cover.jpg",
+		"//cdn.example/c.jpg":        "//cdn.example/c.jpg",
+		"javascript:alert(1)":        "",
+		"data:image/png;base64,AAAA": "",
+	} {
 		page := `<html><body><div class="post_body">
 <img src="` + src + `" class="poster" />
 </div><!--/post_body--></body></html>`
-		if got := posterURL([]byte(page)); got != "" {
-			t.Errorf("src %q: posterURL = %q, want empty", src, got)
+		if got := posterURL([]byte(page)); got != want {
+			t.Errorf("src %q: posterURL = %q, want %q", src, got, want)
 		}
+	}
+}
+
+// TestResolveMetadata_MakesARelativeCoverAbsolute. image_url is persisted once
+// and then rendered into an <img src> for every later viewer, so a relative
+// fragment stored verbatim would resolve against the FRONTEND's origin and
+// show a broken image for the life of the topic.
+func TestResolveMetadata_MakesARelativeCoverAbsolute(t *testing.T) {
+	page := `<html><head><title>` + fixtureTopicTitle + `</title></head><body>
+<div class="post_body">
+<img src="/images/covers/x.jpg" class="poster" />
+</div><!--/post_body--></body></html>`
+	p := newTestPlugin(t, func(w http.ResponseWriter, _ *http.Request) {
+		http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: userCookie, Path: "/"})
+		_, _ = w.Write([]byte(page))
+	})
+	meta, err := p.ResolveMetadata(context.Background(),
+		"https://tapochek.net/viewtopic.php?t=288010", testCreds())
+	if err != nil {
+		t.Fatalf("ResolveMetadata: %v", err)
+	}
+	const want = "https://tapochek.net/images/covers/x.jpg"
+	if meta.ImageURL != want {
+		t.Errorf("ImageURL = %q, want %q", meta.ImageURL, want)
+	}
+}
+
+// TestResolveMetadata_LeavesAnAbsoluteCoverAlone is the inverse guard. Covers
+// are hosted off-site (fastpic, imageban), so resolving must not rewrite an
+// already-absolute URL onto the tracker's own domain.
+func TestResolveMetadata_LeavesAnAbsoluteCoverAlone(t *testing.T) {
+	p := newTestPlugin(t, func(w http.ResponseWriter, _ *http.Request) {
+		http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: userCookie, Path: "/"})
+		_, _ = w.Write([]byte(fixtureSeriesTopicHTML))
+	})
+	meta, err := p.ResolveMetadata(context.Background(),
+		"https://tapochek.net/viewtopic.php?t=288010", testCreds())
+	if err != nil {
+		t.Fatalf("ResolveMetadata: %v", err)
+	}
+	const want = "https://i128.fastpic.org/big/2026/0726/30/cover.jpg"
+	if meta.ImageURL != want {
+		t.Errorf("ImageURL = %q, want %q", meta.ImageURL, want)
 	}
 }
 

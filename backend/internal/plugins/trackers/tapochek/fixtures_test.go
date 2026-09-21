@@ -140,12 +140,18 @@ var fixtureSeriesTopicHTML = `<html><head><title>` + fixtureTopicTitle + `</titl
 ` + fixtureTorrentBlock + `
 </body></html>`
 
-// fixtureGatedTorrentBlock is the torrent table as it reaches an account that
-// may not download the release: every labelled cell is still there, and only
-// the download.php link is gone. Tapochek gates downloading on ratio, rank
-// and a daily cap, so this is a permission state rather than template drift —
-// and it is indistinguishable from drift unless the plugin says which field
-// it lost (issue #186).
+// fixtureGatedTorrentBlock is a MODELLED variant, not a capture: the real
+// block with its download anchor pointed elsewhere. No gated account was
+// available to capture from, so it stands on the site's documented behaviour
+// — Tapochek gates downloading on ratio, rank and a daily cap and answers a
+// gated account with the table intact and only the download.php link replaced
+// — rather than on an observation.
+//
+// What rests on that assumption is narrow: only the id-only branch of
+// blockFieldsError. If a real gated page also drops a labelled cell, the
+// generic "missing: id, size" wording is what the user sees instead, which is
+// still honest. Replace this fixture with a capture if a gated account is
+// ever to hand.
 var fixtureGatedTorrentBlock = strings.Replace(
 	fixtureTorrentBlock,
 	`<a href="download.php?id=189409" class="genmed">`,
