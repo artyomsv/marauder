@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Tapochek topics you already seed no longer fail every check** with
+  `torrent block carried no usable fields`. Tapochek colours the torrent
+  header and its download link by *your* relation to the release — one class
+  for a stranger, another for someone who already seeds it — and the plugin
+  anchored the release filename on the stranger's class. So a topic worked
+  until you downloaded it and broke from then on, which is also why it could
+  not be reproduced from an account that did not have the torrent. The
+  filename is now found by its `.torrent` suffix, which no viewer's state can
+  change. (#186)
+
 ## [1.20.1] - 2026-09-21
 
 ### Fixed

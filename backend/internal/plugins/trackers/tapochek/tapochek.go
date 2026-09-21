@@ -349,10 +349,24 @@ var (
 	// attachment id, not a Russian label a template change could rename.
 	dlHrefRe = regexp.MustCompile(`href="(download\.php\?id=(\d+))"`)
 
-	// fileNameRe reads the .torrent filename from the block's header cell.
-	// Same token match: today the cell is `class="genmed"` alone, but adding
-	// a second class to it must not lose the filename.
-	fileNameRe = regexp.MustCompile(`(?s)<th[^>]*` + classToken("genmed") + `[^>]*>([^<]+)</th>`)
+	// fileNameRe reads the .torrent filename from the block's header cell,
+	// anchored on the `.torrent` suffix rather than on the cell's class.
+	//
+	// The class is NOT usable here, which issue #186 took five days to
+	// establish. Tapochek colours that header — and the download link beside
+	// it — by the VIEWER's relation to the release: `genmed` for a stranger,
+	// `seedmed` for someone who already seeds it, and the same page uses
+	// `leechmed` elsewhere. So `class="genmed"` worked for every account that
+	// did NOT have the torrent and failed for every account that did, which is
+	// why live checks against three of the reporter's own topics could never
+	// reproduce it. It is per-user, per-topic state wearing the costume of a
+	// static selector.
+	//
+	// The suffix is safe to anchor on instead: this is an attachment cell and
+	// the site names every attachment `<release> [tapochek.net].torrent`. The
+	// release-type banner directly below it is a <th> too, but it wraps its
+	// text in <img> tags, so `[^<]*` cannot reach across it.
+	fileNameRe = regexp.MustCompile(`(?s)<th[^>]*>([^<]*\.torrent)\s*</th>`)
 
 	// regDateRe steps from the "Зарегистрирован" label straight into the
 	// <span> holding the timestamp. It must not use a lazy `.*?` across the
