@@ -56,7 +56,15 @@ var secretParams = regexp.MustCompile(
 // bare substrings, so `author`, `keywords`, `monkey` and `consideration` were
 // all blanked (`auth`, `key`, `sid`), destroying the very markup the export
 // exists to carry.
-var inputTagRe = regexp.MustCompile(`(?is)<input\b[^>]*>`)
+// The scan is quote-aware. A quoted attribute value may legally contain `>`,
+// and `<input\b[^>]*>` stops at the first one — truncating the tag before its
+// value is reached, so `<input name="form_token" value="s3cr3t>x">` shipped
+// the credential. The quoted alternatives come FIRST so a `>` inside quotes is
+// consumed as part of the value; `[^>]` is last, which also makes the pattern
+// degrade to the plain scan on malformed markup with an unterminated quote
+// rather than failing to match the tag at all — failing to match is failing
+// open on a secret.
+var inputTagRe = regexp.MustCompile(`(?is)<input\b(?:"[^"]*"|'[^']*'|[^>])*>`)
 
 // attrRe reads one attribute. All three HTML spellings are accepted —
 // double-quoted, single-quoted, and unquoted — because a redactor that only
@@ -67,7 +75,13 @@ var attrRe = regexp.MustCompile(`(?is)\b([a-z_:][-\w:.]*)\s*=\s*(?:"([^"]*)"|'([
 // is replaced. The delimiter is preserved (see redactValueAttr): swapping
 // quotes or adding them to an unquoted attribute is a markup edit, and markup
 // is the evidence.
-var valueAttrRe = regexp.MustCompile(`(?is)\bvalue\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'>]+)`)
+// The last two alternatives catch an unterminated quote. They run to the end
+// of the tag and so rewrite a little more than the value — which is a markup
+// change, and normally forbidden here. It is allowed only on this branch
+// because the alternative is shipping a credential: the tag was already
+// malformed, and a mangled attribute in a diagnostic file costs less than the
+// reporter's account.
+var valueAttrRe = regexp.MustCompile(`(?is)\bvalue\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'>]+|"[^"]*|'[^']*)`)
 
 // secretNameRe matches a field name that carries a credential. The words are
 // matched at non-letter boundaries, not as substrings, which is what keeps

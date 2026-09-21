@@ -203,3 +203,36 @@ func TestRedact_PreservesTheValueDelimiter(t *testing.T) {
 		}
 	}
 }
+
+// TestRedact_TokenInputWithAngleBracketInTheValue. A quoted attribute value
+// may legally contain `>`, and a tag scan of `<input\b[^>]*>` stops at the
+// first one it sees — truncating the tag before the value is reached, so the
+// credential survived (Greptile P1, second round on #193).
+//
+// The unterminated-quote cases are here to pin the degradation: the pattern
+// must fall back to the plain scan rather than failing to match the tag at
+// all, because failing to match is failing open on a secret.
+func TestRedact_TokenInputWithAngleBracketInTheValue(t *testing.T) {
+	for _, tag := range []string{
+		`<input type="hidden" name="form_token" value="s3cr3t>suffix">`,
+		`<input type="hidden" value="s3cr3t>suffix" name="form_token">`,
+		`<input name='form_token' value='s3cr3t>suffix'>`,
+		`<input name="form_token" value="a>b>c">`,
+		// Malformed: no closing quote. Must still not ship the token.
+		`<input name="form_token" value="s3cr3t>`,
+	} {
+		if got := string(Redact([]byte(tag), "")); strings.Contains(got, "s3cr3t") {
+			t.Errorf("token survived in %q -> %q", tag, got)
+		}
+	}
+}
+
+// TestRedact_AngleBracketInAnOrdinaryInputIsUntouched is the other direction:
+// making the tag scan quote-aware must not start rewriting fields that carry
+// no credential.
+func TestRedact_AngleBracketInAnOrdinaryInputIsUntouched(t *testing.T) {
+	const tag = `<input type="text" name="search" value="a>b">`
+	if got := string(Redact([]byte(tag), "")); got != tag {
+		t.Errorf("ordinary input was redacted:\n  in  %q\n  out %q", tag, got)
+	}
+}
