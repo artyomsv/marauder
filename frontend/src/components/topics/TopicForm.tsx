@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { QK } from "@/lib/queryKeys";
+import { useT } from "@/i18n";
 import { useDebouncedValue } from "@/lib/hooks/useDebouncedValue";
 import { SeasonEpisodePicker, SELECT_CLASS } from "./SeasonEpisodePicker";
 import { TopicPreviewCard } from "./TopicPreviewCard";
@@ -105,6 +106,7 @@ export function TopicForm({
   onClose,
   onSubmit,
 }: TopicFormProps) {
+  const t = useT();
   const isEdit = mode === "edit";
   const [url] = useState(initial.url);
   const [displayName, setDisplayName] = useState(initial.displayName);
@@ -424,12 +426,10 @@ export function TopicForm({
               setDelivery((d) => ({ ...d, notifyOnly: e.target.checked }))
             }
           />
-          <span>Notify only — do not download</span>
+          <span>{t("topics.notifyOnly.label")}</span>
         </label>
         <p className="text-xs text-muted-foreground">
-          Keep checking this topic and send a notification when a new release
-          appears, without sending anything to a torrent client. No download
-          client is required.
+          {t("topics.notifyOnly.help")}
         </p>
         {delivery.notifyOnly && (
           <label className="flex items-center gap-2 pt-1 text-sm">
@@ -443,25 +443,20 @@ export function TopicForm({
                 }))
               }
             />
-            <span>Also tell me about the release that is there now</span>
+            <span>{t("topics.notifyOnly.announceCurrent")}</span>
           </label>
         )}
       </div>
 
       {delivery.notifyOnly && notifiersLoaded && willBeSilent && (
         <p className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-400">
-          This topic has no notifier that is subscribed to new releases, so it
-          will be checked silently and you will never hear about it. Pick a
-          notifier below that receives new releases, or mark one as default on
-          the Notifiers page.
+          {t("topics.notifyOnly.silentWarning")}
         </p>
       )}
 
       {isEdit && initial.notifyOnly && !delivery.notifyOnly && (
         <p className="rounded-md border border-border/60 bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
-          Releases seen while this topic was notify-only will not be
-          downloaded — only the next change will. Use Reset on the topic if
-          you want the current release fetched now.
+          {t("topics.notifyOnly.toggleBackNotice")}
         </p>
       )}
 
@@ -515,12 +510,10 @@ export function TopicForm({
                   setDelivery((d) => ({ ...d, replaceOnUpdate: e.target.checked }))
                 }
               />
-              <span>Replace previous version on update</span>
+              <span>{t("topics.replaceOnUpdate.label")}</span>
             </label>
             <p className="text-xs text-muted-foreground">
-              When a new release is detected, remove the previously downloaded torrent
-              from the client instead of keeping every version. Best for single
-              releases (movies, repacked seasons) — not per-episode shows.
+              {t("topics.replaceOnUpdate.help")}
             </p>
             {delivery.replaceOnUpdate && (
               <label className="flex items-center gap-2 pt-1 text-sm">
@@ -531,7 +524,7 @@ export function TopicForm({
                     setDelivery((d) => ({ ...d, replaceDeleteData: e.target.checked }))
                   }
                 />
-                <span>Also delete the old files from disk</span>
+                <span>{t("topics.replaceOnUpdate.deleteData")}</span>
               </label>
             )}
           </div>

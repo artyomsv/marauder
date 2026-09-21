@@ -1,6 +1,7 @@
 import { BellRing } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
+import { useT } from "@/i18n";
 import type { Topic } from "@/lib/api";
 
 /**
@@ -9,11 +10,12 @@ import type { Topic } from "@/lib/api";
  * ordinary topics. Mirrors SonarrBadge / ClientBadge.
  */
 export function NotifyOnlyBadge({ topic }: { topic: Topic }) {
+  const t = useT();
   if (!topic.NotifyOnly) return null;
   return (
     <Badge variant="secondary" className="shrink-0 gap-1 font-normal">
       <BellRing className="size-3" />
-      Notify only
+      {t("topics.notifyOnly.badge")}
     </Badge>
   );
 }
