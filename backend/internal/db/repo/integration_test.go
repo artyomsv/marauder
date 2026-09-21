@@ -21,6 +21,7 @@ package repo
 
 import (
 	"context"
+	"errors"
 	"os"
 	"sync"
 	"testing"
@@ -203,5 +204,60 @@ func TestTopicsNotifyOnlyRoundTrip(t *testing.T) {
 	}
 	if got.NotifyOnlyAnnounceCurrent {
 		t.Errorf("Update wrote NotifyOnlyAnnounceCurrent = true, want false")
+	}
+}
+
+// TestMarkEpisodesDownloadedBulk exercises the SQL a mock cannot: to_jsonb over
+// a text[] must CONCATENATE onto the existing downloaded_episodes array, in
+// order, rather than nesting an array inside it. The notify-only watch mode
+// (issue #184) depends on one statement for a tracker-chosen list length, and
+// the whole point of that statement is that it is all-or-nothing.
+func TestMarkEpisodesDownloadedBulk(t *testing.T) {
+	pool := integrationPool(t)
+	topicsRepo := NewTopics(pool)
+	userID := seedUser(t, pool)
+	ctx := context.Background()
+
+	// Seed with one episode already marked, so the append is proven to extend
+	// the existing array instead of replacing it.
+	topic := seedTopic(t, pool, userID, domain.TopicStatusActive, map[string]any{
+		"downloaded_episodes": []string{"1-1"},
+		"quality":             "1080p",
+	})
+
+	if err := topicsRepo.MarkEpisodesDownloaded(ctx, topic, []string{"1-2", "1-3", "1-4"}); err != nil {
+		t.Fatalf("MarkEpisodesDownloaded: %v", err)
+	}
+	got := reload(t, pool, topic.ID)
+	want := []string{"1-1", "1-2", "1-3", "1-4"}
+	marked, ok := got.Extra["downloaded_episodes"].([]any)
+	if !ok {
+		t.Fatalf("downloaded_episodes is %T, want a JSON array: %#v",
+			got.Extra["downloaded_episodes"], got.Extra["downloaded_episodes"])
+	}
+	if len(marked) != len(want) {
+		t.Fatalf("downloaded_episodes = %v, want %v", marked, want)
+	}
+	for i := range want {
+		if marked[i] != want[i] {
+			t.Errorf("downloaded_episodes[%d] = %v, want %q", i, marked[i], want[i])
+		}
+	}
+	// Sibling keys must survive — this is a targeted append, not a blob write.
+	if got.Extra["quality"] != "1080p" {
+		t.Errorf("quality = %v, want it untouched", got.Extra["quality"])
+	}
+
+	// A stale token must write nothing at all: the whole list is discarded,
+	// leaving no partial state for the next tick to re-announce.
+	stale := *got
+	staleNext := got.NextCheckAt.Add(-time.Hour)
+	stale.NextCheckAt = staleNext
+	if err := topicsRepo.MarkEpisodesDownloaded(ctx, &stale, []string{"2-1", "2-2"}); !errors.Is(err, ErrStaleCheckResult) {
+		t.Fatalf("stale bulk mark: want ErrStaleCheckResult, got %v", err)
+	}
+	after := reload(t, pool, topic.ID)
+	if n := len(after.Extra["downloaded_episodes"].([]any)); n != len(want) {
+		t.Errorf("a rejected bulk mark wrote %d episodes, want the original %d", n, len(want))
 	}
 }

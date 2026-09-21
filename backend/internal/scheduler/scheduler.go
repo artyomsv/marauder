@@ -51,16 +51,22 @@ import (
 
 // topicsRepo is the subset of *repo.Topics that the scheduler uses.
 //
-// RecordCheckResult, MarkEpisodeDownloaded and VerifyCheckState all take the
-// whole topic, not just its id, because each is guarded on the
+// RecordCheckResult, MarkEpisode(s)Downloaded and VerifyCheckState all take
+// the whole topic, not just its id, because each is guarded on the
 // (last_checked_at, next_check_at) version token the worker observed at
-// dispatch — all three return repo.ErrStaleCheckResult when it no longer
-// matches. The first two carry the guard in the WHERE clause of their write;
+// dispatch — all of them return repo.ErrStaleCheckResult when it no longer
+// matches. The first three carry the guard in the WHERE clause of their write;
 // VerifyCheckState is the read-only form, used before an irreversible step.
+//
+// The singular and plural marks are both here on purpose: the download path
+// marks one episode as each is delivered, so a mid-loop failure keeps exactly
+// the progress that happened; the notify-only path marks a whole pending list
+// at once, where one statement is both bounded and all-or-nothing.
 type topicsRepo interface {
 	DueForCheck(ctx context.Context, limit int) ([]*domain.Topic, error)
 	RecordCheckResult(ctx context.Context, t *domain.Topic, hash string, updated bool, nextCheckAt time.Time, errMsg, errCode string) error
 	MarkEpisodeDownloaded(ctx context.Context, t *domain.Topic, packed string) error
+	MarkEpisodesDownloaded(ctx context.Context, t *domain.Topic, packed []string) error
 	VerifyCheckState(ctx context.Context, t *domain.Topic) error
 }
 
@@ -605,22 +611,25 @@ func (s *Scheduler) notifyOnlyRelease(ctx context.Context, log zerolog.Logger, t
 	// Mark every pending episode seen. Without this, switching the topic back
 	// to download mode fetches everything that appeared while notify-only was
 	// on — the accumulated backlog issue #184 explicitly asks us to avoid.
-	// Fail-open: a plain DB error stops the loop and lets the tick finish, so
-	// the worst case is that a later toggle-back re-downloads a few episodes,
-	// never that the check fails.
-	for _, packed := range pendingPacked {
-		if err := s.topics.MarkEpisodeDownloaded(ctx, t, packed); err != nil {
-			if errors.Is(err, repo.ErrStaleCheckResult) {
-				// A reset (or a delete) landed mid-check. Stop rather than
-				// write into state that no longer exists; recordResult below
-				// is guarded by the same token and will be dropped too.
-				log.Info().Str("packed", packed).
-					Msg("notify-only episode mark discarded: another write won the state guard")
-				return
-			}
-			log.Warn().Err(err).Str("packed", packed).Msg("notify-only episode mark failed")
+	//
+	// One statement for the whole list, not one per episode: the list length is
+	// chosen by the remote tracker, so a loop is an unbounded number of writes
+	// on the worker's root context.
+	//
+	// Fail-open: a DB error lets the tick finish rather than failing a check
+	// whose release the user has already been told about.
+	if err := s.topics.MarkEpisodesDownloaded(ctx, t, pendingPacked); err != nil {
+		if errors.Is(err, repo.ErrStaleCheckResult) {
+			// A reset (or a delete) landed mid-check. The write was discarded
+			// rather than applied to state that no longer exists; recordResult
+			// below is guarded by the same token and will be dropped too.
+			log.Info().Int("episodes", len(pendingPacked)).
+				Msg("notify-only episode mark discarded: another write won the state guard")
 			return
 		}
+		log.Warn().Err(err).Int("episodes", len(pendingPacked)).
+			Msg("notify-only episode mark failed")
+		return
 	}
 }
 

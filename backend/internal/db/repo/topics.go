@@ -364,6 +364,52 @@ WHERE  id = $1 AND last_checked_at IS NOT DISTINCT FROM $3 AND next_check_at = $
 	return nil
 }
 
+// MarkEpisodesDownloaded appends EVERY packed episode id in one statement,
+// under the same check-state version token MarkEpisodeDownloaded carries.
+//
+// It exists for the notify-only watch mode (issue #184), which marks a whole
+// pending list seen in one go. The list length is chosen by the remote
+// tracker, so calling the single-episode form in a loop issues an unbounded
+// number of round-trips on the worker's root context — and, worse, is not
+// atomic: a failure partway leaves some episodes marked, which changes a
+// count-derived tracker hash and makes the next tick re-announce the
+// remainder as if it were new. One statement makes it all-or-nothing.
+//
+// The download path deliberately keeps using MarkEpisodeDownloaded: there
+// each mark must land as its own episode is delivered, so a mid-loop failure
+// preserves exactly the progress that really happened.
+//
+// An empty list is a no-op (nil), not a stale result — there is nothing to
+// write, so there is nothing for the token to guard.
+//
+// Returns ErrStaleCheckResult when the guard rejected the write.
+func (r *Topics) MarkEpisodesDownloaded(ctx context.Context, t *domain.Topic, packed []string) error {
+	if len(packed) == 0 {
+		return nil
+	}
+	// Same atomic JSONB append as MarkEpisodeDownloaded, except the right-hand
+	// side is a whole array: to_jsonb over a text[] yields a JSONB array, and
+	// || concatenates two JSONB arrays element-wise rather than nesting one.
+	const query = `
+UPDATE topics
+SET    extra = jsonb_set(
+           COALESCE(extra, '{}'::jsonb),
+           '{downloaded_episodes}',
+           (COALESCE(extra->'downloaded_episodes', '[]'::jsonb) || to_jsonb($2::text[])),
+           true
+       ),
+       updated_at = now()
+WHERE  id = $1 AND last_checked_at IS NOT DISTINCT FROM $3 AND next_check_at = $4`
+	ct, err := r.pool.Exec(ctx, query, t.ID, packed, t.LastCheckedAt, t.NextCheckAt)
+	if err != nil {
+		return fmt.Errorf("topics: mark episodes downloaded: %w", err)
+	}
+	if ct.RowsAffected() == 0 {
+		return ErrStaleCheckResult
+	}
+	return nil
+}
+
 // ResetCheckState discards a topic's check/download state so the next check
 // re-detects the current release as new and re-delivers it. It is the inverse
 // of RecordCheckResult, plus the per-episode progress MarkEpisodeDownloaded

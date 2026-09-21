@@ -226,6 +226,78 @@ func TestTopics_MarkEpisodeDownloaded_DBError(t *testing.T) {
 	}
 }
 
+// ---------- MarkEpisodesDownloaded (bulk) ----------
+
+// TestTopics_MarkEpisodesDownloaded_BindsWholeListAndToken pins the two things
+// the bulk form exists for: the entire list goes out as ONE argument in ONE
+// statement, and it carries the same check-state token as the singular form.
+func TestTopics_MarkEpisodesDownloaded_BindsWholeListAndToken(t *testing.T) {
+	repo, mock := newMockTopics(t)
+	t.Cleanup(func() { assertExpectationsMet(t, mock) })
+
+	observed := time.Now().Add(-time.Minute)
+	next := time.Now().Add(time.Hour)
+	topic := &domain.Topic{ID: uuid.New(), LastCheckedAt: &observed, NextCheckAt: next}
+	packed := []string{"S01E05", "S01E06", "S01E07"}
+
+	mock.ExpectExec(`(?s)UPDATE topics\s+SET\s+extra = jsonb_set\(.*to_jsonb\(\$2::text\[\]\).*`+
+		`WHERE\s+id = \$1 AND last_checked_at IS NOT DISTINCT FROM \$3 AND next_check_at = \$4`).
+		WithArgs(topic.ID, packed, &observed, next).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+
+	if err := repo.MarkEpisodesDownloaded(context.Background(), topic, packed); err != nil {
+		t.Fatalf("MarkEpisodesDownloaded: unexpected error: %v", err)
+	}
+}
+
+// An empty list must not reach the database at all — there is nothing to
+// append, so a statement would only ever produce a misleading stale result on
+// a topic that was legitimately reset. assertExpectationsMet catches any query.
+func TestTopics_MarkEpisodesDownloaded_EmptyIsNoop(t *testing.T) {
+	repo, mock := newMockTopics(t)
+	t.Cleanup(func() { assertExpectationsMet(t, mock) })
+
+	topic := &domain.Topic{ID: uuid.New(), NextCheckAt: time.Now()}
+	if err := repo.MarkEpisodesDownloaded(context.Background(), topic, nil); err != nil {
+		t.Fatalf("MarkEpisodesDownloaded(nil): want nil, got %v", err)
+	}
+}
+
+func TestTopics_MarkEpisodesDownloaded_StaleWriteIsDropped(t *testing.T) {
+	repo, mock := newMockTopics(t)
+	t.Cleanup(func() { assertExpectationsMet(t, mock) })
+
+	stale := time.Now().Add(-time.Hour)
+	topic := &domain.Topic{ID: uuid.New(), LastCheckedAt: &stale, NextCheckAt: time.Now()}
+	mock.ExpectExec(`UPDATE topics\s+SET\s+extra = jsonb_set`).
+		WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
+
+	err := repo.MarkEpisodesDownloaded(context.Background(), topic, []string{"S02E03"})
+	if !errors.Is(err, ErrStaleCheckResult) {
+		t.Fatalf("MarkEpisodesDownloaded: want ErrStaleCheckResult, got %v", err)
+	}
+}
+
+func TestTopics_MarkEpisodesDownloaded_DBError(t *testing.T) {
+	repo, mock := newMockTopics(t)
+	t.Cleanup(func() { assertExpectationsMet(t, mock) })
+
+	topic := &domain.Topic{ID: uuid.New(), NextCheckAt: time.Now()}
+	dbErr := errors.New("deadlock detected")
+	mock.ExpectExec(`UPDATE topics\s+SET\s+extra = jsonb_set`).
+		WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
+		WillReturnError(dbErr)
+
+	err := repo.MarkEpisodesDownloaded(context.Background(), topic, []string{"S03E01"})
+	if !errors.Is(err, dbErr) {
+		t.Fatalf("MarkEpisodesDownloaded: want wrapped %v, got %v", dbErr, err)
+	}
+	if !strings.Contains(err.Error(), "topics: mark episodes downloaded") {
+		t.Errorf("MarkEpisodesDownloaded: missing wrap context: %q", err.Error())
+	}
+}
+
 // ---------- scanTopic malformed extra ----------
 
 // topicRow returns a pgxmock row slice that matches topicColumns exactly

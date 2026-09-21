@@ -94,8 +94,13 @@ type fakeTopics struct {
 	updateDisplayNameCalls []updateDisplayNameCall
 	markCalls              []markCall
 	markErr                error
-	verifyCalls            []uuid.UUID
-	verifyErr              error
+	// markBulkCalls records the notify-only path's whole-list marks. Kept
+	// separate from markCalls (and markBulkErr from markErr) so a test can
+	// stage a failure on one path without touching the other.
+	markBulkCalls [][]string
+	markBulkErr   error
+	verifyCalls   []uuid.UUID
+	verifyErr     error
 }
 
 type recordCall struct {
@@ -135,6 +140,13 @@ func (f *fakeTopics) UpdateDisplayName(_ context.Context, id uuid.UUID, name str
 func (f *fakeTopics) MarkEpisodeDownloaded(_ context.Context, t *domain.Topic, packed string) error {
 	f.markCalls = append(f.markCalls, markCall{t.ID, packed})
 	return f.markErr
+}
+
+// MarkEpisodesDownloaded is the bulk form the notify-only path uses. The
+// packed slice is copied because the caller owns the backing array.
+func (f *fakeTopics) MarkEpisodesDownloaded(_ context.Context, _ *domain.Topic, packed []string) error {
+	f.markBulkCalls = append(f.markBulkCalls, append([]string(nil), packed...))
+	return f.markBulkErr
 }
 
 // VerifyCheckState is the pre-submit read-only guard. verifyErr lets a test
@@ -554,12 +566,23 @@ func TestRunCheck_NotifyOnly_EpisodicMarksPendingSeen(t *testing.T) {
 	if tr.callsDownload != 0 {
 		t.Errorf("notify-only must not call tr.Download, got %d", tr.callsDownload)
 	}
-	if len(f.topics.markCalls) != 3 {
-		t.Fatalf("expected 3 episodes marked seen, got %d", len(f.topics.markCalls))
+	// One statement for the whole list: the tracker chooses the list length, so
+	// a per-episode loop would be an unbounded number of writes per tick.
+	if len(f.topics.markBulkCalls) != 1 {
+		t.Fatalf("expected exactly 1 bulk mark, got %d", len(f.topics.markBulkCalls))
 	}
-	for i, want := range []string{"1-1", "1-2", "1-3"} {
-		if f.topics.markCalls[i].packed != want {
-			t.Errorf("mark %d: expected %q, got %q", i, want, f.topics.markCalls[i].packed)
+	if len(f.topics.markCalls) != 0 {
+		t.Errorf("notify-only must not mark episodes one at a time, got %d calls",
+			len(f.topics.markCalls))
+	}
+	marked := f.topics.markBulkCalls[0]
+	wantMarked := []string{"1-1", "1-2", "1-3"}
+	if len(marked) != len(wantMarked) {
+		t.Fatalf("bulk mark got %d episodes (%v), want %d", len(marked), marked, len(wantMarked))
+	}
+	for i := range wantMarked {
+		if marked[i] != wantMarked[i] {
+			t.Errorf("bulk mark[%d] = %q, want %q", i, marked[i], wantMarked[i])
 		}
 	}
 	got := f.emitter.ofType(events.ReleaseFound)
@@ -616,13 +639,14 @@ func TestRunCheck_NotifyOnly_EpisodicStopsOnStaleToken(t *testing.T) {
 	}
 	f := newFixture(t, tr)
 	f.topic.NotifyOnly = true
-	f.topics.markErr = fmt.Errorf("topics: mark episode: %w", repo.ErrStaleCheckResult)
+	f.topics.markBulkErr = fmt.Errorf("topics: mark episodes: %w", repo.ErrStaleCheckResult)
 
 	f.s.runCheck(context.Background(), f.s.log, f.topic)
 
-	if len(f.topics.markCalls) != 1 {
-		t.Errorf("expected marking to stop after the first stale result, got %d calls",
-			len(f.topics.markCalls))
+	// One statement, one rejection: nothing was written, so there is nothing
+	// half-applied to reconcile and no reason to try again this tick.
+	if len(f.topics.markBulkCalls) != 1 {
+		t.Errorf("expected exactly 1 bulk mark attempt, got %d", len(f.topics.markBulkCalls))
 	}
 }
 
@@ -645,12 +669,12 @@ func TestRunCheck_NotifyOnly_EpisodicPlainDBErrorDoesNotFailCheck(t *testing.T) 
 	}
 	f := newFixture(t, tr)
 	f.topic.NotifyOnly = true
-	f.topics.markErr = errors.New("connection reset by peer")
+	f.topics.markBulkErr = errors.New("connection reset by peer")
 
 	f.s.runCheck(context.Background(), f.s.log, f.topic)
 
-	if len(f.topics.markCalls) != 1 {
-		t.Errorf("expected marking to stop after the first error, got %d calls", len(f.topics.markCalls))
+	if len(f.topics.markBulkCalls) != 1 {
+		t.Errorf("expected exactly 1 bulk mark attempt, got %d", len(f.topics.markBulkCalls))
 	}
 	rec := f.lastRecord(t)
 	if rec.errMsg != "" {
@@ -2862,6 +2886,21 @@ func (f *fakeTopicsGuarded) MarkEpisodeDownloaded(_ context.Context, t *domain.T
 	if f.afterAcceptedMark != nil {
 		f.afterAcceptedMark()
 	}
+	return nil
+}
+
+// MarkEpisodesDownloaded carries the same token guard, and — like the single
+// statement it models — is all-or-nothing: a rejected token appends nothing.
+func (f *fakeTopicsGuarded) MarkEpisodesDownloaded(_ context.Context, t *domain.Topic, packed []string) error {
+	if len(packed) == 0 {
+		return nil
+	}
+	f.markBulkCalls = append(f.markBulkCalls, append([]string(nil), packed...))
+	if !f.tokenMatches(t) {
+		f.markRejected++
+		return repo.ErrStaleCheckResult
+	}
+	f.downloaded = append(f.downloaded, packed...)
 	return nil
 }
 
