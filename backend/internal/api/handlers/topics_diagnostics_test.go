@@ -26,7 +26,7 @@ type fakeRawPageTracker struct {
 	name string
 	page string
 	err  error
-	// hold, when non-nil, blocks RawPage until it is closed — for the
+	// hold, when non-nil, blocks ExportRegions until it is closed — for the
 	// single-flight test. started is closed once, on the first call: the same
 	// test calls the handler again after the gate releases.
 	hold      chan struct{}
@@ -46,7 +46,7 @@ func (f *fakeRawPageTracker) Check(context.Context, *domain.Topic, *domain.Track
 func (f *fakeRawPageTracker) Download(context.Context, *domain.Topic, *domain.Check, *domain.TrackerCredential) (*domain.Payload, error) {
 	return nil, nil
 }
-func (f *fakeRawPageTracker) RawPage(ctx context.Context, _ string, _ *domain.TrackerCredential) ([]byte, error) {
+func (f *fakeRawPageTracker) ExportRegions(ctx context.Context, _ string, _ *domain.TrackerCredential) ([]registry.PageRegion, error) {
 	if f.started != nil {
 		f.startOnce.Do(func() { close(f.started) })
 	}
@@ -60,7 +60,7 @@ func (f *fakeRawPageTracker) RawPage(ctx context.Context, _ string, _ *domain.Tr
 	if f.err != nil {
 		return nil, f.err
 	}
-	return []byte(f.page), nil
+	return []registry.PageRegion{{Name: "page", HTML: []byte(f.page)}}, nil
 }
 
 func diagnosticsRequest(t *testing.T, topicID, userID uuid.UUID) *http.Request {
@@ -193,7 +193,7 @@ func TestDiagnosticsPage_SecondCallWhileRunningIs429(t *testing.T) {
 }
 
 // fakeWarmRawTracker is a credentialed tracker whose login can be made to
-// fail, recording which credential RawPage was handed.
+// fail, recording which credential ExportRegions was handed.
 type fakeWarmRawTracker struct {
 	fakeRawPageTracker
 	verifyOK bool
@@ -208,9 +208,9 @@ func (f *fakeWarmRawTracker) Login(context.Context, *domain.TrackerCredential) e
 func (f *fakeWarmRawTracker) Verify(context.Context, *domain.TrackerCredential) (bool, error) {
 	return f.verifyOK, nil
 }
-func (f *fakeWarmRawTracker) RawPage(_ context.Context, _ string, creds *domain.TrackerCredential) ([]byte, error) {
+func (f *fakeWarmRawTracker) ExportRegions(_ context.Context, _ string, creds *domain.TrackerCredential) ([]registry.PageRegion, error) {
 	f.called, f.gotCreds = true, creds
-	return []byte(f.page), nil
+	return []registry.PageRegion{{Name: "page", HTML: []byte(f.page)}}, nil
 }
 
 // TestDiagnosticsPage_RedactsTheUsernameEvenWhenLoginFails is F11 from the
@@ -255,12 +255,71 @@ func TestDiagnosticsPage_RedactsTheUsernameEvenWhenLoginFails(t *testing.T) {
 			if got["authenticated"] != tc.wantAuthd {
 				t.Errorf("authenticated = %v, want %v", got["authenticated"], tc.wantAuthd)
 			}
-			if want := `<span class="author">` + pageredact.Placeholder + `</span>`; got["html"] != want {
-				t.Errorf("html = %q, want %q", got["html"], want)
+			html, _ := got["html"].(string)
+			if want := `<span class="author">` + pageredact.Placeholder + `</span>`; !strings.Contains(html, want) {
+				t.Errorf("html = %q, want it to contain %q", html, want)
+			}
+			if strings.Contains(html, ">user<") {
+				t.Errorf("the username survived: %q", html)
 			}
 			if !tc.wantAuthd && tr.gotCreds != nil {
-				t.Error("a failed login must fetch anonymously; RawPage got a credential")
+				t.Error("a failed login must fetch anonymously; ExportRegions got a credential")
 			}
 		})
+	}
+}
+
+// TestBuildExport_SaysWhatIsMissing. A region the page did not have is the
+// most useful line in a report about a lost session — a guest page has no
+// torrent table — so it is named in the file rather than silently dropped.
+func TestBuildExport_SaysWhatIsMissing(t *testing.T) {
+	doc, meta, err := buildExport(exportHeader{tracker: "tapochek", url: "https://t.test/?t=1"},
+		[]registry.PageRegion{
+			{Name: "title", HTML: []byte("<title>x</title>")},
+			{Name: "torrent-table"},
+		}, "")
+	if err != nil {
+		t.Fatalf("buildExport: %v", err)
+	}
+	for _, want := range []string{
+		"<!-- region: title -->\n<title>x</title>\n",
+		"<!-- region: torrent-table: NOT FOUND on this page -->",
+		"Everything else on the page was left out on purpose.",
+	} {
+		if !strings.Contains(string(doc), want) {
+			t.Errorf("export is missing %q:\n%s", want, doc)
+		}
+	}
+	if len(meta) != 2 || !meta[0].Found || meta[1].Found {
+		t.Errorf("meta = %+v, want title found and torrent-table not", meta)
+	}
+}
+
+// TestBuildExport_RedactsTheHeader. The header carries the topic URL exactly
+// as the user stored it, and a URL copied from a browser can carry a session.
+func TestBuildExport_RedactsTheHeader(t *testing.T) {
+	doc, _, err := buildExport(exportHeader{
+		tracker: "tapochek", url: "https://t.test/viewtopic.php?t=1&sid=SYNTHETIC_SECRET",
+	}, nil, "")
+	if err != nil {
+		t.Fatalf("buildExport: %v", err)
+	}
+	if strings.Contains(string(doc), "SYNTHETIC_SECRET") {
+		t.Errorf("the session id in the stored URL reached the export:\n%s", doc)
+	}
+}
+
+// TestCommentSafe_CannotCloseTheHeaderComment. The URL is user-supplied and
+// only its prefix is validated, so it must not be able to end the comment it
+// is written into — including through a run of three dashes, which a single
+// ReplaceAll pass turns into `- --` and leaves closable.
+func TestCommentSafe_CannotCloseTheHeaderComment(t *testing.T) {
+	for _, in := range []string{
+		"https://t.test/?t=1--><script>x</script>",
+		"a---b", "a----b", "--!>", "-->",
+	} {
+		if got := commentSafe(in); strings.Contains(got, "--") {
+			t.Errorf("commentSafe(%q) = %q still contains --", in, got)
+		}
 	}
 }

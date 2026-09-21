@@ -173,27 +173,40 @@ type WithSearch interface {
 	Search(ctx context.Context, query string, creds *domain.TrackerCredential) ([]SearchResult, error)
 }
 
-// WithRawPage is an optional tracker capability: return the topic page
-// exactly as the plugin's own Check would read it — same session, same
-// headers, same character-set handling — so a user can attach it to a bug
-// report.
+// PageRegion is one part of a tracker page that the plugin's parser reads,
+// exactly as the tracker sent it. HTML is nil when the region was not found on
+// the page — which is itself evidence: a missing torrent table usually means a
+// lost session, not a changed template.
+type PageRegion struct {
+	Name string
+	HTML []byte
+}
+
+// WithPageExport is an optional tracker capability: fetch the topic page the
+// way Check does — same session, same active domain, same character-set
+// handling — and return the regions its parser reads, in page order, so a user
+// can attach them to a bug report.
 //
 // It exists because of issue #186, where a tracker served DIFFERENT markup to
 // an account that seeds the release than to one that does not. No amount of
-// checking from a maintainer's account could reproduce it, and the only thing
+// checking from a maintainer's account could reproduce it; the only thing
 // that could was the reporter's own bytes. Five days.
 //
-// Implementations must return the page a check sees, not a convenient
-// approximation: a plain GET that skips the plugin's decoding or session is
-// worse than nothing, because it looks like evidence and is not.
+// Regions, not the whole page. The first version exported the page, and the
+// redactor that has to make it safe to publish went through five review
+// rounds, each finding more: the page chrome — DOCTYPE, scripts, forms, the
+// hidden session fields, the username header — is where secrets live, and
+// "remove every secret from arbitrary HTML and change nothing else" has no
+// finish line. The parser never reads the chrome, so a bug in what it reads is
+// fully visible without it. Each region is still redacted as a backstop.
 //
-// The caller redacts before showing the result to anyone (see
-// internal/pageredact) — a login-gated page carries the session in its own
-// links. creds may be nil; the page then shows whatever a guest sees, which
-// is itself a useful thing for a report to say.
-type WithRawPage interface {
+// Implementations must return what a check sees, not a convenient
+// approximation: a plain GET that skips the plugin's decoding or session looks
+// like evidence and is not. creds may be nil; the regions are then whatever a
+// guest sees, and "not found" is a useful thing for a report to say.
+type WithPageExport interface {
 	Tracker
-	RawPage(ctx context.Context, rawURL string, creds *domain.TrackerCredential) ([]byte, error)
+	ExportRegions(ctx context.Context, rawURL string, creds *domain.TrackerCredential) ([]PageRegion, error)
 }
 
 // --- Client & Notifier interfaces ---------------------------------------

@@ -103,6 +103,22 @@ export function TopicDiagnosticsCard({ topic, onClose }: TopicDiagnosticsCardPro
               {!page.authenticated && ` · ${t("topics.diagnostics.anonymous")}`}
             </div>
 
+            {/* The file is not the whole page, and a reporter should know
+                that before attaching it — so say which parts are in it, and
+                which the page did not have. A missing region is evidence. */}
+            <div className="text-xs">
+              <div className="text-muted-foreground">{t("topics.diagnostics.includes")}</div>
+              <ul className="mt-1 space-y-0.5 font-mono">
+                {page.regions.map((r) => (
+                  <li key={r.name} className={r.found ? "" : "text-muted-foreground"}>
+                    {r.found
+                      ? `${r.name} · ${formatBytes(r.bytes)}`
+                      : `${r.name} · ${t("topics.diagnostics.notFound")}`}
+                  </li>
+                ))}
+              </ul>
+            </div>
+
             {/* Not a disclaimer to click past. Redaction removes the secrets
                 we know about on a page we do not control, so the honest thing
                 is to say what was removed and ask the reader to look. */}

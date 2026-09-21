@@ -143,10 +143,24 @@ func (r *redactor) tag(start, end int, open bool) {
 	var m mapped
 	m.identity(r.page, start, end)
 	r.recognize(&m, false)
+
+	// Each swallowed tag is lexed only up to the next `<letter`, so every byte
+	// is read a bounded number of times however many there are. Lexing each
+	// one to the end of the outer tag was quadratic — an unterminated quote
+	// followed by thousands of `<x` took 42 s on a 48 KB page, synchronously
+	// inside a request.
+	var inner []int
 	for i := start + 1; i < end-1; i++ {
 		if r.page[i] == '<' && isASCIILetter(r.page[i+1]) {
-			r.element(lexTag(r.page, i, end))
+			inner = append(inner, i)
 		}
+	}
+	for k, at := range inner {
+		limit := end
+		if k+1 < len(inner) {
+			limit = inner[k+1]
+		}
+		r.element(lexTag(r.page, at, limit))
 	}
 }
 

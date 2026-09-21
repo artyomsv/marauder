@@ -350,7 +350,17 @@ export interface TopicDiagnosticsPage {
   // The marker left behind wherever a secret was removed, so the UI can tell
   // the user what to look for instead of describing it in prose.
   redaction_mark: string;
+  // The parts of the page the parser reads, in page order. Only these are in
+  // the file; a region the page did not have is listed with found=false, which
+  // is itself evidence (a missing torrent table usually means a lost session).
+  regions: TopicExportRegion[];
   html: string;
+}
+
+export interface TopicExportRegion {
+  name: string;
+  found: boolean;
+  bytes: number;
 }
 
 // One event in the per-topic history timeline (GET /topics/{id}/events).
@@ -519,7 +529,7 @@ export type SystemInfo = {
     supports_interactive_login: boolean;
     supports_credentials: boolean;
     supports_search: boolean;
-    supports_raw_page: boolean;
+    supports_page_export: boolean;
   }[];
   clients: { name: string; display_name: string }[];
   notifiers: { name: string; display_name: string }[];

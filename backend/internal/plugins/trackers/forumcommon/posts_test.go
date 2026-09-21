@@ -196,3 +196,34 @@ func TestHTMLToText(t *testing.T) {
 		})
 	}
 }
+
+// TestTagBlockOuter keeps the element's own opening and closing tags. The
+// page export relies on it: the opening tag's attributes are evidence too —
+// the class that solved issue #186 sat on a <th>, and an inner-only slice of a
+// block would have dropped the tag carrying it.
+func TestTagBlockOuter(t *testing.T) {
+	openRe := regexp.MustCompile(`<div class="postbody"[^>]*>`)
+	tests := []struct {
+		name   string
+		html   string
+		want   string
+		wantOK bool
+	}{
+		{"keeps the opening tag byte for byte",
+			`before<div class="postbody" style="x">hello</div>after`,
+			`<div class="postbody" style="x">hello</div>`, true},
+		{"nested divs stay balanced",
+			`<div class="postbody"><div>inner</div>tail</div><div>next</div>`,
+			`<div class="postbody"><div>inner</div>tail</div>`, true},
+		{"not found", `<span>nothing here</span>`, "", false},
+		{"unbalanced returns not-ok", `<div class="postbody">never closed`, "", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := TagBlockOuter(tt.html, openRe, "div")
+			if ok != tt.wantOK || got != tt.want {
+				t.Errorf("TagBlockOuter() = %q, %v; want %q, %v", got, ok, tt.want, tt.wantOK)
+			}
+		})
+	}
+}

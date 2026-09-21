@@ -1,9 +1,12 @@
 package handlers
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -25,9 +28,10 @@ const diagnosticsPageTimeout = 30 * time.Second
 // DiagnosticsPage handles POST /topics/{id}/diagnostics/page.
 //
 // It re-fetches the topic's tracker page through the plugin's own Check path
-// — same session, same active domain, same character-set handling — redacts
-// the secrets out of it, and returns it for the user to attach to a bug
-// report.
+// — same session, same active domain, same character-set handling — keeps only
+// the regions the plugin's parser reads, redacts each, and returns them for
+// the user to attach to a bug report. See registry.WithPageExport for why it
+// is regions and not the whole page.
 //
 // This exists because issue #186 took five days and was finally solved by one
 // CSS class in one table cell. The tracker serves different markup to an
@@ -69,11 +73,11 @@ func (h *Topics) DiagnosticsPage(w http.ResponseWriter, r *http.Request) {
 			"no tracker plugin handles this topic's URL"))
 		return
 	}
-	raw, ok := tracker.(registry.WithRawPage)
+	exporter, ok := tracker.(registry.WithPageExport)
 	if !ok {
 		// 409, not 501: the endpoint exists and the request was well formed —
 		// this particular tracker just has not implemented the capability yet.
-		// The frontend hides the action using supports_raw_page from
+		// The frontend hides the action using supports_page_export from
 		// /system/info, so reaching this is a stale page rather than a bug.
 		problem.Write(w, r, h.BaseURL, problem.ErrConflict(
 			"this tracker cannot export its page yet"))
@@ -104,7 +108,7 @@ func (h *Topics) DiagnosticsPage(w http.ResponseWriter, r *http.Request) {
 	creds, _, _ := warmCredentials(ctx, h.Creds, h.Master, uid, tracker)
 	username := h.reporterUsername(ctx, uid, tracker.Name(), creds)
 
-	page, ferr := raw.RawPage(ctx, topic.URL, creds)
+	regions, ferr := exporter.ExportRegions(ctx, topic.URL, creds)
 	if ferr != nil {
 		// ErrBadGateway, not ErrInternal: the failure is the tracker's or the
 		// network's, and the detail is the whole point of the report.
@@ -112,12 +116,15 @@ func (h *Topics) DiagnosticsPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	redacted, rerr := pageredact.Redact(page, username)
+	fetchedAt := time.Now().UTC()
+	doc, meta, rerr := buildExport(exportHeader{
+		tracker: tracker.Name(), url: topic.URL, at: fetchedAt, signedIn: creds != nil,
+	}, regions, username)
 	if rerr != nil {
-		// Fail closed. The redactor only refuses when it could not examine the
-		// whole page, and returning what it did not examine would hand the user
-		// unchecked tracker bytes to publish. 422, not 500: nothing broke on
-		// our side, this particular page cannot be exported.
+		// Fail closed. The redactor only refuses when it could not examine a
+		// whole region, and returning what it did not examine would hand the
+		// user unchecked tracker bytes to publish. 422, not 500: nothing broke
+		// on our side, this particular page cannot be exported.
 		problem.Write(w, r, h.BaseURL, problem.ErrUnprocessable(
 			"this page could not be safely prepared for export, so nothing was returned"))
 		return
@@ -125,19 +132,97 @@ func (h *Topics) DiagnosticsPage(w http.ResponseWriter, r *http.Request) {
 
 	if h.Audit != nil {
 		h.Audit.Generic(&uid, "topic_diagnostics_page", "topic", id.String(), "success",
-			map[string]any{"tracker": tracker.Name(), "bytes": len(redacted)})
+			map[string]any{"tracker": tracker.Name(), "bytes": len(doc)})
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"tracker":        tracker.Name(),
 		"url":            topic.URL,
 		"authenticated":  creds != nil,
-		"bytes":          len(redacted),
-		"fetched_at":     time.Now().UTC(),
+		"bytes":          len(doc),
+		"fetched_at":     fetchedAt,
 		"redacted":       true,
 		"redaction_mark": pageredact.Placeholder,
-		"html":           string(redacted),
+		"regions":        meta,
+		"html":           string(doc),
 	})
+}
+
+// exportedRegion is what the card shows about each region.
+type exportedRegion struct {
+	Name  string `json:"name"`
+	Found bool   `json:"found"`
+	Bytes int    `json:"bytes"`
+}
+
+type exportHeader struct {
+	tracker, url string
+	at           time.Time
+	signedIn     bool
+}
+
+// buildExport assembles the file the user downloads: a header saying what it
+// is and what was deliberately left out, then each region under a marker,
+// each redacted on its own. Separate redaction is on purpose — a malformed
+// region must not be able to affect how the next one is read.
+//
+// The header is redacted too. It carries the topic URL exactly as the user
+// stored it, and a URL pasted from a browser can carry a session id.
+func buildExport(h exportHeader, regions []registry.PageRegion, username string) ([]byte, []exportedRegion, error) {
+	signedIn := "no — this is what a guest sees"
+	if h.signedIn {
+		signedIn = "yes"
+	}
+	header := fmt.Sprintf("<!--\n"+
+		"  Marauder page export\n"+
+		"  tracker:   %s\n"+
+		"  topic:     %s\n"+
+		"  fetched:   %s\n"+
+		"  signed in: %s\n\n"+
+		"  Only the parts of the page this tracker's parser reads are included,\n"+
+		"  each byte for byte as the tracker sent it, with secrets replaced by\n"+
+		"  %s. Everything else on the page was left out on purpose.\n"+
+		"-->\n",
+		commentSafe(h.tracker), commentSafe(h.url), h.at.Format(time.RFC3339),
+		signedIn, pageredact.Placeholder)
+
+	var b bytes.Buffer
+	head, err := pageredact.Redact([]byte(header), username)
+	if err != nil {
+		return nil, nil, err
+	}
+	b.Write(head)
+
+	meta := make([]exportedRegion, 0, len(regions))
+	for _, r := range regions {
+		name := commentSafe(r.Name)
+		if r.HTML == nil {
+			fmt.Fprintf(&b, "\n<!-- region: %s: NOT FOUND on this page -->\n", name)
+			meta = append(meta, exportedRegion{Name: r.Name})
+			continue
+		}
+		red, err := pageredact.Redact(r.HTML, username)
+		if err != nil {
+			return nil, nil, err
+		}
+		fmt.Fprintf(&b, "\n<!-- region: %s -->\n", name)
+		b.Write(red)
+		b.WriteByte('\n')
+		meta = append(meta, exportedRegion{Name: r.Name, Found: true, Bytes: len(red)})
+	}
+	return b.Bytes(), meta, nil
+}
+
+// commentSafe keeps a value from closing the HTML comment it is written into.
+// The topic URL is user-supplied and only its prefix is validated, so a stored
+// `…?t=1--><script>` would otherwise break out of the header of a file the
+// user then opens in a browser. It loops because one pass is not enough:
+// ReplaceAll turns `---` into `- --`, which still closes a comment.
+func commentSafe(s string) string {
+	for strings.Contains(s, "--") {
+		s = strings.ReplaceAll(s, "--", "- -")
+	}
+	return s
 }
 
 // reporterUsername returns the tracker account name to redact from the page.

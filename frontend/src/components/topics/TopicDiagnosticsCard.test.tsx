@@ -16,6 +16,11 @@ const page: TopicDiagnosticsPage = {
   fetched_at: "2026-09-21T15:00:00Z",
   redacted: true,
   redaction_mark: "MARAUDER-REDACTED",
+  regions: [
+    { name: "title", found: true, bytes: 120 },
+    { name: "torrent-table", found: true, bytes: 2966 },
+    { name: "opening-post", found: false, bytes: 0 },
+  ],
   html: "<th class=\"seedmed\">Some.Release.torrent</th>",
 };
 
@@ -59,6 +64,18 @@ describe("TopicDiagnosticsCard", () => {
     // it in public.
     expect(await screen.findByText(/skim the file before you post it/i)).toBeInTheDocument();
     expect(screen.getByText("MARAUDER-REDACTED")).toBeInTheDocument();
+  });
+
+  it("lists which parts of the page are in the file, including missing ones", async () => {
+    vi.spyOn(api, "topicDiagnosticsPage").mockResolvedValue(page);
+    renderCard();
+    await userEvent.click(screen.getByRole("button", { name: /fetch page/i }));
+
+    // The file is not the whole page. A reporter must know that before
+    // attaching it, and a region the page did not have is evidence in itself.
+    expect(await screen.findByText(/contains only these parts/i)).toBeInTheDocument();
+    expect(screen.getByText("torrent-table · 3 KB")).toBeInTheDocument();
+    expect(screen.getByText("opening-post · not on this page")).toBeInTheDocument();
   });
 
   it("says so when the page was fetched without an account", async () => {

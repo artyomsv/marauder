@@ -805,23 +805,47 @@ func (p *plugin) gateError(creds *domain.TrackerCredential, fallback error) erro
 
 var _ registry.WithMetadata = (*plugin)(nil)
 
-// --- WithRawPage --------------------------------------------------------
+// --- WithPageExport -----------------------------------------------------
 
-var _ registry.WithRawPage = (*plugin)(nil)
+var _ registry.WithPageExport = (*plugin)(nil)
 
-// RawPage returns the topic page exactly as Check reads it.
+// ExportRegions returns the three parts of the topic page this plugin's
+// parser reads — the title, the torrent table and the opening post — each as
+// the WHOLE element, opening tag included, byte for byte. Those are exactly the
+// inputs to Check (title, change token), Download (filename) and
+// ResolveMetadata (poster), so any bug in reading them is visible here; issue
+// #186 lived on the torrent table's header cell, and #191's poster bug in the
+// opening post.
 //
-// It routes through canonicalURL and fetchPage rather than doing its own GET,
-// which is the whole point: the active domain, the session, the redirect
-// guard and the windows-1251 decode are all part of "what the checker saw",
-// and a page collected without them would be evidence of nothing. The caller
-// redacts the result before anyone sees it.
-func (p *plugin) RawPage(ctx context.Context, rawURL string, creds *domain.TrackerCredential) ([]byte, error) {
+// It routes through canonicalURL and fetchPage rather than its own GET: the
+// active domain, the session, the redirect guard and the windows-1251 decode
+// are all part of "what the checker saw".
+func (p *plugin) ExportRegions(ctx context.Context, rawURL string, creds *domain.TrackerCredential) ([]registry.PageRegion, error) {
 	target, err := p.canonicalURL(rawURL)
 	if err != nil {
 		return nil, err
 	}
-	return p.fetchPage(ctx, target, creds)
+	page, err := p.fetchPage(ctx, target, creds)
+	if err != nil {
+		return nil, err
+	}
+	s := string(page)
+	var title []byte
+	if loc := titleRe.FindStringIndex(s); loc != nil {
+		title = page[loc[0]:loc[1]]
+	}
+	return []registry.PageRegion{
+		{Name: "title", HTML: title},
+		{Name: "torrent-table", HTML: outerBlock(s, torrentBlockOpenRe, "table")},
+		{Name: "opening-post", HTML: outerBlock(s, firstPostOpenRe, "div")},
+	}, nil
+}
+
+func outerBlock(s string, openRe *regexp.Regexp, tag string) []byte {
+	if b, ok := forumcommon.TagBlockOuter(s, openRe, tag); ok {
+		return []byte(b)
+	}
+	return nil
 }
 
 // ResolveMetadata returns the release title and cover so a new topic shows a

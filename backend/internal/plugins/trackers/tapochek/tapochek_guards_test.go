@@ -1153,11 +1153,12 @@ func TestFileName_IgnoresAnUnclassedHeaderCellThatNamesNoAttachment(t *testing.T
 	}
 }
 
-// TestRawPage_ReturnsWhatCheckReads. A page collected for a bug report is only
-// evidence if it is the page the CHECKER saw: same session, same active
-// domain, same windows-1251 decode. A convenient plain GET would look like
-// evidence and be something else.
-func TestRawPage_ReturnsWhatCheckReads(t *testing.T) {
+// TestExportRegions_ReturnsWhatTheParserReads. The page export is only
+// evidence if each region is exactly what Check, Download and ResolveMetadata
+// read: same session, same active domain, same windows-1251 decode, and the
+// WHOLE element — the class that solved issue #186 sat on a header cell, and
+// the opening tag of a block is part of what a template can change.
+func TestExportRegions_ReturnsWhatTheParserReads(t *testing.T) {
 	body, eerr := encoding.ReplaceUnsupported(charmap.Windows1251.NewEncoder()).Bytes([]byte(fixtureSeriesTopicHTML))
 	if eerr != nil {
 		t.Fatalf("encode fixture: %v", eerr)
@@ -1170,20 +1171,68 @@ func TestRawPage_ReturnsWhatCheckReads(t *testing.T) {
 	if err := p.Login(context.Background(), creds); err != nil {
 		t.Fatalf("Login: %v", err)
 	}
-	page, err := p.RawPage(context.Background(),
+	regions, err := p.ExportRegions(context.Background(),
 		"https://tapochek.net/viewtopic.php?t=288010", creds)
 	if err != nil {
-		t.Fatalf("RawPage: %v", err)
+		t.Fatalf("ExportRegions: %v", err)
 	}
-	// Decoded, not raw cp1251 bytes: an undecoded page would send the reporter
-	// mojibake and hide the Cyrillic labels the parser anchors on.
-	if !bytes.Contains(page, []byte("Размер:")) {
-		t.Error("RawPage did not transcode the page; the Cyrillic labels are unreadable")
+	got := map[string]string{}
+	var order []string
+	for _, r := range regions {
+		got[r.Name] = string(r.HTML)
+		order = append(order, r.Name)
+	}
+	if want := []string{"title", "torrent-table", "opening-post"}; !slices.Equal(order, want) {
+		t.Fatalf("regions = %v, want %v in page order", order, want)
+	}
+	if !strings.HasPrefix(got["title"], "<title>") || !strings.HasSuffix(got["title"], "</title>") {
+		t.Errorf("title region is not the whole element: %q", got["title"])
+	}
+	// The whole table, opening tag included, and decoded — the Cyrillic labels
+	// the parser anchors on must be readable, not cp1251 bytes.
+	if !strings.HasPrefix(got["torrent-table"], `<table class="attach bordered med">`) ||
+		!strings.HasSuffix(got["torrent-table"], "</table>") {
+		t.Errorf("torrent-table is not the whole element: %.80q…", got["torrent-table"])
+	}
+	if !strings.Contains(got["torrent-table"], "Размер:") {
+		t.Error("torrent-table was not transcoded; the Cyrillic labels are unreadable")
 	}
 	// The same bytes Check parses, so a report and a failure describe one page.
-	if block, ok := torrentBlock(page); !ok {
-		t.Error("RawPage returned a page Check cannot find a torrent block in")
+	if block, ok := torrentBlock([]byte(got["torrent-table"])); !ok {
+		t.Error("the exported table is not one torrentBlock can read")
 	} else if _, missing := fingerprintParts(block); len(missing) > 0 {
-		t.Errorf("RawPage's page is missing %v — it is not what Check reads", missing)
+		t.Errorf("exported table is missing %v — it is not what Check reads", missing)
+	}
+	if !strings.HasPrefix(got["opening-post"], `<div class="post_body">`) ||
+		!strings.Contains(got["opening-post"], `class="poster"`) {
+		t.Errorf("opening-post is not the whole post with its cover: %.80q…", got["opening-post"])
+	}
+	// Nothing outside the three regions is exported.
+	for _, region := range got {
+		if strings.Contains(region, "charset=windows-1251") {
+			t.Error("page chrome (the <meta> in <head>) leaked into a region")
+		}
+	}
+}
+
+// TestExportRegions_ReportsARegionItCannotFind. A guest page has no torrent
+// table; saying so is the most useful line in a report about a lost session,
+// so a missing region is returned empty rather than dropped.
+func TestExportRegions_ReportsARegionItCannotFind(t *testing.T) {
+	p := newTestPlugin(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(fixtureGuestHTML))
+	})
+	regions, err := p.ExportRegions(context.Background(),
+		"https://tapochek.net/viewtopic.php?t=288010", nil)
+	if err != nil {
+		t.Fatalf("ExportRegions: %v", err)
+	}
+	if len(regions) != 3 {
+		t.Fatalf("got %d regions, want all 3 named even when absent", len(regions))
+	}
+	for _, r := range regions {
+		if r.Name == "torrent-table" && r.HTML != nil {
+			t.Errorf("guest page has no torrent table, got %q", r.HTML)
+		}
 	}
 }

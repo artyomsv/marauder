@@ -46,7 +46,7 @@ export interface TopicRowActions {
   onEdit: () => void;
   onRecheck: () => void;
   // Export the tracker page for a bug report. Undefined when the topic's
-  // tracker has no WithRawPage implementation, which hides the menu item
+  // tracker has no WithPageExport implementation, which hides the menu item
   // rather than offering a control that can only 409.
   onDiagnostics?: () => void;
   onReset: () => void;

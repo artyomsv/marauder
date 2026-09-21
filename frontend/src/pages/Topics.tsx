@@ -132,9 +132,9 @@ export function TopicsPage() {
 
   // Trackers that can export the page a check reads. Anything else hides the
   // menu item rather than offering a control that can only fail.
-  const rawPageTrackers = new Set(
+  const exportTrackers = new Set(
     (systemInfo.data?.trackers ?? [])
-      .filter((tr) => tr.supports_raw_page)
+      .filter((tr) => tr.supports_page_export)
       .map((tr) => tr.name),
   );
 
@@ -258,7 +258,7 @@ export function TopicsPage() {
                     onEdit: () => setEditing(t),
                     onRecheck: () => recheck.mutate(t.ID),
                     onReset: () => setResetting([t]),
-                    onDiagnostics: rawPageTrackers.has(t.TrackerName)
+                    onDiagnostics: exportTrackers.has(t.TrackerName)
                       ? () => setDiagnosing(t)
                       : undefined,
                     onDelete: () => del.mutate(t.ID),
