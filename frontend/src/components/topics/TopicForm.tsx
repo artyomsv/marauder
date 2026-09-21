@@ -37,12 +37,25 @@ interface ClientOption {
   is_default: boolean;
 }
 
-interface NotifierDefault {
+// Minimal shape of a configured notifier as GET /notifiers returns it. events
+// is nullable because the backend serialises an unset subscription as null.
+interface NotifierSubscription {
+  id: string;
   is_default: boolean;
+  events: string[] | null;
 }
 
 interface NotifiersList {
-  notifiers: NotifierDefault[] | null;
+  notifiers: NotifierSubscription[] | null;
+}
+
+// A notify-only topic emits exactly one notifiable event: release.found. A
+// notifier only hears it when it subscribes to that type, to the legacy
+// "updated" keyword the backend dispatcher expands to it, or to nothing at
+// all — an empty list means "every event" there.
+function hearsReleases(n: NotifierSubscription): boolean {
+  if (!n.events || n.events.length === 0) return true;
+  return n.events.some((e) => e === "release.found" || e === "updated");
 }
 
 // The mutable fields the user edits. Grouped into one object so the form
@@ -116,7 +129,8 @@ export function TopicForm({
   });
   const clients = clientsQuery.data?.clients ?? [];
 
-  // Share NotifierSelect's cached list to check whether a default exists.
+  // Share NotifierSelect's cached list so we can tell the user, before they
+  // save, that this topic would never reach anyone.
   const notifiersQuery = useQuery({
     queryKey: QK.notifiers,
     queryFn: () => api.get<NotifiersList>("/notifiers"),
@@ -241,6 +255,15 @@ export function TopicForm({
     notifyOnly: initial.notifyOnly,
     notifyOnlyAnnounceCurrent: initial.notifyOnlyAnnounceCurrent,
   });
+
+  // A notify-only topic whose events reach nobody is a topic that silently
+  // does nothing. An explicitly picked notifier replaces the defaults, so it
+  // is the only one to inspect; otherwise the topic reaches the defaults.
+  // Either way the question is the same — will anything that receives this
+  // topic's events actually hear about a new release?
+  const willBeSilent = delivery.notifierId
+    ? !notifiers.some((n) => n.id === delivery.notifierId && hearsReleases(n))
+    : !notifiers.some((n) => n.is_default && hearsReleases(n));
 
   // The category combobox suggests the categories of whichever client will
   // actually receive the topic: the one picked in the form, or the user's
@@ -425,16 +448,14 @@ export function TopicForm({
         )}
       </div>
 
-      {delivery.notifyOnly &&
-        notifiersLoaded &&
-        !delivery.notifierId &&
-        !notifiers.some((n) => n.is_default) && (
-          <p className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-400">
-            This topic has no notifier and there is no default notifier, so it
-            will be checked silently and you will never hear about it. Pick a
-            notifier below, or mark one as default on the Notifiers page.
-          </p>
-        )}
+      {delivery.notifyOnly && notifiersLoaded && willBeSilent && (
+        <p className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-400">
+          This topic has no notifier that is subscribed to new releases, so it
+          will be checked silently and you will never hear about it. Pick a
+          notifier below that receives new releases, or mark one as default on
+          the Notifiers page.
+        </p>
+      )}
 
       {isEdit && initial.notifyOnly && !delivery.notifyOnly && (
         <p className="rounded-md border border-border/60 bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
