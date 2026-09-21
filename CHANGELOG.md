@@ -11,15 +11,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **A "Report page HTML" action on each topic**, for when a tracker parses
   fine for one person and not another. It re-fetches that tracker page the way
-  a check reads it, removes session ids, keys and your tracker username, and
-  offers it as a download to attach to a bug report. Field values are matched
-  by name at word boundaries and every HTML attribute spelling is read, so a
-  token cannot hide behind single quotes or a reversed attribute order.
+  a check reads it and offers it as a download to attach to a bug report.
   Issue #186 took five days because the only copy of the page that showed
   the bug was the reporter's, and they had to find it by hand in 110 KB of
   markup. Tapochek only for now; the action is hidden for trackers that
-  cannot export their page yet. The file is redacted, not guaranteed clean —
-  the UI says so and asks you to skim it.
+  cannot export their page yet.
+
+  Before the file reaches you, session ids, login and form tokens, API keys,
+  echoed cookies and your tracker username are replaced with
+  `MARAUDER-REDACTED` — including when they are written in character
+  references, split by formatting markup, or sit in a script. Everything else
+  is left byte-for-byte as the tracker sent it, because the markup is the
+  evidence. Your username is removed even if the tracker login fails. A page
+  that cannot be fully examined is refused rather than returned. The file is
+  redacted, not guaranteed clean: the UI says so and asks you to skim it.
 
 ## [1.20.3] - 2026-09-22
 

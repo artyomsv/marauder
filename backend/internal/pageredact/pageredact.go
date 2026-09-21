@@ -11,19 +11,53 @@
 //
 // The contract has two halves and both matter:
 //
-//   - No secret survives.
-//   - Everything else is byte-identical. Tags, classes, attributes and text
-//     are what the report is FOR; a redactor that reformats the page destroys
-//     the evidence it was collected to preserve.
+//   - No known secret survives.
+//   - Every other byte is untouched. Tags, classes, attributes, quotes,
+//     whitespace and character-reference spellings are what the report is FOR;
+//     a redactor that reformats the page destroys the evidence it collects.
 //
-// Redaction is best-effort by nature: it removes what we know to be secret,
-// on a public page a reporter could have viewed anyway. It is a seatbelt, not
-// a guarantee, and the UI says so rather than promising the file is clean.
+// # Why this is not a set of regular expressions
+//
+// It was, for three review rounds, and each round's fix opened the next hole:
+// a pattern that required `name` before `value` leaked the reversed order; a
+// quote-aware scan let an unterminated quote swallow the following tag;
+// bounding quoted runs at `<` then broke `title="1 < 2"`. An independent review
+// then found eleven more, each with an exact input. HTML's lexical rules —
+// quoting, comments, raw text, character references — are not something a
+// pattern learns one bug at a time.
+//
+// So the page is tokenised with golang.org/x/net/html, but ONLY to learn where
+// each token starts and ends and what kind it is. The page is never parsed into
+// a tree and never re-serialised: rendering lowercases tags, re-quotes
+// attributes and re-encodes entities, which is exactly the evidence this
+// package must not touch. Every decision is recorded as a replacement of a byte
+// span in the ORIGINAL page, and everything outside those spans is copied
+// through unchanged.
+//
+// Classification happens on DECODED text, so `form_to&#107;en` is recognised
+// as `form_token`; and every decoded byte remembers the source bytes it came
+// from, so a replacement always lands on the original spelling.
+//
+// # Ambiguity
+//
+// A malformed tag is redacted conservatively rather than refused. A tag with a
+// duplicated attribute, a quote inside an attribute name, or no closing `>` is
+// scanned a second time as raw text and for any tags it may have swallowed;
+// and a duplicated `name` attribute marks a credential field if ANY of its
+// values is one, even where a browser would honour only the first. A public
+// source file carries every copy, so the browser's choice is not the one that
+// matters here. Redaction is still best-effort on a page nobody here controls;
+// the UI says so and asks the user to skim the file.
 package pageredact
 
 import (
-	"regexp"
+	"bytes"
+	"errors"
+	"fmt"
+	"io"
 	"strings"
+
+	"golang.org/x/net/html"
 )
 
 // Placeholder replaces every redacted value. It is deliberately loud and
@@ -32,181 +66,186 @@ import (
 // wondering whether the tracker served an empty attribute.
 const Placeholder = "MARAUDER-REDACTED"
 
-// secretParams are query-string parameters whose value authenticates the
-// caller. Matching the NAME rather than the value shape is what keeps this
-// honest: a session id and a topic id are both hex, and only the name says
-// which is which.
-//
-// `sid` is phpBB's session id and is the one that started this package. `uk`
-// is the persistent-login key on the bb_data family of trackers — presenting
-// it signs in WITHOUT the password. The rest are the usual names trackers use
-// for per-account RSS and download keys.
-var secretParams = regexp.MustCompile(
-	`(?i)\b(sid|uk|passkey|pid|auth_key|authkey|apikey|api_key|token|access_token|secret|key)=[^"'&<>\s;]+`)
-
-// inputTagRe finds every <input> tag. Deciding which of them carries a
-// credential is done by reading the tag's ATTRIBUTES, not by a single pattern
-// that also has to express attribute order and quoting.
-//
-// The single-pattern version was wrong in both directions at once. It required
-// `name` before `value` and double quotes on both, so
-// `<input value='x' name='form_token'>` — valid markup either way round, and
-// what some templates emit — kept the credential and shipped it in a file the
-// user was being invited to post publicly. And it matched the secret words as
-// bare substrings, so `author`, `keywords`, `monkey` and `consideration` were
-// all blanked (`auth`, `key`, `sid`), destroying the very markup the export
-// exists to carry.
-// The scan is quote-aware, and every alternative stops at `<`.
-//
-// Quote-aware because a quoted attribute value may legally contain `>`, and
-// `<input\b[^>]*>` stops at the first one — truncating the tag before its
-// value is reached, so `<input name="form_token" value="s3cr3t>x">` shipped
-// the credential. The quoted alternatives come FIRST so a `>` inside quotes is
-// part of the value.
-//
-// Bounded at `<` because the first quote-aware version was worse than the bug
-// it fixed. An UNTERMINATED quote paired with a quote in a LATER tag, so two
-// tags matched as one; attrValue then read the harmless first tag's name, the
-// match was classified as ordinary, and a credential in the second tag rode
-// out untouched. One malformed tag may cost its own value. It must never cost
-// the next tag's.
-//
-// `[^><]` last also makes the pattern degrade to the plain scan inside a
-// malformed tag rather than failing to match it at all — failing to match is
-// failing open on a secret.
-//
-// The closing `>` is optional for the same reason. fetchPage caps a response
-// at maxBodyBytes, so an oversized page arrives cut mid-tag; requiring the `>`
-// would match nothing there and ship whatever the final half-written tag was
-// carrying. It costs nothing on a well-formed tag: `[^><]` cannot eat a `>`,
-// so the greedy run stops in front of it either way.
-var inputTagRe = regexp.MustCompile(`(?is)<input\b(?:"[^"<]*"|'[^'<]*'|[^><])*>?`)
-
-// attrRe reads one attribute. All three HTML spellings are accepted —
-// double-quoted, single-quoted, and unquoted — because a redactor that only
-// understands the tidy one fails open on a credential.
-var attrRe = regexp.MustCompile(`(?is)\b([a-z_:][-\w:.]*)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))`)
-
-// valueAttrRe locates the value attribute inside one tag so only its content
-// is replaced. The delimiter is preserved (see redactValueAttr): swapping
-// quotes or adding them to an unquoted attribute is a markup edit, and markup
-// is the evidence.
-// The last two alternatives catch an unterminated quote. They run to the end
-// of the tag and so rewrite a little more than the value — which is a markup
-// change, and normally forbidden here. It is allowed only on this branch
-// because the alternative is shipping a credential: the tag was already
-// malformed, and a mangled attribute in a diagnostic file costs less than the
-// reporter's account.
-var valueAttrRe = regexp.MustCompile(`(?is)\bvalue\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'>]+|"[^"]*|'[^']*)`)
-
-// secretNameRe matches a field name that carries a credential. The words are
-// matched at non-letter boundaries, not as substrings, which is what keeps
-// `author`, `keywords`, `monkey` and `consideration` intact while still
-// catching `form_token`, `csrf-token`, `session_key` and a bare `sid`.
-//
-// A form token is as good as a session for anything that accepts it, and
-// unlike a session id it travels in markup rather than in a URL.
-var secretNameRe = regexp.MustCompile(
-	`(?i)(^|[^a-z])(sid|uk|csrf|xsrf|nonce|token|passkey|apikey|secret|session|key|auth|password|passwd|pwd)([^a-z]|$)`)
-
-// cookieLines matches a Cookie header echoed into the page — some forum
-// templates dump the request when debugging is left on. One line here is the
-// whole session.
-var cookieLines = regexp.MustCompile(`(?i)(Cookie:\s*)[^<\n\r]+`)
+// ErrUnsafe is returned when the page could not be covered completely. It
+// never fires on an ordinary malformed page — those are redacted
+// conservatively — but the only alternative to refusing is returning bytes
+// that were never examined, and for a file the user is about to publish that
+// is a credential leak.
+var ErrUnsafe = errors.New("pageredact: the page could not be safely prepared for export")
 
 // Redact returns page with every known secret replaced by Placeholder.
 //
 // username is the reporter's own tracker account name, redacted so a bug
-// report does not out which account they use; the page prints it in the
-// header bar. It is optional — credential warming degrades to nil on any
-// failure — and an empty string redacts no name rather than matching
-// everywhere.
+// report does not out which account they use. It is optional; an empty string
+// redacts no name rather than matching everywhere.
 //
 // The returned slice is a new allocation; page is not modified.
-func Redact(page []byte, username string) []byte {
+func Redact(page []byte, username string) ([]byte, error) {
 	if len(page) == 0 {
-		return page
+		return page, nil
 	}
-	s := string(page)
-	s = secretParams.ReplaceAllStringFunc(s, func(m string) string {
-		name, _, _ := strings.Cut(m, "=")
-		return name + "=" + Placeholder
-	})
-	s = redactInputs(s)
-	s = cookieLines.ReplaceAllString(s, "${1}"+Placeholder)
-	s = redactUsername(s, username)
-	return []byte(s)
+	r := &redactor{page: page, name: strings.TrimSpace(username)}
+	if err := r.scan(); err != nil {
+		return nil, err
+	}
+	return r.edits.apply(page), nil
 }
 
-// redactInputs blanks the value of every <input> whose name carries a
-// credential, leaving every other input — and the rest of the tag — untouched.
-//
-// It deliberately does NOT require type="hidden". The attribute is optional,
-// a template is free to carry a token in a visible field, and the cost of the
-// two mistakes is not symmetric: a needlessly blanked value loses one
-// attribute from a diagnostic file, while a missed one hands the reporter's
-// account to everyone who reads the bug report.
-func redactInputs(s string) string {
-	return inputTagRe.ReplaceAllStringFunc(s, func(tag string) string {
-		if !secretNameRe.MatchString(attrValue(tag, "name")) {
-			return tag
-		}
-		return valueAttrRe.ReplaceAllStringFunc(tag, redactValueAttr)
-	})
+type redactor struct {
+	page  []byte
+	name  string
+	edits editList
+	// stream is the page's text since the last block boundary. Inline
+	// formatting markup does not end it, so `Cookie: <b>session=…</b>` is
+	// still read as one line.
+	stream mapped
 }
 
-// attrValue returns the named attribute's value from one tag, or "".
-func attrValue(tag, want string) string {
-	for _, m := range attrRe.FindAllStringSubmatch(tag, -1) {
-		if !strings.EqualFold(m[1], want) {
-			continue
-		}
-		for _, v := range m[2:] {
-			if v != "" {
-				return v
+// scan walks the token stream and records edits. Only each token's length
+// and kind are taken from the tokenizer; content is always read from the
+// original page by offset, so nothing depends on the tokenizer's buffer.
+func (r *redactor) scan() error {
+	z := html.NewTokenizer(bytes.NewReader(r.page))
+	off := 0
+	textMode := ""
+	for {
+		tt := z.Next()
+		start := off
+		off += len(z.Raw())
+		switch tt {
+		case html.ErrorToken:
+			return r.finish(z.Err(), start, off)
+		case html.TextToken:
+			r.text(start, off, textMode)
+			continue // raw-text content may arrive in several tokens
+		case html.StartTagToken, html.SelfClosingTagToken:
+			name, _ := z.TagName()
+			r.boundary(string(name))
+			r.tag(start, off, false)
+			textMode = ""
+			if tt == html.StartTagToken {
+				textMode = rawTextMode[string(name)]
 			}
+			continue
+		case html.EndTagToken:
+			name, _ := z.TagName()
+			r.boundary(string(name))
+		case html.CommentToken:
+			r.flush()
+			r.isolated(start, off, false)
+		default: // doctype
+			r.flush()
 		}
-		return ""
+		textMode = ""
 	}
-	return ""
 }
 
-// redactValueAttr replaces one `value=...` attribute's content, keeping its
-// delimiter and the spacing around the `=` exactly as the page wrote them.
-func redactValueAttr(attr string) string {
-	eq := strings.Index(attr, "=")
-	if eq < 0 {
-		return attr
+// finish handles the tokenizer's final token. At EOF its raw bytes are
+// whatever the page ended inside — most importantly a tag cut off before its
+// `>`. Those bytes are examined: never dropped, never copied unexamined.
+func (r *redactor) finish(err error, start, end int) error {
+	if err != io.EOF {
+		return fmt.Errorf("%w: %v", ErrUnsafe, err)
 	}
-	head, rest := attr[:eq+1], attr[eq+1:]
-	trimmed := strings.TrimLeft(rest, " \t\r\n")
-	pad := rest[:len(rest)-len(trimmed)]
+	if start < end {
+		r.tail(start, end)
+	}
+	r.flush()
+	if end != len(r.page) {
+		return fmt.Errorf("%w: tokens covered %d of %d bytes", ErrUnsafe, end, len(r.page))
+	}
+	return nil
+}
+
+func (r *redactor) tail(start, end int) {
 	switch {
-	case strings.HasPrefix(trimmed, `"`):
-		return head + pad + `"` + Placeholder + `"`
-	case strings.HasPrefix(trimmed, `'`):
-		return head + pad + `'` + Placeholder + `'`
+	case r.page[start] == '<' && start+1 < end && isASCIILetter(r.page[start+1]):
+		r.flush()
+		r.tag(start, end, true)
+	case r.page[start] == '<':
+		r.flush()
+		r.isolated(start, end, false)
 	default:
-		return head + pad + Placeholder
+		r.stream.decode(r.page, start, end, false)
 	}
 }
 
-// redactUsername replaces whole-word occurrences of name, case-insensitively.
-//
-// Whole-word is the point: a substring replace on a short account name would
-// corrupt unrelated text all over the page, and a corrupted page is a useless
-// report. regexp.QuoteMeta because an account name is user input and may
-// contain regex metacharacters.
-func redactUsername(s, name string) string {
-	name = strings.TrimSpace(name)
-	if name == "" {
-		return s
+// text routes one Text token. Script-like content is raw — character
+// references are NOT decoded there, per HTML — while textarea and title
+// decode them. Both are read in isolation, so a secret inside cannot pair with
+// prose outside.
+func (r *redactor) text(start, end int, mode string) {
+	switch mode {
+	case "raw":
+		r.flush()
+		r.isolated(start, end, false)
+	case "rcdata":
+		r.flush()
+		r.isolated(start, end, true)
+	default:
+		r.stream.decode(r.page, start, end, false)
 	}
-	re, err := regexp.Compile(`(?i)\b` + regexp.QuoteMeta(name) + `\b`)
-	if err != nil {
-		// A name that will not compile even quoted is not worth failing the
-		// whole redaction over — every other rule has already run.
-		return s
-	}
-	return re.ReplaceAllString(s, Placeholder)
 }
+
+func (r *redactor) boundary(tag string) {
+	if !inlineTags[tag] {
+		r.flush()
+	}
+}
+
+func (r *redactor) flush() {
+	r.recognize(&r.stream, true)
+	r.stream = mapped{}
+}
+
+func (r *redactor) isolated(start, end int, decode bool) {
+	var m mapped
+	if decode {
+		m.decode(r.page, start, end, false)
+	} else {
+		m.identity(r.page, start, end)
+	}
+	r.recognize(&m, true)
+}
+
+// recognize runs every text-level detector over m and records what they find.
+// withName is false where the text may be markup, so the username can never
+// rewrite a tag or attribute name.
+func (r *redactor) recognize(m *mapped, withName bool) {
+	if m.text.Len() == 0 {
+		return
+	}
+	s := m.text.String()
+	emit := func(ds, de int) { r.edits.replaceAll(m.sourceOf(ds, de)) }
+	scanQueryParams(s, emit)
+	scanAssignments(s, emit)
+	scanHeaders(s, emit)
+	if withName {
+		scanName(s, r.name, emit)
+	}
+}
+
+// rawTextMode lists the elements whose content the tokenizer returns as text
+// rather than markup, and whether character references inside are decoded
+// ("rcdata") or not ("raw").
+var rawTextMode = map[string]string{
+	"script": "raw", "style": "raw", "xmp": "raw", "iframe": "raw",
+	"noembed": "raw", "noframes": "raw", "noscript": "raw", "plaintext": "raw",
+	"textarea": "rcdata", "title": "rcdata",
+}
+
+// inlineTags do not end a line of text. Anything else does, which keeps a
+// value in one table cell from being read as continuing into the next.
+var inlineTags = setOf("a", "abbr", "b", "bdi", "bdo", "big", "cite", "code",
+	"data", "dfn", "em", "font", "i", "kbd", "mark", "nobr", "q", "s", "samp",
+	"small", "span", "strike", "strong", "sub", "sup", "time", "tt", "u", "var")
+
+func setOf(names ...string) map[string]bool {
+	m := make(map[string]bool, len(names))
+	for _, n := range names {
+		m[n] = true
+	}
+	return m
+}
+
+func isASCIILetter(c byte) bool { return c|0x20 >= 'a' && c|0x20 <= 'z' }

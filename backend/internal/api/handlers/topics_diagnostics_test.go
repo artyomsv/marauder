@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -188,5 +189,78 @@ func TestDiagnosticsPage_SecondCallWhileRunningIs429(t *testing.T) {
 	h.DiagnosticsPage(third, diagnosticsRequest(t, topicID, userID))
 	if third.Code != http.StatusOK {
 		t.Errorf("after completion status = %d, want 200 — the gate latched shut", third.Code)
+	}
+}
+
+// fakeWarmRawTracker is a credentialed tracker whose login can be made to
+// fail, recording which credential RawPage was handed.
+type fakeWarmRawTracker struct {
+	fakeRawPageTracker
+	verifyOK bool
+	loginErr error
+	gotCreds *domain.TrackerCredential
+	called   bool
+}
+
+func (f *fakeWarmRawTracker) Login(context.Context, *domain.TrackerCredential) error {
+	return f.loginErr
+}
+func (f *fakeWarmRawTracker) Verify(context.Context, *domain.TrackerCredential) (bool, error) {
+	return f.verifyOK, nil
+}
+func (f *fakeWarmRawTracker) RawPage(_ context.Context, _ string, creds *domain.TrackerCredential) ([]byte, error) {
+	f.called, f.gotCreds = true, creds
+	return []byte(f.page), nil
+}
+
+// TestDiagnosticsPage_RedactsTheUsernameEvenWhenLoginFails is F11 from the
+// independent review of #193. A failed login must still fall back to an
+// anonymous fetch — that part was right — but the account name is still
+// known from the stored credential, and a guest page can still show it: the
+// reporter's own posts, their uploads. Redaction used to depend on the login
+// succeeding, so their identity stayed in the file exactly when something had
+// already gone wrong.
+func TestDiagnosticsPage_RedactsTheUsernameEvenWhenLoginFails(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		verifyOK  bool
+		loginErr  error
+		wantAuthd bool
+	}{
+		{"login fails, fetch goes anonymous", false, errors.New("login failed"), false},
+		{"session is warm", true, nil, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mk := testMasterKey(t)
+			trackerName := "diagwarm" + map[bool]string{true: "ok", false: "fail"}[tc.verifyOK]
+			cred := encryptedCred(t, mk, trackerName)
+			tr := &fakeWarmRawTracker{
+				fakeRawPageTracker: fakeRawPageTracker{name: trackerName, page: `<span class="author">user</span>`},
+				verifyOK:           tc.verifyOK,
+				loginErr:           tc.loginErr,
+			}
+			registry.RegisterTracker(tr)
+			topicID := uuid.New()
+			store := &fakeTopicStore{getByID: &domain.Topic{
+				ID: topicID, UserID: cred.UserID, URL: "https://" + trackerName + ".test/t/1",
+			}}
+			h := &Topics{Topics: store, Creds: &fakeSearchCredStore{cred: cred}, Master: mk}
+
+			rec := httptest.NewRecorder()
+			h.DiagnosticsPage(rec, diagnosticsRequest(t, topicID, cred.UserID))
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200 (body %q)", rec.Code, rec.Body.String())
+			}
+			got := decodeDiagnostics(t, rec)
+			if got["authenticated"] != tc.wantAuthd {
+				t.Errorf("authenticated = %v, want %v", got["authenticated"], tc.wantAuthd)
+			}
+			if want := `<span class="author">` + pageredact.Placeholder + `</span>`; got["html"] != want {
+				t.Errorf("html = %q, want %q", got["html"], want)
+			}
+			if !tc.wantAuthd && tr.gotCreds != nil {
+				t.Error("a failed login must fetch anonymously; RawPage got a credential")
+			}
+		})
 	}
 }

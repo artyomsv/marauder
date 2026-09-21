@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/artyomsv/marauder/backend/internal/db/repo"
+	"github.com/artyomsv/marauder/backend/internal/domain"
 	"github.com/artyomsv/marauder/backend/internal/pageredact"
 	"github.com/artyomsv/marauder/backend/internal/plugins/registry"
 	"github.com/artyomsv/marauder/backend/internal/problem"
@@ -101,10 +102,7 @@ func (h *Topics) DiagnosticsPage(w http.ResponseWriter, r *http.Request) {
 	// report worth having, and "this is what an unauthenticated fetch sees"
 	// is itself a useful line in a bug report.
 	creds, _, _ := warmCredentials(ctx, h.Creds, h.Master, uid, tracker)
-	username := ""
-	if creds != nil {
-		username = creds.Username
-	}
+	username := h.reporterUsername(ctx, uid, tracker.Name(), creds)
 
 	page, ferr := raw.RawPage(ctx, topic.URL, creds)
 	if ferr != nil {
@@ -114,7 +112,16 @@ func (h *Topics) DiagnosticsPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	redacted := pageredact.Redact(page, username)
+	redacted, rerr := pageredact.Redact(page, username)
+	if rerr != nil {
+		// Fail closed. The redactor only refuses when it could not examine the
+		// whole page, and returning what it did not examine would hand the user
+		// unchecked tracker bytes to publish. 422, not 500: nothing broke on
+		// our side, this particular page cannot be exported.
+		problem.Write(w, r, h.BaseURL, problem.ErrUnprocessable(
+			"this page could not be safely prepared for export, so nothing was returned"))
+		return
+	}
 
 	if h.Audit != nil {
 		h.Audit.Generic(&uid, "topic_diagnostics_page", "topic", id.String(), "success",
@@ -131,4 +138,27 @@ func (h *Topics) DiagnosticsPage(w http.ResponseWriter, r *http.Request) {
 		"redaction_mark": pageredact.Placeholder,
 		"html":           string(redacted),
 	})
+}
+
+// reporterUsername returns the tracker account name to redact from the page.
+//
+// It is read from the STORED credential when warming did not produce one.
+// Warming fails for ordinary reasons — a wrong password, a tracker that is
+// down, an undecryptable blob — and the fetch then falls back to anonymous,
+// which is right. But the account name is still known, and a guest page can
+// still show it: the reporter's own posts, their uploads, a member list. Tying
+// the redaction to a successful login left their identity in the one file they
+// were about to publish, precisely when something had already gone wrong.
+func (h *Topics) reporterUsername(ctx context.Context, uid uuid.UUID, tracker string, creds *domain.TrackerCredential) string {
+	if creds != nil {
+		return creds.Username
+	}
+	if h.Creds == nil {
+		return ""
+	}
+	stored, err := h.Creds.GetForTracker(ctx, uid, tracker)
+	if err != nil || stored == nil {
+		return ""
+	}
+	return stored.Username
 }

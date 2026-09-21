@@ -11,6 +11,18 @@ import (
 // HTML" button would invite users to paste a live session id into a public
 // bug report. It is dead now (the session was ended), and no test may ever
 // replace it with a live one.
+// redact runs Redact and fails the test on an error. Every page in this file is
+// one the redactor must be able to handle — an error here means it refused a
+// page it should have cleaned, which would hide a real export from the user.
+func redact(t *testing.T, page, username string) string {
+	t.Helper()
+	out, err := Redact([]byte(page), username)
+	if err != nil {
+		t.Fatalf("Redact(%q) returned an error: %v", page, err)
+	}
+	return string(out)
+}
+
 const livePageFragment = `<p class="small"><a href="viewtopic.php?t=288010&amp;watch=topic&amp;start=0&amp;sid=wCll0mxQk34M71ITmQdA">Следить за ответами</a></p>
 <table class="attach bordered med">
 	<tr class="row3">
@@ -23,7 +35,7 @@ const livePageFragment = `<p class="small"><a href="viewtopic.php?t=288010&amp;w
 </table>`
 
 func TestRedact_RemovesTheSessionID(t *testing.T) {
-	got := string(Redact([]byte(livePageFragment), ""))
+	got := redact(t, livePageFragment, "")
 	if strings.Contains(got, "wCll0mxQk34M71ITmQdA") {
 		t.Fatal("the session id survived redaction")
 	}
@@ -36,7 +48,7 @@ func TestRedact_RemovesTheSessionID(t *testing.T) {
 // disturbs tags, classes or structure destroys the only thing the page was
 // collected for — issue #186 was solved by one class attribute.
 func TestRedact_KeepsTheMarkup(t *testing.T) {
-	got := string(Redact([]byte(livePageFragment), ""))
+	got := redact(t, livePageFragment, "")
 	for _, want := range []string{
 		`<table class="attach bordered med">`,
 		`<th colspan="3" class="seedmed">Some.Release.[tapochek.net].torrent</th>`,
@@ -57,7 +69,7 @@ func TestRedact_RemovesCredentialParameters(t *testing.T) {
 		{"api token", `<img src="/pic.php?token=t0p53cr3t" />`, "t0p53cr3t"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got := string(Redact([]byte(tc.in), ""))
+			got := redact(t, tc.in, "")
 			if strings.Contains(got, tc.leak) {
 				t.Errorf("%s survived: %q", tc.leak, got)
 			}
@@ -72,7 +84,7 @@ func TestRedact_RemovesHiddenTokenInputs(t *testing.T) {
 <input type="hidden" name="creation_time" value="1758400000" />
 <input type="hidden" name="session_key" value="abc123" />
 <input type="text" name="search" value="Stuart Fails" />`
-	got := string(Redact([]byte(in), ""))
+	got := redact(t, in, "")
 	for _, leak := range []string{"9f8e7d6c", "abc123"} {
 		if strings.Contains(got, leak) {
 			t.Errorf("token value %q survived: %q", leak, got)
@@ -89,7 +101,7 @@ func TestRedact_RemovesHiddenTokenInputs(t *testing.T) {
 // tracker account the reporter uses; the page prints it in the header bar.
 func TestRedact_RemovesTheReportersUsername(t *testing.T) {
 	in := `<span class="userName">odcold</span> · <a href="profile.php?u=1">ODCOLD</a> · odcoldish`
-	got := string(Redact([]byte(in), "odcold"))
+	got := redact(t, in, "odcold")
 	if strings.Contains(got, ">odcold<") || strings.Contains(got, ">ODCOLD<") {
 		t.Errorf("username survived: %q", got)
 	}
@@ -109,7 +121,7 @@ func TestRedact_RemovesTheReportersUsername(t *testing.T) {
 // empty needle must redact nothing rather than match at every position.
 func TestRedact_EmptyUsernameIsNotAWildcard(t *testing.T) {
 	const in = `<p>plain page</p>`
-	if got := string(Redact([]byte(in), "")); got != in {
+	if got := redact(t, in, ""); got != in {
 		t.Errorf("empty username changed the page: %q", got)
 	}
 }
@@ -118,7 +130,7 @@ func TestRedact_EmptyUsernameIsNotAWildcard(t *testing.T) {
 // the request for debugging; a Cookie line there carries the whole session.
 func TestRedact_RemovesCookieHeadersEchoedIntoThePage(t *testing.T) {
 	in := `<pre>Cookie: bb_data=a%3A3%3A%7Bs%3A2%3A%22uk%22%3B; other=1</pre>`
-	got := string(Redact([]byte(in), ""))
+	got := redact(t, in, "")
 	if strings.Contains(got, "bb_data=a%3A3") {
 		t.Errorf("cookie value survived: %q", got)
 	}
@@ -127,18 +139,18 @@ func TestRedact_RemovesCookieHeadersEchoedIntoThePage(t *testing.T) {
 // TestRedact_IsIdempotent. The UI may redact, and a user may run the result
 // through again; a second pass must not mangle the placeholders.
 func TestRedact_IsIdempotent(t *testing.T) {
-	once := Redact([]byte(livePageFragment), "someone")
-	twice := Redact(once, "someone")
+	once := redact(t, livePageFragment, "someone")
+	twice := redact(t, once, "someone")
 	if string(once) != string(twice) {
 		t.Errorf("second pass changed the output:\n%s\n---\n%s", once, twice)
 	}
 }
 
 func TestRedact_NilAndEmptyInput(t *testing.T) {
-	if got := Redact(nil, "x"); got != nil {
+	if got, err := Redact(nil, "x"); err != nil || got != nil {
 		t.Errorf("Redact(nil) = %q, want nil", got)
 	}
-	if got := Redact([]byte{}, "x"); len(got) != 0 {
+	if got, err := Redact([]byte{}, "x"); err != nil || len(got) != 0 {
 		t.Errorf("Redact(empty) = %q, want empty", got)
 	}
 }
@@ -164,7 +176,7 @@ func TestRedact_TokenInputSurvivesNoAttributeSpelling(t *testing.T) {
 		// type="hidden" would pass this straight through.
 		`<input name="form_token" value="s3cr3t">`,
 	} {
-		if got := string(Redact([]byte(tag), "")); strings.Contains(got, "s3cr3t") {
+		if got := redact(t, tag, ""); strings.Contains(got, "s3cr3t") {
 			t.Errorf("token survived in %q -> %q", tag, got)
 		}
 	}
@@ -183,7 +195,7 @@ func TestRedact_LeavesOrdinaryInputsAlone(t *testing.T) {
 		`<input type="hidden" name="monkey" value="12">`,
 		`<input type="submit" name="submit" value="Найти">`,
 	} {
-		if got := string(Redact([]byte(tag), "")); got != tag {
+		if got := redact(t, tag, ""); got != tag {
 			t.Errorf("ordinary input was redacted:\n  in  %q\n  out %q", tag, got)
 		}
 	}
@@ -198,7 +210,7 @@ func TestRedact_PreservesTheValueDelimiter(t *testing.T) {
 		`<input name='form_token' value='x'>`: `<input name='form_token' value='` + Placeholder + `'>`,
 		`<input name=form_token value=x>`:     `<input name=form_token value=` + Placeholder + `>`,
 	} {
-		if got := string(Redact([]byte(in), "")); got != want {
+		if got := redact(t, in, ""); got != want {
 			t.Errorf("Redact(%q)\n  = %q\nwant %q", in, got, want)
 		}
 	}
@@ -221,7 +233,7 @@ func TestRedact_TokenInputWithAngleBracketInTheValue(t *testing.T) {
 		// Malformed: no closing quote. Must still not ship the token.
 		`<input name="form_token" value="s3cr3t>`,
 	} {
-		if got := string(Redact([]byte(tag), "")); strings.Contains(got, "s3cr3t") {
+		if got := redact(t, tag, ""); strings.Contains(got, "s3cr3t") {
 			t.Errorf("token survived in %q -> %q", tag, got)
 		}
 	}
@@ -232,7 +244,7 @@ func TestRedact_TokenInputWithAngleBracketInTheValue(t *testing.T) {
 // no credential.
 func TestRedact_AngleBracketInAnOrdinaryInputIsUntouched(t *testing.T) {
 	const tag = `<input type="text" name="search" value="a>b">`
-	if got := string(Redact([]byte(tag), "")); got != tag {
+	if got := redact(t, tag, ""); got != tag {
 		t.Errorf("ordinary input was redacted:\n  in  %q\n  out %q", tag, got)
 	}
 }
@@ -257,7 +269,7 @@ func TestRedact_MalformedTagDoesNotShieldTheNextOne(t *testing.T) {
 			`<p>text</p>` +
 			`<input name="session_key" value="s3cr3t">`,
 	} {
-		if got := string(Redact([]byte(page), "")); strings.Contains(got, "s3cr3t") {
+		if got := redact(t, page, ""); strings.Contains(got, "s3cr3t") {
 			t.Errorf("a malformed tag shielded the credential after it:\n  in  %q\n  out %q", page, got)
 		}
 	}
@@ -273,7 +285,7 @@ func TestRedact_TruncatedPageStillRedactsTheLastTag(t *testing.T) {
 		`<input type="hidden" name="form_token" value="s3cr3t`,
 		`<p>ok</p><input name='session_key' value='s3cr3t'`,
 	} {
-		if got := string(Redact([]byte(page), "")); strings.Contains(got, "s3cr3t") {
+		if got := redact(t, page, ""); strings.Contains(got, "s3cr3t") {
 			t.Errorf("token survived in a truncated page:\n  in  %q\n  out %q", page, got)
 		}
 	}
