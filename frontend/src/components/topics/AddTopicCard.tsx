@@ -28,6 +28,10 @@ const EMPTY: TopicFormValues = {
   // default once replace is enabled, matching the backend column default.
   replaceOnUpdate: false,
   replaceDeleteData: true,
+  // Default to today's behaviour: download automatically. The announce-current
+  // sub-option stays off so adding a topic is silent.
+  notifyOnly: false,
+  notifyOnlyAnnounceCurrent: false,
 };
 
 type AddMode = "url" | "search";
@@ -80,6 +84,8 @@ export function AddTopicCard({ onClose, onCreated }: AddTopicCardProps) {
         category: v.category || undefined,
         replace_on_update: v.replaceOnUpdate,
         replace_delete_data: v.replaceDeleteData,
+        notify_only: v.notifyOnly,
+        notify_only_announce_current: v.notifyOnlyAnnounceCurrent,
       }),
     onSuccess: () => onCreated(),
     onError: (err) => setError(err instanceof Error ? err.message : "Failed"),

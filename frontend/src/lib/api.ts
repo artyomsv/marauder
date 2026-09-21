@@ -357,6 +357,10 @@ export interface UpdateTopicBody {
   // when replace_on_update is true.
   replace_on_update?: boolean;
   replace_delete_data?: boolean;
+  // Notify-only watch mode (issue #184). notify_only_announce_current only
+  // matters when notify_only is true.
+  notify_only?: boolean;
+  notify_only_announce_current?: boolean;
   quality?: string;
   start_season?: number;
   start_episode?: number;
@@ -468,6 +472,8 @@ export type Topic = {
   Category: string;
   ReplaceOnUpdate: boolean;
   ReplaceDeleteData: boolean;
+  NotifyOnly: boolean;
+  NotifyOnlyAnnounceCurrent: boolean;
   Extra: TopicExtra | null;
   LastHash: string;
   LastCheckedAt: string | null;

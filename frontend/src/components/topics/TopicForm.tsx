@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { QK } from "@/lib/queryKeys";
+import { useT } from "@/i18n";
 import { useDebouncedValue } from "@/lib/hooks/useDebouncedValue";
 import { SeasonEpisodePicker, SELECT_CLASS } from "./SeasonEpisodePicker";
 import { TopicPreviewCard } from "./TopicPreviewCard";
@@ -37,6 +38,27 @@ interface ClientOption {
   is_default: boolean;
 }
 
+// Minimal shape of a configured notifier as GET /notifiers returns it. events
+// is nullable because the backend serialises an unset subscription as null.
+interface NotifierSubscription {
+  id: string;
+  is_default: boolean;
+  events: string[] | null;
+}
+
+interface NotifiersList {
+  notifiers: NotifierSubscription[] | null;
+}
+
+// A notify-only topic emits exactly one notifiable event: release.found. A
+// notifier only hears it when it subscribes to that type, to the legacy
+// "updated" keyword the backend dispatcher expands to it, or to nothing at
+// all — an empty list means "every event" there.
+function hearsReleases(n: NotifierSubscription): boolean {
+  if (!n.events || n.events.length === 0) return true;
+  return n.events.some((e) => e === "release.found" || e === "updated");
+}
+
 // The mutable fields the user edits. Grouped into one object so the form
 // stays under the 8-useState component limit.
 export interface TopicFormValues {
@@ -53,6 +75,10 @@ export interface TopicFormValues {
   // replaceOnUpdate is on.
   replaceOnUpdate: boolean;
   replaceDeleteData: boolean;
+  // Notify-only watch mode (issue #184). notifyOnlyAnnounceCurrent only
+  // applies when notifyOnly is on.
+  notifyOnly: boolean;
+  notifyOnlyAnnounceCurrent: boolean;
 }
 
 interface TopicFormProps {
@@ -80,6 +106,7 @@ export function TopicForm({
   onClose,
   onSubmit,
 }: TopicFormProps) {
+  const t = useT();
   const isEdit = mode === "edit";
   const [url] = useState(initial.url);
   const [displayName, setDisplayName] = useState(initial.displayName);
@@ -103,6 +130,16 @@ export function TopicForm({
     staleTime: 60_000,
   });
   const clients = clientsQuery.data?.clients ?? [];
+
+  // Share NotifierSelect's cached list so we can tell the user, before they
+  // save, that this topic would never reach anyone.
+  const notifiersQuery = useQuery({
+    queryKey: QK.notifiers,
+    queryFn: () => api.get<NotifiersList>("/notifiers"),
+    staleTime: 60_000,
+  });
+  const notifiers = notifiersQuery.data?.notifiers ?? [];
+  const notifiersLoaded = notifiersQuery.isSuccess;
 
   // In edit mode the URL never changes, so the debounce is a no-op pass
   // through. In add mode it throttles the /trackers/match lookup.
@@ -217,7 +254,18 @@ export function TopicForm({
     category: initial.category,
     replaceOnUpdate: initial.replaceOnUpdate,
     replaceDeleteData: initial.replaceDeleteData,
+    notifyOnly: initial.notifyOnly,
+    notifyOnlyAnnounceCurrent: initial.notifyOnlyAnnounceCurrent,
   });
+
+  // A notify-only topic whose events reach nobody is a topic that silently
+  // does nothing. An explicitly picked notifier replaces the defaults, so it
+  // is the only one to inspect; otherwise the topic reaches the defaults.
+  // Either way the question is the same — will anything that receives this
+  // topic's events actually hear about a new release?
+  const willBeSilent = delivery.notifierId
+    ? !notifiers.some((n) => n.id === delivery.notifierId && hearsReleases(n))
+    : !notifiers.some((n) => n.is_default && hearsReleases(n));
 
   // The category combobox suggests the categories of whichever client will
   // actually receive the topic: the one picked in the form, or the user's
@@ -249,6 +297,8 @@ export function TopicForm({
       category: delivery.category,
       replaceOnUpdate: delivery.replaceOnUpdate,
       replaceDeleteData: delivery.replaceDeleteData,
+      notifyOnly: delivery.notifyOnly,
+      notifyOnlyAnnounceCurrent: delivery.notifyOnlyAnnounceCurrent,
     });
   };
 
@@ -367,79 +417,124 @@ export function TopicForm({
           </div>
         )}
 
-      <div className="space-y-1.5">
-        <Label htmlFor="client">Client (optional)</Label>
-        <select
-          id="client"
-          value={delivery.clientId}
-          onChange={(e) => setDelivery((d) => ({ ...d, clientId: e.target.value }))}
-          className={SELECT_CLASS}
-        >
-          <option value="">Use default client</option>
-          {clients.map((c) => (
-            <option key={c.id} value={c.id}>
-              {c.display_name}
-            </option>
-          ))}
-        </select>
+      <div className="space-y-2 rounded-md border border-border/60 bg-muted/20 p-3">
+        <label className="flex items-center gap-2 text-sm font-medium text-foreground">
+          <input
+            type="checkbox"
+            checked={delivery.notifyOnly}
+            onChange={(e) =>
+              setDelivery((d) => ({ ...d, notifyOnly: e.target.checked }))
+            }
+          />
+          <span>{t("topics.notifyOnly.label")}</span>
+        </label>
+        <p className="text-xs text-muted-foreground">
+          {t("topics.notifyOnly.help")}
+        </p>
+        {delivery.notifyOnly && (
+          <label className="flex items-center gap-2 pt-1 text-sm">
+            <input
+              type="checkbox"
+              checked={delivery.notifyOnlyAnnounceCurrent}
+              onChange={(e) =>
+                setDelivery((d) => ({
+                  ...d,
+                  notifyOnlyAnnounceCurrent: e.target.checked,
+                }))
+              }
+            />
+            <span>{t("topics.notifyOnly.announceCurrent")}</span>
+          </label>
+        )}
       </div>
+
+      {delivery.notifyOnly && notifiersLoaded && willBeSilent && (
+        <p className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-400">
+          {t("topics.notifyOnly.silentWarning")}
+        </p>
+      )}
+
+      {isEdit && initial.notifyOnly && !delivery.notifyOnly && (
+        <p className="rounded-md border border-border/60 bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
+          {t("topics.notifyOnly.toggleBackNotice")}
+        </p>
+      )}
+
+      {!delivery.notifyOnly && (
+        <>
+          <div className="space-y-1.5">
+            <Label htmlFor="client">Client (optional)</Label>
+            <select
+              id="client"
+              value={delivery.clientId}
+              onChange={(e) => setDelivery((d) => ({ ...d, clientId: e.target.value }))}
+              className={SELECT_CLASS}
+            >
+              <option value="">Use default client</option>
+              {clients.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.display_name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="download-dir">Download folder (optional)</Label>
+              <Input
+                id="download-dir"
+                value={delivery.downloadDir}
+                onChange={(e) =>
+                  setDelivery((d) => ({ ...d, downloadDir: e.target.value }))
+                }
+                placeholder="/downloads/tv"
+              />
+              <p className="text-xs text-muted-foreground">
+                Full path; overrides the client folder and category below.
+              </p>
+            </div>
+            <CategoryField
+              value={delivery.category}
+              onChange={(v) => setDelivery((d) => ({ ...d, category: v }))}
+              suggestions={categorySuggestions}
+            />
+          </div>
+
+          <div className="space-y-2 rounded-md border border-border/60 bg-muted/20 p-3">
+            <label className="flex items-center gap-2 text-sm font-medium text-foreground">
+              <input
+                type="checkbox"
+                checked={delivery.replaceOnUpdate}
+                onChange={(e) =>
+                  setDelivery((d) => ({ ...d, replaceOnUpdate: e.target.checked }))
+                }
+              />
+              <span>{t("topics.replaceOnUpdate.label")}</span>
+            </label>
+            <p className="text-xs text-muted-foreground">
+              {t("topics.replaceOnUpdate.help")}
+            </p>
+            {delivery.replaceOnUpdate && (
+              <label className="flex items-center gap-2 pt-1 text-sm">
+                <input
+                  type="checkbox"
+                  checked={delivery.replaceDeleteData}
+                  onChange={(e) =>
+                    setDelivery((d) => ({ ...d, replaceDeleteData: e.target.checked }))
+                  }
+                />
+                <span>{t("topics.replaceOnUpdate.deleteData")}</span>
+              </label>
+            )}
+          </div>
+        </>
+      )}
 
       <NotifierSelect
         value={delivery.notifierId}
         onChange={(v) => setDelivery((d) => ({ ...d, notifierId: v }))}
       />
-
-      <div className="grid gap-4 sm:grid-cols-2">
-        <div className="space-y-1.5">
-          <Label htmlFor="download-dir">Download folder (optional)</Label>
-          <Input
-            id="download-dir"
-            value={delivery.downloadDir}
-            onChange={(e) =>
-              setDelivery((d) => ({ ...d, downloadDir: e.target.value }))
-            }
-            placeholder="/downloads/tv"
-          />
-          <p className="text-xs text-muted-foreground">
-            Full path; overrides the client folder and category below.
-          </p>
-        </div>
-        <CategoryField
-          value={delivery.category}
-          onChange={(v) => setDelivery((d) => ({ ...d, category: v }))}
-          suggestions={categorySuggestions}
-        />
-      </div>
-
-      <div className="space-y-2 rounded-md border border-border/60 bg-muted/20 p-3">
-        <label className="flex items-center gap-2 text-sm font-medium text-foreground">
-          <input
-            type="checkbox"
-            checked={delivery.replaceOnUpdate}
-            onChange={(e) =>
-              setDelivery((d) => ({ ...d, replaceOnUpdate: e.target.checked }))
-            }
-          />
-          <span>Replace previous version on update</span>
-        </label>
-        <p className="text-xs text-muted-foreground">
-          When a new release is detected, remove the previously downloaded torrent
-          from the client instead of keeping every version. Best for single
-          releases (movies, repacked seasons) — not per-episode shows.
-        </p>
-        {delivery.replaceOnUpdate && (
-          <label className="flex items-center gap-2 pt-1 text-sm">
-            <input
-              type="checkbox"
-              checked={delivery.replaceDeleteData}
-              onChange={(e) =>
-                setDelivery((d) => ({ ...d, replaceDeleteData: e.target.checked }))
-              }
-            />
-            <span>Also delete the old files from disk</span>
-          </label>
-        )}
-      </div>
 
       {error && (
         <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">

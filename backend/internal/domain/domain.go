@@ -90,15 +90,26 @@ type Topic struct {
 	// every episode (see scheduler.isEpisodic).
 	ReplaceOnUpdate   bool
 	ReplaceDeleteData bool
-	Extra             map[string]any
-	LastHash          string
-	LastCheckedAt     *time.Time
-	LastUpdatedAt     *time.Time
-	NextCheckAt       time.Time
-	CheckIntervalSec  int
-	ConsecutiveErrors int
-	Status            TopicStatus
-	LastError         string
+	// NotifyOnly turns the topic into a watch-only entry (issue #184): the
+	// scheduler still checks it on schedule and still emits release.found, but
+	// never resolves a client and never submits a payload, so no download
+	// client is required. Per-episode trackers still have their pending
+	// episodes marked seen, so switching back to download mode fetches only
+	// what appears afterwards rather than the accumulated backlog.
+	NotifyOnly bool
+	// NotifyOnlyAnnounceCurrent announces the release already on the page at
+	// the topic's first check — and the first check after a reset, which also
+	// clears LastHash. Off by default so adding a topic is silent.
+	NotifyOnlyAnnounceCurrent bool
+	Extra                     map[string]any
+	LastHash                  string
+	LastCheckedAt             *time.Time
+	LastUpdatedAt             *time.Time
+	NextCheckAt               time.Time
+	CheckIntervalSec          int
+	ConsecutiveErrors         int
+	Status                    TopicStatus
+	LastError                 string
 	// LastErrorCode is a stable, machine-readable classification of
 	// LastError (timeout / unreachable / auth / cloudflare / solver / parse /
 	// plugin_missing / unknown) so the UI can render a localised,

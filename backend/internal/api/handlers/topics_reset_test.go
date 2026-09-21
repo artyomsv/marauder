@@ -520,7 +520,7 @@ func (s *concurrentResetStore) Delete(context.Context, uuid.UUID, uuid.UUID) err
 func (s *concurrentResetStore) UpdateStatus(context.Context, uuid.UUID, uuid.UUID, domain.TopicStatus) error {
 	return nil
 }
-func (s *concurrentResetStore) Update(context.Context, uuid.UUID, uuid.UUID, string, *uuid.UUID, *uuid.UUID, string, string, bool, bool, map[string]any) (*domain.Topic, error) {
+func (s *concurrentResetStore) Update(context.Context, uuid.UUID, uuid.UUID, string, *uuid.UUID, *uuid.UUID, string, string, repo.TopicFlags, map[string]any) (*domain.Topic, error) {
 	return nil, nil
 }
 func (s *concurrentResetStore) ResetCheckState(_ context.Context, id, _ uuid.UUID) error {

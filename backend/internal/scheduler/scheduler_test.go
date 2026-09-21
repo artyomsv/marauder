@@ -11,14 +11,29 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/prometheus/client_golang/prometheus"
+	dto "github.com/prometheus/client_model/go"
 	"github.com/rs/zerolog"
 
 	"github.com/artyomsv/marauder/backend/internal/config"
 	"github.com/artyomsv/marauder/backend/internal/db/repo"
 	"github.com/artyomsv/marauder/backend/internal/domain"
 	"github.com/artyomsv/marauder/backend/internal/events"
+	"github.com/artyomsv/marauder/backend/internal/metrics"
 	"github.com/artyomsv/marauder/backend/internal/plugins/registry"
 )
+
+// counterValue reads one counter child's current value. Written by hand
+// against the already-vendored client_model rather than pulling in
+// prometheus/testutil, which drags a whole extra module in for one read.
+func counterValue(t *testing.T, c prometheus.Counter) float64 {
+	t.Helper()
+	var m dto.Metric
+	if err := c.Write(&m); err != nil {
+		t.Fatalf("read counter: %v", err)
+	}
+	return m.GetCounter().GetValue()
+}
 
 // --- Fakes --------------------------------------------------------------
 
@@ -94,8 +109,13 @@ type fakeTopics struct {
 	updateDisplayNameCalls []updateDisplayNameCall
 	markCalls              []markCall
 	markErr                error
-	verifyCalls            []uuid.UUID
-	verifyErr              error
+	// markBulkCalls records the notify-only path's whole-list marks. Kept
+	// separate from markCalls (and markBulkErr from markErr) so a test can
+	// stage a failure on one path without touching the other.
+	markBulkCalls [][]string
+	markBulkErr   error
+	verifyCalls   []uuid.UUID
+	verifyErr     error
 }
 
 type recordCall struct {
@@ -137,9 +157,17 @@ func (f *fakeTopics) MarkEpisodeDownloaded(_ context.Context, t *domain.Topic, p
 	return f.markErr
 }
 
-// VerifyCheckState is the pre-submit read-only guard. verifyErr lets a test
-// stage a reset landing between Check and Add; the zero value means "token
-// still valid", so every existing test keeps submitting as before.
+// MarkEpisodesDownloaded is the bulk form the notify-only path uses. The
+// packed slice is copied because the caller owns the backing array.
+func (f *fakeTopics) MarkEpisodesDownloaded(_ context.Context, _ *domain.Topic, packed []string) error {
+	f.markBulkCalls = append(f.markBulkCalls, append([]string(nil), packed...))
+	return f.markBulkErr
+}
+
+// VerifyCheckState is the read-only guard run before each step a reset cannot
+// undo: the client submit, and the notify-only announcement. verifyErr lets a
+// test stage a reset landing after Check; the zero value means "token still
+// valid", so every existing test keeps submitting as before.
 func (f *fakeTopics) VerifyCheckState(_ context.Context, t *domain.Topic) error {
 	f.verifyCalls = append(f.verifyCalls, t.ID)
 	return f.verifyErr
@@ -148,9 +176,10 @@ func (f *fakeTopics) VerifyCheckState(_ context.Context, t *domain.Topic) error 
 // fakeClients records GetByID / GetDefault calls and always returns a
 // fixed Client whose ClientName matches the registered fakeClientPlugin.
 type fakeClients struct {
-	client       *domain.Client
-	getByIDCalls []uuid.UUID
-	getByIDErr   error
+	client          *domain.Client
+	getByIDCalls    []uuid.UUID
+	getDefaultCalls []uuid.UUID
+	getByIDErr      error
 }
 
 func (f *fakeClients) GetByID(_ context.Context, id uuid.UUID, _ uuid.UUID) (*domain.Client, error) {
@@ -161,7 +190,8 @@ func (f *fakeClients) GetByID(_ context.Context, id uuid.UUID, _ uuid.UUID) (*do
 	return f.client, nil
 }
 
-func (f *fakeClients) GetDefault(_ context.Context, _ uuid.UUID) (*domain.Client, error) {
+func (f *fakeClients) GetDefault(_ context.Context, userID uuid.UUID) (*domain.Client, error) {
+	f.getDefaultCalls = append(f.getDefaultCalls, userID)
 	return f.client, nil
 }
 
@@ -400,6 +430,508 @@ func (f *fixture) lastRecord(t *testing.T) recordCall {
 }
 
 // --- Tests --------------------------------------------------------------
+
+// A notify-only topic must announce the release, never touch a client, and
+// advance the persisted hash so the same release is not re-announced (#184).
+func TestRunCheck_NotifyOnly_AnnouncesAndSkipsClient(t *testing.T) {
+	tr := &fakeTracker{
+		name: "faketracker",
+		checks: []checkResult{
+			{check: &domain.Check{Hash: "new-hash", Extra: map[string]any{}}, err: nil},
+		},
+		downloads: []downloadResult{
+			{payload: &domain.Payload{MagnetURI: "magnet:?xt=urn:btih:abc"}, err: nil},
+		},
+	}
+	f := newFixture(t, tr)
+	f.topic.NotifyOnly = true
+	f.topic.ClientID = nil
+
+	f.s.runCheck(context.Background(), f.s.log, f.topic)
+
+	if f.clientPlugin.addCalls != 0 {
+		t.Errorf("notify-only must not submit to a client, got %d Add calls", f.clientPlugin.addCalls)
+	}
+	if n := len(f.clients.getDefaultCalls); n != 0 {
+		t.Errorf("notify-only must not resolve a client at all, got %d GetDefault calls", n)
+	}
+	if got := f.emitter.ofType(events.ReleaseFound); len(got) != 1 {
+		t.Fatalf("expected exactly 1 release.found, got %d", len(got))
+	}
+	if got := f.emitter.ofType(events.DownloadSubmitted); len(got) != 0 {
+		t.Errorf("notify-only must not emit download.submitted, got %d", len(got))
+	}
+	ev := f.emitter.ofType(events.ReleaseFound)[0]
+	if ev.SourceURL != f.topic.URL {
+		t.Errorf("expected SourceURL %q, got %q", f.topic.URL, ev.SourceURL)
+	}
+	if !strings.Contains(ev.Body, "not downloaded") {
+		t.Errorf("body must say the release was not downloaded, got %q", ev.Body)
+	}
+	if strings.Contains(ev.Body, "Sent to client") {
+		t.Errorf("body must not imply a download happened: %q", ev.Body)
+	}
+	rec := f.lastRecord(t)
+	if rec.hash != "new-hash" {
+		t.Errorf("notify-only must advance the hash, got %q", rec.hash)
+	}
+	if rec.errMsg != "" {
+		t.Errorf("notify-only is not a failure, got errMsg %q", rec.errMsg)
+	}
+}
+
+// The release.found emit must NOT be gated on ConsecutiveErrors. The download
+// path can afford that gate because it re-persists the OLD hash and replays
+// next tick; notify-only persists the NEW hash on this very tick, so a
+// suppressed event is lost for good.
+func TestRunCheck_NotifyOnly_EmitsDespitePriorErrors(t *testing.T) {
+	tr := &fakeTracker{
+		name: "faketracker",
+		checks: []checkResult{
+			{check: &domain.Check{Hash: "new-hash", Extra: map[string]any{}}, err: nil},
+		},
+		downloads: []downloadResult{
+			{payload: &domain.Payload{MagnetURI: "magnet:?xt=urn:btih:abc"}, err: nil},
+		},
+	}
+	f := newFixture(t, tr)
+	f.topic.NotifyOnly = true
+	f.topic.ConsecutiveErrors = 5
+
+	f.s.runCheck(context.Background(), f.s.log, f.topic)
+
+	if got := f.emitter.ofType(events.ReleaseFound); len(got) != 1 {
+		t.Fatalf("expected release.found despite prior errors, got %d", len(got))
+	}
+}
+
+// The first check of a notify-only topic (LastHash == "") is silent unless the
+// user opted in — adding a topic must not announce what is already there.
+func TestRunCheck_NotifyOnly_FirstCheckSilentByDefault(t *testing.T) {
+	tr := &fakeTracker{
+		name: "faketracker",
+		checks: []checkResult{
+			{check: &domain.Check{Hash: "first-hash", Extra: map[string]any{}}, err: nil},
+		},
+		downloads: []downloadResult{
+			{payload: &domain.Payload{MagnetURI: "magnet:?xt=urn:btih:abc"}, err: nil},
+		},
+	}
+	f := newFixture(t, tr)
+	f.topic.NotifyOnly = true
+	f.topic.LastHash = ""
+
+	f.s.runCheck(context.Background(), f.s.log, f.topic)
+
+	if got := f.emitter.ofType(events.ReleaseFound); len(got) != 0 {
+		t.Errorf("first check must be silent by default, got %d release.found", len(got))
+	}
+	// It must still baseline, or the NEXT check would announce this same release.
+	if rec := f.lastRecord(t); rec.hash != "first-hash" {
+		t.Errorf("first check must still persist the baseline hash, got %q", rec.hash)
+	}
+}
+
+func TestRunCheck_NotifyOnly_FirstCheckAnnouncesWhenOptedIn(t *testing.T) {
+	tr := &fakeTracker{
+		name: "faketracker",
+		checks: []checkResult{
+			{check: &domain.Check{Hash: "first-hash", Extra: map[string]any{}}, err: nil},
+		},
+		downloads: []downloadResult{
+			{payload: &domain.Payload{MagnetURI: "magnet:?xt=urn:btih:abc"}, err: nil},
+		},
+	}
+	f := newFixture(t, tr)
+	f.topic.NotifyOnly = true
+	f.topic.NotifyOnlyAnnounceCurrent = true
+	f.topic.LastHash = ""
+
+	f.s.runCheck(context.Background(), f.s.log, f.topic)
+
+	if got := f.emitter.ofType(events.ReleaseFound); len(got) != 1 {
+		t.Errorf("opted-in first check must announce, got %d release.found", len(got))
+	}
+	if f.clientPlugin.addCalls != 0 {
+		t.Errorf("notify-only must not submit even when announcing the current release, got %d Add calls", f.clientPlugin.addCalls)
+	}
+}
+
+// A notify-only episodic topic must mark every pending episode seen, so a
+// later switch back to download mode fetches only what appears afterwards
+// rather than the whole backlog (#184).
+func TestRunCheck_NotifyOnly_EpisodicMarksPendingSeen(t *testing.T) {
+	tr := &fakeTracker{
+		name:     "faketracker",
+		episodic: true,
+		checks: []checkResult{
+			{check: &domain.Check{Hash: "new-hash", Extra: map[string]any{
+				"pending_episodes": []string{"1-1", "1-2", "1-3"},
+				"pending_human":    []string{"s01e01", "s01e02", "s01e03"},
+			}}, err: nil},
+		},
+	}
+	f := newFixture(t, tr)
+	f.topic.NotifyOnly = true
+
+	f.s.runCheck(context.Background(), f.s.log, f.topic)
+
+	if f.clientPlugin.addCalls != 0 {
+		t.Errorf("notify-only must not submit, got %d Add calls", f.clientPlugin.addCalls)
+	}
+	if tr.callsDownload != 0 {
+		t.Errorf("notify-only must not call tr.Download, got %d", tr.callsDownload)
+	}
+	// One statement for the whole list: the tracker chooses the list length, so
+	// a per-episode loop would be an unbounded number of writes per tick.
+	if len(f.topics.markBulkCalls) != 1 {
+		t.Fatalf("expected exactly 1 bulk mark, got %d", len(f.topics.markBulkCalls))
+	}
+	if len(f.topics.markCalls) != 0 {
+		t.Errorf("notify-only must not mark episodes one at a time, got %d calls",
+			len(f.topics.markCalls))
+	}
+	marked := f.topics.markBulkCalls[0]
+	wantMarked := []string{"1-1", "1-2", "1-3"}
+	if len(marked) != len(wantMarked) {
+		t.Fatalf("bulk mark got %d episodes (%v), want %d", len(marked), marked, len(wantMarked))
+	}
+	for i := range wantMarked {
+		if marked[i] != wantMarked[i] {
+			t.Errorf("bulk mark[%d] = %q, want %q", i, marked[i], wantMarked[i])
+		}
+	}
+	got := f.emitter.ofType(events.ReleaseFound)
+	if len(got) != 1 {
+		t.Fatalf("expected 1 release.found, got %d", len(got))
+	}
+	for _, label := range []string{"s01e01", "s01e02", "s01e03"} {
+		if !strings.Contains(got[0].Body, label) {
+			t.Errorf("body %q must name episode %s", got[0].Body, label)
+		}
+	}
+}
+
+// LostFilm's hash is derived from counts, so the tick AFTER marking sees a
+// changed hash with nothing pending. That must not produce a second, empty
+// "new release" message.
+func TestRunCheck_NotifyOnly_EpisodicSilentWhenNothingPending(t *testing.T) {
+	tr := &fakeTracker{
+		name:     "faketracker",
+		episodic: true,
+		checks: []checkResult{
+			{check: &domain.Check{Hash: "recounted-hash", Extra: map[string]any{
+				"pending_episodes": []string{},
+				"pending_human":    []string{},
+			}}, err: nil},
+		},
+	}
+	f := newFixture(t, tr)
+	f.topic.NotifyOnly = true
+
+	f.s.runCheck(context.Background(), f.s.log, f.topic)
+
+	if got := f.emitter.ofType(events.ReleaseFound); len(got) != 0 {
+		t.Errorf("no pending episodes means nothing to announce, got %d", len(got))
+	}
+	rec := f.lastRecord(t)
+	// The hash must still advance, or this recount repeats every tick forever.
+	if rec.hash != "recounted-hash" {
+		t.Errorf("expected hash to advance to recounted-hash, got %q", rec.hash)
+	}
+	// ...but the topic must NOT be recorded as updated. Nothing was announced,
+	// so an update here moves the topic's "last updated" timestamp with no
+	// timeline entry that could ever explain it.
+	if rec.updated {
+		t.Errorf("a silent recount must not mark the topic updated")
+	}
+}
+
+// The full sequence: a batch is announced and marked, then the recount tick
+// arrives. Only the first tick is an update; both advance the hash.
+func TestRunCheck_NotifyOnly_RecountTickIsNotAnUpdate(t *testing.T) {
+	tr := &fakeTracker{
+		name:     "faketracker",
+		episodic: true,
+		checks: []checkResult{
+			{check: &domain.Check{Hash: "batch-hash", Extra: map[string]any{
+				"pending_episodes": []string{"1-1", "1-2"},
+				"pending_human":    []string{"s01e01", "s01e02"},
+			}}, err: nil},
+			{check: &domain.Check{Hash: "recounted-hash", Extra: map[string]any{
+				"pending_episodes": []string{},
+				"pending_human":    []string{},
+			}}, err: nil},
+		},
+	}
+	f := newFixture(t, tr)
+	f.topic.NotifyOnly = true
+
+	f.s.runCheck(context.Background(), f.s.log, f.topic)
+	first := f.lastRecord(t)
+	if !first.updated {
+		t.Errorf("the announcing tick must be recorded as an update")
+	}
+	if first.hash != "batch-hash" {
+		t.Errorf("first hash = %q, want batch-hash", first.hash)
+	}
+
+	// The scheduler re-reads the topic each tick; mirror the persisted hash.
+	f.topic.LastHash = first.hash
+	f.s.runCheck(context.Background(), f.s.log, f.topic)
+
+	second := f.lastRecord(t)
+	if second.updated {
+		t.Errorf("the recount tick must not be recorded as an update")
+	}
+	if second.hash != "recounted-hash" {
+		t.Errorf("second hash = %q, want recounted-hash", second.hash)
+	}
+	if got := f.emitter.ofType(events.ReleaseFound); len(got) != 1 {
+		t.Errorf("expected exactly 1 announcement across both ticks, got %d", len(got))
+	}
+}
+
+// A reset landing mid-check invalidates the state token. Marking must stop
+// rather than write episodes into state that no longer exists.
+func TestRunCheck_NotifyOnly_EpisodicStopsOnStaleToken(t *testing.T) {
+	tr := &fakeTracker{
+		name:     "faketracker",
+		episodic: true,
+		checks: []checkResult{
+			{check: &domain.Check{Hash: "new-hash", Extra: map[string]any{
+				"pending_episodes": []string{"1-1", "1-2", "1-3"},
+				"pending_human":    []string{"s01e01", "s01e02", "s01e03"},
+			}}, err: nil},
+		},
+	}
+	f := newFixture(t, tr)
+	f.topic.NotifyOnly = true
+	f.topics.markBulkErr = fmt.Errorf("topics: mark episodes: %w", repo.ErrStaleCheckResult)
+
+	f.s.runCheck(context.Background(), f.s.log, f.topic)
+
+	// One statement, one rejection: nothing was written, so there is nothing
+	// half-applied to reconcile and no reason to try again this tick.
+	if len(f.topics.markBulkCalls) != 1 {
+		t.Errorf("expected exactly 1 bulk mark attempt, got %d", len(f.topics.markBulkCalls))
+	}
+	// The mark runs before the announcement, so a rejected mark also means the
+	// user is never told about a release the reset discarded.
+	if got := f.emitter.ofType(events.ReleaseFound); len(got) != 0 {
+		t.Errorf("a discarded mark must announce nothing, got %d release.found", len(got))
+	}
+	// Nor may the discarded tick be recorded as an update.
+	if rec := f.lastRecord(t); rec.updated {
+		t.Errorf("a discarded mark must not mark the topic updated")
+	}
+}
+
+// A reset landing between tr.Check and the announcement must silence the tick
+// outright. A notification cannot be unsent, so the same read-only token guard
+// the submit path uses runs first — and it is the ONLY guard a non-episodic
+// topic has, since it marks no episodes.
+func TestRunCheck_NotifyOnly_StaleTokenSilencesTheTick(t *testing.T) {
+	tr := &fakeTracker{
+		name: "faketracker",
+		checks: []checkResult{
+			{check: &domain.Check{Hash: "new-hash", Extra: map[string]any{}}, err: nil},
+		},
+	}
+	f := newFixture(t, tr)
+	f.topic.NotifyOnly = true
+	f.topics.verifyErr = fmt.Errorf("topics: verify check state: %w", repo.ErrStaleCheckResult)
+
+	f.s.runCheck(context.Background(), f.s.log, f.topic)
+
+	if got := f.emitter.ofType(events.ReleaseFound); len(got) != 0 {
+		t.Errorf("a stale token must announce nothing, got %d release.found", len(got))
+	}
+	if len(f.topics.markBulkCalls) != 0 {
+		t.Errorf("a stale token must not mark episodes, got %d bulk marks", len(f.topics.markBulkCalls))
+	}
+	if len(f.topics.verifyCalls) != 1 {
+		t.Errorf("expected exactly 1 VerifyCheckState call, got %d", len(f.topics.verifyCalls))
+	}
+	// recordResult still runs and is rejected by the same token in the repo, so
+	// this is not a failed check — just one whose result goes nowhere.
+	if rec := f.lastRecord(t); rec.errMsg != "" {
+		t.Errorf("a stale token is not a check failure, got errMsg %q", rec.errMsg)
+	}
+}
+
+// A DB failure on the pre-announce verify is NOT evidence the topic moved on.
+// Going silent about a real release over an unrelated blip would be the wrong
+// trade, so the tick announces anyway — the same choice sendViaClient makes.
+func TestRunCheck_NotifyOnly_VerifyDBErrorStillAnnounces(t *testing.T) {
+	tr := &fakeTracker{
+		name: "faketracker",
+		checks: []checkResult{
+			{check: &domain.Check{Hash: "new-hash", Extra: map[string]any{}}, err: nil},
+		},
+	}
+	f := newFixture(t, tr)
+	f.topic.NotifyOnly = true
+	f.topics.verifyErr = errors.New("connection reset by peer")
+
+	f.s.runCheck(context.Background(), f.s.log, f.topic)
+
+	if got := f.emitter.ofType(events.ReleaseFound); len(got) != 1 {
+		t.Errorf("an unrelated DB blip must not silence the release, got %d", len(got))
+	}
+	if rec := f.lastRecord(t); rec.errMsg != "" {
+		t.Errorf("a verify blip must not fail the check, got errMsg %q", rec.errMsg)
+	}
+}
+
+// A plain DB error while marking MUST fail the check. The mark now runs before
+// the announcement, so the tick carried no release at all: there is no "the
+// user has already been told" to trade against, and swallowing it would advance
+// the hash with the episodes still pending. The tracker would then recompute the
+// SAME hash every later tick, `updated` would be false, the mark would never be
+// retried, and a later switch to download mode would fetch the whole backlog —
+// exactly what this mode exists to prevent, reached silently on one DB blip.
+func TestRunCheck_NotifyOnly_EpisodicPlainDBErrorFailsCheck(t *testing.T) {
+	tr := &fakeTracker{
+		name:     "faketracker",
+		episodic: true,
+		checks: []checkResult{
+			{check: &domain.Check{Hash: "new-hash", Extra: map[string]any{
+				"pending_episodes": []string{"1-1", "1-2", "1-3"},
+				"pending_human":    []string{"s01e01", "s01e02", "s01e03"},
+			}}, err: nil},
+		},
+	}
+	f := newFixture(t, tr)
+	f.topic.NotifyOnly = true
+	f.topics.markBulkErr = errors.New("connection reset by peer")
+
+	// Measured as a delta because the collector is process-global and other
+	// tests share the tracker label.
+	failed := metrics.SchedulerTopicChecksTotal.WithLabelValues(f.topic.TrackerName, "notify_only_mark_error")
+	before := counterValue(t, failed)
+
+	f.s.runCheck(context.Background(), f.s.log, f.topic)
+
+	if got := counterValue(t, failed) - before; got != 1 {
+		t.Errorf("notify_only_mark_error incremented by %v, want 1", got)
+	}
+	if len(f.topics.markBulkCalls) != 1 {
+		t.Errorf("expected exactly 1 bulk mark attempt, got %d", len(f.topics.markBulkCalls))
+	}
+	// Nothing was announced, which is what makes failing the tick the right
+	// trade rather than a notification the retry would duplicate.
+	if got := f.emitter.ofType(events.ReleaseFound); len(got) != 0 {
+		t.Errorf("a failed mark must announce nothing, got %d release.found", len(got))
+	}
+	rec := f.lastRecord(t)
+	if rec.errMsg == "" {
+		t.Errorf("a failed mark must fail the check, got an empty errMsg")
+	}
+	// errStatePersist, not a bare error: without it the message ("connection
+	// reset by peer") is blamed on the tracker and can rotate its domain on
+	// evidence about our own database.
+	if rec.errCode != errCodeInternal {
+		t.Errorf("errCode = %q, want %q", rec.errCode, errCodeInternal)
+	}
+	// The OLD hash: the tracker reports the same hash next tick, so keeping it
+	// is what makes the change re-detectable and the mark retryable.
+	if rec.hash != "old-hash" {
+		t.Errorf("a failed mark must keep the old hash, got %q", rec.hash)
+	}
+}
+
+// The retry closes the loop: the tick after a failed mark re-detects the same
+// release, marks it, and announces it — exactly once across both ticks. The
+// failing tick announced nothing, so there is no duplicate to suppress, which
+// is why the announce is safe to leave ungated on ConsecutiveErrors.
+func TestRunCheck_NotifyOnly_RetryAfterFailedMarkAnnouncesOnce(t *testing.T) {
+	batch := func() *domain.Check {
+		return &domain.Check{Hash: "batch-hash", Extra: map[string]any{
+			"pending_episodes": []string{"1-1", "1-2"},
+			"pending_human":    []string{"s01e01", "s01e02"},
+		}}
+	}
+	tr := &fakeTracker{
+		name:     "faketracker",
+		episodic: true,
+		// The tracker has not changed, so it recomputes the SAME hash.
+		checks: []checkResult{{check: batch()}, {check: batch()}},
+	}
+	f := newFixture(t, tr)
+	f.topic.NotifyOnly = true
+	f.topics.markBulkErr = errors.New("connection reset by peer")
+
+	f.s.runCheck(context.Background(), f.s.log, f.topic)
+
+	if got := f.emitter.ofType(events.ReleaseFound); len(got) != 0 {
+		t.Fatalf("the failing tick must announce nothing, got %d", len(got))
+	}
+	if first := f.lastRecord(t); first.hash != "old-hash" {
+		t.Fatalf("first hash = %q, want old-hash", first.hash)
+	}
+
+	// The scheduler re-reads the topic each tick: the old hash was persisted
+	// and the failure bumped the error count.
+	f.topic.ConsecutiveErrors = 1
+	f.topics.markBulkErr = nil
+	f.s.runCheck(context.Background(), f.s.log, f.topic)
+
+	if got := f.emitter.ofType(events.ReleaseFound); len(got) != 1 {
+		t.Errorf("expected exactly 1 announcement across both ticks, got %d", len(got))
+	}
+	if len(f.topics.markBulkCalls) != 2 {
+		t.Errorf("expected the mark to be retried, got %d attempts", len(f.topics.markBulkCalls))
+	}
+	second := f.lastRecord(t)
+	if second.hash != "batch-hash" {
+		t.Errorf("second hash = %q, want batch-hash", second.hash)
+	}
+	if second.errMsg != "" {
+		t.Errorf("the retry succeeded, got errMsg %q", second.errMsg)
+	}
+	if !second.updated {
+		t.Errorf("the announcing tick must be recorded as an update")
+	}
+}
+
+// notifyOnlyBody caps its label list the same way notifyUpdated does, so one
+// catch-up tick cannot produce a wall of text in a Telegram message.
+func TestNotifyOnlyBody(t *testing.T) {
+	labels := func(n int) []string {
+		out := make([]string, n)
+		for i := range out {
+			out[i] = fmt.Sprintf("s01e%02d", i+1)
+		}
+		return out
+	}
+	cases := []struct {
+		name         string
+		in           []string
+		wantContains []string
+		wantOmits    []string
+	}{
+		{"none", nil, []string{"not downloaded"}, []string{"s01e", "more)"}},
+		{"one", labels(1), []string{"s01e01", "not downloaded"}, []string{"more)"}},
+		{"exactly ten", labels(10), []string{"s01e01", "s01e10"}, []string{"more)"}},
+		{"eleven caps at ten", labels(11), []string{"s01e01", "s01e10", "(+1 more)"}, []string{"s01e11"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := notifyOnlyBody(tc.in)
+			for _, want := range tc.wantContains {
+				if !strings.Contains(got, want) {
+					t.Errorf("body %q must contain %q", got, want)
+				}
+			}
+			for _, omit := range tc.wantOmits {
+				if strings.Contains(got, omit) {
+					t.Errorf("body %q must not contain %q", got, omit)
+				}
+			}
+		})
+	}
+}
 
 func TestRunCheck_HashUnchanged(t *testing.T) {
 	tr := &fakeTracker{
@@ -2556,6 +3088,21 @@ func (f *fakeTopicsGuarded) MarkEpisodeDownloaded(_ context.Context, t *domain.T
 	if f.afterAcceptedMark != nil {
 		f.afterAcceptedMark()
 	}
+	return nil
+}
+
+// MarkEpisodesDownloaded carries the same token guard, and — like the single
+// statement it models — is all-or-nothing: a rejected token appends nothing.
+func (f *fakeTopicsGuarded) MarkEpisodesDownloaded(_ context.Context, t *domain.Topic, packed []string) error {
+	if len(packed) == 0 {
+		return nil
+	}
+	f.markBulkCalls = append(f.markBulkCalls, append([]string(nil), packed...))
+	if !f.tokenMatches(t) {
+		f.markRejected++
+		return repo.ErrStaleCheckResult
+	}
+	f.downloaded = append(f.downloaded, packed...)
 	return nil
 }
 

@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -83,6 +84,7 @@ type fakeTopicStore struct {
 	updateCategory          string
 	updateReplaceOnUpdate   bool
 	updateReplaceDeleteData bool
+	lastFlags               repo.TopicFlags
 	updateExtra             map[string]any
 	updateReturn            *domain.Topic
 
@@ -131,15 +133,16 @@ func (s *fakeTopicStore) QueueRecheck(_ context.Context, id, userID uuid.UUID) (
 	s.recheckCalls = append(s.recheckCalls, [2]uuid.UUID{id, userID})
 	return s.recheckOutcome, s.recheckErr
 }
-func (s *fakeTopicStore) Update(_ context.Context, _, _ uuid.UUID, displayName string, clientID, notifierID *uuid.UUID, downloadDir, category string, replaceOnUpdate, replaceDeleteData bool, extra map[string]any) (*domain.Topic, error) {
+func (s *fakeTopicStore) Update(_ context.Context, _, _ uuid.UUID, displayName string, clientID, notifierID *uuid.UUID, downloadDir, category string, flags repo.TopicFlags, extra map[string]any) (*domain.Topic, error) {
 	s.updateCalled = true
 	s.updateDisplayName = displayName
 	s.updateClientID = clientID
 	s.updateNotifierID = notifierID
 	s.updateDownloadDir = downloadDir
 	s.updateCategory = category
-	s.updateReplaceOnUpdate = replaceOnUpdate
-	s.updateReplaceDeleteData = replaceDeleteData
+	s.updateReplaceOnUpdate = flags.ReplaceOnUpdate
+	s.updateReplaceDeleteData = flags.ReplaceDeleteData
+	s.lastFlags = flags
 	s.updateExtra = extra
 	if s.updateReturn != nil {
 		return s.updateReturn, nil
@@ -267,6 +270,43 @@ func TestTopicsUpdate_OmittedReplaceFlags_PreserveExisting(t *testing.T) {
 	}
 	if store.updateReplaceDeleteData {
 		t.Error("omitted replace_delete_data should preserve the stored false")
+	}
+}
+
+// PUT /topics/{id} must persist notify_only when supplied, and must PRESERVE
+// the topic's current value when the field is omitted — the same pointer
+// semantics replace_on_update uses (issue #184).
+func TestUpdateTopic_NotifyOnlyPointerSemantics(t *testing.T) {
+	topicID, userID := uuid.New(), uuid.New()
+	store := &fakeTopicStore{getByID: &domain.Topic{
+		ID: topicID, UserID: userID, NotifyOnly: true, NotifyOnlyAnnounceCurrent: true,
+		Extra: map[string]any{},
+	}}
+	h := &Topics{Topics: store, BaseURL: "http://test"}
+
+	// Omitted → preserved.
+	w := httptest.NewRecorder()
+	req := withURLParam(authedReq(t, userID, map[string]any{"display_name": "x"}), "id", topicID.String())
+	h.Update(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if !store.lastFlags.NotifyOnly || !store.lastFlags.NotifyOnlyAnnounceCurrent {
+		t.Errorf("omitted flags must be preserved, got %+v", store.lastFlags)
+	}
+
+	// Supplied false → applied.
+	w = httptest.NewRecorder()
+	req = withURLParam(authedReq(t, userID, map[string]any{"display_name": "x", "notify_only": false}), "id", topicID.String())
+	h.Update(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if store.lastFlags.NotifyOnly {
+		t.Errorf("notify_only:false must be applied, got %+v", store.lastFlags)
+	}
+	if !store.lastFlags.NotifyOnlyAnnounceCurrent {
+		t.Errorf("announce_current was omitted and must still be preserved, got %+v", store.lastFlags)
 	}
 }
 
@@ -466,5 +506,56 @@ func TestTopics_Update_PassesNotifierID(t *testing.T) {
 	}
 	if store.updateNotifierID == nil || *store.updateNotifierID != notifierID {
 		t.Errorf("updateNotifierID = %v, want %s", store.updateNotifierID, notifierID)
+	}
+}
+
+// TestTopics_Create_PassesNotifyOnlyFlags pins the whole POST /topics hop for
+// the watch-only flags (issue #184): the JSON field names, the handler's
+// req → topics.CreateInput copy, and CreateInput → domain.Topic.
+//
+// The body is raw JSON rather than a createTopicReq literal so a renamed tag
+// fails here too, and the two values are deliberately DIFFERENT — with
+// {true,true} the test still passes when the two assignments are transposed.
+func TestTopics_Create_PassesNotifyOnlyFlags(t *testing.T) {
+	store := &fakeTopicStore{}
+	h := &Topics{Topics: store, BaseURL: "http://x"}
+
+	body := json.RawMessage(`{"url":"fake-create://topic/notify-only",` +
+		`"notify_only":true,"notify_only_announce_current":false}`)
+	w := httptest.NewRecorder()
+	h.Create(w, authedReq(t, uuid.New(), body))
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body=%s", w.Code, w.Body.String())
+	}
+	if store.created == nil {
+		t.Fatal("handler must call store.Create")
+	}
+	if !store.created.NotifyOnly {
+		t.Errorf("created.NotifyOnly = false, want true")
+	}
+	if store.created.NotifyOnlyAnnounceCurrent {
+		t.Errorf("created.NotifyOnlyAnnounceCurrent = true, want false")
+	}
+}
+
+// TestTopics_Create_NotifyOnlyAnnounceCurrent pins that the sub-flag can carry
+// true through the handler at all — the test above only ever sends it as false.
+// It is deliberately NOT a swap detector: {true,true} is symmetric, so a
+// transposed pair would still pass here. The asymmetric case above catches that.
+func TestTopics_Create_NotifyOnlyAnnounceCurrent(t *testing.T) {
+	store := &fakeTopicStore{}
+	h := &Topics{Topics: store, BaseURL: "http://x"}
+
+	body := json.RawMessage(`{"url":"fake-create://topic/announce-current",` +
+		`"notify_only":true,"notify_only_announce_current":true}`)
+	w := httptest.NewRecorder()
+	h.Create(w, authedReq(t, uuid.New(), body))
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body=%s", w.Code, w.Body.String())
+	}
+	if !store.created.NotifyOnly || !store.created.NotifyOnlyAnnounceCurrent {
+		t.Errorf("want both flags true, got %+v", store.created)
 	}
 }

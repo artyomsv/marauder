@@ -81,6 +81,137 @@ describe("AddTopicCard", () => {
   // jsdom (animations don't run), which makes CSS-visibility matchers lie.
   const inHiddenPane = (el: HTMLElement) => el.closest("div[hidden]") !== null;
 
+  it("sends notify_only and hides the client selector when notify-only is on", async () => {
+    const user = userEvent.setup();
+    mockApi.post.mockResolvedValue({});
+    render(<AddTopicCard onClose={() => {}} onCreated={() => {}} />, {
+      wrapper: wrap(),
+    });
+
+    await user.type(screen.getByLabelText(/URL or magnet link/i), "https://example.com/t/1");
+    await user.click(screen.getByLabelText(/Notify only/i));
+
+    // Download settings are irrelevant in this mode and must be out of the way.
+    expect(screen.queryByLabelText(/Client \(optional\)/i)).not.toBeInTheDocument();
+    // The notifier selector must stay — it is the whole point of the mode.
+    expect(screen.getByLabelText("Notifier (optional)")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /add topic/i }));
+
+    expect(mockApi.post).toHaveBeenCalledWith(
+      "/topics",
+      expect.objectContaining({ notify_only: true, notify_only_announce_current: false }),
+    );
+  });
+
+  it("forwards notify_only_announce_current when the sub-option is ticked", async () => {
+    const user = userEvent.setup();
+    mockApi.post.mockResolvedValue({});
+    render(<AddTopicCard onClose={() => {}} onCreated={() => {}} />, {
+      wrapper: wrap(),
+    });
+
+    await user.type(screen.getByLabelText(/URL or magnet link/i), "https://example.com/t/1");
+    await user.click(screen.getByLabelText(/Notify only/i));
+    // The sub-option only exists once notify-only is on.
+    await user.click(screen.getByLabelText(/release that is there now/i));
+    await user.click(screen.getByRole("button", { name: /add topic/i }));
+
+    expect(mockApi.post).toHaveBeenCalledWith(
+      "/topics",
+      expect.objectContaining({ notify_only: true, notify_only_announce_current: true }),
+    );
+  });
+
+  it.each([false, true])("checks the notifier list for a default (is_default=%s)", async (isDefault) => {
+    const user = userEvent.setup();
+    const routeGet = mockApi.get.getMockImplementation() as (path: string) => unknown;
+    mockApi.get.mockImplementation((path: string) =>
+      path === "/notifiers"
+        ? Promise.resolve({ notifiers: [{ id: "n1", display_name: "Alerts", is_default: isDefault }] })
+        : routeGet(path),
+    );
+    render(<AddTopicCard onClose={() => {}} onCreated={() => {}} />, {
+      wrapper: wrap(),
+    });
+    await screen.findByRole("option", { name: "Alerts" });
+    expect(screen.queryByText(/This topic has no notifier/)).not.toBeInTheDocument();
+
+    await user.click(screen.getByLabelText(/Notify only/i));
+    if (isDefault) {
+      expect(screen.queryByText(/This topic has no notifier/)).not.toBeInTheDocument();
+    } else {
+      expect(screen.getByText(/This topic has no notifier/)).toBeInTheDocument();
+    }
+
+    await user.selectOptions(screen.getByLabelText("Notifier (optional)"), "n1");
+    expect(screen.queryByText(/This topic has no notifier/)).not.toBeInTheDocument();
+  });
+
+  // The silent-topic warning must ask whether a notifier hears release.found —
+  // the ONLY notifiable event a notify-only topic emits. Merely existing, or
+  // merely being the default, is not enough.
+  type TestNotifier = {
+    id: string;
+    display_name: string;
+    is_default: boolean;
+    events: string[] | null;
+  };
+
+  function withNotifiers(list: TestNotifier[]) {
+    const routeGet = mockApi.get.getMockImplementation() as (path: string) => unknown;
+    mockApi.get.mockImplementation((path: string) =>
+      path === "/notifiers" ? Promise.resolve({ notifiers: list }) : routeGet(path),
+    );
+  }
+
+  it.each([
+    ["release.found", ["release.found"], false],
+    ["the legacy updated alias", ["updated"], false],
+    ["an empty list (means all events)", [], false],
+    ["download events only", ["download.submitted", "download.completed"], true],
+  ])(
+    "default notifier subscribed to %s → warning shown: %j",
+    async (_label, events, wantWarning) => {
+      const user = userEvent.setup();
+      withNotifiers([
+        { id: "n1", display_name: "Alerts", is_default: true, events: events as string[] },
+      ]);
+      render(<AddTopicCard onClose={() => {}} onCreated={() => {}} />, {
+        wrapper: wrap(),
+      });
+      await screen.findByRole("option", { name: "Alerts" });
+      await user.click(screen.getByLabelText(/Notify only/i));
+
+      const warning = screen.queryByText(/no notifier that is subscribed to new releases/i);
+      expect(warning === null).toBe(!wantWarning);
+    },
+  );
+
+  // An explicitly picked notifier replaces the defaults, so it — not the
+  // default — is what decides whether the topic is silent.
+  it("warns when the explicitly picked notifier ignores new releases", async () => {
+    const user = userEvent.setup();
+    withNotifiers([
+      { id: "n1", display_name: "Alerts", is_default: true, events: ["release.found"] },
+      { id: "n2", display_name: "Deaf", is_default: false, events: ["download.completed"] },
+    ]);
+    render(<AddTopicCard onClose={() => {}} onCreated={() => {}} />, {
+      wrapper: wrap(),
+    });
+    await screen.findByRole("option", { name: "Deaf" });
+    await user.click(screen.getByLabelText(/Notify only/i));
+    // The default hears releases, so nothing is wrong yet.
+    expect(
+      screen.queryByText(/no notifier that is subscribed to new releases/i),
+    ).not.toBeInTheDocument();
+
+    await user.selectOptions(screen.getByLabelText("Notifier (optional)"), "n2");
+    expect(
+      screen.getByText(/no notifier that is subscribed to new releases/i),
+    ).toBeInTheDocument();
+  });
+
   it("opens in URL mode with the topic form visible", () => {
     render(<AddTopicCard onClose={() => {}} onCreated={() => {}} />, {
       wrapper: wrap(),

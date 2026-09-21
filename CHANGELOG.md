@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Per-topic **notify-only** mode: watch a tracker page and get a notification
+  when a new release appears, without sending anything to a download client.
+  No download client is required. An optional sub-setting also announces the
+  release already present when the topic is first checked. (#184)
+
 ## [1.19.10] - 2026-09-08
 
 ### Security

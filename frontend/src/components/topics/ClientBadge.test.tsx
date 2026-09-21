@@ -27,6 +27,8 @@ function topicWith(clientID: string | null): Topic {
     Category: "",
     ReplaceOnUpdate: false,
     ReplaceDeleteData: true,
+    NotifyOnly: false,
+    NotifyOnlyAnnounceCurrent: false,
     Extra: null,
     LastHash: "",
     LastCheckedAt: null,
@@ -43,6 +45,17 @@ function topicWith(clientID: string | null): Topic {
 }
 
 describe("ClientBadge", () => {
+  it.each(["c2", "gone", null])("hides client badges for notify-only topics (client=%s)", (clientID) => {
+    const { container } = render(
+      <ClientBadge
+        topic={{ ...topicWith(clientID), NotifyOnly: true }}
+        clientById={clientById}
+        defaultClient={null}
+      />,
+    );
+    expect(container).toBeEmptyDOMElement();
+  });
+
   it("shows the explicitly selected client's name", () => {
     render(
       <ClientBadge topic={topicWith("c2")} clientById={clientById} defaultClient={QBIT} />,

@@ -385,3 +385,39 @@ func TestResolveMetadata_CredentialWarmHasItsOwnBudget(t *testing.T) {
 		t.Errorf("ResolveMetadata got %v of budget, want ~%v", remaining, metadataTimeout)
 	}
 }
+
+// TestBuildAndCreate_NotifyOnlyFlags pins the watch-only flags (issue #184)
+// onto the persisted topic. The two values are deliberately DIFFERENT: with
+// {true,true} or {false,false} the test still passes when the two assignments
+// in BuildAndCreate are transposed, which is exactly the bug it must catch.
+func TestBuildAndCreate_NotifyOnlyFlags(t *testing.T) {
+	store := &fakeStore{}
+	_, err := BuildAndCreate(context.Background(), store, CreateInput{
+		UserID: uuid.New(), URL: goodURL,
+		NotifyOnly:                true,
+		NotifyOnlyAnnounceCurrent: false,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !store.created.NotifyOnly {
+		t.Errorf("NotifyOnly = false, want true")
+	}
+	if store.created.NotifyOnlyAnnounceCurrent {
+		t.Errorf("NotifyOnlyAnnounceCurrent = true, want false")
+	}
+}
+
+// TestBuildAndCreate_NotifyOnlyFlags_DefaultOff proves an omitted pair leaves
+// a topic in the historical download mode.
+func TestBuildAndCreate_NotifyOnlyFlags_DefaultOff(t *testing.T) {
+	store := &fakeStore{}
+	if _, err := BuildAndCreate(context.Background(), store, CreateInput{
+		UserID: uuid.New(), URL: goodURL,
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if store.created.NotifyOnly || store.created.NotifyOnlyAnnounceCurrent {
+		t.Errorf("want both flags false by default, got %+v", store.created)
+	}
+}

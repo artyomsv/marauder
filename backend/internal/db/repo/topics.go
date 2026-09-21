@@ -41,7 +41,7 @@ const topicColumns = `id, user_id, tracker_name, url, display_name,
 		last_checked_at, last_updated_at, next_check_at,
 		check_interval_sec, consecutive_errors, status,
 		COALESCE(last_error,''), COALESCE(last_error_code,''), created_at, updated_at, display_name_is_placeholder,
-		replace_on_update, replace_delete_data`
+		replace_on_update, replace_delete_data, notify_only, notify_only_announce_current`
 
 func scanTopic(row pgx.Row) (*domain.Topic, error) {
 	var t domain.Topic
@@ -55,7 +55,7 @@ func scanTopic(row pgx.Row) (*domain.Topic, error) {
 		&lastChecked, &lastUpdated, &t.NextCheckAt,
 		&t.CheckIntervalSec, &t.ConsecutiveErrors, &status,
 		&t.LastError, &t.LastErrorCode, &t.CreatedAt, &t.UpdatedAt, &t.DisplayNameIsPlaceholder,
-		&t.ReplaceOnUpdate, &t.ReplaceDeleteData,
+		&t.ReplaceOnUpdate, &t.ReplaceDeleteData, &t.NotifyOnly, &t.NotifyOnlyAnnounceCurrent,
 	)
 	if err != nil {
 		return nil, err
@@ -86,13 +86,15 @@ func (r *Topics) Create(ctx context.Context, t *domain.Topic) (*domain.Topic, er
 	q := `
 INSERT INTO topics (user_id, tracker_name, url, display_name, image_url, client_id, notifier_id,
                     download_dir, category, extra, check_interval_sec, next_check_at, status,
-                    display_name_is_placeholder, replace_on_update, replace_delete_data)
-VALUES ($1,$2,$3,$4,NULLIF($5,''),$6,$7,NULLIF($8,''),NULLIF($9,''),$10,$11,$12,$13,$14,$15,$16)
+                    display_name_is_placeholder, replace_on_update, replace_delete_data,
+                    notify_only, notify_only_announce_current)
+VALUES ($1,$2,$3,$4,NULLIF($5,''),$6,$7,NULLIF($8,''),NULLIF($9,''),$10,$11,$12,$13,$14,$15,$16,$17,$18)
 RETURNING ` + topicColumns
 	row := r.pool.QueryRow(ctx, q,
 		t.UserID, t.TrackerName, t.URL, t.DisplayName, t.ImageURL, t.ClientID, t.NotifierID,
 		t.DownloadDir, t.Category, extra, t.CheckIntervalSec, t.NextCheckAt, string(t.Status),
 		t.DisplayNameIsPlaceholder, t.ReplaceOnUpdate, t.ReplaceDeleteData,
+		t.NotifyOnly, t.NotifyOnlyAnnounceCurrent,
 	)
 	return scanTopic(row)
 }
@@ -362,6 +364,52 @@ WHERE  id = $1 AND last_checked_at IS NOT DISTINCT FROM $3 AND next_check_at = $
 	return nil
 }
 
+// MarkEpisodesDownloaded appends EVERY packed episode id in one statement,
+// under the same check-state version token MarkEpisodeDownloaded carries.
+//
+// It exists for the notify-only watch mode (issue #184), which marks a whole
+// pending list seen in one go. The list length is chosen by the remote
+// tracker, so calling the single-episode form in a loop issues an unbounded
+// number of round-trips on the worker's root context — and, worse, is not
+// atomic: a failure partway leaves some episodes marked, which changes a
+// count-derived tracker hash and makes the next tick re-announce the
+// remainder as if it were new. One statement makes it all-or-nothing.
+//
+// The download path deliberately keeps using MarkEpisodeDownloaded: there
+// each mark must land as its own episode is delivered, so a mid-loop failure
+// preserves exactly the progress that really happened.
+//
+// An empty list is a no-op (nil), not a stale result — there is nothing to
+// write, so there is nothing for the token to guard.
+//
+// Returns ErrStaleCheckResult when the guard rejected the write.
+func (r *Topics) MarkEpisodesDownloaded(ctx context.Context, t *domain.Topic, packed []string) error {
+	if len(packed) == 0 {
+		return nil
+	}
+	// Same atomic JSONB append as MarkEpisodeDownloaded, except the right-hand
+	// side is a whole array: to_jsonb over a text[] yields a JSONB array, and
+	// || concatenates two JSONB arrays element-wise rather than nesting one.
+	const query = `
+UPDATE topics
+SET    extra = jsonb_set(
+           COALESCE(extra, '{}'::jsonb),
+           '{downloaded_episodes}',
+           (COALESCE(extra->'downloaded_episodes', '[]'::jsonb) || to_jsonb($2::text[])),
+           true
+       ),
+       updated_at = now()
+WHERE  id = $1 AND last_checked_at IS NOT DISTINCT FROM $3 AND next_check_at = $4`
+	ct, err := r.pool.Exec(ctx, query, t.ID, packed, t.LastCheckedAt, t.NextCheckAt)
+	if err != nil {
+		return fmt.Errorf("topics: mark episodes downloaded: %w", err)
+	}
+	if ct.RowsAffected() == 0 {
+		return ErrStaleCheckResult
+	}
+	return nil
+}
+
 // ResetCheckState discards a topic's check/download state so the next check
 // re-detects the current release as new and re-delivers it. It is the inverse
 // of RecordCheckResult, plus the per-episode progress MarkEpisodeDownloaded
@@ -485,11 +533,28 @@ SELECT EXISTS (SELECT 1 FROM target), EXISTS (SELECT 1 FROM updated)`
 	return out, nil
 }
 
+// TopicFlags groups a topic's boolean delivery policies. They travel as a
+// struct rather than as positional parameters because Update would otherwise
+// take several adjacent bools, which the compiler cannot tell apart: a
+// transposed pair would silently swap two policies and no test that does not
+// assert on both would notice.
+type TopicFlags struct {
+	// ReplaceOnUpdate opts the topic into the "replace previous version"
+	// policy (issue #101); ReplaceDeleteData also deletes the old torrent's
+	// files from disk.
+	ReplaceOnUpdate   bool
+	ReplaceDeleteData bool
+	// NotifyOnly / NotifyOnlyAnnounceCurrent are the notify-only watch mode
+	// (issue #184). See domain.Topic for the full semantics.
+	NotifyOnly                bool
+	NotifyOnlyAnnounceCurrent bool
+}
+
 // Update edits a topic's user-editable fields (display name, client, notifier,
 // download dir, category, and the capability Extra map). It does NOT
 // touch url/tracker/status/hash/scheduling. Returns ErrNotFound when the
 // topic doesn't belong to the user.
-func (r *Topics) Update(ctx context.Context, id, userID uuid.UUID, displayName string, clientID, notifierID *uuid.UUID, downloadDir, category string, replaceOnUpdate, replaceDeleteData bool, extra map[string]any) (*domain.Topic, error) {
+func (r *Topics) Update(ctx context.Context, id, userID uuid.UUID, displayName string, clientID, notifierID *uuid.UUID, downloadDir, category string, flags TopicFlags, extra map[string]any) (*domain.Topic, error) {
 	raw, err := json.Marshal(extra)
 	if err != nil {
 		return nil, fmt.Errorf("topics: marshal extra: %w", err)
@@ -500,10 +565,11 @@ func (r *Topics) Update(ctx context.Context, id, userID uuid.UUID, displayName s
 	row := r.pool.QueryRow(ctx, `UPDATE topics SET
 		display_name = $3, client_id = $4, notifier_id = $5, download_dir = $6, category = $7,
 		extra = $8, replace_on_update = $9, replace_delete_data = $10,
+		notify_only = $11, notify_only_announce_current = $12,
 		display_name_is_placeholder = CASE WHEN display_name <> $3 THEN false ELSE display_name_is_placeholder END,
 		updated_at = now()
 	WHERE id = $1 AND user_id = $2
-	RETURNING `+topicColumns, id, userID, displayName, clientID, notifierID, downloadDir, category, raw, replaceOnUpdate, replaceDeleteData)
+	RETURNING `+topicColumns, id, userID, displayName, clientID, notifierID, downloadDir, category, raw, flags.ReplaceOnUpdate, flags.ReplaceDeleteData, flags.NotifyOnly, flags.NotifyOnlyAnnounceCurrent)
 	t, err := scanTopic(row)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound

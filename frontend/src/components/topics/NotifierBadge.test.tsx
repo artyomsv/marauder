@@ -9,6 +9,7 @@ function topic(overrides: Partial<Topic>): Topic {
     ID: "t1", UserID: "u1", TrackerName: "rutracker", URL: "x",
     DisplayName: "Show", ImageURL: "", ClientID: null, NotifierID: null,
     DownloadDir: "", Category: "", ReplaceOnUpdate: false, ReplaceDeleteData: true, Extra: null, LastHash: "",
+    NotifyOnly: false, NotifyOnlyAnnounceCurrent: false,
     LastCheckedAt: null, LastUpdatedAt: null, NextCheckAt: "", CheckIntervalSec: 900,
     ConsecutiveErrors: 0, Status: "active", LastError: "", LastErrorCode: "", CreatedAt: "", UpdatedAt: "",
     ...overrides,

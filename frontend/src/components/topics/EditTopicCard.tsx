@@ -31,6 +31,8 @@ function initialFrom(topic: Topic): TopicFormValues {
     category: topic.Category ?? "",
     replaceOnUpdate: topic.ReplaceOnUpdate ?? false,
     replaceDeleteData: topic.ReplaceDeleteData ?? true,
+    notifyOnly: topic.NotifyOnly ?? false,
+    notifyOnlyAnnounceCurrent: topic.NotifyOnlyAnnounceCurrent ?? false,
   };
 }
 
@@ -53,6 +55,8 @@ export function EditTopicCard({ topic, onClose, onSaved }: EditTopicCardProps) {
         category: v.category,
         replace_on_update: v.replaceOnUpdate,
         replace_delete_data: v.replaceDeleteData,
+        notify_only: v.notifyOnly,
+        notify_only_announce_current: v.notifyOnlyAnnounceCurrent,
         quality: v.quality || undefined,
         start_season: v.startSeason ? parseInt(v.startSeason, 10) : undefined,
         start_episode: v.startEpisode ? parseInt(v.startEpisode, 10) : undefined,

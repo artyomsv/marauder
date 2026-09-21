@@ -71,9 +71,14 @@ type CreateInput struct {
 	// get the same default as the DB column.
 	ReplaceOnUpdate   bool
 	ReplaceDeleteData *bool
-	Quality           string
-	StartSeason       *int
-	StartEpisode      *int
+	// NotifyOnly makes the topic watch-only (issue #184): monitored and
+	// announced, never submitted to a client. NotifyOnlyAnnounceCurrent
+	// additionally announces the release already present at the first check.
+	NotifyOnly                bool
+	NotifyOnlyAnnounceCurrent bool
+	Quality                   string
+	StartSeason               *int
+	StartEpisode              *int
 	// Source tags how the topic was created (e.g. "sonarr"). Stored in
 	// extra["source"] so the UI can badge auto-imported topics. Empty for
 	// manually-added topics.
@@ -163,22 +168,24 @@ func BuildAndCreate(ctx context.Context, store Store, in CreateInput) (*Result, 
 	}
 
 	t := &domain.Topic{
-		UserID:                   in.UserID,
-		TrackerName:              tracker.Name(),
-		URL:                      in.URL,
-		DisplayName:              displayName,
-		DisplayNameIsPlaceholder: !resolved,
-		ImageURL:                 imageURL,
-		ClientID:                 in.ClientID,
-		NotifierID:               in.NotifierID,
-		DownloadDir:              in.DownloadDir,
-		Category:                 in.Category,
-		ReplaceOnUpdate:          in.ReplaceOnUpdate,
-		ReplaceDeleteData:        replaceDeleteData,
-		Extra:                    extra,
-		CheckIntervalSec:         interval,
-		NextCheckAt:              time.Now().UTC(),
-		Status:                   domain.TopicStatusActive,
+		UserID:                    in.UserID,
+		TrackerName:               tracker.Name(),
+		URL:                       in.URL,
+		DisplayName:               displayName,
+		DisplayNameIsPlaceholder:  !resolved,
+		ImageURL:                  imageURL,
+		ClientID:                  in.ClientID,
+		NotifierID:                in.NotifierID,
+		DownloadDir:               in.DownloadDir,
+		Category:                  in.Category,
+		ReplaceOnUpdate:           in.ReplaceOnUpdate,
+		ReplaceDeleteData:         replaceDeleteData,
+		NotifyOnly:                in.NotifyOnly,
+		NotifyOnlyAnnounceCurrent: in.NotifyOnlyAnnounceCurrent,
+		Extra:                     extra,
+		CheckIntervalSec:          interval,
+		NextCheckAt:               time.Now().UTC(),
+		Status:                    domain.TopicStatusActive,
 	}
 
 	created, err := store.Create(ctx, t)

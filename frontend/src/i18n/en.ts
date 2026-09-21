@@ -275,7 +275,7 @@ const en: Record<string, string> = {
   "topics.reset.title": "Reset {name}",
   "topics.reset.titleBulk": "Reset {count} topics",
   "topics.reset.body":
-    "Discards delivery records, downloaded-episode progress and error state, then checks again immediately so everything is downloaded from scratch. Settings and event history are kept. A paused topic stays paused.",
+    "Discards delivery records, downloaded-episode progress and error state, then checks again immediately so the current release counts as new. Topics that download will fetch it again. Notify-only topics re-detect it silently unless you enabled announcing the release that is already there. Settings and event history are kept. A paused topic stays paused.",
   "topics.reset.deleteData": "Also delete the downloaded files from the client",
   "topics.reset.confirm": "Reset",
   "topics.reset.cancel": "Cancel",
@@ -283,6 +283,25 @@ const en: Record<string, string> = {
   "topics.reset.done": "Removed {count} torrent(s). Queued for a fresh check.",
   "topics.reset.warnings": "Some torrents could not be removed:",
   "topics.reset.close": "Close",
+
+  // Notify-only watch mode (issue #184) — monitored and announced, never
+  // delivered to a torrent client.
+  "topics.notifyOnly.badge": "Notify only",
+  "topics.notifyOnly.label": "Notify only — do not download",
+  "topics.notifyOnly.help":
+    "Keep checking this topic and send a notification when a new release appears, without sending anything to a torrent client. No download client is required.",
+  "topics.notifyOnly.announceCurrent":
+    "Also tell me about the release that is there now",
+  "topics.notifyOnly.silentWarning":
+    "This topic has no notifier that is subscribed to new releases, so it will be checked silently and you will never hear about it. Pick a notifier below that receives new releases, or mark one as default on the Notifiers page.",
+  "topics.notifyOnly.toggleBackNotice":
+    "Releases seen while this topic was notify-only will not be downloaded — only the next change will. Use Reset on the topic if you want the current release fetched now.",
+
+  // Replace-on-update policy (issue #101)
+  "topics.replaceOnUpdate.label": "Replace previous version on update",
+  "topics.replaceOnUpdate.help":
+    "When a new release is detected, remove the previously downloaded torrent from the client instead of keeping every version. Best for single releases (movies, repacked seasons) — not per-episode shows.",
+  "topics.replaceOnUpdate.deleteData": "Also delete the old files from disk",
 
   // Notifier event subscriptions (which events a notifier fires on)
   "notifiers.events.prefix": "Notifies on",

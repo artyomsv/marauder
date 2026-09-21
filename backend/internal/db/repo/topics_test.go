@@ -226,10 +226,82 @@ func TestTopics_MarkEpisodeDownloaded_DBError(t *testing.T) {
 	}
 }
 
+// ---------- MarkEpisodesDownloaded (bulk) ----------
+
+// TestTopics_MarkEpisodesDownloaded_BindsWholeListAndToken pins the two things
+// the bulk form exists for: the entire list goes out as ONE argument in ONE
+// statement, and it carries the same check-state token as the singular form.
+func TestTopics_MarkEpisodesDownloaded_BindsWholeListAndToken(t *testing.T) {
+	repo, mock := newMockTopics(t)
+	t.Cleanup(func() { assertExpectationsMet(t, mock) })
+
+	observed := time.Now().Add(-time.Minute)
+	next := time.Now().Add(time.Hour)
+	topic := &domain.Topic{ID: uuid.New(), LastCheckedAt: &observed, NextCheckAt: next}
+	packed := []string{"S01E05", "S01E06", "S01E07"}
+
+	mock.ExpectExec(`(?s)UPDATE topics\s+SET\s+extra = jsonb_set\(.*to_jsonb\(\$2::text\[\]\).*`+
+		`WHERE\s+id = \$1 AND last_checked_at IS NOT DISTINCT FROM \$3 AND next_check_at = \$4`).
+		WithArgs(topic.ID, packed, &observed, next).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+
+	if err := repo.MarkEpisodesDownloaded(context.Background(), topic, packed); err != nil {
+		t.Fatalf("MarkEpisodesDownloaded: unexpected error: %v", err)
+	}
+}
+
+// An empty list must not reach the database at all — there is nothing to
+// append, so a statement would only ever produce a misleading stale result on
+// a topic that was legitimately reset. assertExpectationsMet catches any query.
+func TestTopics_MarkEpisodesDownloaded_EmptyIsNoop(t *testing.T) {
+	repo, mock := newMockTopics(t)
+	t.Cleanup(func() { assertExpectationsMet(t, mock) })
+
+	topic := &domain.Topic{ID: uuid.New(), NextCheckAt: time.Now()}
+	if err := repo.MarkEpisodesDownloaded(context.Background(), topic, nil); err != nil {
+		t.Fatalf("MarkEpisodesDownloaded(nil): want nil, got %v", err)
+	}
+}
+
+func TestTopics_MarkEpisodesDownloaded_StaleWriteIsDropped(t *testing.T) {
+	repo, mock := newMockTopics(t)
+	t.Cleanup(func() { assertExpectationsMet(t, mock) })
+
+	stale := time.Now().Add(-time.Hour)
+	topic := &domain.Topic{ID: uuid.New(), LastCheckedAt: &stale, NextCheckAt: time.Now()}
+	mock.ExpectExec(`UPDATE topics\s+SET\s+extra = jsonb_set`).
+		WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
+
+	err := repo.MarkEpisodesDownloaded(context.Background(), topic, []string{"S02E03"})
+	if !errors.Is(err, ErrStaleCheckResult) {
+		t.Fatalf("MarkEpisodesDownloaded: want ErrStaleCheckResult, got %v", err)
+	}
+}
+
+func TestTopics_MarkEpisodesDownloaded_DBError(t *testing.T) {
+	repo, mock := newMockTopics(t)
+	t.Cleanup(func() { assertExpectationsMet(t, mock) })
+
+	topic := &domain.Topic{ID: uuid.New(), NextCheckAt: time.Now()}
+	dbErr := errors.New("deadlock detected")
+	mock.ExpectExec(`UPDATE topics\s+SET\s+extra = jsonb_set`).
+		WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
+		WillReturnError(dbErr)
+
+	err := repo.MarkEpisodesDownloaded(context.Background(), topic, []string{"S03E01"})
+	if !errors.Is(err, dbErr) {
+		t.Fatalf("MarkEpisodesDownloaded: want wrapped %v, got %v", dbErr, err)
+	}
+	if !strings.Contains(err.Error(), "topics: mark episodes downloaded") {
+		t.Errorf("MarkEpisodesDownloaded: missing wrap context: %q", err.Error())
+	}
+}
+
 // ---------- scanTopic malformed extra ----------
 
 // topicRow returns a pgxmock row slice that matches topicColumns exactly
-// (23 columns as of migration 0012, which added last_error_code).
+// (27 columns as of migration 0016, which added the notify-only flags).
 // Callers override individual fields as needed. The helper centralises
 // column-order so tests don't drift.
 func topicRow(id, userID uuid.UUID, now time.Time) []any {
@@ -247,10 +319,11 @@ func topicRow(id, userID uuid.UUID, now time.Time) []any {
 		"", "", now, now, // last_error, last_error_code, created_at, updated_at
 		false,       // display_name_is_placeholder
 		false, true, // replace_on_update, replace_delete_data
+		false, false, // notify_only, notify_only_announce_current
 	}
 }
 
-// topicColumnsAll mirrors the header slice for pgxmock.NewRows (25 cols).
+// topicColumnsAll mirrors the header slice for pgxmock.NewRows (27 cols).
 var topicColumnsAll = []string{
 	"id", "user_id", "tracker_name", "url", "display_name", "image_url", "client_id", "notifier_id",
 	"download_dir", "category", "extra", "last_hash",
@@ -258,6 +331,7 @@ var topicColumnsAll = []string{
 	"check_interval_sec", "consecutive_errors", "status",
 	"last_error", "last_error_code", "created_at", "updated_at", "display_name_is_placeholder",
 	"replace_on_update", "replace_delete_data",
+	"notify_only", "notify_only_announce_current",
 }
 
 // TestTopics_ScanTopic_MalformedExtra drives GetByID through a mocked
@@ -272,7 +346,7 @@ func TestTopics_ScanTopic_MalformedExtra(t *testing.T) {
 	userID := uuid.New()
 	now := time.Now().UTC()
 
-	// Build a row that matches topicColumns exactly (23 columns).
+	// Build a row that matches topicColumns exactly (27 columns).
 	rows := pgxmock.NewRows(topicColumnsAll).AddRow(
 		id, userID, "faketracker", "https://example.invalid/t/1",
 		"My Topic", "", // display_name, image_url
@@ -285,6 +359,7 @@ func TestTopics_ScanTopic_MalformedExtra(t *testing.T) {
 		"", "", now, now, // last_error, last_error_code, created_at, updated_at
 		false,       // display_name_is_placeholder
 		false, true, // replace_on_update, replace_delete_data
+		false, false, // notify_only, notify_only_announce_current
 	)
 
 	mock.ExpectQuery(`SELECT .* FROM topics WHERE id = \$1`).
@@ -379,7 +454,8 @@ func TestTopics_Create_RoundTripsCategory(t *testing.T) {
 	rows := pgxmock.NewRows(topicColumnsAll).AddRow(row...)
 
 	// Match INSERT containing the category column.
-	mock.ExpectQuery(`INSERT INTO topics.*category.*RETURNING`).
+	mock.ExpectQuery(`INSERT INTO topics.*category.*notify_only, notify_only_announce_current\) `+
+		`VALUES \(\$1,\$2,\$3,\$4,NULLIF\(\$5,''\),\$6,\$7,NULLIF\(\$8,''\),NULLIF\(\$9,''\),\$10,\$11,\$12,\$13,\$14,\$15,\$16,\$17,\$18\) RETURNING`).
 		WithArgs(
 			userID, "faketracker", "https://example.invalid/t/1",
 			"My Topic", "", // display_name, image_url
@@ -391,6 +467,7 @@ func TestTopics_Create_RoundTripsCategory(t *testing.T) {
 			3600, pgxmock.AnyArg(), "active",
 			false,       // display_name_is_placeholder
 			false, true, // replace_on_update, replace_delete_data
+			false, false, // notify_only, notify_only_announce_current
 		).
 		WillReturnRows(rows)
 
@@ -440,7 +517,7 @@ func TestTopics_Update_HappyPath(t *testing.T) {
 
 	// Pattern asserts the lock-on-rename clause is present (not just any UPDATE),
 	// so an accidental removal of the CASE expression is caught at unit level.
-	mock.ExpectQuery(`UPDATE topics SET[\s\S]*display_name_is_placeholder = CASE WHEN display_name <> \$3`).
+	mock.ExpectQuery(`UPDATE topics SET[\s\S]*notify_only = \$11, notify_only_announce_current = \$12,\s+display_name_is_placeholder = CASE WHEN display_name <> \$3`).
 		WithArgs(
 			id, userID,
 			"Updated Name",    // $3 display_name
@@ -451,11 +528,13 @@ func TestTopics_Update_HappyPath(t *testing.T) {
 			pgxmock.AnyArg(),  // $8 extra (JSON)
 			true,              // $9 replace_on_update
 			false,             // $10 replace_delete_data
+			false,             // $11 notify_only
+			false,             // $12 notify_only_announce_current
 		).
 		WillReturnRows(rows)
 
 	extra := map[string]any{"quality": "720p", "start_season": 2}
-	got, err := r.Update(context.Background(), id, userID, "Updated Name", nil, nil, "", "series", true, false, extra)
+	got, err := r.Update(context.Background(), id, userID, "Updated Name", nil, nil, "", "series", TopicFlags{ReplaceOnUpdate: true, ReplaceDeleteData: false}, extra)
 	if err != nil {
 		t.Fatalf("Update: unexpected error: %v", err)
 	}
@@ -477,10 +556,10 @@ func TestTopics_Update_NotFound(t *testing.T) {
 	userID := uuid.New()
 
 	mock.ExpectQuery(`UPDATE topics SET`).
-		WithArgs(id, userID, pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
+		WithArgs(id, userID, pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), false, false).
 		WillReturnError(pgx.ErrNoRows)
 
-	_, err := r.Update(context.Background(), id, userID, "X", nil, nil, "", "", false, true, map[string]any{})
+	_, err := r.Update(context.Background(), id, userID, "X", nil, nil, "", "", TopicFlags{ReplaceOnUpdate: false, ReplaceDeleteData: true}, map[string]any{})
 	if !errors.Is(err, ErrNotFound) {
 		t.Fatalf("Update: want ErrNotFound, got %v", err)
 	}
@@ -497,10 +576,10 @@ func TestTopics_Update_DBError(t *testing.T) {
 	dbErr := errors.New("connection reset")
 
 	mock.ExpectQuery(`UPDATE topics SET`).
-		WithArgs(id, userID, pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
+		WithArgs(id, userID, pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), false, false).
 		WillReturnError(dbErr)
 
-	_, err := r.Update(context.Background(), id, userID, "X", nil, nil, "", "", false, true, map[string]any{})
+	_, err := r.Update(context.Background(), id, userID, "X", nil, nil, "", "", TopicFlags{ReplaceOnUpdate: false, ReplaceDeleteData: true}, map[string]any{})
 	if err == nil {
 		t.Fatal("Update: want error, got nil")
 	}
@@ -525,7 +604,8 @@ func TestTopics_Create_RoundTripsNotifierID(t *testing.T) {
 
 	rows := pgxmock.NewRows(topicColumnsAll).AddRow(row...)
 
-	mock.ExpectQuery(`INSERT INTO topics.*notifier_id.*RETURNING`).
+	mock.ExpectQuery(`INSERT INTO topics.*notifier_id.*notify_only, notify_only_announce_current\) `+
+		`VALUES \(\$1,\$2,\$3,\$4,NULLIF\(\$5,''\),\$6,\$7,NULLIF\(\$8,''\),NULLIF\(\$9,''\),\$10,\$11,\$12,\$13,\$14,\$15,\$16,\$17,\$18\) RETURNING`).
 		WithArgs(
 			userID, "faketracker", "https://example.invalid/t/1",
 			"My Topic", "",
@@ -536,6 +616,7 @@ func TestTopics_Create_RoundTripsNotifierID(t *testing.T) {
 			3600, pgxmock.AnyArg(), "active",
 			false,        // display_name_is_placeholder
 			false, false, // replace_on_update, replace_delete_data (unset on this raw topic)
+			false, false, // notify_only, notify_only_announce_current
 		).
 		WillReturnRows(rows)
 

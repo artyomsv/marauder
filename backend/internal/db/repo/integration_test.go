@@ -21,6 +21,7 @@ package repo
 
 import (
 	"context"
+	"errors"
 	"os"
 	"sync"
 	"testing"
@@ -122,4 +123,141 @@ func reload(t *testing.T, pool *pgxpool.Pool, id uuid.UUID) *domain.Topic {
 		t.Fatalf("reload topic %s: %v", id, err)
 	}
 	return got
+}
+
+func TestTopicsNotifyOnlyRoundTrip(t *testing.T) {
+	pool := integrationPool(t)
+	topicsRepo := NewTopics(pool)
+	userID := seedUser(t, pool)
+	ctx := context.Background()
+
+	// The two flags are deliberately DIFFERENT. With {true,true} the INSERT
+	// argument list can be transposed and this test still passes, which is
+	// exactly the bug it has to catch, so each one is also asserted on its own
+	// rather than with a combined || — a joint check names neither field.
+	created, err := topicsRepo.Create(ctx, &domain.Topic{
+		UserID:                    userID,
+		TrackerName:               "faketracker",
+		URL:                       "https://example.com/notify-only-roundtrip",
+		DisplayName:               "Notify Only Round Trip",
+		NotifyOnly:                true,
+		NotifyOnlyAnnounceCurrent: false,
+		CheckIntervalSec:          900,
+		NextCheckAt:               time.Now().UTC(),
+		Status:                    domain.TopicStatusActive,
+		Extra:                     map[string]any{},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if !created.NotifyOnly {
+		t.Errorf("Create returned NotifyOnly = false, want true")
+	}
+	if created.NotifyOnlyAnnounceCurrent {
+		t.Errorf("Create returned NotifyOnlyAnnounceCurrent = true, want false")
+	}
+	// Re-read the stored row: Create's return value is built from RETURNING,
+	// so only a fresh SELECT proves the columns themselves hold the pair.
+	reloaded, err := topicsRepo.GetByID(ctx, created.ID, &userID)
+	if err != nil {
+		t.Fatalf("GetByID created: %v", err)
+	}
+	if !reloaded.NotifyOnly {
+		t.Errorf("stored NotifyOnly = false, want true")
+	}
+	if reloaded.NotifyOnlyAnnounceCurrent {
+		t.Errorf("stored NotifyOnlyAnnounceCurrent = true, want false")
+	}
+
+	// A plain topic must default to the historical behaviour.
+	plain, err := topicsRepo.Create(ctx, &domain.Topic{
+		UserID:           userID,
+		TrackerName:      "faketracker",
+		URL:              "https://example.com/notify-only-default",
+		DisplayName:      "Default",
+		CheckIntervalSec: 900,
+		NextCheckAt:      time.Now().UTC(),
+		Status:           domain.TopicStatusActive,
+		Extra:            map[string]any{},
+	})
+	if err != nil {
+		t.Fatalf("Create plain: %v", err)
+	}
+	if plain.NotifyOnly {
+		t.Errorf("default NotifyOnly = true, want false")
+	}
+	if plain.NotifyOnlyAnnounceCurrent {
+		t.Errorf("default NotifyOnlyAnnounceCurrent = true, want false")
+	}
+
+	// Update must persist both, and GetByID must read them back.
+	if _, err := topicsRepo.Update(ctx, plain.ID, userID, plain.DisplayName, nil, nil, "", "",
+		TopicFlags{NotifyOnly: true, NotifyOnlyAnnounceCurrent: false}, map[string]any{}); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	got, err := topicsRepo.GetByID(ctx, plain.ID, &userID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if !got.NotifyOnly {
+		t.Errorf("Update did not persist NotifyOnly = true")
+	}
+	if got.NotifyOnlyAnnounceCurrent {
+		t.Errorf("Update wrote NotifyOnlyAnnounceCurrent = true, want false")
+	}
+}
+
+// TestMarkEpisodesDownloadedBulk exercises the SQL a mock cannot: to_jsonb over
+// a text[] must CONCATENATE onto the existing downloaded_episodes array, in
+// order, rather than nesting an array inside it. The notify-only watch mode
+// (issue #184) depends on one statement for a tracker-chosen list length, and
+// the whole point of that statement is that it is all-or-nothing.
+func TestMarkEpisodesDownloadedBulk(t *testing.T) {
+	pool := integrationPool(t)
+	topicsRepo := NewTopics(pool)
+	userID := seedUser(t, pool)
+	ctx := context.Background()
+
+	// Seed with one episode already marked, so the append is proven to extend
+	// the existing array instead of replacing it.
+	topic := seedTopic(t, pool, userID, domain.TopicStatusActive, map[string]any{
+		"downloaded_episodes": []string{"1-1"},
+		"quality":             "1080p",
+	})
+
+	if err := topicsRepo.MarkEpisodesDownloaded(ctx, topic, []string{"1-2", "1-3", "1-4"}); err != nil {
+		t.Fatalf("MarkEpisodesDownloaded: %v", err)
+	}
+	got := reload(t, pool, topic.ID)
+	want := []string{"1-1", "1-2", "1-3", "1-4"}
+	marked, ok := got.Extra["downloaded_episodes"].([]any)
+	if !ok {
+		t.Fatalf("downloaded_episodes is %T, want a JSON array: %#v",
+			got.Extra["downloaded_episodes"], got.Extra["downloaded_episodes"])
+	}
+	if len(marked) != len(want) {
+		t.Fatalf("downloaded_episodes = %v, want %v", marked, want)
+	}
+	for i := range want {
+		if marked[i] != want[i] {
+			t.Errorf("downloaded_episodes[%d] = %v, want %q", i, marked[i], want[i])
+		}
+	}
+	// Sibling keys must survive — this is a targeted append, not a blob write.
+	if got.Extra["quality"] != "1080p" {
+		t.Errorf("quality = %v, want it untouched", got.Extra["quality"])
+	}
+
+	// A stale token must write nothing at all: the whole list is discarded,
+	// leaving no partial state for the next tick to re-announce.
+	stale := *got
+	staleNext := got.NextCheckAt.Add(-time.Hour)
+	stale.NextCheckAt = staleNext
+	if err := topicsRepo.MarkEpisodesDownloaded(ctx, &stale, []string{"2-1", "2-2"}); !errors.Is(err, ErrStaleCheckResult) {
+		t.Fatalf("stale bulk mark: want ErrStaleCheckResult, got %v", err)
+	}
+	after := reload(t, pool, topic.ID)
+	if n := len(after.Extra["downloaded_episodes"].([]any)); n != len(want) {
+		t.Errorf("a rejected bulk mark wrote %d episodes, want the original %d", n, len(want))
+	}
 }

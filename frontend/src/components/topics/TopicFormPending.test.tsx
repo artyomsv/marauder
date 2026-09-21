@@ -46,6 +46,8 @@ const EMPTY: TopicFormValues = {
   category: "",
   replaceOnUpdate: false,
   replaceDeleteData: true,
+  notifyOnly: false,
+  notifyOnlyAnnounceCurrent: false,
 };
 
 function renderForm() {
