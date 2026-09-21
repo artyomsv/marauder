@@ -130,13 +130,17 @@ func TestTopicsNotifyOnlyRoundTrip(t *testing.T) {
 	userID := seedUser(t, pool)
 	ctx := context.Background()
 
+	// The two flags are deliberately DIFFERENT. With {true,true} the INSERT
+	// argument list can be transposed and this test still passes, which is
+	// exactly the bug it has to catch, so each one is also asserted on its own
+	// rather than with a combined || — a joint check names neither field.
 	created, err := topicsRepo.Create(ctx, &domain.Topic{
 		UserID:                    userID,
 		TrackerName:               "faketracker",
 		URL:                       "https://example.com/notify-only-roundtrip",
 		DisplayName:               "Notify Only Round Trip",
 		NotifyOnly:                true,
-		NotifyOnlyAnnounceCurrent: true,
+		NotifyOnlyAnnounceCurrent: false,
 		CheckIntervalSec:          900,
 		NextCheckAt:               time.Now().UTC(),
 		Status:                    domain.TopicStatusActive,
@@ -145,8 +149,23 @@ func TestTopicsNotifyOnlyRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	if !created.NotifyOnly || !created.NotifyOnlyAnnounceCurrent {
-		t.Fatalf("Create did not round-trip the flags: %+v", created)
+	if !created.NotifyOnly {
+		t.Errorf("Create returned NotifyOnly = false, want true")
+	}
+	if created.NotifyOnlyAnnounceCurrent {
+		t.Errorf("Create returned NotifyOnlyAnnounceCurrent = true, want false")
+	}
+	// Re-read the stored row: Create's return value is built from RETURNING,
+	// so only a fresh SELECT proves the columns themselves hold the pair.
+	reloaded, err := topicsRepo.GetByID(ctx, created.ID, &userID)
+	if err != nil {
+		t.Fatalf("GetByID created: %v", err)
+	}
+	if !reloaded.NotifyOnly {
+		t.Errorf("stored NotifyOnly = false, want true")
+	}
+	if reloaded.NotifyOnlyAnnounceCurrent {
+		t.Errorf("stored NotifyOnlyAnnounceCurrent = true, want false")
 	}
 
 	// A plain topic must default to the historical behaviour.
@@ -163,8 +182,11 @@ func TestTopicsNotifyOnlyRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create plain: %v", err)
 	}
-	if plain.NotifyOnly || plain.NotifyOnlyAnnounceCurrent {
-		t.Fatalf("expected both flags false by default, got %+v", plain)
+	if plain.NotifyOnly {
+		t.Errorf("default NotifyOnly = true, want false")
+	}
+	if plain.NotifyOnlyAnnounceCurrent {
+		t.Errorf("default NotifyOnlyAnnounceCurrent = true, want false")
 	}
 
 	// Update must persist both, and GetByID must read them back.
@@ -176,7 +198,10 @@ func TestTopicsNotifyOnlyRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetByID: %v", err)
 	}
-	if !got.NotifyOnly || got.NotifyOnlyAnnounceCurrent {
-		t.Fatalf("Update did not persist the flags: %+v", got)
+	if !got.NotifyOnly {
+		t.Errorf("Update did not persist NotifyOnly = true")
+	}
+	if got.NotifyOnlyAnnounceCurrent {
+		t.Errorf("Update wrote NotifyOnlyAnnounceCurrent = true, want false")
 	}
 }
