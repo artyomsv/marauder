@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Tapochek TV-series topics now show their cover art.** Tapochek serves two
+  page templates: film and game topics mark the cover with an aligned `<var>`,
+  while series topics use a plain `<img class="poster">`. Only the first was
+  read, so every series topic was stored with no image — and nothing backfills
+  one afterwards. Screenshots in the same post are still ignored, and a page
+  carrying both markers keeps the image it already had. (#186)
+- **Tapochek now says when your account is not allowed to download a
+  release**, instead of reporting `torrent block carried no usable fields`.
+  Tapochek gates downloading on ratio, rank and a daily cap, and a gated
+  account still receives the whole torrent table — only the download link is
+  replaced. That read as a broken parser. The generic message now also names
+  which field it lost, so genuine template drift is diagnosable from the
+  topic row. (#186)
+
 ## [1.20.0] - 2026-09-21
 
 ### Added

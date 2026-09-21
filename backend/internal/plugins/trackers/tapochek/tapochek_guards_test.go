@@ -871,3 +871,110 @@ func TestDownload_FileNameCannotEscapeAWatchFolder(t *testing.T) {
 		t.Errorf("FileName = %q, which is not a file name", payload.FileName)
 	}
 }
+
+// --- issue #186: the series template and the download gate ---------------
+
+// TestPosterURL_ReadsTheSeriesTemplateCover. Tapochek serves two templates,
+// and the TV-series one carries no aligned <var> at all — its cover is an
+// <img class="poster">. Reading only the <var> form left every series topic
+// with no image, which nothing backfills once the topic exists.
+func TestPosterURL_ReadsTheSeriesTemplateCover(t *testing.T) {
+	const want = "https://i128.fastpic.org/big/2026/0726/30/cover.jpg"
+	if got := posterURL([]byte(fixtureSeriesTopicHTML)); got != want {
+		t.Errorf("posterURL = %q, want %q", got, want)
+	}
+}
+
+// TestPosterURL_IgnoresScreenshotImages is the inverse guard. A series topic's
+// screenshots are <img> tags in the same post, so widening the search to "any
+// <img>" would store a screenshot as the release artwork.
+func TestPosterURL_IgnoresScreenshotImages(t *testing.T) {
+	page := `<html><body><div class="post_body">
+<img src="https://img.example/screenshot-1.png" border="0" alt="" />
+<img src="https://img.example/screenshot-2.png" border="0" alt="" />
+</div><!--/post_body--></body></html>`
+	if got := posterURL([]byte(page)); got != "" {
+		t.Errorf("posterURL = %q, want empty — a screenshot is not the cover", got)
+	}
+}
+
+// TestPosterURL_PrefersTheAlignedVarOverAnImgPoster pins the precedence. The
+// <var> form is the one five live topics were verified against on 2026-09-04,
+// so it stays authoritative and the <img> form is the fallback; a page
+// carrying both must not change the image already stored for it.
+func TestPosterURL_PrefersTheAlignedVarOverAnImgPoster(t *testing.T) {
+	const want = "https://img.example/aligned-cover.jpg"
+	page := `<html><body><div class="post_body">
+<img src="https://img.example/img-poster.jpg" class="poster" />
+<var class="postImg postImgAligned img-right" title="` + want + `"></var>
+</div><!--/post_body--></body></html>`
+	if got := posterURL([]byte(page)); got != want {
+		t.Errorf("posterURL = %q, want %q", got, want)
+	}
+}
+
+// TestPosterURL_RejectsANonAbsolutePosterSrc. Unlike the <var> form, whose
+// title is always a full URL, an <img src> may be site-relative. The value is
+// stored once and then rendered into an <img src> for every later viewer, so
+// a fragment that is not an http(s) URL is dropped rather than persisted.
+func TestPosterURL_RejectsANonAbsolutePosterSrc(t *testing.T) {
+	for _, src := range []string{"images/cover.jpg", "/images/cover.jpg", "javascript:alert(1)"} {
+		page := `<html><body><div class="post_body">
+<img src="` + src + `" class="poster" />
+</div><!--/post_body--></body></html>`
+		if got := posterURL([]byte(page)); got != "" {
+			t.Errorf("src %q: posterURL = %q, want empty", src, got)
+		}
+	}
+}
+
+// TestCheck_NamesTheDownloadGateRatherThanBlamingTheParser is the reported
+// half of issue #186. A table that still carries the filename, size and
+// registration date but no download link means THIS ACCOUNT may not download
+// the release — Tapochek gates on ratio, rank and a daily cap. Reporting that
+// as "no usable fields" sent the reporter, and us, hunting for a broken
+// selector.
+func TestCheck_NamesTheDownloadGateRatherThanBlamingTheParser(t *testing.T) {
+	page := `<html><head><title>` + fixtureTopicTitle + `</title></head><body>
+<div class="post_body"></div><!--/post_body-->
+` + fixtureGatedTorrentBlock + `
+</body></html>`
+	p := newTestPlugin(t, func(w http.ResponseWriter, _ *http.Request) {
+		http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: userCookie, Path: "/"})
+		_, _ = w.Write([]byte(page))
+	})
+	creds := testCreds()
+	if err := p.Login(context.Background(), creds); err != nil {
+		t.Fatalf("Login: %v", err)
+	}
+	_, err := p.Check(context.Background(), &domain.Topic{
+		URL: "https://tapochek.net/viewtopic.php?t=288010",
+	}, creds)
+	if err == nil {
+		t.Fatal("Check succeeded on a table with no download link")
+	}
+	if !strings.Contains(err.Error(), "download link") {
+		t.Errorf("Check error = %q, want it to name the missing download link", err)
+	}
+	// The wording must stay out of the scheduler's auth/parse keyword sets:
+	// the credentials are fine and the template is fine.
+	for _, wrong := range []string{"parse", "auth failed", "no usable fields"} {
+		if strings.Contains(err.Error(), wrong) {
+			t.Errorf("Check error = %q must not contain %q", err, wrong)
+		}
+	}
+}
+
+// TestBlockFieldsError_NamesWhatIsActuallyMissing keeps the generic branch
+// diagnostic. When a labelled cell drifts there is no account story to tell,
+// so the message must at least say which field went.
+func TestBlockFieldsError_NamesWhatIsActuallyMissing(t *testing.T) {
+	block := strings.Replace(fixtureTorrentBlock, "Размер:", "Объём:", 1)
+	err := blockFieldsError(block)
+	if !strings.Contains(err.Error(), "size") {
+		t.Errorf("blockFieldsError = %q, want it to name the missing size field", err)
+	}
+	if strings.Contains(err.Error(), "download link") {
+		t.Errorf("blockFieldsError = %q must not blame the download gate — the link is present", err)
+	}
+}
