@@ -236,3 +236,45 @@ func TestRedact_AngleBracketInAnOrdinaryInputIsUntouched(t *testing.T) {
 		t.Errorf("ordinary input was redacted:\n  in  %q\n  out %q", tag, got)
 	}
 }
+
+// TestRedact_MalformedTagDoesNotShieldTheNextOne. Making the tag scan
+// quote-aware let an UNTERMINATED quote pair with a quote in a later tag, so
+// the two tags matched as one. attrValue then read the harmless first tag's
+// name, the match was classified as ordinary, and the credential in the
+// second tag rode out untouched (Greptile P1, third round on #193).
+//
+// A quoted run must therefore stop at a tag boundary: one malformed tag may
+// cost its own value, never the next tag's.
+func TestRedact_MalformedTagDoesNotShieldTheNextOne(t *testing.T) {
+	for _, page := range []string{
+		`<input type="text" name="search" value="unterminated>` +
+			`<input type="hidden" name="form_token" value="s3cr3t">`,
+		`<input name='broken value='1'>` +
+			`<input name='form_token' value='s3cr3t'>`,
+		// The malformed tag's own quote pairing with the NEXT tag's quote is
+		// the exact mechanism; keep a plain tag between them too.
+		`<input name="broken value="1">` +
+			`<p>text</p>` +
+			`<input name="session_key" value="s3cr3t">`,
+	} {
+		if got := string(Redact([]byte(page), "")); strings.Contains(got, "s3cr3t") {
+			t.Errorf("a malformed tag shielded the credential after it:\n  in  %q\n  out %q", page, got)
+		}
+	}
+}
+
+// TestRedact_TruncatedPageStillRedactsTheLastTag. fetchPage caps a response
+// at maxBodyBytes, so an oversized page arrives cut mid-tag with no closing
+// `>`. A scan that requires one matches nothing there and ships whatever the
+// final, half-written tag was carrying.
+func TestRedact_TruncatedPageStillRedactsTheLastTag(t *testing.T) {
+	for _, page := range []string{
+		`<input type="hidden" name="form_token" value="s3cr3t"`,
+		`<input type="hidden" name="form_token" value="s3cr3t`,
+		`<p>ok</p><input name='session_key' value='s3cr3t'`,
+	} {
+		if got := string(Redact([]byte(page), "")); strings.Contains(got, "s3cr3t") {
+			t.Errorf("token survived in a truncated page:\n  in  %q\n  out %q", page, got)
+		}
+	}
+}

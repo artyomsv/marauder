@@ -56,15 +56,31 @@ var secretParams = regexp.MustCompile(
 // bare substrings, so `author`, `keywords`, `monkey` and `consideration` were
 // all blanked (`auth`, `key`, `sid`), destroying the very markup the export
 // exists to carry.
-// The scan is quote-aware. A quoted attribute value may legally contain `>`,
-// and `<input\b[^>]*>` stops at the first one — truncating the tag before its
+// The scan is quote-aware, and every alternative stops at `<`.
+//
+// Quote-aware because a quoted attribute value may legally contain `>`, and
+// `<input\b[^>]*>` stops at the first one — truncating the tag before its
 // value is reached, so `<input name="form_token" value="s3cr3t>x">` shipped
 // the credential. The quoted alternatives come FIRST so a `>` inside quotes is
-// consumed as part of the value; `[^>]` is last, which also makes the pattern
-// degrade to the plain scan on malformed markup with an unterminated quote
-// rather than failing to match the tag at all — failing to match is failing
-// open on a secret.
-var inputTagRe = regexp.MustCompile(`(?is)<input\b(?:"[^"]*"|'[^']*'|[^>])*>`)
+// part of the value.
+//
+// Bounded at `<` because the first quote-aware version was worse than the bug
+// it fixed. An UNTERMINATED quote paired with a quote in a LATER tag, so two
+// tags matched as one; attrValue then read the harmless first tag's name, the
+// match was classified as ordinary, and a credential in the second tag rode
+// out untouched. One malformed tag may cost its own value. It must never cost
+// the next tag's.
+//
+// `[^><]` last also makes the pattern degrade to the plain scan inside a
+// malformed tag rather than failing to match it at all — failing to match is
+// failing open on a secret.
+//
+// The closing `>` is optional for the same reason. fetchPage caps a response
+// at maxBodyBytes, so an oversized page arrives cut mid-tag; requiring the `>`
+// would match nothing there and ship whatever the final half-written tag was
+// carrying. It costs nothing on a well-formed tag: `[^><]` cannot eat a `>`,
+// so the greedy run stops in front of it either way.
+var inputTagRe = regexp.MustCompile(`(?is)<input\b(?:"[^"<]*"|'[^'<]*'|[^><])*>?`)
 
 // attrRe reads one attribute. All three HTML spellings are accepted —
 // double-quoted, single-quoted, and unquoted — because a redactor that only
