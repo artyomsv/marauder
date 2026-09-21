@@ -11,14 +11,29 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/prometheus/client_golang/prometheus"
+	dto "github.com/prometheus/client_model/go"
 	"github.com/rs/zerolog"
 
 	"github.com/artyomsv/marauder/backend/internal/config"
 	"github.com/artyomsv/marauder/backend/internal/db/repo"
 	"github.com/artyomsv/marauder/backend/internal/domain"
 	"github.com/artyomsv/marauder/backend/internal/events"
+	"github.com/artyomsv/marauder/backend/internal/metrics"
 	"github.com/artyomsv/marauder/backend/internal/plugins/registry"
 )
+
+// counterValue reads one counter child's current value. Written by hand
+// against the already-vendored client_model rather than pulling in
+// prometheus/testutil, which drags a whole extra module in for one read.
+func counterValue(t *testing.T, c prometheus.Counter) float64 {
+	t.Helper()
+	var m dto.Metric
+	if err := c.Write(&m); err != nil {
+		t.Fatalf("read counter: %v", err)
+	}
+	return m.GetCounter().GetValue()
+}
 
 // --- Fakes --------------------------------------------------------------
 
@@ -671,8 +686,17 @@ func TestRunCheck_NotifyOnly_EpisodicPlainDBErrorDoesNotFailCheck(t *testing.T) 
 	f.topic.NotifyOnly = true
 	f.topics.markBulkErr = errors.New("connection reset by peer")
 
+	// The check reports success, so the metric is the only trace a topic that
+	// silently stopped marking ever leaves. Measured as a delta because the
+	// collector is process-global and other tests share the tracker label.
+	failed := metrics.SchedulerTopicChecksTotal.WithLabelValues(f.topic.TrackerName, "notify_only_mark_error")
+	before := counterValue(t, failed)
+
 	f.s.runCheck(context.Background(), f.s.log, f.topic)
 
+	if got := counterValue(t, failed) - before; got != 1 {
+		t.Errorf("notify_only_mark_error incremented by %v, want 1", got)
+	}
 	if len(f.topics.markBulkCalls) != 1 {
 		t.Errorf("expected exactly 1 bulk mark attempt, got %d", len(f.topics.markBulkCalls))
 	}

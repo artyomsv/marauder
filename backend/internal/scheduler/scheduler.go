@@ -618,17 +618,31 @@ func (s *Scheduler) notifyOnlyRelease(ctx context.Context, log zerolog.Logger, t
 	//
 	// Fail-open: a DB error lets the tick finish rather than failing a check
 	// whose release the user has already been told about.
+	//
+	// Being one statement is what makes that trade safe. It is all-or-nothing,
+	// so the failure leaves the topic exactly as it was and a later toggle back
+	// to download mode fetches the whole announced batch — one re-download of
+	// things the user was told about, which is the bounded, coherent outcome.
+	// A per-episode loop had no such property: a failure partway moved the
+	// done-count, which changes a count-derived tracker hash, so the next tick
+	// saw an update again and announced the REMAINDER as a fresh release —
+	// a second notification naming a subset of the first.
+	//
+	// Metered, because the failure is otherwise invisible: the check reports
+	// success and only shows up as a backlog months later.
 	if err := s.topics.MarkEpisodesDownloaded(ctx, t, pendingPacked); err != nil {
 		if errors.Is(err, repo.ErrStaleCheckResult) {
 			// A reset (or a delete) landed mid-check. The write was discarded
 			// rather than applied to state that no longer exists; recordResult
-			// below is guarded by the same token and will be dropped too.
+			// below is guarded by the same token and will be dropped too. Not
+			// metered: this is the guard working, not a failure.
 			log.Info().Int("episodes", len(pendingPacked)).
 				Msg("notify-only episode mark discarded: another write won the state guard")
 			return
 		}
 		log.Warn().Err(err).Int("episodes", len(pendingPacked)).
 			Msg("notify-only episode mark failed")
+		metrics.SchedulerTopicChecksTotal.WithLabelValues(t.TrackerName, "notify_only_mark_error").Inc()
 		return
 	}
 }
