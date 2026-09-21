@@ -436,7 +436,15 @@ func (s *Scheduler) runCheck(ctx context.Context, log zerolog.Logger, t *domain.
 			// Control falls through to the shared tail below, which persists
 			// the NEW hash — there is no download to retry, so nothing is
 			// gained by replaying the change next tick.
-			s.notifyOnlyRelease(ctx, log, t, tr, check, authorComment)
+			//
+			// The tick after marking episodes seen re-enters this branch with a
+			// recounted hash and nothing pending, so notifyOnlyRelease stays
+			// silent. Take its answer as `updated`: the shared tail would
+			// otherwise record an update the user was never told about and can
+			// find nothing about on the timeline. check.Hash is passed to
+			// recordResult separately, so the hash still advances and the
+			// recount does not repeat.
+			updated = s.notifyOnlyRelease(ctx, log, t, tr, check, authorComment)
 		} else {
 			// Emit release.found once per error episode, before draining episodes.
 			//
@@ -574,7 +582,14 @@ func (s *Scheduler) notifyUpdated(ctx context.Context, t *domain.Topic, labels [
 // notifyOnlyRelease handles a detected update on a notify-only topic: it
 // announces the release and never resolves or contacts a torrent client.
 // It also marks a per-episode tracker's pending episodes seen.
-func (s *Scheduler) notifyOnlyRelease(ctx context.Context, log zerolog.Logger, t *domain.Topic, tr registry.Tracker, check *domain.Check, authorComment string) {
+//
+// It reports whether the tick carried a release worth announcing. A changed
+// hash is not enough on its own: marking episodes seen changes a count-derived
+// hash, so the very next tick looks updated with nothing pending. The caller
+// uses this as the topic's `updated` flag, which keeps that recount out of the
+// topic's update timestamp and out of the run summary — the hash still
+// advances, because it is persisted independently of the flag.
+func (s *Scheduler) notifyOnlyRelease(ctx context.Context, log zerolog.Logger, t *domain.Topic, tr registry.Tracker, check *domain.Check, authorComment string) bool {
 	pendingPacked := extra.StringSlice(check.Extra, "pending_episodes")
 	pendingHuman := extra.StringSlice(check.Extra, "pending_human")
 
@@ -638,13 +653,14 @@ func (s *Scheduler) notifyOnlyRelease(ctx context.Context, log zerolog.Logger, t
 			// metered: this is the guard working, not a failure.
 			log.Info().Int("episodes", len(pendingPacked)).
 				Msg("notify-only episode mark discarded: another write won the state guard")
-			return
+			return announce
 		}
 		log.Warn().Err(err).Int("episodes", len(pendingPacked)).
 			Msg("notify-only episode mark failed")
 		metrics.SchedulerTopicChecksTotal.WithLabelValues(t.TrackerName, "notify_only_mark_error").Inc()
-		return
+		return announce
 	}
+	return announce
 }
 
 // notifyOnlyBody builds the release.found body for a watch-only topic. The

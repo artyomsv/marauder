@@ -633,9 +633,61 @@ func TestRunCheck_NotifyOnly_EpisodicSilentWhenNothingPending(t *testing.T) {
 	if got := f.emitter.ofType(events.ReleaseFound); len(got) != 0 {
 		t.Errorf("no pending episodes means nothing to announce, got %d", len(got))
 	}
+	rec := f.lastRecord(t)
 	// The hash must still advance, or this recount repeats every tick forever.
-	if rec := f.lastRecord(t); rec.hash != "recounted-hash" {
+	if rec.hash != "recounted-hash" {
 		t.Errorf("expected hash to advance to recounted-hash, got %q", rec.hash)
+	}
+	// ...but the topic must NOT be recorded as updated. Nothing was announced,
+	// so an update here moves the topic's "last updated" timestamp with no
+	// timeline entry that could ever explain it.
+	if rec.updated {
+		t.Errorf("a silent recount must not mark the topic updated")
+	}
+}
+
+// The full sequence: a batch is announced and marked, then the recount tick
+// arrives. Only the first tick is an update; both advance the hash.
+func TestRunCheck_NotifyOnly_RecountTickIsNotAnUpdate(t *testing.T) {
+	tr := &fakeTracker{
+		name:     "faketracker",
+		episodic: true,
+		checks: []checkResult{
+			{check: &domain.Check{Hash: "batch-hash", Extra: map[string]any{
+				"pending_episodes": []string{"1-1", "1-2"},
+				"pending_human":    []string{"s01e01", "s01e02"},
+			}}, err: nil},
+			{check: &domain.Check{Hash: "recounted-hash", Extra: map[string]any{
+				"pending_episodes": []string{},
+				"pending_human":    []string{},
+			}}, err: nil},
+		},
+	}
+	f := newFixture(t, tr)
+	f.topic.NotifyOnly = true
+
+	f.s.runCheck(context.Background(), f.s.log, f.topic)
+	first := f.lastRecord(t)
+	if !first.updated {
+		t.Errorf("the announcing tick must be recorded as an update")
+	}
+	if first.hash != "batch-hash" {
+		t.Errorf("first hash = %q, want batch-hash", first.hash)
+	}
+
+	// The scheduler re-reads the topic each tick; mirror the persisted hash.
+	f.topic.LastHash = first.hash
+	f.s.runCheck(context.Background(), f.s.log, f.topic)
+
+	second := f.lastRecord(t)
+	if second.updated {
+		t.Errorf("the recount tick must not be recorded as an update")
+	}
+	if second.hash != "recounted-hash" {
+		t.Errorf("second hash = %q, want recounted-hash", second.hash)
+	}
+	if got := f.emitter.ofType(events.ReleaseFound); len(got) != 1 {
+		t.Errorf("expected exactly 1 announcement across both ticks, got %d", len(got))
 	}
 }
 
