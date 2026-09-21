@@ -1029,3 +1029,58 @@ func TestBlockFieldsError_NamesWhatIsActuallyMissing(t *testing.T) {
 		t.Errorf("blockFieldsError = %q must not blame the download gate — the link is present", err)
 	}
 }
+
+// TestFingerprintInput_SurvivesTheViewerScopedRowClass is the reported half of
+// issue #186, root cause at last.
+//
+// Tapochek colours the torrent header and download link by the VIEWER's
+// relation to the release: `genmed` for a stranger, `seedmed` for someone who
+// seeds it, and the same page uses `leechmed` elsewhere. Anchoring the
+// filename on `genmed` therefore worked for every account that did NOT have
+// the torrent and failed for every account that did — which is why five days
+// of live checks against three of the reporter's own topics could not
+// reproduce it. Both captures must produce the same four fields.
+func TestFingerprintInput_SurvivesTheViewerScopedRowClass(t *testing.T) {
+	_, missing := fingerprintParts(fixtureSeedingTorrentBlock)
+	if len(missing) > 0 {
+		t.Fatalf("missing %v — the seeding viewer's table must parse like any other", missing)
+	}
+	const wantName = "name=Стюарт Блум не смог спасти вселенную Stuart Fails to Save the Universe " +
+		"Сезон 1 Серии 1-8 из 10 [WEB-DL 1080p] [tapochek.net].torrent"
+	if got := fingerprintInput(fixtureSeedingTorrentBlock); !strings.Contains(got, wantName) {
+		t.Errorf("fingerprintInput = %q, want it to carry %q", got, wantName)
+	}
+}
+
+// TestFileNameRe_IgnoresTheGoldBannerHeader. The release-type banner is a <th>
+// in the same table and sits directly below the filename, so a selector loose
+// enough to survive the class change must not start matching it instead.
+func TestFileNameRe_IgnoresTheGoldBannerHeader(t *testing.T) {
+	got := cellValue(fileNameRe, fixtureSeedingTorrentBlock)
+	if !strings.HasSuffix(got, ".torrent") {
+		t.Errorf("fileNameRe captured %q — that is not the attachment name", got)
+	}
+	for _, unwanted := range []string{"ЗОЛОТАЯ", "Золото", "img src"} {
+		if strings.Contains(got, unwanted) {
+			t.Errorf("fileNameRe captured %q, which contains the banner text %q", got, unwanted)
+		}
+	}
+}
+
+// TestFileNameRe_AcceptsAnyViewerClass pins the whole known family at once, so
+// a future variant is a one-line fixture rather than another five-day hunt.
+func TestFileNameRe_AcceptsAnyViewerClass(t *testing.T) {
+	for _, class := range []string{"genmed", "seedmed", "leechmed", "row3 seedmed", ""} {
+		attr := ""
+		if class != "" {
+			attr = ` class="` + class + `"`
+		}
+		block := `<table class="attach"><tr><th colspan="3"` + attr + `>Some.Release.[tapochek.net].torrent</th></tr>
+<td width="15%" rowspan="7"><a href="download.php?id=1">x</a></td>
+<td>Размер:</td><td>1.00&nbsp;GB</td>
+<td>Зарегистрирован &nbsp; [ <span title="4 дня">17-09-2026 00:21</span> ]</td></table>`
+		if got := cellValue(fileNameRe, block); got != "Some.Release.[tapochek.net].torrent" {
+			t.Errorf("class %q: fileNameRe = %q", class, got)
+		}
+	}
+}

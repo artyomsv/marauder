@@ -158,3 +158,58 @@ var fixtureGatedTorrentBlock = strings.Replace(
 	`<a href="profile.php?mode=viewprofile" class="genmed">`,
 	1,
 )
+
+// fixtureSeedingTorrentBlock is the SAME release's torrent table as
+// fixtureTorrentBlock, captured on 2026-09-21 from an account that already
+// seeds it (issue #186, reporter's paste for t=288010, ad markup trimmed).
+//
+// The only difference that matters is the class: `seedmed` where the other
+// capture has `genmed`, on both the filename <th> and the download <a>. The
+// site colours that cell by the VIEWER's relation to the torrent — the same
+// page also uses `seedmed`/`leechmed` for its seeder and leecher counts — so
+// the class is per-user, per-topic state and cannot anchor a selector. It is
+// also why this was unreproducible for five days: the reporter seeds the
+// release and we do not.
+const fixtureSeedingTorrentBlock = `<table class="attach bordered med">
+	<tr class="row3">
+		<th colspan="3" class="seedmed">Стюарт Блум не смог спасти вселенную Stuart Fails to Save the Universe Сезон 1 Серии 1-8 из 10 [WEB-DL 1080p] [tapochek.net].torrent</th>
+	</tr>
+		<tr class="row4">
+	    <th colspan="3" class="row7 gold-header torrent-type-header torrent-type-header--gold"><img src="images/tor_gold.gif" width="16" height="15" title="Золото" />&nbsp;ЗОЛОТАЯ РАЗДАЧА! СКАЧАННОЕ НЕ ЗАСЧИТЫВАЕТСЯ!&nbsp;<img src="images/tor_gold.gif" width="16" height="15" title="Золото" />&nbsp;</th>
+	</tr>
+			<tr class="row1">
+		<td width="15%">Трекер:</td>
+		<td width="70%">
+						Зарегистрирован &nbsp;
+						[ <span title="4 дня">17-09-2026 00:21</span> ]
+		</td>
+		<td width="15%" rowspan="7" class="tCenter pad_6">
+						<a href="download.php?id=188304" class="seedmed">
+			<p><span class="download-torrent-btn" title="Скачать торрент-файл">&#8681; Скачать &#8681;</span></p></a>
+			<p class="small torrent-size-info">Размер .torrent файла 131&nbsp;KB</p>
+						<br /><p class="small"><input type="button" value="Список файлов" id="tor-filelist-btn" onclick="show_filelist();return false;"></p>
+        </td>
+	</tr>
+<tr class="row1">
+<td>Статус:</td>
+<td style="padding: 6px 4px;">
+<script type="text/javascript">$('#tor-288010').html( $('#tor-status-txt').html() );</script>
+<b>
+<span  id="tor-288010-icon" class="tor-icon tor_status_txt">
+<span style="color: green;">&radic;</span></span> <span id="tor-288010-text"> проверено</span>
+</b>
+</td>
+</tr>
+	<tr class="row1">
+		<td>Скачан:</td>
+		<td><span title="Раздача полностью скачана 38 раз">38 раз</span></td>
+	</tr>
+	<tr class="row1">
+		<td>Размер:</td>
+		<td>13.03&nbsp;GB</td>
+	</tr>
+	<tr class="row1">
+		<td>Поблагодарили:</td>
+		<td><span id="VT188304">25</span></td>
+	</tr>
+</table>`
