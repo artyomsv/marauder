@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -768,12 +769,8 @@ func TestFileName_SurvivesExtraClasses(t *testing.T) {
 	if block == fixtureTorrentBlock {
 		t.Fatal("substitution matched nothing")
 	}
-	m := fileNameRe.FindStringSubmatch(block)
-	if m == nil {
-		t.Fatal("filename not found with an extra class")
-	}
-	if !strings.HasSuffix(normalizeCell(m[1]), ".torrent") {
-		t.Errorf("filename = %q", m[1])
+	if got := fileName(block); !strings.HasSuffix(got, ".torrent") {
+		t.Errorf("filename = %q with an extra class", got)
 	}
 }
 
@@ -1030,57 +1027,128 @@ func TestBlockFieldsError_NamesWhatIsActuallyMissing(t *testing.T) {
 	}
 }
 
-// TestFingerprintInput_SurvivesTheViewerScopedRowClass is the reported half of
-// issue #186, root cause at last.
+// --- issue #186: the viewer-scoped class ---------------------------------
+
+// TestFingerprintInput_ViewerClassDoesNotMoveTheToken is the invariant the
+// whole bug turned on, and it is only provable with two blocks that differ in
+// NOTHING but the class — hence the derived fixture rather than the second
+// capture, whose release, id, size and date all differ.
 //
-// Tapochek colours the torrent header and download link by the VIEWER's
-// relation to the release: `genmed` for a stranger, `seedmed` for someone who
-// seeds it, and the same page uses `leechmed` elsewhere. Anchoring the
-// filename on `genmed` therefore worked for every account that did NOT have
-// the torrent and failed for every account that did — which is why five days
-// of live checks against three of the reporter's own topics could not
-// reproduce it. Both captures must produce the same four fields.
-func TestFingerprintInput_SurvivesTheViewerScopedRowClass(t *testing.T) {
-	_, missing := fingerprintParts(fixtureSeedingTorrentBlock)
+// If this fails, every Tapochek topic looks updated the moment its owner
+// starts seeding it: N spurious re-downloads and a stacked duplicate torrent
+// for each topic not on replace-on-update.
+func TestFingerprintInput_ViewerClassDoesNotMoveTheToken(t *testing.T) {
+	want := fingerprintInput(fixtureTorrentBlock)
+	if want == "" {
+		t.Fatal("the baseline block does not parse; the comparison would prove nothing")
+	}
+	if fixtureSeedmedTorrentBlock == fixtureTorrentBlock {
+		t.Fatal("the class substitution matched nothing; the two blocks are identical")
+	}
+	if got := fingerprintInput(fixtureSeedmedTorrentBlock); got != want {
+		t.Errorf("the viewer class moved the token:\n got %q\nwant %q", got, want)
+	}
+}
+
+// TestFingerprintParts_ParsesTheSeedingViewerCapture exercises the reporter's
+// real markup, which the derived fixture above cannot stand in for: it carries
+// the gold release-type banner and the Статус row with its inline <script>,
+// both absent from the older capture.
+func TestFingerprintParts_ParsesTheSeedingViewerCapture(t *testing.T) {
+	parts, missing := fingerprintParts(fixtureSeedingTorrentBlock)
 	if len(missing) > 0 {
 		t.Fatalf("missing %v — the seeding viewer's table must parse like any other", missing)
 	}
 	const wantName = "name=Стюарт Блум не смог спасти вселенную Stuart Fails to Save the Universe " +
 		"Сезон 1 Серии 1-8 из 10 [WEB-DL 1080p] [tapochek.net].torrent"
-	if got := fingerprintInput(fixtureSeedingTorrentBlock); !strings.Contains(got, wantName) {
-		t.Errorf("fingerprintInput = %q, want it to carry %q", got, wantName)
+	if !slices.Contains(parts, wantName) {
+		t.Errorf("parts = %q, want one to be %q", parts, wantName)
 	}
 }
 
-// TestFileNameRe_IgnoresTheGoldBannerHeader. The release-type banner is a <th>
-// in the same table and sits directly below the filename, so a selector loose
-// enough to survive the class change must not start matching it instead.
-func TestFileNameRe_IgnoresTheGoldBannerHeader(t *testing.T) {
-	got := cellValue(fileNameRe, fixtureSeedingTorrentBlock)
-	if !strings.HasSuffix(got, ".torrent") {
-		t.Errorf("fileNameRe captured %q — that is not the attachment name", got)
+// TestFileName_SurvivesATrailingEntity is the failure the first fix for #186
+// would eventually have hit. A pattern ending `\s*</th>` cannot match a
+// trailing `&nbsp;`, because Go's `\s` is ASCII-only — and this template emits
+// `&nbsp;` in the size cell and at the end of the gold banner, so the filename
+// cell gaining one is a template edit away, not a hypothetical.
+//
+// The captured name must be IDENTICAL to the plain block's, or recovering the
+// match would itself move every stored token.
+func TestFileName_SurvivesATrailingEntity(t *testing.T) {
+	if fixtureNbspNameBlock == fixtureTorrentBlock {
+		t.Fatal("the &nbsp; substitution matched nothing; the test proves nothing")
 	}
-	for _, unwanted := range []string{"ЗОЛОТАЯ", "Золото", "img src"} {
-		if strings.Contains(got, unwanted) {
-			t.Errorf("fileNameRe captured %q, which contains the banner text %q", got, unwanted)
+	want := fileName(fixtureTorrentBlock)
+	if want == "" {
+		t.Fatal("the baseline block yields no filename")
+	}
+	if got := fileName(fixtureNbspNameBlock); got != want {
+		t.Errorf("fileName = %q, want %q — a trailing entity must not change the name", got, want)
+	}
+}
+
+// TestFileName_RequiresTheTorrentSuffix is the failure direction, which
+// nothing asserted before. A header cell that does not name an attachment must
+// yield nothing, so the check fails loudly with `(missing: name)` rather than
+// digesting a neighbouring cell into the token.
+func TestFileName_RequiresTheTorrentSuffix(t *testing.T) {
+	block := strings.Replace(fixtureTorrentBlock, ".torrent</th>", "</th>", 1)
+	if block == fixtureTorrentBlock {
+		t.Fatal("the substitution matched nothing; the test proves nothing")
+	}
+	if got := fileName(block); got != "" {
+		t.Errorf("fileName = %q, want empty", got)
+	}
+	if _, missing := fingerprintParts(block); len(missing) != 1 || missing[0] != "name" {
+		t.Errorf("missing = %v, want exactly [name]", missing)
+	}
+	if got := fingerprintInput(block); got != "" {
+		t.Errorf("fingerprintInput = %q, want empty so the check fails loudly", got)
+	}
+}
+
+// TestFileName_SkipsAHeaderCellThatIsNotTheAttachment pins the property the
+// previous banner test only appeared to: it put the filename cell FIRST, so
+// leftmost-match won before the banner was ever reached, and it passed even
+// for a pattern with no `.torrent` anchor at all. Here the banner comes first.
+func TestFileName_SkipsAHeaderCellThatIsNotTheAttachment(t *testing.T) {
+	block := `<table class="attach bordered med">
+	<tr class="row4"><th colspan="3" class="row7 gold-header">ЗОЛОТАЯ РАЗДАЧА! СКАЧАННОЕ НЕ ЗАСЧИТЫВАЕТСЯ!&nbsp;</th></tr>
+	<tr class="row3"><th colspan="3" class="seedmed">Some.Release.[tapochek.net].torrent</th></tr>
+</table>`
+	if got := fileName(block); got != "Some.Release.[tapochek.net].torrent" {
+		t.Errorf("fileName = %q — it took the banner, not the attachment", got)
+	}
+}
+
+// TestFileName_AcceptsAnyViewerClass pins the whole known class family at
+// once, so a future variant is a one-line fixture rather than another
+// five-day hunt. The block is a real one with only the class substituted, and
+// the whole of it is asserted — an inline stub would let the test look broader
+// than it is.
+func TestFileName_AcceptsAnyViewerClass(t *testing.T) {
+	for _, class := range []string{"genmed", "seedmed", "leechmed", "row3 seedmed"} {
+		block := strings.Replace(fixtureTorrentBlock,
+			`<th colspan="3" class="genmed">`,
+			`<th colspan="3" class="`+class+`">`, 1)
+		if class != "genmed" && block == fixtureTorrentBlock {
+			t.Fatalf("class %q: substitution matched nothing", class)
+		}
+		if _, missing := fingerprintParts(block); len(missing) > 0 {
+			t.Errorf("class %q: missing %v", class, missing)
+		}
+		if got := fileName(block); !strings.HasSuffix(got, ".torrent") {
+			t.Errorf("class %q: fileName = %q", class, got)
 		}
 	}
 }
 
-// TestFileNameRe_AcceptsAnyViewerClass pins the whole known family at once, so
-// a future variant is a one-line fixture rather than another five-day hunt.
-func TestFileNameRe_AcceptsAnyViewerClass(t *testing.T) {
-	for _, class := range []string{"genmed", "seedmed", "leechmed", "row3 seedmed", ""} {
-		attr := ""
-		if class != "" {
-			attr = ` class="` + class + `"`
-		}
-		block := `<table class="attach"><tr><th colspan="3"` + attr + `>Some.Release.[tapochek.net].torrent</th></tr>
-<td width="15%" rowspan="7"><a href="download.php?id=1">x</a></td>
-<td>Размер:</td><td>1.00&nbsp;GB</td>
-<td>Зарегистрирован &nbsp; [ <span title="4 дня">17-09-2026 00:21</span> ]</td></table>`
-		if got := cellValue(fileNameRe, block); got != "Some.Release.[tapochek.net].torrent" {
-			t.Errorf("class %q: fileNameRe = %q", class, got)
-		}
+// TestFileName_IgnoresAnUnclassedHeaderCellThatNamesNoAttachment is the
+// inverse of the family test: dropping the class entirely must not make a
+// non-attachment cell eligible.
+func TestFileName_IgnoresAnUnclassedHeaderCellThatNamesNoAttachment(t *testing.T) {
+	block := `<table class="attach"><tr><th colspan="3">Раздача от 17-09-2026</th></tr></table>`
+	if got := fileName(block); got != "" {
+		t.Errorf("fileName = %q, want empty", got)
 	}
 }

@@ -159,17 +159,24 @@ var fixtureGatedTorrentBlock = strings.Replace(
 	1,
 )
 
-// fixtureSeedingTorrentBlock is the SAME release's torrent table as
-// fixtureTorrentBlock, captured on 2026-09-21 from an account that already
-// seeds it (issue #186, reporter's paste for t=288010, ad markup trimmed).
+// fixtureSeedingTorrentBlock is a SECOND release's torrent table (t=288010,
+// not the t=289113 of fixtureTorrentBlock), captured on 2026-09-21 from an
+// account that already seeds it — the reporter's own paste on issue #186, ad
+// markup trimmed.
 //
-// The only difference that matters is the class: `seedmed` where the other
-// capture has `genmed`, on both the filename <th> and the download <a>. The
-// site colours that cell by the VIEWER's relation to the torrent — the same
-// page also uses `seedmed`/`leechmed` for its seeder and leecher counts — so
-// the class is per-user, per-topic state and cannot anchor a selector. It is
-// also why this was unreproducible for five days: the reporter seeds the
-// release and we do not.
+// It is here for what only a real capture carries: the gold release-type
+// banner, the Статус row with its inline <script>, and `class="seedmed"` on
+// both the filename <th> and the download <a>. The site colours that cell by
+// the VIEWER's relation to the torrent — the same page uses
+// `seedmed`/`leechmed` for its seeder and leecher counts — so the class is
+// per-user, per-topic state and cannot anchor a selector. That is why the bug
+// was unreproducible for five days: the reporter seeds the release, we do not.
+//
+// It is the WRONG fixture for proving the viewer class does not move the
+// change token, because the ids, names, sizes and dates differ from
+// fixtureTorrentBlock — two unrelated blocks cannot be compared. The
+// same-release differential that CAN prove it is fixtureSeedmedTorrentBlock
+// below.
 const fixtureSeedingTorrentBlock = `<table class="attach bordered med">
 	<tr class="row3">
 		<th colspan="3" class="seedmed">Стюарт Блум не смог спасти вселенную Stuart Fails to Save the Universe Сезон 1 Серии 1-8 из 10 [WEB-DL 1080p] [tapochek.net].torrent</th>
@@ -213,3 +220,26 @@ const fixtureSeedingTorrentBlock = `<table class="attach bordered med">
 		<td><span id="VT188304">25</span></td>
 	</tr>
 </table>`
+
+// fixtureSeedmedTorrentBlock is fixtureTorrentBlock with the viewer-scoped
+// class swapped, so the two differ in NOTHING else — not the download id, not
+// the filename, not the size, not the registration date.
+//
+// That is the whole point. Comparing two captures of DIFFERENT releases proves
+// only that each one parses; comparing these two proves the thing issue #186
+// actually turned on, which is that the reader's relation to a release must
+// not move its change token. Derived rather than captured because obtaining
+// the genuine article means one account seeding a release while another does
+// not, and the substitution is exactly what the server does.
+var fixtureSeedmedTorrentBlock = strings.ReplaceAll(fixtureTorrentBlock, "genmed", "seedmed")
+
+// fixtureNbspNameBlock is fixtureTorrentBlock with a trailing `&nbsp;` inside
+// the filename cell — the shape that broke the first fix for this bug.
+//
+// Not invented: the gold banner in fixtureSeedingTorrentBlock ends
+// `&nbsp;</th>` and the size cell one row down reads `1.39&nbsp;GB`, so this
+// template emits them freely. A pattern ending `\s*</th>` does not match one
+// (Go's `\s` is ASCII-only), so had the filename cell ever gained one, every
+// Tapochek check would have failed at once.
+var fixtureNbspNameBlock = strings.Replace(fixtureTorrentBlock,
+	`[tapochek.net].torrent</th>`, `[tapochek.net].torrent&nbsp;</th>`, 1)
