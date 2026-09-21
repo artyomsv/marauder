@@ -144,8 +144,8 @@ func (r *redactor) scan() error {
 // whatever the page ended inside — most importantly a tag cut off before its
 // `>`. Those bytes are examined: never dropped, never copied unexamined.
 func (r *redactor) finish(err error, start, end int) error {
-	if err != io.EOF {
-		return fmt.Errorf("%w: %v", ErrUnsafe, err)
+	if !errors.Is(err, io.EOF) {
+		return fmt.Errorf("%w: %w", ErrUnsafe, err)
 	}
 	if start < end {
 		r.tail(start, end)

@@ -141,7 +141,7 @@ func TestRedact_RemovesCookieHeadersEchoedIntoThePage(t *testing.T) {
 func TestRedact_IsIdempotent(t *testing.T) {
 	once := redact(t, livePageFragment, "someone")
 	twice := redact(t, once, "someone")
-	if string(once) != string(twice) {
+	if once != twice {
 		t.Errorf("second pass changed the output:\n%s\n---\n%s", once, twice)
 	}
 }
