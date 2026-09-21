@@ -577,6 +577,62 @@ describe("EditTopicCard — prefill + update", () => {
     expect(onSaved).toHaveBeenCalled();
   });
 
+  // The edit PUT is the only way to turn the watch mode on or off for an
+  // existing topic, and objectContaining ignores keys it is not given — so
+  // without naming both, dropping them from EditTopicCard's body passes CI.
+  it("pre-fills the notify-only toggles and sends both on save", async () => {
+    const user = userEvent.setup();
+    routeGetWithQuality(() => Promise.resolve({ seasons: [] }));
+    mockApi.updateTopic.mockResolvedValue({});
+
+    renderEdit({
+      ...EXISTING_TOPIC,
+      NotifyOnly: true,
+      NotifyOnlyAnnounceCurrent: true,
+    });
+
+    const notifyToggle = (await screen.findByLabelText(
+      /notify only/i,
+    )) as HTMLInputElement;
+    expect(notifyToggle.checked).toBe(true);
+    const announceToggle = screen.getByLabelText(
+      /release that is there now/i,
+    ) as HTMLInputElement;
+    expect(announceToggle.checked).toBe(true);
+
+    // Flip the sub-option so the two values differ: an equal pair cannot
+    // tell the two body fields apart if they were ever swapped.
+    await user.click(announceToggle);
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    expect(mockApi.updateTopic).toHaveBeenCalledWith(
+      "t-1",
+      expect.objectContaining({
+        notify_only: true,
+        notify_only_announce_current: false,
+      }),
+    );
+  });
+
+  // Turning the mode OFF is the only moment a user is told that what appeared
+  // while the topic was silent will never be fetched.
+  it("explains the missed backlog when notify-only is switched off", async () => {
+    const user = userEvent.setup();
+    routeGetWithQuality(() => Promise.resolve({ seasons: [] }));
+
+    renderEdit({ ...EXISTING_TOPIC, NotifyOnly: true });
+
+    const backlog = /will not be\s+downloaded/i;
+    expect(screen.queryByText(backlog)).not.toBeInTheDocument();
+
+    await user.click(await screen.findByLabelText(/notify only/i));
+    expect(screen.getByText(backlog)).toBeInTheDocument();
+
+    // Switching it back on removes the notice — nothing is being missed.
+    await user.click(screen.getByLabelText(/notify only/i));
+    expect(screen.queryByText(backlog)).not.toBeInTheDocument();
+  });
+
   it("pre-fills the replace toggle from the topic and sends it on save", async () => {
     const user = userEvent.setup();
     routeGetWithQuality(() => Promise.resolve({ seasons: [] }));
