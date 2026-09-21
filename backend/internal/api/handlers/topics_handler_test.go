@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -505,5 +506,54 @@ func TestTopics_Update_PassesNotifierID(t *testing.T) {
 	}
 	if store.updateNotifierID == nil || *store.updateNotifierID != notifierID {
 		t.Errorf("updateNotifierID = %v, want %s", store.updateNotifierID, notifierID)
+	}
+}
+
+// TestTopics_Create_PassesNotifyOnlyFlags pins the whole POST /topics hop for
+// the watch-only flags (issue #184): the JSON field names, the handler's
+// req → topics.CreateInput copy, and CreateInput → domain.Topic.
+//
+// The body is raw JSON rather than a createTopicReq literal so a renamed tag
+// fails here too, and the two values are deliberately DIFFERENT — with
+// {true,true} the test still passes when the two assignments are transposed.
+func TestTopics_Create_PassesNotifyOnlyFlags(t *testing.T) {
+	store := &fakeTopicStore{}
+	h := &Topics{Topics: store, BaseURL: "http://x"}
+
+	body := json.RawMessage(`{"url":"fake-create://topic/notify-only",` +
+		`"notify_only":true,"notify_only_announce_current":false}`)
+	w := httptest.NewRecorder()
+	h.Create(w, authedReq(t, uuid.New(), body))
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body=%s", w.Code, w.Body.String())
+	}
+	if store.created == nil {
+		t.Fatal("handler must call store.Create")
+	}
+	if !store.created.NotifyOnly {
+		t.Errorf("created.NotifyOnly = false, want true")
+	}
+	if store.created.NotifyOnlyAnnounceCurrent {
+		t.Errorf("created.NotifyOnlyAnnounceCurrent = true, want false")
+	}
+}
+
+// TestTopics_Create_NotifyOnlyAnnounceCurrent covers the other asymmetric
+// pair, so neither flag can be wired to the other's source.
+func TestTopics_Create_NotifyOnlyAnnounceCurrent(t *testing.T) {
+	store := &fakeTopicStore{}
+	h := &Topics{Topics: store, BaseURL: "http://x"}
+
+	body := json.RawMessage(`{"url":"fake-create://topic/announce-current",` +
+		`"notify_only":true,"notify_only_announce_current":true}`)
+	w := httptest.NewRecorder()
+	h.Create(w, authedReq(t, uuid.New(), body))
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body=%s", w.Code, w.Body.String())
+	}
+	if !store.created.NotifyOnly || !store.created.NotifyOnlyAnnounceCurrent {
+		t.Errorf("want both flags true, got %+v", store.created)
 	}
 }
