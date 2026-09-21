@@ -101,6 +101,11 @@ type Topics struct {
 	// keep working, while a double-click, an impatient retry after the
 	// "retry the reset" 500, or two tabs racing the same topic must not.
 	resetInFlight sync.Map
+
+	// diagnosticsInFlight gates POST /topics/{id}/diagnostics/page the same
+	// way, and for a sharper reason: that endpoint makes a live authenticated
+	// request to a third-party tracker, and several of them rate-limit hard.
+	diagnosticsInFlight sync.Map
 }
 
 type createTopicReq struct {

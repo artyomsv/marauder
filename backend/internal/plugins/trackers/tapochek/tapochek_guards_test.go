@@ -1152,3 +1152,38 @@ func TestFileName_IgnoresAnUnclassedHeaderCellThatNamesNoAttachment(t *testing.T
 		t.Errorf("fileName = %q, want empty", got)
 	}
 }
+
+// TestRawPage_ReturnsWhatCheckReads. A page collected for a bug report is only
+// evidence if it is the page the CHECKER saw: same session, same active
+// domain, same windows-1251 decode. A convenient plain GET would look like
+// evidence and be something else.
+func TestRawPage_ReturnsWhatCheckReads(t *testing.T) {
+	body, eerr := encoding.ReplaceUnsupported(charmap.Windows1251.NewEncoder()).Bytes([]byte(fixtureSeriesTopicHTML))
+	if eerr != nil {
+		t.Fatalf("encode fixture: %v", eerr)
+	}
+	p := newTestPlugin(t, func(w http.ResponseWriter, _ *http.Request) {
+		http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: userCookie, Path: "/"})
+		_, _ = w.Write(body)
+	})
+	creds := testCreds()
+	if err := p.Login(context.Background(), creds); err != nil {
+		t.Fatalf("Login: %v", err)
+	}
+	page, err := p.RawPage(context.Background(),
+		"https://tapochek.net/viewtopic.php?t=288010", creds)
+	if err != nil {
+		t.Fatalf("RawPage: %v", err)
+	}
+	// Decoded, not raw cp1251 bytes: an undecoded page would send the reporter
+	// mojibake and hide the Cyrillic labels the parser anchors on.
+	if !bytes.Contains(page, []byte("Размер:")) {
+		t.Error("RawPage did not transcode the page; the Cyrillic labels are unreadable")
+	}
+	// The same bytes Check parses, so a report and a failure describe one page.
+	if block, ok := torrentBlock(page); !ok {
+		t.Error("RawPage returned a page Check cannot find a torrent block in")
+	} else if _, missing := fingerprintParts(block); len(missing) > 0 {
+		t.Errorf("RawPage's page is missing %v — it is not what Check reads", missing)
+	}
+}

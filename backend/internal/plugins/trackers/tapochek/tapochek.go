@@ -805,6 +805,25 @@ func (p *plugin) gateError(creds *domain.TrackerCredential, fallback error) erro
 
 var _ registry.WithMetadata = (*plugin)(nil)
 
+// --- WithRawPage --------------------------------------------------------
+
+var _ registry.WithRawPage = (*plugin)(nil)
+
+// RawPage returns the topic page exactly as Check reads it.
+//
+// It routes through canonicalURL and fetchPage rather than doing its own GET,
+// which is the whole point: the active domain, the session, the redirect
+// guard and the windows-1251 decode are all part of "what the checker saw",
+// and a page collected without them would be evidence of nothing. The caller
+// redacts the result before anyone sees it.
+func (p *plugin) RawPage(ctx context.Context, rawURL string, creds *domain.TrackerCredential) ([]byte, error) {
+	target, err := p.canonicalURL(rawURL)
+	if err != nil {
+		return nil, err
+	}
+	return p.fetchPage(ctx, target, creds)
+}
+
 // ResolveMetadata returns the release title and cover so a new topic shows a
 // real name and poster instead of a "Tapochek topic 155445" placeholder.
 //

@@ -1,5 +1,14 @@
 import { motion } from "framer-motion";
-import { Check, Loader2, MoreVertical, Pencil, RefreshCw, RotateCcw, Trash2 } from "lucide-react";
+import {
+  Bug,
+  Check,
+  Loader2,
+  MoreVertical,
+  Pencil,
+  RefreshCw,
+  RotateCcw,
+  Trash2,
+} from "lucide-react";
 
 import type { Topic } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
@@ -36,6 +45,10 @@ export interface TopicRowActions {
   onToggleSelect: () => void;
   onEdit: () => void;
   onRecheck: () => void;
+  // Export the tracker page for a bug report. Undefined when the topic's
+  // tracker has no WithRawPage implementation, which hides the menu item
+  // rather than offering a control that can only 409.
+  onDiagnostics?: () => void;
   onReset: () => void;
   onDelete: () => void;
 }
@@ -185,6 +198,12 @@ function TopicRowActionsMenu({
           <RotateCcw className="size-4" />
           {t("topics.actions.reset")}
         </DropdownMenuItem>
+        {actions.onDiagnostics && (
+          <DropdownMenuItem onSelect={() => actions.onDiagnostics?.()}>
+            <Bug className="size-4" />
+            {t("topics.actions.diagnostics")}
+          </DropdownMenuItem>
+        )}
         <DropdownMenuSeparator />
         {armed ? (
           <DropdownMenuItem

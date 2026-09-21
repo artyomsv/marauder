@@ -173,6 +173,29 @@ type WithSearch interface {
 	Search(ctx context.Context, query string, creds *domain.TrackerCredential) ([]SearchResult, error)
 }
 
+// WithRawPage is an optional tracker capability: return the topic page
+// exactly as the plugin's own Check would read it — same session, same
+// headers, same character-set handling — so a user can attach it to a bug
+// report.
+//
+// It exists because of issue #186, where a tracker served DIFFERENT markup to
+// an account that seeds the release than to one that does not. No amount of
+// checking from a maintainer's account could reproduce it, and the only thing
+// that could was the reporter's own bytes. Five days.
+//
+// Implementations must return the page a check sees, not a convenient
+// approximation: a plain GET that skips the plugin's decoding or session is
+// worse than nothing, because it looks like evidence and is not.
+//
+// The caller redacts before showing the result to anyone (see
+// internal/pageredact) — a login-gated page carries the session in its own
+// links. creds may be nil; the page then shows whatever a guest sees, which
+// is itself a useful thing for a report to say.
+type WithRawPage interface {
+	Tracker
+	RawPage(ctx context.Context, rawURL string, creds *domain.TrackerCredential) ([]byte, error)
+}
+
 // --- Client & Notifier interfaces ---------------------------------------
 
 // Client is a torrent client plugin.

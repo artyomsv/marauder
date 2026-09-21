@@ -268,6 +268,21 @@ const ru: Record<string, string> = {
   "topics.actions.reset": "Сбросить",
   "topics.actions.delete": "Удалить",
   "topics.actions.confirmDelete": "Подтвердить удаление",
+  "topics.actions.diagnostics": "HTML страницы для отчёта",
+
+  // Export the tracker page a check reads, for bug reports (issue #186).
+  "topics.diagnostics.title": "HTML страницы для отчёта",
+  "topics.diagnostics.explain":
+    "Загружает эту страницу трекера заново, прямо сейчас, так же как её читает проверка. Трекеры могут отдавать разную разметку разным аккаунтам, поэтому ваша копия может быть единственным способом воспроизвести ошибку разбора.",
+  "topics.diagnostics.fetch": "Загрузить страницу",
+  "topics.diagnostics.fetching": "Загрузка…",
+  "topics.diagnostics.anonymous": "загружено без аккаунта",
+  "topics.diagnostics.warning":
+    "Идентификаторы сессии, ключи и ваше имя пользователя на трекере удалены и заменены этой меткой. Пожалуйста, просмотрите файл перед публикацией — это страница из вашего аккаунта, и мы не можем знать все секреты, которые трекер на неё помещает:",
+  "topics.diagnostics.download": "Скачать .html",
+  "topics.diagnostics.copy": "Копировать",
+  "topics.diagnostics.copied": "Скопировано",
+  "topics.diagnostics.close": "Закрыть",
 
   // Сброс темы (сброс доставок/прогресса/ошибок, повторная проверка с нуля)
   "topics.reset.title": "Сбросить «{name}»",

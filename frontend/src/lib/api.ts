@@ -181,6 +181,12 @@ export const api = {
       delete_data: deleteData,
     }),
 
+  // /topics/{id}/diagnostics/page — re-fetch the tracker page this topic
+  // checks, redacted, so the user can attach it to a bug report. Issue #186
+  // was a CSS class that only the reporter's account ever saw.
+  topicDiagnosticsPage: (id: string) =>
+    request<TopicDiagnosticsPage>("POST", `/topics/${id}/diagnostics/page`),
+
   // /topics/{id}/events — read-only per-topic history timeline.
   topicEvents: (id: string) =>
     request<{ events: TopicEvent[] }>("GET", `/topics/${id}/events`),
@@ -328,6 +334,23 @@ export interface TopicStatus {
 export interface TopicResetResult {
   removed: number;
   warnings: string[];
+}
+
+// The tracker page a check reads, fetched live and redacted, for attaching to
+// a bug report (POST /topics/{id}/diagnostics/page).
+export interface TopicDiagnosticsPage {
+  tracker: string;
+  url: string;
+  // False when no usable tracker credential was available, so the page is
+  // whatever a guest sees. Worth saying out loud in a report.
+  authenticated: boolean;
+  bytes: number;
+  fetched_at: string;
+  redacted: boolean;
+  // The marker left behind wherever a secret was removed, so the UI can tell
+  // the user what to look for instead of describing it in prose.
+  redaction_mark: string;
+  html: string;
 }
 
 // One event in the per-topic history timeline (GET /topics/{id}/events).
@@ -496,6 +519,7 @@ export type SystemInfo = {
     supports_interactive_login: boolean;
     supports_credentials: boolean;
     supports_search: boolean;
+    supports_raw_page: boolean;
   }[];
   clients: { name: string; display_name: string }[];
   notifiers: { name: string; display_name: string }[];

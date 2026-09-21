@@ -270,6 +270,21 @@ const en: Record<string, string> = {
   "topics.actions.reset": "Reset",
   "topics.actions.delete": "Delete",
   "topics.actions.confirmDelete": "Confirm delete",
+  "topics.actions.diagnostics": "Report page HTML",
+
+  // Export the tracker page a check reads, for bug reports (issue #186).
+  "topics.diagnostics.title": "Report page HTML",
+  "topics.diagnostics.explain":
+    "Fetches this tracker page again, right now, the way a check reads it. Trackers can serve different markup to different accounts, so your copy may be the only way to reproduce a parsing bug.",
+  "topics.diagnostics.fetch": "Fetch page",
+  "topics.diagnostics.fetching": "Fetching…",
+  "topics.diagnostics.anonymous": "fetched without an account",
+  "topics.diagnostics.warning":
+    "Session ids, keys and your tracker username were removed and replaced with this marker. Please skim the file before you post it — it is a page from your account, and we cannot know every secret a tracker puts on one:",
+  "topics.diagnostics.download": "Download .html",
+  "topics.diagnostics.copy": "Copy",
+  "topics.diagnostics.copied": "Copied",
+  "topics.diagnostics.close": "Close",
 
   // Reset topic (discard deliveries/progress/error state, re-check from scratch)
   "topics.reset.title": "Reset {name}",
