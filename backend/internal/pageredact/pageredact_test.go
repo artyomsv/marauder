@@ -142,3 +142,64 @@ func TestRedact_NilAndEmptyInput(t *testing.T) {
 		t.Errorf("Redact(empty) = %q, want empty", got)
 	}
 }
+
+// TestRedact_TokenInputSurvivesNoAttributeSpelling is the P1 Greptile raised
+// on this package. The first version matched only `name="..."` appearing
+// BEFORE `value="..."`, both double-quoted. HTML permits neither constraint,
+// and a form token is as good as a session for anything that accepts it — so
+// every spelling below leaked the reporter's credential into a file they were
+// being invited to post publicly.
+func TestRedact_TokenInputSurvivesNoAttributeSpelling(t *testing.T) {
+	for _, tag := range []string{
+		`<input type="hidden" name="form_token" value="s3cr3t" />`,
+		`<input type="hidden" value="s3cr3t" name="form_token" />`,
+		`<input type='hidden' name='form_token' value='s3cr3t'>`,
+		`<input type='hidden' value='s3cr3t' name='form_token'>`,
+		`<input type=hidden name=form_token value=s3cr3t>`,
+		`<INPUT TYPE="HIDDEN" NAME="FORM_TOKEN" VALUE="s3cr3t">`,
+		`<input name = "form_token"  value = "s3cr3t">`,
+		`<input name="csrf-token" value="s3cr3t">`,
+		`<input name="session_key" value="s3cr3t">`,
+		// No type attribute at all: `type` is optional, so a rule keyed on
+		// type="hidden" would pass this straight through.
+		`<input name="form_token" value="s3cr3t">`,
+	} {
+		if got := string(Redact([]byte(tag), "")); strings.Contains(got, "s3cr3t") {
+			t.Errorf("token survived in %q -> %q", tag, got)
+		}
+	}
+}
+
+// TestRedact_LeavesOrdinaryInputsAlone is the P2. Over-redaction destroys the
+// markup the export exists to carry, and the first version blanked any input
+// whose name merely CONTAINED a secret word as a substring — so `author`,
+// `keywords` and `consideration` all matched (`auth`, `key`, `sid`).
+func TestRedact_LeavesOrdinaryInputsAlone(t *testing.T) {
+	for _, tag := range []string{
+		`<input type="text" name="search" value="Stuart Fails">`,
+		`<input type="text" name="author" value="Fire">`,
+		`<input type="text" name="keywords" value="1080p">`,
+		`<input type="hidden" name="consideration" value="12">`,
+		`<input type="hidden" name="monkey" value="12">`,
+		`<input type="submit" name="submit" value="Найти">`,
+	} {
+		if got := string(Redact([]byte(tag), "")); got != tag {
+			t.Errorf("ordinary input was redacted:\n  in  %q\n  out %q", tag, got)
+		}
+	}
+}
+
+// TestRedact_PreservesTheValueDelimiter. Redaction must change the VALUE and
+// nothing else — swapping single quotes for double, or adding them to an
+// unquoted attribute, is a markup edit, and markup is the evidence.
+func TestRedact_PreservesTheValueDelimiter(t *testing.T) {
+	for in, want := range map[string]string{
+		`<input name="form_token" value="x">`: `<input name="form_token" value="` + Placeholder + `">`,
+		`<input name='form_token' value='x'>`: `<input name='form_token' value='` + Placeholder + `'>`,
+		`<input name=form_token value=x>`:     `<input name=form_token value=` + Placeholder + `>`,
+	} {
+		if got := string(Redact([]byte(in), "")); got != want {
+			t.Errorf("Redact(%q)\n  = %q\nwant %q", in, got, want)
+		}
+	}
+}

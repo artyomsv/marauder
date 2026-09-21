@@ -44,16 +44,40 @@ const Placeholder = "MARAUDER-REDACTED"
 var secretParams = regexp.MustCompile(
 	`(?i)\b(sid|uk|passkey|pid|auth_key|authkey|apikey|api_key|token|access_token|secret|key)=[^"'&<>\s;]+`)
 
-// secretInputs matches a hidden form field whose NAME says it carries a
-// token. A form token is as good as a session for anything that accepts it,
-// and unlike a session id it travels in markup rather than in a URL.
+// inputTagRe finds every <input> tag. Deciding which of them carries a
+// credential is done by reading the tag's ATTRIBUTES, not by a single pattern
+// that also has to express attribute order and quoting.
 //
-// Deliberately narrow: it requires the name to contain one of these words, so
-// an ordinary `<input name="search" value="...">` keeps its value. An
-// over-eager rule would blank the page content that the report exists to
-// show.
-var secretInputs = regexp.MustCompile(
-	`(?is)(<input\b[^>]*\bname="[^"]*(?:token|passkey|sid|auth|secret|session|key)[^"]*"[^>]*\bvalue=")([^"]*)(")`)
+// The single-pattern version was wrong in both directions at once. It required
+// `name` before `value` and double quotes on both, so
+// `<input value='x' name='form_token'>` — valid markup either way round, and
+// what some templates emit — kept the credential and shipped it in a file the
+// user was being invited to post publicly. And it matched the secret words as
+// bare substrings, so `author`, `keywords`, `monkey` and `consideration` were
+// all blanked (`auth`, `key`, `sid`), destroying the very markup the export
+// exists to carry.
+var inputTagRe = regexp.MustCompile(`(?is)<input\b[^>]*>`)
+
+// attrRe reads one attribute. All three HTML spellings are accepted —
+// double-quoted, single-quoted, and unquoted — because a redactor that only
+// understands the tidy one fails open on a credential.
+var attrRe = regexp.MustCompile(`(?is)\b([a-z_:][-\w:.]*)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))`)
+
+// valueAttrRe locates the value attribute inside one tag so only its content
+// is replaced. The delimiter is preserved (see redactValueAttr): swapping
+// quotes or adding them to an unquoted attribute is a markup edit, and markup
+// is the evidence.
+var valueAttrRe = regexp.MustCompile(`(?is)\bvalue\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'>]+)`)
+
+// secretNameRe matches a field name that carries a credential. The words are
+// matched at non-letter boundaries, not as substrings, which is what keeps
+// `author`, `keywords`, `monkey` and `consideration` intact while still
+// catching `form_token`, `csrf-token`, `session_key` and a bare `sid`.
+//
+// A form token is as good as a session for anything that accepts it, and
+// unlike a session id it travels in markup rather than in a URL.
+var secretNameRe = regexp.MustCompile(
+	`(?i)(^|[^a-z])(sid|uk|csrf|xsrf|nonce|token|passkey|apikey|secret|session|key|auth|password|passwd|pwd)([^a-z]|$)`)
 
 // cookieLines matches a Cookie header echoed into the page — some forum
 // templates dump the request when debugging is left on. One line here is the
@@ -78,10 +102,63 @@ func Redact(page []byte, username string) []byte {
 		name, _, _ := strings.Cut(m, "=")
 		return name + "=" + Placeholder
 	})
-	s = secretInputs.ReplaceAllString(s, "${1}"+Placeholder+"${3}")
+	s = redactInputs(s)
 	s = cookieLines.ReplaceAllString(s, "${1}"+Placeholder)
 	s = redactUsername(s, username)
 	return []byte(s)
+}
+
+// redactInputs blanks the value of every <input> whose name carries a
+// credential, leaving every other input — and the rest of the tag — untouched.
+//
+// It deliberately does NOT require type="hidden". The attribute is optional,
+// a template is free to carry a token in a visible field, and the cost of the
+// two mistakes is not symmetric: a needlessly blanked value loses one
+// attribute from a diagnostic file, while a missed one hands the reporter's
+// account to everyone who reads the bug report.
+func redactInputs(s string) string {
+	return inputTagRe.ReplaceAllStringFunc(s, func(tag string) string {
+		if !secretNameRe.MatchString(attrValue(tag, "name")) {
+			return tag
+		}
+		return valueAttrRe.ReplaceAllStringFunc(tag, redactValueAttr)
+	})
+}
+
+// attrValue returns the named attribute's value from one tag, or "".
+func attrValue(tag, want string) string {
+	for _, m := range attrRe.FindAllStringSubmatch(tag, -1) {
+		if !strings.EqualFold(m[1], want) {
+			continue
+		}
+		for _, v := range m[2:] {
+			if v != "" {
+				return v
+			}
+		}
+		return ""
+	}
+	return ""
+}
+
+// redactValueAttr replaces one `value=...` attribute's content, keeping its
+// delimiter and the spacing around the `=` exactly as the page wrote them.
+func redactValueAttr(attr string) string {
+	eq := strings.Index(attr, "=")
+	if eq < 0 {
+		return attr
+	}
+	head, rest := attr[:eq+1], attr[eq+1:]
+	trimmed := strings.TrimLeft(rest, " \t\r\n")
+	pad := rest[:len(rest)-len(trimmed)]
+	switch {
+	case strings.HasPrefix(trimmed, `"`):
+		return head + pad + `"` + Placeholder + `"`
+	case strings.HasPrefix(trimmed, `'`):
+		return head + pad + `'` + Placeholder + `'`
+	default:
+		return head + pad + Placeholder
+	}
 }
 
 // redactUsername replaces whole-word occurrences of name, case-insensitively.

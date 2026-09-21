@@ -12,12 +12,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A "Report page HTML" action on each topic**, for when a tracker parses
   fine for one person and not another. It re-fetches that tracker page the way
   a check reads it, removes session ids, keys and your tracker username, and
-  offers it as a download to attach to a bug report. Issue #186 took five days
-  because the only copy of the page that showed the bug was the reporter's,
-  and they had to find it by hand in 110 KB of markup. Tapochek only for now;
-  the action is hidden for trackers that cannot export their page yet. The
-  file is redacted, not guaranteed clean — the UI says so and asks you to
-  skim it.
+  offers it as a download to attach to a bug report. Field values are matched
+  by name at word boundaries and every HTML attribute spelling is read, so a
+  token cannot hide behind single quotes or a reversed attribute order.
+  Issue #186 took five days because the only copy of the page that showed
+  the bug was the reporter's, and they had to find it by hand in 110 KB of
+  markup. Tapochek only for now; the action is hidden for trackers that
+  cannot export their page yet. The file is redacted, not guaranteed clean —
+  the UI says so and asks you to skim it.
 
 ## [1.20.3] - 2026-09-22
 
