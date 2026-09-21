@@ -539,8 +539,10 @@ func TestTopics_Create_PassesNotifyOnlyFlags(t *testing.T) {
 	}
 }
 
-// TestTopics_Create_NotifyOnlyAnnounceCurrent covers the other asymmetric
-// pair, so neither flag can be wired to the other's source.
+// TestTopics_Create_NotifyOnlyAnnounceCurrent pins that the sub-flag can carry
+// true through the handler at all — the test above only ever sends it as false.
+// It is deliberately NOT a swap detector: {true,true} is symmetric, so a
+// transposed pair would still pass here. The asymmetric case above catches that.
 func TestTopics_Create_NotifyOnlyAnnounceCurrent(t *testing.T) {
 	store := &fakeTopicStore{}
 	h := &Topics{Topics: store, BaseURL: "http://x"}
