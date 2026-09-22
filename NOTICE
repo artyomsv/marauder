@@ -18,6 +18,11 @@ work under the MIT License and who have not granted explicit permission to
 relicense remain licensed under the MIT License, the text of which is
 reproduced in MIT-LICENSE.txt.
 
+One contribution is in that position: the changes made by pull request #122
+(commit 4c55036, "fix(anilibria): support current AniLiberty API"), Portions
+Copyright 2026 Zenderg. Consent was requested in issue #160 on 2026-08-20 and
+has not been given, so those changes remain under the MIT License.
+
 No rights beyond those granted by the applicable original license are conveyed
 for such contributions.
 
