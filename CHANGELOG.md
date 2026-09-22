@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.21.0] - 2026-09-22
+
 ### Added
 
 - **A "Report page HTML" action on each topic**, for when a tracker parses
