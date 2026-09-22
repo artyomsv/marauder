@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.20.3] - 2026-09-22
+
 ### Fixed
 
 - **Hardened the Tapochek filename lookup against a trailing `&nbsp;`.** The
