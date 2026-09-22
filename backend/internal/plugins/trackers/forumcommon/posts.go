@@ -74,6 +74,21 @@ func TagBlockInner(s string, openRe *regexp.Regexp, tag string) (string, bool) {
 	return s[loc[1] : end-len("</"+tag+">")], true
 }
 
+// TagBlockOuter is TagBlockInner including the element's own opening and
+// closing tags, byte for byte. Use it when the opening tag's attributes matter
+// — the page export does, because a class on the block itself is evidence.
+func TagBlockOuter(s string, openRe *regexp.Regexp, tag string) (string, bool) {
+	loc := openRe.FindStringIndex(s)
+	if loc == nil {
+		return "", false
+	}
+	end, ok := matchingClose(s, loc[1], tag)
+	if !ok {
+		return "", false
+	}
+	return s[loc[0]:end], true
+}
+
 // maxScanIterations bounds the matchingClose token walk. Each iteration
 // rescans the remaining string, so pathological input (thousands of nested
 // same-tag openings in an attacker-controlled page) would otherwise degrade

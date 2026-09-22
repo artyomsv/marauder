@@ -187,6 +187,7 @@ func NewRouter(d Deps) http.Handler {
 			r.Post("/topics/{id}/resume", topicsH.Resume)
 			r.Post("/topics/{id}/reset", topicsH.Reset)
 			r.Post("/topics/{id}/recheck", topicsH.Recheck)
+			r.Post("/topics/{id}/diagnostics/page", topicsH.DiagnosticsPage)
 
 			r.Get("/clients", clientsH.List)
 			r.Post("/clients", clientsH.Create)

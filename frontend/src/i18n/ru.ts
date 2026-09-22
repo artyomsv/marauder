@@ -268,6 +268,23 @@ const ru: Record<string, string> = {
   "topics.actions.reset": "Сбросить",
   "topics.actions.delete": "Удалить",
   "topics.actions.confirmDelete": "Подтвердить удаление",
+  "topics.actions.diagnostics": "HTML страницы для отчёта",
+
+  // Export the tracker page a check reads, for bug reports (issue #186).
+  "topics.diagnostics.title": "HTML страницы для отчёта",
+  "topics.diagnostics.explain":
+    "Загружает эту страницу трекера заново, прямо сейчас, так же как её читает проверка, и оставляет только те части, которые читает парсер Marauder. Трекеры могут отдавать разную разметку разным аккаунтам, поэтому ваша копия может быть единственным способом воспроизвести ошибку разбора.",
+  "topics.diagnostics.fetch": "Загрузить страницу",
+  "topics.diagnostics.fetching": "Загрузка…",
+  "topics.diagnostics.anonymous": "загружено без аккаунта",
+  "topics.diagnostics.includes": "В файле только эти части страницы:",
+  "topics.diagnostics.notFound": "нет на этой странице",
+  "topics.diagnostics.warning":
+    "Остальная часть страницы не включена. Внутри этих частей идентификаторы сессии, ключи и ваше имя пользователя на трекере заменены этой меткой. Пожалуйста, просмотрите файл перед публикацией — мы не можем знать все секреты, которые трекер помещает на страницу:",
+  "topics.diagnostics.download": "Скачать .html",
+  "topics.diagnostics.copy": "Копировать",
+  "topics.diagnostics.copied": "Скопировано",
+  "topics.diagnostics.close": "Закрыть",
 
   // Сброс темы (сброс доставок/прогресса/ошибок, повторная проверка с нуля)
   "topics.reset.title": "Сбросить «{name}»",

@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A "Report page HTML" action on each topic**, for when a tracker parses
+  fine for one person and not another. It re-fetches that tracker page the way
+  a check reads it and offers a file to attach to a bug report. Issue #186
+  took five days because the only copy of the page that showed the bug was
+  the reporter's, and they had to find it by hand in 110 KB of markup.
+  Tapochek only for now; the action is hidden for trackers that cannot export
+  their page yet.
+
+  The file holds **only the parts of the page Marauder's parser reads** — for
+  Tapochek the title, the torrent table and the opening post — each exactly
+  as the tracker sent it, and it says which parts are included and which the
+  page did not have. The rest of the page is left out on purpose: that is
+  where a tracker keeps your session, your login forms and your username.
+  Inside the included parts, session ids, tokens, keys, echoed cookies and
+  your tracker username are still replaced with `MARAUDER-REDACTED` as a
+  backstop, even if the tracker login fails. The file is redacted, not
+  guaranteed clean: the UI says so and asks you to skim it.
+
 ## [1.20.3] - 2026-09-22
 
 ### Fixed

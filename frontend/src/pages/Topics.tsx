@@ -11,7 +11,9 @@ import { QK } from "@/lib/queryKeys";
 import { mapWithConcurrency } from "@/lib/concurrency";
 import { AddTopicCard } from "@/components/topics/AddTopicCard";
 import { EditTopicCard } from "@/components/topics/EditTopicCard";
+import { useSystemInfo } from "@/lib/hooks/useSystemInfo";
 import { ResetTopicCard } from "@/components/topics/ResetTopicCard";
+import { TopicDiagnosticsCard } from "@/components/topics/TopicDiagnosticsCard";
 import type { ClientRef } from "@/components/topics/ClientBadge";
 import type { NotifierRef } from "@/components/topics/NotifierBadge";
 import { TopicRow } from "@/components/topics/TopicRow";
@@ -60,6 +62,8 @@ export function TopicsPage() {
   // finishing a bulk reset clears the selection, and the card must stay
   // mounted afterwards to show its result.
   const [resetting, setResetting] = useState<Topic[] | null>(null);
+  const systemInfo = useSystemInfo();
+  const [diagnosing, setDiagnosing] = useState<Topic | null>(null);
 
   const del = useMutation({
     mutationFn: (id: string) => api.del<void>(`/topics/${id}`),
@@ -126,6 +130,14 @@ export function TopicsPage() {
     setSelected(new Set());
   };
 
+  // Trackers that can export the page a check reads. Anything else hides the
+  // menu item rather than offering a control that can only fail.
+  const exportTrackers = new Set(
+    (systemInfo.data?.trackers ?? [])
+      .filter((tr) => tr.supports_page_export)
+      .map((tr) => tr.name),
+  );
+
   const onResetDone = () => {
     for (const topic of resetting ?? []) {
       useCheckStatus.getState().clear(topic.ID);
@@ -191,6 +203,13 @@ export function TopicsPage() {
             onDone={onResetDone}
           />
         )}
+        {diagnosing && (
+          <TopicDiagnosticsCard
+            key={diagnosing.ID}
+            topic={diagnosing}
+            onClose={() => setDiagnosing(null)}
+          />
+        )}
       </AnimatePresence>
 
       {selected.size > 0 && (
@@ -239,6 +258,9 @@ export function TopicsPage() {
                     onEdit: () => setEditing(t),
                     onRecheck: () => recheck.mutate(t.ID),
                     onReset: () => setResetting([t]),
+                    onDiagnostics: exportTrackers.has(t.TrackerName)
+                      ? () => setDiagnosing(t)
+                      : undefined,
                     onDelete: () => del.mutate(t.ID),
                   }}
                 />
