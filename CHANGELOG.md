@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Hardened the Tapochek filename lookup against a trailing `&nbsp;`.** The
+  1.20.2 fix anchored the release filename on its `.torrent` suffix followed by
+  optional whitespace — but Go's `\s` does not match `&nbsp;`, and this tracker
+  emits those freely (its size cell reads `1.39&nbsp;GB`, and its release-type
+  banner ends with one). Had the filename cell ever gained one, every Tapochek
+  check would have failed at once — issue #186 again, with a new trigger. The
+  suffix is now matched after the text is decoded, not inside the pattern.
+  Stored change tokens are unaffected. (#186)
+
+### Note on 1.20.1
+
+- The 1.20.1 entry below presents the "your account is not allowed to download
+  this release" wording as the answer to #186. That wording describes a real
+  Tapochek state and is worth having, but it was **not** the cause of the
+  reported failures. The actual cause — the tracker colouring the filename cell
+  by the reader's relation to the release — was found and fixed in 1.20.2.
+
 ## [1.20.2] - 2026-09-21
 
 ### Fixed

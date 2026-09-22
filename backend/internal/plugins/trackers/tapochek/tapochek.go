@@ -349,24 +349,20 @@ var (
 	// attachment id, not a Russian label a template change could rename.
 	dlHrefRe = regexp.MustCompile(`href="(download\.php\?id=(\d+))"`)
 
-	// fileNameRe reads the .torrent filename from the block's header cell,
-	// anchored on the `.torrent` suffix rather than on the cell's class.
+	// headerCellRe matches the plain text of any header cell in the block.
+	// Which of them is the attachment name is decided by fileName below, on
+	// the NORMALISED text — not by this pattern.
 	//
-	// The class is NOT usable here, which issue #186 took five days to
-	// establish. Tapochek colours that header — and the download link beside
-	// it — by the VIEWER's relation to the release: `genmed` for a stranger,
-	// `seedmed` for someone who already seeds it, and the same page uses
-	// `leechmed` elsewhere. So `class="genmed"` worked for every account that
-	// did NOT have the torrent and failed for every account that did, which is
-	// why live checks against three of the reporter's own topics could never
-	// reproduce it. It is per-user, per-topic state wearing the costume of a
-	// static selector.
-	//
-	// The suffix is safe to anchor on instead: this is an attachment cell and
-	// the site names every attachment `<release> [tapochek.net].torrent`. The
-	// release-type banner directly below it is a <th> too, but it wraps its
-	// text in <img> tags, so `[^<]*` cannot reach across it.
-	fileNameRe = regexp.MustCompile(`(?s)<th[^>]*>([^<]*\.torrent)\s*</th>`)
+	// The cell's class is NOT usable for that, which issue #186 took five days
+	// to establish. Tapochek colours that header — and the download link
+	// beside it — by the VIEWER's relation to the release: `genmed` for a
+	// stranger, `seedmed` for someone who already seeds it, and the same page
+	// uses `leechmed` elsewhere. So `class="genmed"` worked for every account
+	// that did NOT have the torrent and failed for every account that did,
+	// which is why live checks against three of the reporter's own topics
+	// could never reproduce it. It is per-user, per-topic state wearing the
+	// costume of a static selector.
+	headerCellRe = regexp.MustCompile(`(?s)<th\b[^>]*>([^<]+)</th>`)
 
 	// regDateRe steps from the "Зарегистрирован" label straight into the
 	// <span> holding the timestamp. It must not use a lazy `.*?` across the
@@ -627,12 +623,38 @@ func fingerprintParts(block string) (parts, missing []string) {
 		id = m[2]
 	}
 	add("id", id)
-	add("name", cellValue(fileNameRe, block))
+	add("name", fileName(block))
 	add("size", cellValue(sizeRe, block))
 	// The registration timestamp is the field Tapochek moves when an uploader
 	// replaces a torrent — the event being watched.
 	add("registered", cellValue(regDateRe, block))
 	return parts, missing
+}
+
+// fileName returns the .torrent attachment name from the block's header
+// cells, or "" when no cell names one.
+//
+// The suffix, not the class, is what identifies the cell: this is an
+// attachment table and the site names every attachment
+// `<release> [tapochek.net].torrent`. The release-type banner beside it is a
+// <th> too and is rejected for naming no attachment — not for wrapping its
+// text in <img> tags, which is true today but is not the guard.
+//
+// The suffix is tested on the NORMALISED text rather than inside the pattern,
+// and that is the whole reason this is a loop instead of one regex. Go's `\s`
+// is ASCII-only, so a pattern ending `\s*</th>` does not match a trailing
+// `&nbsp;` — and this table emits those freely (`13.03&nbsp;GB` one row down,
+// and the gold banner ends `&nbsp;</th>`). A filename cell that gained one
+// would have failed every Tapochek check at once: issue #186 again, new
+// trigger. normalizeCell already unescapes entities and collapses U+00A0, so
+// putting the decision after it is both shorter and harder to break.
+func fileName(block string) string {
+	for _, m := range headerCellRe.FindAllStringSubmatch(block, -1) {
+		if v := normalizeCell(m[1]); strings.HasSuffix(v, ".torrent") {
+			return v
+		}
+	}
+	return ""
 }
 
 // cellValue returns re's first capture, normalised, or "" when it does not
@@ -748,10 +770,8 @@ func (p *plugin) Download(ctx context.Context, topic *domain.Topic, _ *domain.Ch
 		return nil, p.gateError(creds, errors.New("tapochek: download did not return a .torrent"))
 	}
 	name := "tapochek.torrent"
-	if fm := fileNameRe.FindStringSubmatch(block); fm != nil {
-		if n := safeFileName(normalizeCell(fm[1])); n != "" {
-			name = n
-		}
+	if n := safeFileName(fileName(block)); n != "" {
+		name = n
 	}
 	return &domain.Payload{TorrentFile: torrent, FileName: name}, nil
 }
