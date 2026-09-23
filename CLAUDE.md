@@ -523,8 +523,11 @@ an escape hatch). The flow:
 - `release.yml` (unchanged trigger: `v*` tag push) builds/signs/SBOMs the
   images, and composes the GitHub Release notes from the CHANGELOG section
   **plus** the PR description read from the tag annotation. A `notify-issues`
-  job then comments on every linked issue (closing keywords in the PR body
-  **and** an issue-number branch prefix like `48-...`) once artifacts exist.
+  job then comments on every linked issue once artifacts exist. `issue_refs`
+  collects those numbers from closing keywords in the PR body **or** a leading
+  issue-number branch prefix like `48-...`. We no longer write closing keywords
+  (see **Work tracking**), so **the branch prefix is the only remaining link** —
+  a branch that does not start with its issue number notifies nobody.
 - `release.yml`'s `bump-dev-version` job (runs on every tag) stamps the released
   version into **every** file that mirrors it, via
   `.github/scripts/bump-version-refs.sh` (tested by `bump-version-refs_test.sh`):
@@ -544,6 +547,24 @@ an escape hatch). The flow:
 - Keep `CHANGELOG.md`'s `[Unreleased]` section filled as you work — it becomes
   the release notes. If it's empty on a version-bumping merge, a single bullet
   is synthesized from the PR title as a fallback.
+
+## Work tracking
+
+Issues, roadmap and backlog live on the org project **Delivery** —
+https://github.com/orgs/stukans/projects/8
+
+- **Branch names start with the issue number**: `1161-marad-verification-timeout`.
+  `release-helpers.sh` `issue_refs` reads that prefix, and it is what makes the
+  `notify-issues` job comment on the issue after a release. No number, no comment.
+- **Never close an issue from a pull request.** Do not put `Closes`/`Fixes`/
+  `Resolves` in front of an issue number, and do not link the issue through the
+  pull request sidebar **Development** panel. Reference it with `Ref #N`.
+- Why: trunk-based development with feature flags means one issue spans several
+  pull requests, and testing sends work back to coding. A merged pull request is
+  not finished work. The board moves the issue to `In Testing` on merge; a human
+  closes it once verified.
+- `Ref #N` is **not** parsed by `issue_refs` — only closing keywords and the
+  branch prefix are. That is why the branch prefix is mandatory here.
 
 ## Ports (per `~/.claude/rules/local-port-ranges.md` — host ports must be 30000-49999)
 
