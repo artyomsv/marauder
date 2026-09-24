@@ -27,6 +27,10 @@ type sessionTracker struct {
 	account map[uuid.UUID]string // user → account the session is signed in as
 	logins  []string             // usernames Login was called with, in order
 
+	// Set before any call starts; read-only afterwards.
+	verifyDelay time.Duration // network latency of one Verify
+	loginErr    error         // a login the tracker refuses (after release)
+
 	loginCalls  atomic.Int32
 	verifyCalls atomic.Int32
 	inFlight    atomic.Int32
@@ -58,8 +62,10 @@ func (s *sessionTracker) enter() func() {
 func (s *sessionTracker) Verify(ctx context.Context, c *domain.TrackerCredential) (bool, error) {
 	defer s.enter()()
 	s.verifyCalls.Add(1)
-	if err := ctx.Err(); err != nil {
-		return false, err
+	select {
+	case <-time.After(s.verifyDelay):
+	case <-ctx.Done():
+		return false, ctx.Err()
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -77,6 +83,9 @@ func (s *sessionTracker) Login(ctx context.Context, c *domain.TrackerCredential)
 	case <-s.release:
 	case <-ctx.Done():
 		return ctx.Err()
+	}
+	if s.loginErr != nil {
+		return s.loginErr
 	}
 	s.mu.Lock()
 	s.account[c.UserID] = c.Username
@@ -298,6 +307,131 @@ func TestEnsureSession_FailedLogin_IsRetriedNextTime(t *testing.T) {
 		t.Errorf("login calls = %d, want 2", g.loginCalls)
 	}
 }
+
+// runConcurrently starts n EnsureSession calls for one credential at once and
+// returns their errors.
+func runConcurrently(ctx context.Context, tr registry.Tracker, cred *domain.TrackerCredential, n int) []error {
+	var wg sync.WaitGroup
+	errs := make([]error, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			c := *cred // each worker loads its own copy
+			errs[i] = EnsureSession(ctx, tr, &c)
+		}()
+	}
+	wg.Wait()
+	return errs
+}
+
+// TestEnsureSession_QueuedCallers_ReuseOneVerify: eight of a user's topics due
+// together on a live session must not pay eight Verify round-trips one after
+// another — every check's budget is already running while it queues, so the
+// last ones would time out on a healthy session. Callers that queued behind a
+// verification of the same credential reuse its answer.
+func TestEnsureSession_QueuedCallers_ReuseOneVerify(t *testing.T) {
+	tr := newSessionTracker()
+	close(tr.release)
+	cred := sessionCred(uuid.New(), "alice")
+	if err := EnsureSession(context.Background(), tr, cred); err != nil {
+		t.Fatal(err)
+	}
+	tr.verifyDelay = 200 * time.Millisecond
+
+	for i, err := range runConcurrently(context.Background(), tr, cred, 8) {
+		if err != nil {
+			t.Errorf("caller %d: %v", i, err)
+		}
+	}
+	// 1 in practice; 2 allows for a goroutine that only reached the queue
+	// after the first Verify had finished. Serialised Verify would be 8.
+	if got := tr.verifyCalls.Load(); got > 2 {
+		t.Errorf("verify calls = %d, want at most 2 — queued callers must reuse "+
+			"a verification that finished while they waited", got)
+	}
+}
+
+// TestEnsureSession_QueuedCallers_ShareARefusal: when the tracker is refusing
+// logins — the 503s of issue #198 — the callers queued behind a failed login
+// get that answer instead of each asking again.
+func TestEnsureSession_QueuedCallers_ShareARefusal(t *testing.T) {
+	tr := newSessionTracker()
+	refused := errors.New("tapochek POST /login.php -> 503")
+	tr.loginErr = refused
+	cred := sessionCred(uuid.New(), "alice")
+
+	// Hold the first login open so the others queue behind it.
+	errs := make(chan []error, 1)
+	go func() { errs <- runConcurrently(context.Background(), tr, cred, 8) }()
+	tr.waitLogins(t, 1)
+	time.Sleep(joinGrace)
+	close(tr.release)
+
+	for i, err := range <-errs {
+		if !errors.Is(err, refused) {
+			t.Errorf("caller %d: err = %v, want the tracker's refusal", i, err)
+		}
+	}
+	if got := tr.loginCalls.Load(); got > 2 {
+		t.Errorf("login calls = %d, want at most 2 — a refusal must be shared "+
+			"with the callers queued behind it", got)
+	}
+}
+
+// TestEstablish_RecordsTheSessionOwner: the credentials page logs in on its
+// own (create, update, test). If that login did not count, the scheduler
+// would find a slot with no owner and log in again — and if the password had
+// since changed on the tracker, that login would fail while the session the
+// page established was still perfectly good.
+func TestEstablish_RecordsTheSessionOwner(t *testing.T) {
+	tr := newSessionTracker()
+	close(tr.release)
+	cred := sessionCred(uuid.New(), "alice")
+
+	err := Establish(context.Background(), tr, cred, func() error {
+		return tr.Login(context.Background(), cred)
+	})
+	if err != nil {
+		t.Fatalf("Establish: %v", err)
+	}
+	tr.loginErr = errors.New("password changed on the tracker")
+	tr.loginCalls.Store(0)
+
+	if err := EnsureSession(context.Background(), tr, cred); err != nil {
+		t.Fatalf("EnsureSession: %v — the live session should have been reused", err)
+	}
+	if got := tr.loginCalls.Load(); got != 0 {
+		t.Errorf("login calls = %d, want 0", got)
+	}
+}
+
+// TestEstablish_FailedLogin_ClearsTheOwner: a credential that failed to sign
+// in owns nothing, so the next check must log in rather than trust Verify.
+func TestEstablish_FailedLogin_ClearsTheOwner(t *testing.T) {
+	tr := newSessionTracker()
+	close(tr.release)
+	cred := sessionCred(uuid.New(), "alice")
+	if err := EnsureSession(context.Background(), tr, cred); err != nil {
+		t.Fatal(err)
+	}
+	boom := errors.New("rejected")
+	if err := Establish(context.Background(), tr, cred, func() error { return boom }); !errors.Is(err, boom) {
+		t.Fatalf("Establish: err = %v, want %v", err, boom)
+	}
+	tr.loginCalls.Store(0)
+	if err := EnsureSession(context.Background(), tr, cred); err != nil {
+		t.Fatal(err)
+	}
+	if got := tr.loginCalls.Load(); got != 1 {
+		t.Errorf("login calls = %d, want 1", got)
+	}
+}
+
+// joinGrace is how long a test gives already-running goroutines to reach the
+// queue. Too short only lets a straggler run its own attempt, which the
+// assertions above tolerate; it cannot make a correct implementation fail.
+const joinGrace = 100 * time.Millisecond
 
 // TestEnsureSession_NoCredentialsCapability_IsNoWork: a tracker without a
 // login has no session to establish.

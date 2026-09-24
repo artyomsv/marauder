@@ -13,6 +13,7 @@ import (
 
 	"github.com/artyomsv/marauder/backend/internal/domain"
 	"github.com/artyomsv/marauder/backend/internal/plugins/registry"
+	"github.com/artyomsv/marauder/backend/internal/trackercreds"
 )
 
 // sessionRecordingTracker implements Tracker + WithCredentials and records the
@@ -172,6 +173,23 @@ func TestLoginAndVerify(t *testing.T) {
 				t.Errorf("verified = %v, want %v", verified, tt.wantVerified)
 			}
 		})
+	}
+}
+
+// TestLoginAndVerify_SessionCountsForTheScheduler: a session this handler
+// signs in must be one the scheduler reuses. Otherwise the scheduler logs in
+// again straight away — and if the password has since changed on the tracker,
+// that login fails while this session is still good.
+func TestLoginAndVerify_SessionCountsForTheScheduler(t *testing.T) {
+	plugin := &fakeCredPlugin{verifyOK: true}
+	creds := &domain.TrackerCredential{UserID: uuid.New(), Username: "alice", SecretEnc: []byte("pw")}
+	if _, err := loginAndVerify(context.Background(), plugin, creds); err != nil {
+		t.Fatalf("loginAndVerify: %v", err)
+	}
+
+	plugin.loginErr = errors.New("password changed on the tracker")
+	if err := trackercreds.EnsureSession(context.Background(), plugin, creds); err != nil {
+		t.Errorf("EnsureSession = %v, want the handler's live session reused", err)
 	}
 }
 
