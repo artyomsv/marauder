@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.21.3] - 2026-09-24
+
 ### Fixed
 
 - **Checking many Tapochek topics at once no longer fails with error 503.**
