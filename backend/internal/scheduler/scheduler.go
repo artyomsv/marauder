@@ -65,6 +65,7 @@ import (
 // at once, where one statement is both bounded and all-or-nothing.
 type topicsRepo interface {
 	DueForCheck(ctx context.Context, limit int, exclude []uuid.UUID) ([]*domain.Topic, error)
+	GetByID(ctx context.Context, id uuid.UUID, userID *uuid.UUID) (*domain.Topic, error)
 	RecordCheckResult(ctx context.Context, t *domain.Topic, hash string, updated bool, nextCheckAt time.Time, errMsg, errCode string) error
 	MarkEpisodeDownloaded(ctx context.Context, t *domain.Topic, packed string) error
 	MarkEpisodesDownloaded(ctx context.Context, t *domain.Topic, packed []string) error
@@ -166,9 +167,9 @@ type Scheduler struct {
 	// spacer keeps the checks of a WithCheckSpacing tracker apart.
 	spacer checkSpacer
 	// lanes holds one queue per WithCheckSpacing tracker, each drained by
-	// its own goroutine, so waiting for a slot never holds a shared worker.
+	// its own goroutines, so waiting for a slot never holds a shared worker.
 	lanesMu sync.Mutex
-	lanes   map[string]chan *domain.Topic
+	lanes   map[string]*laneQueue
 	// inflight holds the ids of topics queued or running. They are passed to
 	// DueForCheck as exclusions, and a later tick does not dispatch one of
 	// them again: a topic waiting in a lane is still due by next_check_at.
@@ -268,19 +269,17 @@ func (s *Scheduler) dispatchOnce(ctx context.Context) {
 		if _, queued := s.inflight.LoadOrStore(t.ID, struct{}{}); queued {
 			continue
 		}
-		q, isLane := s.queueFor(ctx, t)
+		if lane := s.laneFor(ctx, t); lane != nil {
+			lane.push(t)
+			continue
+		}
 		select {
-		case q <- t:
+		case s.jobs <- t:
 		case <-ctx.Done():
 			s.inflight.Delete(t.ID)
 			return
 		default:
 			s.inflight.Delete(t.ID)
-			if isLane {
-				// A full lane holds up only its own tracker.
-				s.log.Debug().Str("tracker", t.TrackerName).Msg("lane full; will retry next tick")
-				continue
-			}
 			s.log.Warn().Msg("job queue full; will retry next tick")
 			return
 		}
@@ -357,14 +356,10 @@ func (s *Scheduler) recordChecked(updated bool, errored bool) {
 
 func (s *Scheduler) worker(ctx context.Context, id int) {
 	defer s.wg.Done()
-	s.drain(ctx, s.log.With().Int("worker", id).Logger(), s.jobs)
-}
-
-// drain runs every topic from ch until ch is closed, releasing each topic's
-// inflight mark only once its check is over.
-func (s *Scheduler) drain(ctx context.Context, log zerolog.Logger, ch <-chan *domain.Topic) {
-	for t := range ch {
+	log := s.log.With().Int("worker", id).Logger()
+	for t := range s.jobs {
 		s.runCheck(ctx, log, t)
+		// Only once the check is over, so no tick dispatches it meanwhile.
 		s.inflight.Delete(t.ID)
 	}
 }
@@ -417,7 +412,11 @@ func (s *Scheduler) runCheck(ctx context.Context, log zerolog.Logger, t *domain.
 		Logger()
 
 	start := time.Now()
+	ran := true
 	defer func() {
+		if !ran {
+			return // skipped while waiting for its turn; not a check
+		}
 		metrics.SchedulerTopicCheckDurationSeconds.
 			WithLabelValues(t.TrackerName).
 			Observe(time.Since(start).Seconds())
@@ -435,10 +434,14 @@ func (s *Scheduler) runCheck(ctx context.Context, log zerolog.Logger, t *domain.
 
 	// Before check.started and before checkCtx: the wait is not part of the
 	// check, so it must neither show as "Checking…" nor use up the budget,
-	// nor count in the duration metric.
-	if !s.awaitCheckTurn(ctx, log, t, tr) {
+	// nor count in the duration metric. A spaced topic is re-read after its
+	// wait, and the rest of the check works on that fresh row.
+	fresh := s.awaitCheckTurn(ctx, log, t, tr)
+	if fresh == nil {
+		ran = false
 		return
 	}
+	t = fresh
 	start = time.Now()
 
 	// Emit check.started once the tracker plugin is confirmed present.

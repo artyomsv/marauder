@@ -55,20 +55,25 @@ func spacingOf(tr registry.Tracker) time.Duration {
 	return max(ws.CheckSpacing(), 0)
 }
 
-// awaitCheckTurn blocks until tr may start another check, then confirms the
-// topic is still the one this worker was handed. It reports false when the
-// check must not run: ctx ended first, or the topic's check state changed
-// while it waited. Either way the topic stays due and a later tick picks it up.
+// awaitCheckTurn blocks until tr may start another check, then re-reads the
+// topic. It returns the topic to check, or nil when the check must not run:
+// ctx ended first, or the topic was deleted or paused while it waited. In the
+// nil case the topic, if still due, is picked up by a later tick.
 //
-// A spaced topic can wait minutes in its lane, and a reset, recheck or delete
-// in that time moves its check-state token. Running the check anyway would
-// spend requests on a rate-limited site only for RecordCheckResult to throw
-// the result away, and a second click on "Check now" would double the load in
-// exactly the burst issue #198 is about.
-func (s *Scheduler) awaitCheckTurn(ctx context.Context, log zerolog.Logger, t *domain.Topic, tr registry.Tracker) bool {
+// The re-read is what a spaced topic needs and a worker's topic does not: it
+// can wait minutes in its lane, while its inflight mark keeps a later tick from
+// dispatching a fresh copy. A reset or recheck in that time moves its
+// check-state token, so the snapshot taken at dispatch would run a check that
+// RecordCheckResult then throws away, and the reset or recheck the user asked
+// for would wait for yet another tick. Checking the fresh row does what they
+// asked for as soon as the topic's turn comes.
+func (s *Scheduler) awaitCheckTurn(ctx context.Context, log zerolog.Logger, t *domain.Topic, tr registry.Tracker) *domain.Topic {
 	spacing := spacingOf(tr)
 	if spacing == 0 {
-		return true
+		return t
+	}
+	if ctx.Err() != nil {
+		return nil
 	}
 	if wait := s.spacer.reserve(tr.Name(), spacing); wait > 0 {
 		timer := time.NewTimer(wait)
@@ -76,67 +81,131 @@ func (s *Scheduler) awaitCheckTurn(ctx context.Context, log zerolog.Logger, t *d
 		select {
 		case <-timer.C:
 		case <-ctx.Done():
-			return false
+			return nil
 		}
 	}
-	err := s.topics.VerifyCheckState(ctx, t)
+	fresh, err := s.topics.GetByID(ctx, t.ID, nil)
 	switch {
-	case errors.Is(err, repo.ErrStaleCheckResult):
-		log.Info().Msg("check skipped: topic changed while waiting for its turn")
-		return false
+	case errors.Is(err, repo.ErrNotFound):
+		log.Info().Msg("check skipped: topic deleted while waiting for its turn")
+		return nil
 	case err != nil:
-		// Not staleness, so not a reason to drop the check; the write guard
-		// in RecordCheckResult still protects the result.
-		log.Warn().Err(err).Msg("verify check state before check failed; checking anyway")
+		// A read failure is no reason to drop the check: the snapshot still
+		// works, and the write guard in RecordCheckResult protects the result.
+		log.Warn().Err(err).Msg("re-read topic before check failed; using the dispatch snapshot")
+		return t
 	}
-	return true
+	if fresh.Status == domain.TopicStatusPaused {
+		log.Info().Msg("check skipped: topic paused while waiting for its turn")
+		return nil
+	}
+	return fresh
 }
 
-// queueFor picks the queue a due topic goes to: its tracker's lane when the
-// tracker asks for spacing, the shared worker queue otherwise.
-func (s *Scheduler) queueFor(ctx context.Context, t *domain.Topic) (chan<- *domain.Topic, bool) {
+// laneQueue is an unbounded FIFO shared by a lane's goroutines.
+//
+// Unbounded on purpose. A bounded lane has to turn topics away when full, and
+// a turned-away topic loses its inflight mark while keeping its old
+// next_check_at, so it is again among the oldest due rows on the next tick,
+// turned away again, and a large enough backlog fills DueForCheck's LIMIT
+// window and keeps every other tracker's topics out (found in review). The
+// size is still bounded: the inflight set admits each topic once, so a lane
+// never holds more than its tracker's topic count.
+type laneQueue struct {
+	mu     sync.Mutex
+	cond   *sync.Cond
+	items  []*domain.Topic
+	closed bool
+}
+
+func newLaneQueue() *laneQueue {
+	q := &laneQueue{}
+	q.cond = sync.NewCond(&q.mu)
+	return q
+}
+
+func (q *laneQueue) push(t *domain.Topic) {
+	q.mu.Lock()
+	q.items = append(q.items, t)
+	q.mu.Unlock()
+	q.cond.Signal()
+}
+
+// pop blocks until a topic is queued or the queue is closed. Once closed it
+// reports false even with topics left: they are still due in the database,
+// and the next start picks them up instead of this shutdown working through
+// them on a cancelled context.
+func (q *laneQueue) pop() (*domain.Topic, bool) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	for len(q.items) == 0 && !q.closed {
+		q.cond.Wait()
+	}
+	if q.closed {
+		return nil, false
+	}
+	t := q.items[0]
+	q.items[0] = nil
+	q.items = q.items[1:]
+	return t, true
+}
+
+func (q *laneQueue) close() {
+	q.mu.Lock()
+	q.closed = true
+	q.mu.Unlock()
+	q.cond.Broadcast()
+}
+
+// laneFor returns the lane of the topic's tracker when that tracker asks for
+// spacing, starting it on first use, or nil for the shared worker queue.
+//
+// Lanes instead of the shared workers: a worker asleep until its slot is a
+// worker no other tracker can use, and a burst of one spaced tracker's topics
+// (a restart, a bulk "Check now") once parked all of them and stopped every
+// other tracker's checks for every user. A lane has as many goroutines as
+// there are workers, so a slow check — a download, a stalled request — does
+// not hold back the next check's start; the spacer alone sets the pace.
+func (s *Scheduler) laneFor(ctx context.Context, t *domain.Topic) *laneQueue {
 	tr := s.lookupTracker(t.TrackerName)
 	if tr == nil || spacingOf(tr) == 0 {
-		return s.jobs, false
+		return nil
 	}
-	return s.lane(ctx, tr.Name()), true
-}
-
-// lane returns the tracker's queue, starting its goroutine on first use.
-//
-// One goroutine per spaced tracker instead of the shared workers: a worker
-// asleep until its slot is a worker no other tracker can use, and a burst of
-// one spaced tracker's topics (a restart, a bulk "Check now") once parked all
-// of them and stopped every other tracker's checks for every user. One
-// goroutine loses nothing, because the checks of a spaced tracker start
-// one after another anyway.
-func (s *Scheduler) lane(ctx context.Context, tracker string) chan<- *domain.Topic {
+	name := tr.Name()
 	s.lanesMu.Lock()
 	defer s.lanesMu.Unlock()
-	if ch, ok := s.lanes[tracker]; ok {
-		return ch
+	if q, ok := s.lanes[name]; ok {
+		return q
 	}
 	if s.lanes == nil {
-		s.lanes = map[string]chan *domain.Topic{}
+		s.lanes = map[string]*laneQueue{}
 	}
-	ch := make(chan *domain.Topic, s.cfg.SchedulerWorkers*4)
-	s.lanes[tracker] = ch
-	s.wg.Add(1)
-	go func() {
-		defer s.wg.Done()
-		s.drain(ctx, s.log.With().Str("lane", tracker).Logger(), ch)
-	}()
-	return ch
+	q := newLaneQueue()
+	s.lanes[name] = q
+	log := s.log.With().Str("lane", name).Logger()
+	for range max(s.cfg.SchedulerWorkers, 1) {
+		s.wg.Add(1)
+		go func() {
+			defer s.wg.Done()
+			for {
+				t, ok := q.pop()
+				if !ok {
+					return
+				}
+				s.runCheck(ctx, log, t)
+				s.inflight.Delete(t.ID)
+			}
+		}()
+	}
+	return q
 }
 
-// closeLanes ends every lane goroutine once its queue is empty. It runs on
-// the dispatching goroutine, after its last dispatch, so nothing sends on a
-// closed lane.
+// closeLanes stops every lane goroutine once its current check is over.
 func (s *Scheduler) closeLanes() {
 	s.lanesMu.Lock()
 	defer s.lanesMu.Unlock()
-	for _, ch := range s.lanes {
-		close(ch)
+	for _, q := range s.lanes {
+		q.close()
 	}
 	s.lanes = nil
 }

@@ -3,15 +3,19 @@ package scheduler
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/prometheus/client_golang/prometheus"
+	dto "github.com/prometheus/client_model/go"
 	"github.com/rs/zerolog"
 
 	"github.com/artyomsv/marauder/backend/internal/db/repo"
 	"github.com/artyomsv/marauder/backend/internal/domain"
 	"github.com/artyomsv/marauder/backend/internal/events"
+	"github.com/artyomsv/marauder/backend/internal/metrics"
 	"github.com/artyomsv/marauder/backend/internal/plugins/registry"
 )
 
@@ -56,57 +60,92 @@ func TestCheckSpacer_Reserve_PartlyElapsedSlot_WaitsTheRest(t *testing.T) {
 	}
 }
 
-func TestAwaitCheckTurn_TrackerWithoutSpacing_NeverWaitsOrVerifies(t *testing.T) {
+func TestAwaitCheckTurn_TrackerWithoutSpacing_NeverWaitsOrRereads(t *testing.T) {
 	topics := &fakeTopics{}
 	s := &Scheduler{topics: topics}
 	tr := &fakeTracker{name: "plain"}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	for range 3 {
-		if !s.awaitCheckTurn(ctx, zerolog.Nop(), &domain.Topic{ID: uuid.New()}, tr) {
-			t.Fatal("awaitCheckTurn = false for a tracker that asks for no spacing")
+		topic := &domain.Topic{ID: uuid.New()}
+		if got := s.awaitCheckTurn(ctx, zerolog.Nop(), topic, tr); got != topic {
+			t.Fatalf("awaitCheckTurn = %v for a tracker that asks for no spacing, want the topic itself", got)
 		}
 	}
 	// No extra query per check for the trackers that never wait.
-	if len(topics.verifyCalls) != 0 {
-		t.Errorf("VerifyCheckState calls = %d, want 0", len(topics.verifyCalls))
+	if topics.getCalls != 0 {
+		t.Errorf("GetByID calls = %d, want 0", topics.getCalls)
 	}
 }
 
-// A reset, recheck or delete while the topic waited moves its token. The
-// check must then not run: its result would be thrown away after spending
-// requests on the rate-limited site.
-func TestRunCheck_StateChangedWhileWaiting_SkipsTheCheck(t *testing.T) {
+// newSpacedFixture is newFixture with the tracker asking for a tiny spacing,
+// so awaitCheckTurn re-reads the topic without a noticeable wait.
+func newSpacedFixture(t *testing.T) (*fixture, *fakeTracker) {
+	t.Helper()
 	tr := &fakeTracker{
 		name:   "faketracker",
 		checks: []checkResult{{check: &domain.Check{Hash: "old-hash"}}},
 	}
 	f := newFixture(t, tr)
 	f.s.lookupTracker = func(string) registry.Tracker { return &spacedTracker{fakeTracker: tr, spacing: time.Millisecond} }
-	f.topics.verifyErr = repo.ErrStaleCheckResult
+	return f, tr
+}
+
+// A reset or recheck while the topic waited in its lane must be honoured when
+// its turn comes, not after another tick: the check runs on the fresh row.
+func TestRunCheck_ResetWhileWaiting_ChecksTheFreshRow(t *testing.T) {
+	f, tr := newSpacedFixture(t)
+	observed := time.Now().Add(-time.Hour)
+	f.topic.LastCheckedAt = &observed // the snapshot taken at dispatch
+	fresh := *f.topic
+	fresh.LastCheckedAt = nil // ResetCheckState nulls it
+	f.topics.current = &fresh
 
 	f.s.runCheck(context.Background(), f.s.log, f.topic)
 
-	if tr.callsCheck != 0 {
-		t.Errorf("Check calls = %d, want 0", tr.callsCheck)
+	if tr.callsCheck != 1 {
+		t.Fatalf("Check calls = %d, want 1", tr.callsCheck)
 	}
-	if len(f.topics.recordCalls) != 0 {
-		t.Errorf("RecordCheckResult calls = %d, want 0", len(f.topics.recordCalls))
-	}
-	if n := len(f.emitter.ofType(events.CheckStarted)); n != 0 {
-		t.Errorf("check.started events = %d, want 0", n)
+	// RecordCheckResult is guarded on the token the check carries; the
+	// snapshot's would no longer match and the result would be discarded.
+	if got := f.lastRecord(t).observed; got != nil {
+		t.Errorf("result carried last_checked_at %v, want the fresh row's nil", got)
 	}
 }
 
-// Only staleness drops a check. A database blip must not strand the topic.
-func TestRunCheck_VerifyFailsWhileWaiting_ChecksAnyway(t *testing.T) {
-	tr := &fakeTracker{
-		name:   "faketracker",
-		checks: []checkResult{{check: &domain.Check{Hash: "old-hash"}}},
+func TestRunCheck_ChangedWhileWaiting_SkipsTheCheck(t *testing.T) {
+	paused := func(f *fixture) {
+		p := *f.topic
+		p.Status = domain.TopicStatusPaused
+		f.topics.current = &p
 	}
-	f := newFixture(t, tr)
-	f.s.lookupTracker = func(string) registry.Tracker { return &spacedTracker{fakeTracker: tr, spacing: time.Millisecond} }
-	f.topics.verifyErr = errors.New("connection reset")
+	deleted := func(f *fixture) { f.topics.getErr = repo.ErrNotFound }
+
+	for name, stage := range map[string]func(*fixture){"paused": paused, "deleted": deleted} {
+		t.Run(name, func(t *testing.T) {
+			f, tr := newSpacedFixture(t)
+			stage(f)
+
+			f.s.runCheck(context.Background(), f.s.log, f.topic)
+
+			if tr.callsCheck != 0 {
+				t.Errorf("Check calls = %d, want 0", tr.callsCheck)
+			}
+			if len(f.topics.recordCalls) != 0 {
+				t.Errorf("RecordCheckResult calls = %d, want 0", len(f.topics.recordCalls))
+			}
+			if n := len(f.emitter.ofType(events.CheckStarted)); n != 0 {
+				t.Errorf("check.started events = %d, want 0", n)
+			}
+		})
+	}
+}
+
+// A database blip on the re-read must not strand the topic: the dispatch
+// snapshot still works, and the write guard protects its result.
+func TestRunCheck_RereadFails_ChecksTheSnapshot(t *testing.T) {
+	f, tr := newSpacedFixture(t)
+	f.topics.getErr = errors.New("connection reset")
 
 	f.s.runCheck(context.Background(), f.s.log, f.topic)
 
@@ -255,79 +294,199 @@ func TestWorker_HoldsInflightDuringCheck_ReleasesAfter(t *testing.T) {
 	}
 }
 
+// syncTopics serialises calls into a topicsRepo fake, for tests where a
+// lane's goroutines run checks concurrently.
+type syncTopics struct {
+	mu    sync.Mutex
+	inner topicsRepo
+}
+
+func (s *syncTopics) DueForCheck(ctx context.Context, limit int, exclude []uuid.UUID) ([]*domain.Topic, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.inner.DueForCheck(ctx, limit, exclude)
+}
+
+func (s *syncTopics) GetByID(ctx context.Context, id uuid.UUID, userID *uuid.UUID) (*domain.Topic, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.inner.GetByID(ctx, id, userID)
+}
+
+func (s *syncTopics) RecordCheckResult(ctx context.Context, t *domain.Topic, hash string, updated bool, next time.Time, errMsg, errCode string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.inner.RecordCheckResult(ctx, t, hash, updated, next, errMsg, errCode)
+}
+
+func (s *syncTopics) MarkEpisodeDownloaded(ctx context.Context, t *domain.Topic, packed string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.inner.MarkEpisodeDownloaded(ctx, t, packed)
+}
+
+func (s *syncTopics) MarkEpisodesDownloaded(ctx context.Context, t *domain.Topic, packed []string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.inner.MarkEpisodesDownloaded(ctx, t, packed)
+}
+
+func (s *syncTopics) VerifyCheckState(ctx context.Context, t *domain.Topic) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.inner.VerifyCheckState(ctx, t)
+}
+
+// gateTracker is a spaced tracker whose Check reports each start and then
+// blocks until release is closed, so a test can hold checks in flight.
+type gateTracker struct {
+	*spacedTracker
+	started chan uuid.UUID
+	release chan struct{}
+}
+
+func (g *gateTracker) Check(_ context.Context, topic *domain.Topic, _ *domain.TrackerCredential) (*domain.Check, error) {
+	g.started <- topic.ID
+	<-g.release
+	return &domain.Check{Hash: topic.LastHash}, nil
+}
+
+func newGateTracker(spacing time.Duration) *gateTracker {
+	return &gateTracker{
+		spacedTracker: &spacedTracker{fakeTracker: &fakeTracker{name: "spaced"}, spacing: spacing},
+		started:       make(chan uuid.UUID, 100),
+		release:       make(chan struct{}),
+	}
+}
+
+func spacedTopics(n int) []*domain.Topic {
+	out := make([]*domain.Topic, n)
+	for i := range out {
+		out[i] = &domain.Topic{ID: uuid.New(), TrackerName: "spaced", LastHash: "h", Extra: map[string]any{}}
+	}
+	return out
+}
+
+// waitStarted receives one check start or fails the test.
+func waitStarted(t *testing.T, g *gateTracker) uuid.UUID {
+	t.Helper()
+	select {
+	case id := <-g.started:
+		return id
+	case <-time.After(5 * time.Second):
+		t.Fatal("no check started")
+		return uuid.Nil
+	}
+}
+
 // A spaced tracker's topics go to its own lane, never to the shared workers,
 // and the lane runs them and releases them.
 func TestDispatchOnce_SpacedTracker_RunsInItsLane(t *testing.T) {
-	tr := &fakeTracker{name: "faketracker", checks: []checkResult{{check: &domain.Check{Hash: "old-hash"}}}}
-	f := newFixture(t, tr)
-	f.s.lookupTracker = func(string) registry.Tracker { return &spacedTracker{fakeTracker: tr, spacing: time.Millisecond} }
-	f.s.topics = &dueTopics{fakeTopics: f.topics, due: []*domain.Topic{f.topic}}
+	f := newFixture(t, &fakeTracker{name: "unused"})
+	g := newGateTracker(time.Millisecond)
+	close(g.release)
+	f.s.lookupTracker = func(string) registry.Tracker { return g }
+	topic := spacedTopics(1)[0]
+	f.s.topics = &dueTopics{fakeTopics: f.topics, due: []*domain.Topic{topic}}
 	f.s.jobs = make(chan *domain.Topic, 8)
 
 	f.s.dispatchOnce(context.Background())
 	if n := len(f.s.jobs); n != 0 {
 		t.Errorf("shared queue holds %d topics, want 0", n)
 	}
+	if got := waitStarted(t, g); got != topic.ID {
+		t.Errorf("lane checked %s, want %s", got, topic.ID)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if _, marked := f.s.inflight.Load(topic.ID); !marked {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("topic still marked in flight after its lane ran it")
+		}
+		time.Sleep(time.Millisecond)
+	}
 	f.s.closeLanes()
 	f.s.wg.Wait()
-
-	if tr.callsCheck != 1 {
-		t.Errorf("Check calls = %d, want 1", tr.callsCheck)
-	}
-	if _, marked := f.s.inflight.Load(f.topic.ID); marked {
-		t.Error("topic still marked in flight after its lane ran it")
-	}
 }
 
-// The failure the lanes exist to prevent: a backlog of one spaced tracker
-// must not keep another tracker's topics from being dispatched.
-func TestDispatchOnce_FullLane_OtherTrackersStillDispatched(t *testing.T) {
-	spaced := &fakeTracker{name: "spaced", checks: []checkResult{{check: &domain.Check{Hash: "old-hash"}}}}
-	release := make(chan struct{})
-	spaced.onCheck = func() { <-release } // the lane is stuck on its first check
+// What the lanes are for: however long one spaced tracker's backlog is, it
+// never turns its topics away — a turned-away topic keeps its old
+// next_check_at and crowds the LIMIT window again on the next tick — and
+// never keeps another tracker's topics from being dispatched.
+func TestDispatchOnce_LaneBacklog_HoldsEveryTopicAndOthersStillDispatch(t *testing.T) {
+	f := newFixture(t, &fakeTracker{name: "unused"})
+	g := newGateTracker(time.Millisecond) // release stays open: checks hang
 	plain := &fakeTracker{name: "plain"}
-	f := newFixture(t, spaced)
 	f.s.lookupTracker = func(name string) registry.Tracker {
 		if name == "spaced" {
-			return &spacedTracker{fakeTracker: spaced, spacing: time.Millisecond}
+			return g
 		}
 		return plain
 	}
 	f.s.jobs = make(chan *domain.Topic, 8)
-
-	// Lane capacity is SchedulerWorkers*4 = 4; seven spaced topics overflow
-	// it whether or not the lane has taken its first one yet.
-	var due []*domain.Topic
-	for range 7 {
-		due = append(due, &domain.Topic{ID: uuid.New(), TrackerName: "spaced", LastHash: "old-hash", Extra: map[string]any{}})
-	}
+	backlog := spacedTopics(40) // far above the shared queue's workers*4
 	other := &domain.Topic{ID: uuid.New(), TrackerName: "plain"}
-	due = append(due, other)
-	f.s.topics = &dueTopics{fakeTopics: f.topics, due: due}
+	f.s.topics = &syncTopics{inner: &dueTopics{fakeTopics: f.topics, due: append(append([]*domain.Topic{}, backlog...), other)}}
 
 	f.s.dispatchOnce(context.Background())
 
+	for _, b := range backlog {
+		if _, marked := f.s.inflight.Load(b.ID); !marked {
+			t.Fatalf("spaced topic %s was turned away", b.ID)
+		}
+	}
 	select {
 	case got := <-f.s.jobs:
 		if got.ID != other.ID {
-			t.Errorf("shared queue got topic %s, want the other tracker's %s", got.ID, other.ID)
+			t.Errorf("shared queue got %s, want the other tracker's %s", got.ID, other.ID)
 		}
 	default:
-		t.Error("other tracker's topic was not dispatched behind a full lane")
-	}
-	var turnedAway int
-	for _, d := range due[:7] {
-		if _, marked := f.s.inflight.Load(d.ID); !marked {
-			turnedAway++
-		}
-	}
-	if turnedAway == 0 {
-		t.Error("no spaced topic was released; the lane never filled")
+		t.Error("other tracker's topic was not dispatched behind the backlog")
 	}
 
-	close(release)
+	// Every queued topic is checked; none was dropped on the way.
+	close(g.release)
+	checked := map[uuid.UUID]bool{}
+	for range backlog {
+		checked[waitStarted(t, g)] = true
+	}
+	if len(checked) != len(backlog) {
+		t.Errorf("checked %d distinct topics, want %d", len(checked), len(backlog))
+	}
 	f.s.closeLanes()
 	f.s.wg.Wait()
+}
+
+// A slow check must not hold back the next start: the spacer sets the pace,
+// not the duration of the check in front.
+func TestLane_SlowCheck_DoesNotHoldBackTheNextStart(t *testing.T) {
+	f := newFixture(t, &fakeTracker{name: "unused"})
+	f.s.cfg.SchedulerWorkers = 2
+	g := newGateTracker(10 * time.Millisecond)
+	f.s.lookupTracker = func(string) registry.Tracker { return g }
+	topics := spacedTopics(2)
+	f.s.topics = &syncTopics{inner: &dueTopics{fakeTopics: f.topics, due: topics}}
+
+	f.s.dispatchOnce(context.Background())
+	waitStarted(t, g) // the first check now hangs
+	waitStarted(t, g) // and the second starts anyway
+
+	close(g.release)
+	f.s.closeLanes()
+	f.s.wg.Wait()
+}
+
+// Shutdown must not work through a lane's backlog on a cancelled context:
+// those topics are still due and the next start picks them up.
+func TestLaneQueue_Closed_StopsEvenWithTopicsLeft(t *testing.T) {
+	q := newLaneQueue()
+	q.push(&domain.Topic{ID: uuid.New()})
+	q.close()
+	if _, ok := q.pop(); ok {
+		t.Error("pop handed out a topic after close")
+	}
 }
 
 // A topic waiting for its spacing slot is still due by next_check_at, so
@@ -369,5 +528,40 @@ func TestDispatchOnce_QueueFull_ReleasesTheTopic(t *testing.T) {
 	}
 	if _, marked := f.s.inflight.Load(a.ID); !marked {
 		t.Error("queued topic is not marked in flight")
+	}
+}
+
+// histogramCount reads how many observations one histogram child holds.
+func histogramCount(t *testing.T, o prometheus.Observer) uint64 {
+	t.Helper()
+	m, ok := o.(prometheus.Metric)
+	if !ok {
+		t.Fatal("observer is not a metric")
+	}
+	var d dto.Metric
+	if err := m.Write(&d); err != nil {
+		t.Fatalf("read histogram: %v", err)
+	}
+	return d.GetHistogram().GetSampleCount()
+}
+
+// A check skipped at its turn never ran, so it must not add its wait to the
+// check-duration histogram as if it were check time.
+func TestRunCheck_SkippedAtItsTurn_RecordsNoDuration(t *testing.T) {
+	f, _ := newSpacedFixture(t)
+	f.topic.TrackerName = "metric-" + uuid.NewString() // a histogram child of its own
+	hist := metrics.SchedulerTopicCheckDurationSeconds.WithLabelValues(f.topic.TrackerName)
+
+	f.topics.getErr = repo.ErrNotFound
+	f.s.runCheck(context.Background(), f.s.log, f.topic)
+	if n := histogramCount(t, hist); n != 0 {
+		t.Errorf("skipped check recorded %d durations, want 0", n)
+	}
+
+	f.topics.getErr = nil
+	f.topics.current = f.topic
+	f.s.runCheck(context.Background(), f.s.log, f.topic)
+	if n := histogramCount(t, hist); n != 1 {
+		t.Errorf("check that ran recorded %d durations, want 1", n)
 	}
 }

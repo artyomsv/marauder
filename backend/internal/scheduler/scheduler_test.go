@@ -116,6 +116,12 @@ type fakeTopics struct {
 	markBulkErr   error
 	verifyCalls   []uuid.UUID
 	verifyErr     error
+	// current and getErr stage GetByID, the re-read a spaced topic gets after
+	// its wait. Neither set means a read failure, on which the scheduler
+	// carries on with the dispatch snapshot.
+	current  *domain.Topic
+	getErr   error
+	getCalls int
 }
 
 type recordCall struct {
@@ -140,6 +146,18 @@ type updateDisplayNameCall struct {
 
 func (f *fakeTopics) DueForCheck(_ context.Context, _ int, _ []uuid.UUID) ([]*domain.Topic, error) {
 	return nil, nil
+}
+
+func (f *fakeTopics) GetByID(_ context.Context, _ uuid.UUID, _ *uuid.UUID) (*domain.Topic, error) {
+	f.getCalls++
+	switch {
+	case f.getErr != nil:
+		return nil, f.getErr
+	case f.current != nil:
+		c := *f.current
+		return &c, nil
+	}
+	return nil, errors.New("fakeTopics: GetByID not staged")
 }
 
 func (f *fakeTopics) RecordCheckResult(_ context.Context, t *domain.Topic, hash string, updated bool, nextCheckAt time.Time, errMsg, errCode string) error {

@@ -263,43 +263,53 @@ bulk entry that fans out through `mapWithConcurrency`.
 **Tracker check spacing (issue #198):** a tracker implementing
 `registry.WithCheckSpacing` (`CheckSpacing() time.Duration`; Tapochek, 5s) never
 has two topic checks start closer together than that, across all users.
-- **Lanes, not workers.** `dispatchOnce` sends a spaced tracker's topics to that
-  tracker's own **lane** (`scheduler/spacing.go`: one queue of `workers*4` plus
-  one goroutine, created on first use, closed by `closeLanes` at shutdown)
-  instead of the shared worker queue. The first version slept inside the shared
-  pool, and review found that a burst of Tapochek topics (a restart, a bulk
-  "Check now") parked every worker and stopped all other trackers' checks for
-  every user — for about 8 minutes with 100 topics. One goroutine loses
-  nothing, because a spaced tracker's checks start one after another anyway. A
-  full lane skips only its own topic (`continue`), not the rest of the batch.
+- **Lanes, not workers.** `dispatchOnce` pushes a spaced tracker's topics onto
+  that tracker's own **lane** (`scheduler/spacing.go`), not onto the shared
+  worker queue. A lane is an unbounded `laneQueue` drained by
+  `SchedulerWorkers` goroutines of its own, created on first use and stopped
+  by `closeLanes` at shutdown. At close, a lane drops what is left: those
+  topics are still due, and running them on a cancelled context would only
+  record failures. Each design choice answers a failure found in review:
+  - *Not the shared pool:* sleeping workers let a burst of Tapochek topics (a
+    restart, a bulk "Check now") park every worker and stop all other
+    trackers' checks for every user.
+  - *Unbounded:* a bounded lane turns topics away. A turned-away topic loses
+    its inflight mark but keeps its old `next_check_at`, so it is again among
+    the oldest due rows on the next tick. A big enough backlog then fills the
+    LIMIT window and keeps other trackers out. The size is still bounded: the
+    inflight set admits each topic once, so a lane never holds more than its
+    tracker's topic count.
+  - *Several goroutines:* with one, a slow check (a download, a stalled
+    request) held back the next start. The spacer alone sets the pace, and the
+    plugin's request slot keeps the requests serial.
 - **The wait.** `checkSpacer` hands out per-tracker start slots, and `runCheck`
   calls `awaitCheckTurn` **before** it emits `check.started`, before it creates
-  `checkCtx`, and before the duration metric's clock starts. So the wait does
-  not show as "Checking…", does not use up the check's budget, and does not
-  count as check time. After the wait, `awaitCheckTurn` calls
-  `VerifyCheckState` (spaced trackers only), because a topic can sit in its
-  lane for minutes: a reset, recheck or delete in that time would otherwise
-  cost Tapochek requests for a result the write guard throws away. A stale
-  token skips the check; any other DB error checks anyway. A shutdown during
-  the wait records nothing, and the topic stays due.
-- **`inflight` set.** It holds the ids of queued and running topics. The worker
-  or lane releases an id after `runCheck` (`drain`), and `dispatchOnce`
-  releases it when the queue is full. `DueForCheck(ctx, limit, exclude)` gets
-  those ids as `NOT (id = ANY($2::uuid[]))`. Without that, held topics are the
-  oldest due rows, so they filled the LIMIT window on every tick and blocked
-  every other topic from being selected. The repo turns a nil list into
-  `'{}'`, because `ANY(NULL)` would filter out every row.
+  `checkCtx`, and before the duration metric's clock starts. A skipped check
+  records no duration at all. After the wait, `awaitCheckTurn` **re-reads the
+  topic** (`GetByID`, spaced trackers only) and the check works on that fresh
+  row. A topic can wait minutes in its lane while its inflight mark blocks a
+  fresh dispatch. Checking the snapshot would waste requests on a result the
+  write guard throws away, and would delay a reset or recheck the user asked
+  for by another tick. A deleted or paused topic is skipped. A read error falls
+  back to the snapshot.
+- **`inflight` set.** It holds the ids of queued and running topics, released
+  after `runCheck` and when the shared queue is full.
+  `DueForCheck(ctx, limit, exclude)` gets those ids as
+  `NOT (id = ANY($2::uuid[]))`, so held topics do not fill the LIMIT window.
+  The repo turns a nil list into `'{}'`, because `ANY(NULL)` would filter out
+  every row.
 - **Cost.** At most 12 Tapochek checks a minute across all users. Above that
-  load, the Tapochek backlog never clears, but it now delays only Tapochek.
+  load, the Tapochek backlog never clears, but it delays only Tapochek.
 - **Why.** Tapochek's nginx answers 503 to parallel requests (measured
   2026-09-24: 1 of 5 simultaneous GETs refused, 6 sent 0.3s apart all
   accepted). After v1.21.1 removed the per-check logins, a bulk "Check now"
   still failed every topic but the first.
 - **In the plugin.** It sends one request at a time (its own slot, so the
-  preview, metadata and export paths are serialised too). Spacing only limits
-  rate; the slot is what prevents overlap. It retries a 503 once after 2s,
-  keeping the slot through the pause, and skips the retry when the context
-  has less time left than the pause.
+  preview, metadata and export paths are serialised too). It retries a 503
+  once after 2s, keeping the slot through the pause, and skips the retry when
+  the context has less time left than the pause. Waiting for the slot counts
+  against the caller's own budget. That is the price of serial requests,
+  because the alternative is the 503.
 
 **Errored-topic retry:** `DueForCheck` selects `WHERE status IN
 ('active','error')`, so a topic that errors keeps retrying on its already-
@@ -316,7 +326,8 @@ working mirror).
 The scheduler depends on small **consumer-side interfaces** (`topicsRepo`,
 `markEpisodeDownloader`, `clientsRepo`, `credentialsRepo`, `deliveriesRecorder`,
 `decryptor`) plus two lookup-fn seams (`trackerLookupFn`, `clientLookupFn`) so
-it's unit-testable without DB or registry. Tests live in `scheduler_test.go`.
+it's unit-testable without DB or registry. Tests live in `scheduler_test.go`, and in
+`spacing_test.go` for the spacing, lanes and inflight set in `spacing.go`.
 
 ## Frontend (`frontend/src/...`)
 
