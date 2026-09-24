@@ -146,8 +146,8 @@ func TestLogin_Accepted_ReturnsNil(t *testing.T) {
 // false-green that survives the rest of this file's fixes.
 //
 // The session store keys jars by tracker:userID and hands the SAME jar back for
-// two hours, and the scheduler calls Login on every check — so a user with
-// working credentials always has a warm, authenticated jar. A credential
+// two hours — so a user with working credentials usually has a warm,
+// authenticated jar. A credential
 // re-test or a password rotation would then POST the new (possibly wrong)
 // password onto that already-authenticated jar: the tracker renders the
 // signed-in page, no rejection marker matches, and Verify confirms a session
@@ -191,8 +191,8 @@ func TestLogin_DoesNotReuseAnEstablishedSession(t *testing.T) {
 // race the fresh-jar fix introduced.
 //
 // Sessions are keyed by tracker:userID, so every one of a user's anidub topics
-// shares one jar, the scheduler calls Login on every check, and fetch
-// re-resolves the jar by key on every call. Invalidating the shared entry
+// shares one jar, the scheduler logs in whenever that jar stops verifying, and
+// fetch re-resolves the jar by key on every call. Invalidating the shared entry
 // therefore left a window — between the delete and the login response — where
 // the store held an ANONYMOUS jar. A concurrent Download resolving in that
 // window dials unauthenticated: on a login-gated download that yields an HTML

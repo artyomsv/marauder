@@ -288,9 +288,9 @@ func (p *plugin) Login(ctx context.Context, creds *domain.TrackerCredential) err
 		// durable `uk` key, which signs in without the password and stays
 		// valid server-side until someone logs out. Marauder holds the jar in
 		// memory for at most forumcommon.sessionTTL and never persists it, so
-		// the persistence buys nothing — while the scheduler logs in before
-		// every check, so each tick would leave another live key behind. uid
-		// is set in bb_data either way.
+		// the persistence buys nothing — while every re-login (restart, TTL
+		// expiry) would leave another live key behind. uid is set in bb_data
+		// either way.
 	}
 	body, err := p.post(ctx, sess, p.baseURL()+"/login.php", form)
 	if err != nil {

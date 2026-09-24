@@ -2160,18 +2160,54 @@ func TestBackoffDelay_ShortIntervalNotRaised(t *testing.T) {
 }
 
 // fakeTrackerWithCreds wraps fakeTracker and additionally implements
-// registry.WithCredentials so that loadCredentials calls Login.
+// registry.WithCredentials. Verify reports verifyOK (false by default, so a
+// test reaches Login unless it asks for a live session).
 type fakeTrackerWithCreds struct {
 	fakeTracker
-	loginErr error
+	loginErr    error
+	verifyOK    bool
+	loginCalls  int
+	verifyCalls int
 }
 
 func (f *fakeTrackerWithCreds) Login(_ context.Context, _ *domain.TrackerCredential) error {
+	f.loginCalls++
 	return f.loginErr
 }
 
 func (f *fakeTrackerWithCreds) Verify(_ context.Context, _ *domain.TrackerCredential) (bool, error) {
-	return true, nil
+	f.verifyCalls++
+	return f.verifyOK, nil
+}
+
+// TestLoadCredentials_LiveSession_SkipsLogin is issue #198: the scheduler used
+// to post the password before every check of every topic, so ten Tapochek
+// topics cost ten logins a cycle and a burst of them drew 503s. A session that
+// still verifies must be reused.
+func TestLoadCredentials_LiveSession_SkipsLogin(t *testing.T) {
+	tr := &fakeTrackerWithCreds{fakeTracker: fakeTracker{name: "tapochek"}, verifyOK: true}
+	storedCred := &domain.TrackerCredential{
+		ID: uuid.New(), UserID: uuid.New(), TrackerName: "tapochek",
+		SecretEnc: []byte("secret"),
+	}
+	s, topic := newSessionFixture(t, &fakeCredsSession{stored: storedCred}, &fakeEmitter{})
+	topic.UserID = storedCred.UserID
+	topic.TrackerName = "tapochek"
+
+	ctx := context.Background()
+	checkCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	got, ok := s.loadCredentials(ctx, checkCtx, zerolog.New(io.Discard), topic, tr)
+	if !ok || got == nil {
+		t.Fatalf("loadCredentials = (%v, %v), want the credential", got, ok)
+	}
+	if tr.verifyCalls != 1 {
+		t.Errorf("verify calls = %d, want 1", tr.verifyCalls)
+	}
+	if tr.loginCalls != 0 {
+		t.Errorf("login calls = %d, want 0 — a live session must not pay a login", tr.loginCalls)
+	}
 }
 
 // newSessionFixture builds a scheduler wired for session-expiry tests.
