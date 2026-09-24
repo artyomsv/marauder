@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Tracker logins no longer run before every topic check.** Marauder now
+  reuses your tracker session while it is still valid, and logs in only when it
+  is missing or has expired. When several of your topics on one tracker are due
+  at the same time, they now share a single login. Before, each topic sent its
+  own login, and Tapochek answered a burst of them with `503`, so some topics
+  failed at random. Applies to every tracker that uses an account.
+
 ## [1.21.0] - 2026-09-22
 
 ### Added

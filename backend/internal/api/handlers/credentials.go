@@ -16,6 +16,7 @@ import (
 	"github.com/artyomsv/marauder/backend/internal/domain"
 	"github.com/artyomsv/marauder/backend/internal/plugins/registry"
 	"github.com/artyomsv/marauder/backend/internal/problem"
+	"github.com/artyomsv/marauder/backend/internal/trackercreds"
 )
 
 // Credentials handles /credentials — per-user, per-tracker login
@@ -92,7 +93,20 @@ type credentialView struct {
 // way to check the session; the credential is still usable (Login succeeded),
 // so this is not a failure, but callers MUST NOT present it as a verified
 // login. Everything else keeps the strict behaviour above.
+//
+// It runs through trackercreds.Establish so the session it signs in counts as
+// this credential's: the scheduler then reuses it rather than logging in
+// again, and never races this login on the same per-user session.
 func loginAndVerify(ctx context.Context, wc registry.WithCredentials, creds *domain.TrackerCredential) (verified bool, err error) {
+	err = trackercreds.Establish(ctx, wc, creds, func() error {
+		var lerr error
+		verified, lerr = signIn(ctx, wc, creds)
+		return lerr
+	})
+	return verified, err
+}
+
+func signIn(ctx context.Context, wc registry.WithCredentials, creds *domain.TrackerCredential) (verified bool, err error) {
 	if err := wc.Login(ctx, creds); err != nil {
 		return false, fmt.Errorf("login: %w", err)
 	}

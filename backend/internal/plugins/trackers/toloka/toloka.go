@@ -246,9 +246,9 @@ func (p *plugin) Login(ctx context.Context, creds *domain.TrackerCredential) err
 		// durable "remember me" key, which signs in without the password and
 		// stays valid server-side until someone logs out. Marauder holds the
 		// jar in memory for at most forumcommon.sessionTTL and never persists
-		// it, so the persistence buys nothing — while the scheduler logs in
-		// before every check, so each tick would leave another live key
-		// behind. userid is set in toloka_data either way.
+		// it, so the persistence buys nothing — while every re-login
+		// (restart, TTL expiry) would leave another live key behind. userid
+		// is set in toloka_data either way.
 		"redirect": {""},
 	}
 	body, err := p.post(ctx, sess, p.baseURL()+"/login.php", form)

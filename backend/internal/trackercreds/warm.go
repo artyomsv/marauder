@@ -49,14 +49,12 @@ type Decryptor interface {
 // failed" instead of telling a user who has an account to go add one. Only
 // search surfaces it today; the others treat both alike.
 //
-// Ordering is Verify-first, Login-on-miss: on a warm in-process session Verify
-// is one cheap GET, and only a cold or dead session pays the Login round-trip.
-// Deliberately neither the credentials handler's loginAndVerify (Login→Verify
-// always, right for validating a freshly entered password, wasteful per call)
-// nor the scheduler's Login-only loadCredentials.
+// The session itself comes from EnsureSession — Verify-first, Login-on-miss,
+// one attempt in flight per (tracker, user) — which the scheduler uses too.
+// Deliberately not the credentials handler's loginAndVerify (Login→Verify
+// always, right for validating a freshly entered password, wasteful per call).
 func Warm(ctx context.Context, store Store, master Decryptor, userID uuid.UUID, t registry.Tracker) (creds *domain.TrackerCredential, loginFailed bool, loginErr error) {
-	wc, needsCreds := t.(registry.WithCredentials)
-	if !needsCreds || store == nil || master == nil {
+	if _, needsCreds := t.(registry.WithCredentials); !needsCreds || store == nil || master == nil {
 		return nil, false, nil
 	}
 	stored, err := store.GetForTracker(ctx, userID, t.Name())
@@ -87,10 +85,7 @@ func Warm(ctx context.Context, store Store, master Decryptor, userID uuid.UUID, 
 		}
 		transient.SessionEnc = sess
 	}
-	if ok, verr := wc.Verify(ctx, transient); verr == nil && ok {
-		return transient, false, nil
-	}
-	if lerr := wc.Login(ctx, transient); lerr != nil {
+	if lerr := EnsureSession(ctx, t, transient); lerr != nil {
 		log.Debug().Str("tracker", t.Name()).Err(lerr).
 			Msg("tracker credential login failed; continuing anonymously")
 		return nil, true, lerr

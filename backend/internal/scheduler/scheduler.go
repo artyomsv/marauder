@@ -40,6 +40,7 @@ import (
 	"github.com/artyomsv/marauder/backend/internal/infohash"
 	"github.com/artyomsv/marauder/backend/internal/metrics"
 	"github.com/artyomsv/marauder/backend/internal/plugins/registry"
+	"github.com/artyomsv/marauder/backend/internal/trackercreds"
 )
 
 // --- Consumer-side interfaces ------------------------------------------
@@ -779,9 +780,9 @@ func (s *Scheduler) notifyError(ctx context.Context, t *domain.Topic, errMsg str
 }
 
 // loadCredentials fetches and decrypts the per-user tracker credential
-// for trackers that implement WithCredentials, then performs the
-// plugin's Login. Returns (nil, true) if the tracker doesn't need
-// credentials at all. Returns (_, false) on any failure, having
+// for trackers that implement WithCredentials, then makes sure the
+// plugin's session is live (trackercreds.EnsureSession). Returns
+// (nil, true) if the tracker doesn't need credentials at all. Returns (_, false) on any failure, having
 // already persisted the error result and recorded metrics.
 func (s *Scheduler) loadCredentials(ctx context.Context, checkCtx context.Context, log zerolog.Logger, t *domain.Topic, tr registry.Tracker) (*domain.TrackerCredential, bool) {
 	wc, isWC := tr.(registry.WithCredentials)
@@ -811,7 +812,11 @@ func (s *Scheduler) loadCredentials(ctx context.Context, checkCtx context.Contex
 			stored.SessionEnc = sessPlain
 		}
 	}
-	if loginErr := wc.Login(checkCtx, stored); loginErr != nil {
+	// Verify-first, Login-on-miss, one attempt per (tracker, user) at a time:
+	// the plugin's session is shared by all of the user's topics, and logging
+	// in before every check once sent a burst of Tapochek logins that the site
+	// answered with 503 (issue #198).
+	if loginErr := trackercreds.EnsureSession(checkCtx, wc, stored); loginErr != nil {
 		if errors.Is(loginErr, registry.ErrSessionExpired) && stored.SessionExpiredAt == nil {
 			// The atomic UPDATE...WHERE session_expired_at IS NULL is the
 			// real dedup gate: when many topics share one credential and

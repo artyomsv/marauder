@@ -157,9 +157,8 @@ func (p *plugin) Login(ctx context.Context, creds *domain.TrackerCredential) err
 	// Validate on a FRESH, UNSTORED jar, then publish it only once it is
 	// authenticated.
 	//
-	// Fresh, because the store hands the same jar back for two hours and the
-	// scheduler calls Login on every check: a user with working credentials
-	// always has a warm session, and posting a new password onto it proves
+	// Fresh, because the store hands the same jar back for two hours: a user
+	// with working credentials usually has a warm session, and posting a new password onto it proves
 	// nothing — the tracker renders the signed-in page, no rejection marker
 	// matches, and Verify confirms a session this attempt never established.
 	//
