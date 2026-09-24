@@ -64,7 +64,7 @@ import (
 // the progress that happened; the notify-only path marks a whole pending list
 // at once, where one statement is both bounded and all-or-nothing.
 type topicsRepo interface {
-	DueForCheck(ctx context.Context, limit int) ([]*domain.Topic, error)
+	DueForCheck(ctx context.Context, limit int, exclude []uuid.UUID) ([]*domain.Topic, error)
 	RecordCheckResult(ctx context.Context, t *domain.Topic, hash string, updated bool, nextCheckAt time.Time, errMsg, errCode string) error
 	MarkEpisodeDownloaded(ctx context.Context, t *domain.Topic, packed string) error
 	MarkEpisodesDownloaded(ctx context.Context, t *domain.Topic, packed []string) error
@@ -165,9 +165,13 @@ type Scheduler struct {
 
 	// spacer keeps the checks of a WithCheckSpacing tracker apart.
 	spacer checkSpacer
-	// inflight holds the ids of topics queued or running, so a later tick
-	// does not dispatch one again. DueForCheck selects on next_check_at
-	// alone, and a topic waiting for its spacer slot is still due by it.
+	// lanes holds one queue per WithCheckSpacing tracker, each drained by
+	// its own goroutine, so waiting for a slot never holds a shared worker.
+	lanesMu sync.Mutex
+	lanes   map[string]chan *domain.Topic
+	// inflight holds the ids of topics queued or running. They are passed to
+	// DueForCheck as exclusions, and a later tick does not dispatch one of
+	// them again: a topic waiting in a lane is still due by next_check_at.
 	inflight sync.Map // uuid.UUID → struct{}
 
 	// Lightweight in-memory ring buffer of recent run summaries.
@@ -224,6 +228,7 @@ func (s *Scheduler) Start(ctx context.Context) error {
 		case <-ctx.Done():
 			s.log.Info().Msg("scheduler stopping")
 			close(s.jobs)
+			s.closeLanes()
 			s.wg.Wait()
 			return nil
 		case <-ticker.C:
@@ -240,7 +245,7 @@ func (s *Scheduler) dispatchOnce(ctx context.Context) {
 		return
 	}
 	limit := s.cfg.SchedulerWorkers * 4
-	due, err := s.topics.DueForCheck(ctx, limit)
+	due, err := s.topics.DueForCheck(ctx, limit, s.inflightIDs())
 	if err != nil {
 		s.log.Error().Err(err).Msg("DueForCheck failed")
 		metrics.SchedulerRunsTotal.WithLabelValues("error").Inc()
@@ -258,20 +263,40 @@ func (s *Scheduler) dispatchOnce(ctx context.Context) {
 	metrics.SchedulerRunsTotal.WithLabelValues("ok").Inc()
 
 	for _, t := range due {
+		// Still needed with the exclusion list: DueForCheck can read a topic
+		// just before its worker's result commits and the worker releases it.
 		if _, queued := s.inflight.LoadOrStore(t.ID, struct{}{}); queued {
 			continue
 		}
+		q, isLane := s.queueFor(ctx, t)
 		select {
-		case s.jobs <- t:
+		case q <- t:
 		case <-ctx.Done():
 			s.inflight.Delete(t.ID)
 			return
 		default:
 			s.inflight.Delete(t.ID)
+			if isLane {
+				// A full lane holds up only its own tracker.
+				s.log.Debug().Str("tracker", t.TrackerName).Msg("lane full; will retry next tick")
+				continue
+			}
 			s.log.Warn().Msg("job queue full; will retry next tick")
 			return
 		}
 	}
+}
+
+// inflightIDs lists the topics currently queued or running.
+func (s *Scheduler) inflightIDs() []uuid.UUID {
+	var ids []uuid.UUID
+	s.inflight.Range(func(k, _ any) bool {
+		if id, ok := k.(uuid.UUID); ok {
+			ids = append(ids, id)
+		}
+		return true
+	})
+	return ids
 }
 
 func (s *Scheduler) beginRun() {
@@ -332,8 +357,13 @@ func (s *Scheduler) recordChecked(updated bool, errored bool) {
 
 func (s *Scheduler) worker(ctx context.Context, id int) {
 	defer s.wg.Done()
-	log := s.log.With().Int("worker", id).Logger()
-	for t := range s.jobs {
+	s.drain(ctx, s.log.With().Int("worker", id).Logger(), s.jobs)
+}
+
+// drain runs every topic from ch until ch is closed, releasing each topic's
+// inflight mark only once its check is over.
+func (s *Scheduler) drain(ctx context.Context, log zerolog.Logger, ch <-chan *domain.Topic) {
+	for t := range ch {
 		s.runCheck(ctx, log, t)
 		s.inflight.Delete(t.ID)
 	}
@@ -360,10 +390,11 @@ func (s *Scheduler) recordResult(ctx context.Context, log zerolog.Logger, t *dom
 	case errors.Is(err, repo.ErrStaleCheckResult):
 		// Something else wrote the topic's check state after this worker was
 		// dispatched, so the guard threw this result away. Legitimate causes:
-		// a reset or recheck landing mid-check, or the topic being deleted. (A
-		// long check re-dispatched on a later tick used to be one too; the
-		// inflight set now stops that.) Info, not Warn: every one of those is
-		// a designed outcome with nothing for anyone to act on, and the message
+		// a reset or recheck landing mid-check, the topic being deleted, or,
+		// rarely, a re-dispatch: DueForCheck read the topic just before this
+		// result committed, and its inflight mark was gone by the time the
+		// dispatch loop reached it. Info, not Warn: every one of those is a
+		// designed outcome with nothing for anyone to act on, and the message
 		// must not assert a reset that may never have happened.
 		log.Info().
 			Str("hash", hash).
@@ -403,10 +434,12 @@ func (s *Scheduler) runCheck(ctx context.Context, log zerolog.Logger, t *domain.
 	}
 
 	// Before check.started and before checkCtx: the wait is not part of the
-	// check, so it must neither show as "Checking…" nor use up the budget.
-	if !s.waitForCheckSlot(ctx, tr) {
+	// check, so it must neither show as "Checking…" nor use up the budget,
+	// nor count in the duration metric.
+	if !s.awaitCheckTurn(ctx, log, t, tr) {
 		return
 	}
+	start = time.Now()
 
 	// Emit check.started once the tracker plugin is confirmed present.
 	if s.emit != nil {

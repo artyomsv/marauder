@@ -15,7 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Marauder now starts Tapochek topic checks at least 5 seconds apart, sends
   only one request to the site at a time, and tries a request once more,
   after a short pause, when the site answers 503. The wait for a free slot
-  does not count against a check's timeout. Ref #198.
+  does not count against a check's timeout, and a long queue of Tapochek
+  topics no longer delays checks of other trackers. A topic that is reset or
+  deleted while it waits is skipped instead of checked. Ref #198.
 
 ## [1.21.2] - 2026-09-24
 

@@ -107,9 +107,13 @@ const (
 	maxRedirects = 5
 
 	// checkSpacing is the gap the scheduler keeps between the starts of two
-	// Tapochek topic checks. A check sends up to three requests (Verify,
-	// Check, Download) back to back, so this is well above the 0.3s spacing
-	// the site was measured to accept on 2026-09-24 (issue #198).
+	// Tapochek topic checks (issue #198). It limits rate, not overlap: the
+	// request slot in acquire is what keeps requests serial. A check sends
+	// up to five requests back to back — Login on a cold session, Verify,
+	// the topic page, and on an update the page again plus download.php —
+	// each retried once on a 503, so a gap well above the 0.3s the site was
+	// measured to accept on 2026-09-24 keeps it clear of the limit. The cost
+	// is throughput: at most 12 Tapochek checks a minute across all users.
 	checkSpacing = 5 * time.Second
 
 	// unavailableRetryDelay is the pause before the one retry of a request
@@ -990,7 +994,9 @@ func (p *plugin) do(ctx context.Context, sess *forumcommon.Session, method, targ
 		return nil, err
 	}
 	if err := p.acquire(ctx); err != nil {
-		return nil, fmt.Errorf("tapochek %s %s: %w", method, u.Path, err)
+		// Named, so a timeout spent in our own queue is not read as the
+		// tracker failing to answer.
+		return nil, fmt.Errorf("tapochek %s %s: waiting for a free request slot: %w", method, u.Path, err)
 	}
 	defer p.release()
 	body, status, err := p.send(ctx, sess, method, u, form)
@@ -999,7 +1005,17 @@ func (p *plugin) do(ctx context.Context, sess *forumcommon.Session, method, targ
 	}
 	// One more try after a pause. The slot is kept through the pause, so no
 	// other request of this plugin reaches the site before the retry does.
-	timer := time.NewTimer(p.unavailableDelay())
+	//
+	// Retrying is safe only because every request through do is idempotent:
+	// GETs, and the login POST, which just signs in again. A mutating POST
+	// added later must not take this path.
+	delay := p.unavailableDelay()
+	if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) < delay {
+		// Too little time left to pause and retry: return the 503 now
+		// instead of holding the slot for a retry that cannot finish.
+		return nil, err
+	}
+	timer := time.NewTimer(delay)
 	defer timer.Stop()
 	select {
 	case <-timer.C:
@@ -1013,11 +1029,17 @@ func (p *plugin) do(ctx context.Context, sess *forumcommon.Session, method, targ
 // acquire takes the plugin's one request slot, or gives up when ctx ends.
 //
 // Tapochek's nginx answers 503 to requests that arrive together (measured
-// 2026-09-24: 1 of 5 parallel GETs refused, none of 6 sent 0.3s apart), and
-// the scheduler's spacing only covers check starts: search, the AddTopic
-// preview, a page export and a check's own Verify, Check and Download can
-// still overlap. One request at a time covers all of them. The slot is
-// per plugin, not per session, because the limit counts our address.
+// 2026-09-24: 1 of 5 parallel GETs refused, none of 6 sent 0.3s apart). The
+// scheduler's spacing only limits how often checks start; it is this slot
+// that makes requests serial — a check that outlasts the gap, the AddTopic
+// preview, a topic's metadata resolve and a page export would otherwise
+// overlap. The slot is per plugin, not per session, because the limit counts
+// our address.
+//
+// Its cost is felt by the short budgets: a preview or a create that queues
+// behind a stalled request can run out of time, and a create that does so
+// stores no poster, which nothing backfills. That is rare — checks start 5s
+// apart and hold the slot for about a second each.
 func (p *plugin) acquire(ctx context.Context) error {
 	p.slotOnce.Do(func() { p.slot = make(chan struct{}, 1) })
 	select {

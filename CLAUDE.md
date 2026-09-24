@@ -263,20 +263,43 @@ bulk entry that fans out through `mapWithConcurrency`.
 **Tracker check spacing (issue #198):** a tracker implementing
 `registry.WithCheckSpacing` (`CheckSpacing() time.Duration`; Tapochek, 5s) never
 has two topic checks start closer together than that, across all users.
-`checkSpacer` (`scheduler/spacing.go`) hands out per-tracker start slots, and
-`runCheck` waits for its slot **before** emitting `check.started` and before
-creating `checkCtx`, so the wait neither shows as "Checking…" nor uses up the
-check's budget; a shutdown during the wait records nothing and the topic stays
-due. The wait holds a worker — bounded by DueForCheck's `workers*4` batch, and
-only when many topics of one spaced tracker fall due together. Because a topic
-waiting for its slot is still due by `next_check_at`, `dispatchOnce` keeps an
-**`inflight` set** (queued or running topic ids, released by the worker after
-`runCheck` and on a full queue) so a later tick does not dispatch it again.
-Why: Tapochek's nginx answers 503 to parallel requests (measured 2026-09-24: 1
-of 5 simultaneous GETs refused, 6 sent 0.3s apart all accepted), so after
-v1.21.1 removed the per-check logins a bulk "Check now" still failed every topic
-but the first. The plugin additionally sends one request at a time (its own
-slot, covering search/preview/export too) and retries a 503 once after 2s.
+- **Lanes, not workers.** `dispatchOnce` sends a spaced tracker's topics to that
+  tracker's own **lane** (`scheduler/spacing.go`: one queue of `workers*4` plus
+  one goroutine, created on first use, closed by `closeLanes` at shutdown)
+  instead of the shared worker queue. The first version slept inside the shared
+  pool, and review found that a burst of Tapochek topics (a restart, a bulk
+  "Check now") parked every worker and stopped all other trackers' checks for
+  every user — for about 8 minutes with 100 topics. One goroutine loses
+  nothing, because a spaced tracker's checks start one after another anyway. A
+  full lane skips only its own topic (`continue`), not the rest of the batch.
+- **The wait.** `checkSpacer` hands out per-tracker start slots, and `runCheck`
+  calls `awaitCheckTurn` **before** it emits `check.started`, before it creates
+  `checkCtx`, and before the duration metric's clock starts. So the wait does
+  not show as "Checking…", does not use up the check's budget, and does not
+  count as check time. After the wait, `awaitCheckTurn` calls
+  `VerifyCheckState` (spaced trackers only), because a topic can sit in its
+  lane for minutes: a reset, recheck or delete in that time would otherwise
+  cost Tapochek requests for a result the write guard throws away. A stale
+  token skips the check; any other DB error checks anyway. A shutdown during
+  the wait records nothing, and the topic stays due.
+- **`inflight` set.** It holds the ids of queued and running topics. The worker
+  or lane releases an id after `runCheck` (`drain`), and `dispatchOnce`
+  releases it when the queue is full. `DueForCheck(ctx, limit, exclude)` gets
+  those ids as `NOT (id = ANY($2::uuid[]))`. Without that, held topics are the
+  oldest due rows, so they filled the LIMIT window on every tick and blocked
+  every other topic from being selected. The repo turns a nil list into
+  `'{}'`, because `ANY(NULL)` would filter out every row.
+- **Cost.** At most 12 Tapochek checks a minute across all users. Above that
+  load, the Tapochek backlog never clears, but it now delays only Tapochek.
+- **Why.** Tapochek's nginx answers 503 to parallel requests (measured
+  2026-09-24: 1 of 5 simultaneous GETs refused, 6 sent 0.3s apart all
+  accepted). After v1.21.1 removed the per-check logins, a bulk "Check now"
+  still failed every topic but the first.
+- **In the plugin.** It sends one request at a time (its own slot, so the
+  preview, metadata and export paths are serialised too). Spacing only limits
+  rate; the slot is what prevents overlap. It retries a 503 once after 2s,
+  keeping the slot through the pause, and skips the retry when the context
+  has less time left than the pause.
 
 **Errored-topic retry:** `DueForCheck` selects `WHERE status IN
 ('active','error')`, so a topic that errors keeps retrying on its already-

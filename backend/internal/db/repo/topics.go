@@ -170,9 +170,10 @@ func (r *Topics) UpdateStatus(ctx context.Context, id uuid.UUID, userID uuid.UUI
 
 // ErrStaleCheckResult is returned by RecordCheckResult, MarkEpisodeDownloaded
 // and VerifyCheckState when the topic's check state changed between the worker
-// observing it and acting on it — in practice a reset landing mid-check, the
-// topic being deleted, or a long check being re-dispatched and the second
-// worker winning. For the two writes the write is discarded on purpose; for
+// observing it and acting on it — in practice a reset or recheck landing
+// mid-check, or the topic being deleted. (A long check re-dispatched on a
+// later tick, the second worker winning, used to be one too; the scheduler's
+// inflight set now makes that rare.) For the two writes the write is discarded on purpose; for
 // VerifyCheckState the caller has not acted yet and should stop. Either way it
 // describes state that no longer exists: callers should log it and carry on,
 // not treat it as a persistence failure.
@@ -597,13 +598,25 @@ func (r *Topics) UpdateDisplayName(ctx context.Context, id uuid.UUID, displayNam
 // DueForCheck returns up to `limit` topics whose next_check_at is in the past
 // and status is active or error. Errored topics are retried on their
 // exponential-backoff schedule; paused topics remain excluded.
-func (r *Topics) DueForCheck(ctx context.Context, limit int) ([]*domain.Topic, error) {
+//
+// exclude names topics the scheduler already has queued or running. They are
+// still due by next_check_at, and being the oldest due rows they would
+// otherwise fill the LIMIT window on every tick and keep every other topic
+// from being selected (issue #198: a backlog of spaced Tapochek checks did
+// exactly that).
+func (r *Topics) DueForCheck(ctx context.Context, limit int, exclude []uuid.UUID) ([]*domain.Topic, error) {
+	if exclude == nil {
+		// A nil slice encodes as NULL, and `id = ANY(NULL)` is NULL, which
+		// would filter out every row.
+		exclude = []uuid.UUID{}
+	}
 	q := `SELECT ` + topicColumns + `
 FROM topics
 WHERE status IN ('active', 'error') AND next_check_at <= now()
+  AND NOT (id = ANY($2::uuid[]))
 ORDER BY next_check_at ASC
 LIMIT $1`
-	rows, err := r.pool.Query(ctx, q, limit)
+	rows, err := r.pool.Query(ctx, q, limit, exclude)
 	if err != nil {
 		return nil, err
 	}

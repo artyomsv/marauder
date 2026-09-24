@@ -138,7 +138,7 @@ type updateDisplayNameCall struct {
 	name string
 }
 
-func (f *fakeTopics) DueForCheck(_ context.Context, _ int) ([]*domain.Topic, error) {
+func (f *fakeTopics) DueForCheck(_ context.Context, _ int, _ []uuid.UUID) ([]*domain.Topic, error) {
 	return nil, nil
 }
 

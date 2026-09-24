@@ -119,14 +119,88 @@ func TestDo_ContextEndsDuringRetryPause_ReturnsThe503(t *testing.T) {
 	p := newTestPlugin(t, h)
 	p.retryDelay = time.Hour
 
-	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	// No deadline, so the pause starts; the cancel ends it.
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	time.AfterFunc(50*time.Millisecond, cancel)
 	_, err := p.get(ctx, p.newSession(), throttleTarget)
 	if err == nil || !strings.Contains(err.Error(), "-> 503") {
 		t.Fatalf("err = %v, want the 503", err)
 	}
 	if got := calls.Load(); got != 1 {
 		t.Errorf("requests = %d, want 1", got)
+	}
+}
+
+// With less time left than the pause, the retry cannot finish: the 503 must
+// come back at once instead of holding the slot until the deadline.
+func TestDo_DeadlineNearerThanPause_ReturnsThe503AtOnce(t *testing.T) {
+	h, calls := statusSequence(http.StatusServiceUnavailable, http.StatusOK)
+	p := newTestPlugin(t, h)
+	p.retryDelay = time.Hour
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	start := time.Now()
+	_, err := p.get(ctx, p.newSession(), throttleTarget)
+	if err == nil || !strings.Contains(err.Error(), "-> 503") {
+		t.Fatalf("err = %v, want the 503", err)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Errorf("returned after %v, want at once", elapsed)
+	}
+	if got := calls.Load(); got != 1 {
+		t.Errorf("requests = %d, want 1", got)
+	}
+}
+
+// The slot is kept through the retry pause, so the retry reaches the site
+// before any other waiting request does.
+func TestDo_RetryPause_KeepsTheSlot(t *testing.T) {
+	var (
+		mu    sync.Mutex
+		order []string
+	)
+	first503 := make(chan struct{})
+	p := newTestPlugin(t, func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		order = append(order, r.URL.Path)
+		n := len(order)
+		mu.Unlock()
+		if n == 1 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			close(first503)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+	p.retryDelay = 200 * time.Millisecond
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := p.get(context.Background(), p.newSession(), "https://"+defaultDomain+"/first.php")
+		done <- err
+	}()
+	<-first503
+	if _, err := p.get(context.Background(), p.newSession(), "https://"+defaultDomain+"/second.php"); err != nil {
+		t.Fatalf("second get: %v", err)
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("first get: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	want := []string{"/first.php", "/first.php", "/second.php"}
+	if strings.Join(order, " ") != strings.Join(want, " ") {
+		t.Errorf("arrival order = %v, want %v", order, want)
+	}
+}
+
+// Issue #198 is only fixed while Tapochek asks the scheduler for spacing.
+func TestCheckSpacing_IsAtLeastOneSecond(t *testing.T) {
+	if got := (&plugin{}).CheckSpacing(); got < time.Second {
+		t.Errorf("CheckSpacing = %v, want at least 1s", got)
 	}
 }
 
@@ -194,9 +268,16 @@ func TestDo_ContextEndsWhileQueued_GivesUp(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
+	start := time.Now()
 	_, err := p.get(ctx, p.newSession(), throttleTarget)
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Errorf("err = %v, want context.DeadlineExceeded", err)
+	}
+	// Bounded, because a caller that ignored ctx would still end with
+	// DeadlineExceeded — once the first request's own 30s timeout freed
+	// the slot.
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Errorf("queued caller gave up after %v, want soon after its 20ms deadline", elapsed)
 	}
 	close(release)
 	<-done
