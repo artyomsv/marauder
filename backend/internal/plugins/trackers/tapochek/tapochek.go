@@ -78,6 +78,8 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/artyomsv/marauder/backend/internal/domain"
 	"github.com/artyomsv/marauder/backend/internal/plugins/registry"
@@ -103,6 +105,16 @@ const (
 	// against the same host allowlist, so this is a cost bound, not a
 	// security one.
 	maxRedirects = 5
+
+	// checkSpacing is the gap the scheduler keeps between the starts of two
+	// Tapochek topic checks. A check sends up to three requests (Verify,
+	// Check, Download) back to back, so this is well above the 0.3s spacing
+	// the site was measured to accept on 2026-09-24 (issue #198).
+	checkSpacing = 5 * time.Second
+
+	// unavailableRetryDelay is the pause before the one retry of a request
+	// the site answered 503.
+	unavailableRetryDelay = 2 * time.Second
 )
 
 // urlPattern is host-agnostic; CanParse gates the captured host against the
@@ -116,6 +128,13 @@ type plugin struct {
 	sessions  *forumcommon.SessionStore
 	domain    string
 	transport http.RoundTripper
+
+	// slot lets one request at a time reach the site (see acquire).
+	slotOnce sync.Once
+	slot     chan struct{}
+	// retryDelay overrides unavailableRetryDelay; zero keeps the default.
+	// A test seam.
+	retryDelay time.Duration
 }
 
 func init() {
@@ -124,6 +143,11 @@ func init() {
 
 func (p *plugin) Name() string        { return pluginName }
 func (p *plugin) DisplayName() string { return displayName }
+
+var _ registry.WithCheckSpacing = (*plugin)(nil)
+
+// CheckSpacing implements registry.WithCheckSpacing.
+func (p *plugin) CheckSpacing() time.Duration { return checkSpacing }
 
 var _ registry.WithDomains = (*plugin)(nil)
 
@@ -965,13 +989,64 @@ func (p *plugin) do(ctx context.Context, sess *forumcommon.Session, method, targ
 	if err := p.checkTarget(u); err != nil {
 		return nil, err
 	}
+	if err := p.acquire(ctx); err != nil {
+		return nil, fmt.Errorf("tapochek %s %s: %w", method, u.Path, err)
+	}
+	defer p.release()
+	body, status, err := p.send(ctx, sess, method, u, form)
+	if status != http.StatusServiceUnavailable {
+		return body, err
+	}
+	// One more try after a pause. The slot is kept through the pause, so no
+	// other request of this plugin reaches the site before the retry does.
+	timer := time.NewTimer(p.unavailableDelay())
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+	case <-ctx.Done():
+		return nil, err
+	}
+	body, _, err = p.send(ctx, sess, method, u, form)
+	return body, err
+}
+
+// acquire takes the plugin's one request slot, or gives up when ctx ends.
+//
+// Tapochek's nginx answers 503 to requests that arrive together (measured
+// 2026-09-24: 1 of 5 parallel GETs refused, none of 6 sent 0.3s apart), and
+// the scheduler's spacing only covers check starts: search, the AddTopic
+// preview, a page export and a check's own Verify, Check and Download can
+// still overlap. One request at a time covers all of them. The slot is
+// per plugin, not per session, because the limit counts our address.
+func (p *plugin) acquire(ctx context.Context) error {
+	p.slotOnce.Do(func() { p.slot = make(chan struct{}, 1) })
+	select {
+	case p.slot <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (p *plugin) release() { <-p.slot }
+
+func (p *plugin) unavailableDelay() time.Duration {
+	if p.retryDelay > 0 {
+		return p.retryDelay
+	}
+	return unavailableRetryDelay
+}
+
+// send makes one request. status is the HTTP status, or 0 when no response
+// arrived; err is set for every status but 200.
+func (p *plugin) send(ctx context.Context, sess *forumcommon.Session, method string, u *url.URL, form url.Values) ([]byte, int, error) {
 	var reader io.Reader
 	if form != nil {
 		reader = strings.NewReader(form.Encode())
 	}
 	req, err := http.NewRequestWithContext(ctx, method, u.String(), reader)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	req.Header.Set("User-Agent", userAgent)
 	if form != nil {
@@ -988,27 +1063,27 @@ func (p *plugin) do(ctx context.Context, sess *forumcommon.Session, method, targ
 		// ("context deadline exceeded", "no such host").
 		var ue *url.Error
 		if errors.As(err, &ue) {
-			return nil, fmt.Errorf("tapochek %s %s: %w", method, u.Path, ue.Err)
+			return nil, 0, fmt.Errorf("tapochek %s %s: %w", method, u.Path, ue.Err)
 		}
-		return nil, fmt.Errorf("tapochek %s %s: %w", method, u.Path, err)
+		return nil, 0, fmt.Errorf("tapochek %s %s: %w", method, u.Path, err)
 	}
 	defer resp.Body.Close()
 	// Only the path is named in errors: a search or redirect target can
 	// carry a query string, which has no business in an error or a log.
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("tapochek %s %s -> %d", method, u.Path, resp.StatusCode)
+		return nil, resp.StatusCode, fmt.Errorf("tapochek %s %s -> %d", method, u.Path, resp.StatusCode)
 	}
 	// limit+1: io.ReadAll on a bare LimitReader cannot tell a body that ended
 	// from one that was cut off, so an oversized .torrent would be truncated
 	// and still pass isTorrent's first-byte check on its way to a client.
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes+1))
 	if err != nil {
-		return nil, fmt.Errorf("tapochek: reading %s: %w", u.Path, err)
+		return nil, resp.StatusCode, fmt.Errorf("tapochek: reading %s: %w", u.Path, err)
 	}
 	if len(body) > maxBodyBytes {
-		return nil, fmt.Errorf("tapochek: response from %s exceeds %d bytes", u.Path, maxBodyBytes)
+		return nil, resp.StatusCode, fmt.Errorf("tapochek: response from %s exceeds %d bytes", u.Path, maxBodyBytes)
 	}
-	return body, nil
+	return body, resp.StatusCode, nil
 }
 
 // safeFileName reduces the scraped .torrent name to a single path segment.

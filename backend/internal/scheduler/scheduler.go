@@ -163,6 +163,13 @@ type Scheduler struct {
 	stop  chan struct{}
 	ready chan struct{}
 
+	// spacer keeps the checks of a WithCheckSpacing tracker apart.
+	spacer checkSpacer
+	// inflight holds the ids of topics queued or running, so a later tick
+	// does not dispatch one again. DueForCheck selects on next_check_at
+	// alone, and a topic waiting for its spacer slot is still due by it.
+	inflight sync.Map // uuid.UUID → struct{}
+
 	// Lightweight in-memory ring buffer of recent run summaries.
 	historyMu sync.Mutex
 	history   []RunSummary
@@ -251,11 +258,16 @@ func (s *Scheduler) dispatchOnce(ctx context.Context) {
 	metrics.SchedulerRunsTotal.WithLabelValues("ok").Inc()
 
 	for _, t := range due {
+		if _, queued := s.inflight.LoadOrStore(t.ID, struct{}{}); queued {
+			continue
+		}
 		select {
 		case s.jobs <- t:
 		case <-ctx.Done():
+			s.inflight.Delete(t.ID)
 			return
 		default:
+			s.inflight.Delete(t.ID)
 			s.log.Warn().Msg("job queue full; will retry next tick")
 			return
 		}
@@ -323,6 +335,7 @@ func (s *Scheduler) worker(ctx context.Context, id int) {
 	log := s.log.With().Int("worker", id).Logger()
 	for t := range s.jobs {
 		s.runCheck(ctx, log, t)
+		s.inflight.Delete(t.ID)
 	}
 }
 
@@ -347,10 +360,9 @@ func (s *Scheduler) recordResult(ctx context.Context, log zerolog.Logger, t *dom
 	case errors.Is(err, repo.ErrStaleCheckResult):
 		// Something else wrote the topic's check state after this worker was
 		// dispatched, so the guard threw this result away. Legitimate causes:
-		// a reset landing mid-check, the topic being deleted, or — with no
-		// in-flight set in DueForCheck (it selects purely on next_check_at <=
-		// now()) — a long check being re-dispatched on a later tick, with the
-		// second worker's write winning. Info, not Warn: every one of those is
+		// a reset or recheck landing mid-check, or the topic being deleted. (A
+		// long check re-dispatched on a later tick used to be one too; the
+		// inflight set now stops that.) Info, not Warn: every one of those is
 		// a designed outcome with nothing for anyone to act on, and the message
 		// must not assert a reset that may never have happened.
 		log.Info().
@@ -387,6 +399,12 @@ func (s *Scheduler) runCheck(ctx context.Context, log zerolog.Logger, t *domain.
 		s.recordResult(ctx, log, t, "", false, s.backoff(t, true, nil), "tracker plugin not installed", nil)
 		s.notifyError(ctx, t, "tracker plugin not installed")
 		s.recordChecked(false, true)
+		return
+	}
+
+	// Before check.started and before checkCtx: the wait is not part of the
+	// check, so it must neither show as "Checking…" nor use up the budget.
+	if !s.waitForCheckSlot(ctx, tr) {
 		return
 	}
 

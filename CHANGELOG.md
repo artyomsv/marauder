@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Checking many Tapochek topics at once no longer fails with error 503.**
+  Tapochek refuses requests that arrive together, so after v1.21.1 stopped the
+  repeated logins, a bulk "Check now" still failed every topic but the first.
+  Marauder now starts Tapochek topic checks at least 5 seconds apart, sends
+  only one request to the site at a time, and tries a request once more,
+  after a short pause, when the site answers 503. The wait for a free slot
+  does not count against a check's timeout. Ref #198.
+
 ## [1.21.2] - 2026-09-24
 
 ### Fixed
