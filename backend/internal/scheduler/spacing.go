@@ -17,13 +17,43 @@ import (
 // implements registry.WithCheckSpacing, so no two of them start closer
 // together than the tracker asks (issue #198).
 //
-// It reserves rather than locks: each caller claims the next free slot and
-// sleeps until it, and a slot already in the past is free at once. The zero
-// value is ready to use.
+// It works in two steps. reserve hands each caller the next free slot to
+// sleep until, so a lane's goroutines take turns in order instead of all
+// waking at once; a slot already in the past is free at once. claim then
+// records the actual start, and refuses one that comes less than spacing
+// after the previous actual start — the guarantee, since a caller can be
+// held up between its slot and its start. The zero value is ready to use.
 type checkSpacer struct {
-	mu   sync.Mutex
-	next map[string]time.Time // tracker name → earliest start of the next check
-	now  func() time.Time     // nil means time.Now; a test seam
+	mu      sync.Mutex
+	next    map[string]time.Time // tracker name → earliest start of the next check
+	started map[string]time.Time // tracker name → when the last check actually started
+	now     func() time.Time     // nil means time.Now; a test seam
+}
+
+func (c *checkSpacer) clock() time.Time {
+	if c.now != nil {
+		return c.now()
+	}
+	return time.Now()
+}
+
+// claim records a check start for tracker now and returns zero, unless the
+// previous start was less than spacing ago: then it records nothing and
+// returns how long is left.
+func (c *checkSpacer) claim(tracker string, spacing time.Duration) time.Duration {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	now := c.clock()
+	if last, ok := c.started[tracker]; ok {
+		if left := last.Add(spacing).Sub(now); left > 0 {
+			return left
+		}
+	}
+	if c.started == nil {
+		c.started = map[string]time.Time{}
+	}
+	c.started[tracker] = now
+	return 0
 }
 
 // reserve claims the tracker's next start slot and returns how long the
@@ -31,10 +61,7 @@ type checkSpacer struct {
 func (c *checkSpacer) reserve(tracker string, spacing time.Duration) time.Duration {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	now := time.Now()
-	if c.now != nil {
-		now = c.now()
-	}
+	now := c.clock()
 	if c.next == nil {
 		c.next = map[string]time.Time{}
 	}
@@ -75,14 +102,8 @@ func (s *Scheduler) awaitCheckTurn(ctx context.Context, log zerolog.Logger, t *d
 	if ctx.Err() != nil {
 		return nil
 	}
-	if wait := s.spacer.reserve(tr.Name(), spacing); wait > 0 {
-		timer := time.NewTimer(wait)
-		defer timer.Stop()
-		select {
-		case <-timer.C:
-		case <-ctx.Done():
-			return nil
-		}
+	if !sleepCtx(ctx, s.spacer.reserve(tr.Name(), spacing)) {
+		return nil
 	}
 	fresh, err := s.topics.GetByID(ctx, t.ID, nil)
 	switch {
@@ -93,13 +114,40 @@ func (s *Scheduler) awaitCheckTurn(ctx context.Context, log zerolog.Logger, t *d
 		// A read failure is no reason to drop the check: the snapshot still
 		// works, and the write guard in RecordCheckResult protects the result.
 		log.Warn().Err(err).Msg("re-read topic before check failed; using the dispatch snapshot")
-		return t
-	}
-	if fresh.Status == domain.TopicStatusPaused {
+		fresh = t
+	case fresh.Status == domain.TopicStatusPaused:
 		log.Info().Msg("check skipped: topic paused while waiting for its turn")
 		return nil
 	}
-	return fresh
+	// The slot reserved above only orders the lane's goroutines. The re-read
+	// sits between it and the start, and a slow read would let the goroutine
+	// holding the next slot start first and this one right after it — two
+	// starts closer than spacing (found in review). claim is what enforces the
+	// gap, against the time checks actually started.
+	for {
+		wait := s.spacer.claim(tr.Name(), spacing)
+		if wait == 0 {
+			return fresh
+		}
+		if !sleepCtx(ctx, wait) {
+			return nil
+		}
+	}
+}
+
+// sleepCtx waits for d, or reports false when ctx ends first.
+func sleepCtx(ctx context.Context, d time.Duration) bool {
+	if d <= 0 {
+		return true
+	}
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return true
+	case <-ctx.Done():
+		return false
+	}
 }
 
 // laneQueue is an unbounded FIFO shared by a lane's goroutines.

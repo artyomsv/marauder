@@ -60,6 +60,50 @@ func TestCheckSpacer_Reserve_PartlyElapsedSlot_WaitsTheRest(t *testing.T) {
 	}
 }
 
+func TestCheckSpacer_Claim_RefusesAStartTooSoonAfterTheLast(t *testing.T) {
+	now := time.Date(2026, 9, 24, 12, 0, 0, 0, time.UTC)
+	c := &checkSpacer{now: func() time.Time { return now }}
+	const gap = 5 * time.Second
+
+	if got := c.claim("tapochek", gap); got != 0 {
+		t.Fatalf("first claim = %v, want 0", got)
+	}
+	now = now.Add(2 * time.Second)
+	if got := c.claim("tapochek", gap); got != 3*time.Second {
+		t.Errorf("claim 2s after a start = %v, want 3s", got)
+	}
+	// A refused claim records nothing, so the gap still counts from the
+	// first start.
+	now = now.Add(3 * time.Second)
+	if got := c.claim("tapochek", gap); got != 0 {
+		t.Errorf("claim a full gap after the start = %v, want 0", got)
+	}
+	if got := c.claim("rutracker", gap); got != 0 {
+		t.Errorf("other tracker = %v, want 0", got)
+	}
+}
+
+// The case review found: this goroutine's reserved slot is due, but another
+// one started a check a moment ago — it overtook while this one was held up
+// between its slot and its start, on the topic re-read. The start must still
+// wait out the gap.
+func TestRunCheck_RecentStartByAnother_WaitsOutTheGap(t *testing.T) {
+	f, tr := newSpacedFixture(t)
+	const gap = 300 * time.Millisecond
+	f.s.lookupTracker = func(string) registry.Tracker { return &spacedTracker{fakeTracker: tr, spacing: gap} }
+	f.s.spacer.started = map[string]time.Time{"faketracker": time.Now()}
+
+	start := time.Now()
+	f.s.runCheck(context.Background(), f.s.log, f.topic)
+
+	if elapsed := time.Since(start); elapsed < gap-50*time.Millisecond {
+		t.Errorf("check started after %v, want about the %v gap", elapsed, gap)
+	}
+	if tr.callsCheck != 1 {
+		t.Errorf("Check calls = %d, want 1", tr.callsCheck)
+	}
+}
+
 func TestAwaitCheckTurn_TrackerWithoutSpacing_NeverWaitsOrRereads(t *testing.T) {
 	topics := &fakeTopics{}
 	s := &Scheduler{topics: topics}

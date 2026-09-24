@@ -292,6 +292,11 @@ has two topic checks start closer together than that, across all users.
   write guard throws away, and would delay a reset or recheck the user asked
   for by another tick. A deleted or paused topic is skipped. A read error falls
   back to the snapshot.
+- **Reserve, then claim.** The spacer works in two steps. `reserve` only
+  orders the lane's goroutines. `claim` enforces the gap, measured against
+  when the last check **actually started**. `claim` runs after the re-read,
+  because a slow read between slot and start once let the next slot's
+  goroutine overtake: two starts less than the gap apart (Greptile).
 - **`inflight` set.** It holds the ids of queued and running topics, released
   after `runCheck` and when the shared queue is full.
   `DueForCheck(ctx, limit, exclude)` gets those ids as
