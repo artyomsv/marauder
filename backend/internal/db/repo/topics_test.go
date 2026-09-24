@@ -418,10 +418,10 @@ func TestTopics_DueForCheck_IncludesErrorStatus(t *testing.T) {
 
 	// The regex asserts the IN clause is present.
 	mock.ExpectQuery(`status IN \('active', 'error'\)`).
-		WithArgs(10).
+		WithArgs(10, []uuid.UUID{}).
 		WillReturnRows(rows)
 
-	topics, err := repo.DueForCheck(context.Background(), 10)
+	topics, err := repo.DueForCheck(context.Background(), 10, nil)
 	if err != nil {
 		t.Fatalf("DueForCheck: unexpected error: %v", err)
 	}

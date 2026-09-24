@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/artyomsv/marauder/backend/internal/domain"
 )
@@ -52,6 +53,23 @@ type WithCredentials interface {
 type WithAnonymousDownload interface {
 	Tracker
 	SupportsAnonymousDownload() bool
+}
+
+// WithCheckSpacing is implemented by a tracker that refuses requests which
+// arrive close together. The scheduler starts no two of its topic checks less
+// than CheckSpacing apart, across all users: the limit is the site's, and it
+// counts our address, not an account.
+//
+// Tapochek is the reason: its nginx answers 503 to a burst of parallel
+// requests (measured 2026-09-24: 1 of 5 simultaneous GETs refused, 6 sent
+// 0.3s apart all accepted), so a bulk "Check now" failed every topic but the
+// first (issue #198).
+//
+// The wait happens before a check's timeout starts, so it never uses up the
+// check's budget.
+type WithCheckSpacing interface {
+	Tracker
+	CheckSpacing() time.Duration
 }
 
 // LoginChallenge is a captcha to present to the user during interactive
