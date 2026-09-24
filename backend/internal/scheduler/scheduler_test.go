@@ -2198,15 +2198,19 @@ func TestLoadCredentials_LiveSession_SkipsLogin(t *testing.T) {
 	checkCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	got, ok := s.loadCredentials(ctx, checkCtx, zerolog.New(io.Discard), topic, tr)
-	if !ok || got == nil {
-		t.Fatalf("loadCredentials = (%v, %v), want the credential", got, ok)
+	// Two checks: the first after a start has to log in (nothing yet says whose
+	// session the plugin holds); the second must reuse it.
+	for i := 0; i < 2; i++ {
+		got, ok := s.loadCredentials(ctx, checkCtx, zerolog.New(io.Discard), topic, tr)
+		if !ok || got == nil {
+			t.Fatalf("check %d: loadCredentials = (%v, %v), want the credential", i, got, ok)
+		}
 	}
 	if tr.verifyCalls != 1 {
 		t.Errorf("verify calls = %d, want 1", tr.verifyCalls)
 	}
-	if tr.loginCalls != 0 {
-		t.Errorf("login calls = %d, want 0 — a live session must not pay a login", tr.loginCalls)
+	if tr.loginCalls != 1 {
+		t.Errorf("login calls = %d, want 1 — a live session must not pay a second login", tr.loginCalls)
 	}
 }
 

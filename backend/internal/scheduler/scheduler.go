@@ -781,8 +781,8 @@ func (s *Scheduler) notifyError(ctx context.Context, t *domain.Topic, errMsg str
 
 // loadCredentials fetches and decrypts the per-user tracker credential
 // for trackers that implement WithCredentials, then makes sure the
-// plugin's session is live (trackercreds.EnsureSession). Returns (nil, true) if the tracker doesn't need
-// credentials at all. Returns (_, false) on any failure, having
+// plugin's session is live (trackercreds.EnsureSession). Returns
+// (nil, true) if the tracker doesn't need credentials at all. Returns (_, false) on any failure, having
 // already persisted the error result and recorded metrics.
 func (s *Scheduler) loadCredentials(ctx context.Context, checkCtx context.Context, log zerolog.Logger, t *domain.Topic, tr registry.Tracker) (*domain.TrackerCredential, bool) {
 	wc, isWC := tr.(registry.WithCredentials)

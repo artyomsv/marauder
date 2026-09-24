@@ -134,6 +134,11 @@ func TestWarm_VerifyFirst_SkipsTheLogin(t *testing.T) {
 	g := &gatedTracker{verifyOK: true}
 	cred := storedCred(t, mk, "session-blob")
 
+	// The first warm in a process logs in: nothing yet says which account the
+	// plugin's session belongs to (see EnsureSession).
+	if _, _, err := Warm(context.Background(), fakeStore{cred: cred}, mk, cred.UserID, g); err != nil {
+		t.Fatalf("first Warm: %v", err)
+	}
 	got, failed, err := Warm(context.Background(), fakeStore{cred: cred}, mk, cred.UserID, g)
 	if err != nil || failed || got == nil {
 		t.Fatalf("Warm = (%v, %v, %v), want a usable credential", got, failed, err)
@@ -141,8 +146,8 @@ func TestWarm_VerifyFirst_SkipsTheLogin(t *testing.T) {
 	if g.verifyCalls != 1 {
 		t.Errorf("verify calls = %d, want 1", g.verifyCalls)
 	}
-	if g.loginCalls != 0 {
-		t.Errorf("login calls = %d, want 0 — a live session must not pay a login", g.loginCalls)
+	if g.loginCalls != 1 {
+		t.Errorf("login calls = %d, want 1 — a live session must not pay a second login", g.loginCalls)
 	}
 	// The DECRYPTED blobs are what the plugin needs; the stored ciphertext
 	// would rehydrate into a jar full of nonsense.
@@ -161,12 +166,18 @@ func TestWarm_VerifyFalse_FallsBackToLogin(t *testing.T) {
 	g := &gatedTracker{verifyOK: false}
 	cred := storedCred(t, mk, "")
 
-	got, failed, err := Warm(context.Background(), fakeStore{cred: cred}, mk, cred.UserID, g)
-	if err != nil || failed || got == nil {
-		t.Fatalf("Warm = (%v, %v, %v), want a usable credential", got, failed, err)
+	// Twice: the first is the cold start, the second finds the session dead.
+	for i := 0; i < 2; i++ {
+		got, failed, err := Warm(context.Background(), fakeStore{cred: cred}, mk, cred.UserID, g)
+		if err != nil || failed || got == nil {
+			t.Fatalf("Warm %d = (%v, %v, %v), want a usable credential", i, got, failed, err)
+		}
 	}
-	if g.loginCalls != 1 {
-		t.Errorf("login calls = %d, want 1", g.loginCalls)
+	if g.verifyCalls != 1 {
+		t.Errorf("verify calls = %d, want 1", g.verifyCalls)
+	}
+	if g.loginCalls != 2 {
+		t.Errorf("login calls = %d, want 2", g.loginCalls)
 	}
 }
 
@@ -174,14 +185,22 @@ func TestWarm_VerifyFalse_FallsBackToLogin(t *testing.T) {
 // the password, so refusing to log in would strand a recoverable session.
 func TestWarm_VerifyErrors_StillTriesLogin(t *testing.T) {
 	mk := masterKey(t)
-	g := &gatedTracker{verifyErr: errors.New("network blip")}
+	g := &gatedTracker{}
 	cred := storedCred(t, mk, "")
 
+	// Establish a session first, so the second warm actually consults Verify.
+	if _, _, err := Warm(context.Background(), fakeStore{cred: cred}, mk, cred.UserID, g); err != nil {
+		t.Fatalf("first Warm: %v", err)
+	}
+	g.verifyErr = errors.New("network blip")
 	if _, _, err := Warm(context.Background(), fakeStore{cred: cred}, mk, cred.UserID, g); err != nil {
 		t.Fatalf("Warm: %v", err)
 	}
-	if g.loginCalls != 1 {
-		t.Errorf("login calls = %d, want 1", g.loginCalls)
+	if g.verifyCalls != 1 {
+		t.Errorf("verify calls = %d, want 1", g.verifyCalls)
+	}
+	if g.loginCalls != 2 {
+		t.Errorf("login calls = %d, want 2 (cold start, then the errored Verify)", g.loginCalls)
 	}
 }
 
