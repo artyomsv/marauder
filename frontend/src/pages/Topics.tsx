@@ -224,7 +224,11 @@ export function TopicsPage() {
         />
       )}
 
-      <Card>
+      {/* No backdrop blur on the list card: it is as tall as the whole list,
+          so the browser re-blurred a viewport-sized area on every scroll
+          frame (issue #201). Behind it is only the smooth background glow,
+          which looks the same unblurred. */}
+      <Card className="backdrop-filter-none">
         {isLoading ? (
           <div className="flex items-center justify-center gap-2 p-12 text-sm text-muted-foreground">
             <Loader2 className="size-4 animate-spin" />

@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Scrolling the Topics page no longer repaints the whole screen.** The soft
+  background glow was pinned to the window in a way that made the browser
+  repaint the full viewport on every scroll frame, which made scrolling stutter
+  on large or high-resolution screens. It now sits on its own layer and looks
+  the same. The topic list card also no longer blurs the background behind it,
+  and only topics in an error state pulse their status dot. Hovering a button
+  such as "Add topic" no longer repaints the whole topic list either: buttons
+  now lighten their colour on hover instead of applying a brightness filter.
+  Ref #201.
+
 ## [1.21.1] - 2026-09-24
 
 ### Fixed

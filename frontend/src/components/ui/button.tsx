@@ -4,19 +4,23 @@ import { cva, type VariantProps } from "class-variance-authority";
 
 import { cn } from "@/lib/utils";
 
+// transition-colors, not transition-all, and hover shades rather than a
+// brightness() filter: an animating filter or transform is a compositor
+// animation, which makes Chrome repaint everything painted after the button
+// (the whole topic list, issue #201). The press scale now snaps instead.
 const buttonVariants = cva(
-  "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-lg text-sm font-medium ring-offset-background transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 [&_svg]:size-4 [&_svg]:shrink-0 active:scale-[0.98]",
+  "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-lg text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 [&_svg]:size-4 [&_svg]:shrink-0 active:scale-[0.98]",
   {
     variants: {
       variant: {
         default:
-          "bg-primary text-primary-foreground shadow-[0_8px_24px_-8px_hsl(var(--primary)/0.7)] hover:brightness-110",
+          "bg-primary text-primary-foreground shadow-[0_8px_24px_-8px_hsl(var(--primary)/0.7)] hover:bg-primary-hover",
         destructive:
-          "bg-destructive text-destructive-foreground hover:brightness-110",
+          "bg-destructive text-destructive-foreground hover:bg-destructive-hover",
         outline:
           "border border-border bg-background/40 hover:bg-accent/10 hover:text-foreground",
         secondary:
-          "bg-secondary text-secondary-foreground hover:brightness-110",
+          "bg-secondary text-secondary-foreground hover:bg-secondary-hover",
         ghost: "hover:bg-accent/10 hover:text-foreground",
         link: "text-primary underline-offset-4 hover:underline",
       },
