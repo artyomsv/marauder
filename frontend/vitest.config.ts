@@ -21,5 +21,14 @@ export default defineConfig({
     setupFiles: ["./src/test/setup.ts"],
     css: true,
     include: ["src/**/*.{test,spec}.{ts,tsx}"],
+    // Only active with --coverage (`npm run test:coverage`, which CI runs).
+    // `include` lists every source file, so a file no test imports counts
+    // as 0% instead of silently vanishing from the total.
+    coverage: {
+      provider: "v8",
+      reporter: ["text-summary", "lcov"],
+      include: ["src/**/*.{ts,tsx}"],
+      exclude: ["src/**/*.{test,spec}.{ts,tsx}", "src/test/**", "src/vite-env.d.ts"],
+    },
   },
 });

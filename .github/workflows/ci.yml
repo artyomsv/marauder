@@ -68,6 +68,7 @@ jobs:
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: backend/coverage.out
+          flags: backend
 
       # Advisory, non-blocking: govulncheck tracks the upstream advisory DB,
       # which continuously outpaces released Go patches — current stdlib
@@ -271,8 +272,17 @@ jobs:
       - name: typecheck
         run: npm run typecheck
 
-      - name: test
-        run: npm test
+      - name: test (coverage)
+        run: npm run test:coverage
+
+      # Same pinned action as the backend job. Flags keep the two halves
+      # apart in Codecov; the badge shows their combined total.
+      - name: Upload coverage reports to Codecov
+        uses: codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac # v5.5.5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: frontend/coverage/lcov.info
+          flags: frontend
 
       - name: build
         run: npm run build
