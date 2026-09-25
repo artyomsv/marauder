@@ -10,6 +10,7 @@
 [![Release: v1.21.3](https://img.shields.io/badge/release-v1.21.3-success.svg)](CHANGELOG.md)
 
 [![CI](https://github.com/artyomsv/marauder/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/artyomsv/marauder/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/artyomsv/marauder/branch/main/graph/badge.svg)](https://codecov.io/gh/artyomsv/marauder)
 [![CodeQL](https://github.com/artyomsv/marauder/actions/workflows/codeql.yml/badge.svg?branch=main)](https://github.com/artyomsv/marauder/actions/workflows/codeql.yml)
 [![Docker build + scan](https://github.com/artyomsv/marauder/actions/workflows/docker.yml/badge.svg?branch=main)](https://github.com/artyomsv/marauder/actions/workflows/docker.yml)
 [![E2E (nightly)](https://github.com/artyomsv/marauder/actions/workflows/e2e.yml/badge.svg)](https://github.com/artyomsv/marauder/actions/workflows/e2e.yml)
