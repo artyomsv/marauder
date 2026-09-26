@@ -608,8 +608,11 @@ an escape hatch). The flow:
 
 ## Work tracking
 
-Issues, roadmap and backlog live on the org project **Delivery** —
-https://github.com/orgs/stukans/projects/8
+Issues live in this repository (`artyomsv/marauder`), labelled (`bug` /
+`enhancement` / …). **Do not add them to any project board** — in particular not
+the `stukans` org's **Delivery** board (`orgs/stukans/projects/8`), which belongs
+to an unrelated organisation. Feature requests often arrive as GitHub
+Discussions; a ticket filed from one references the discussion and its author.
 
 - **Branch names start with the issue number**: `1161-marad-verification-timeout`.
   `release-helpers.sh` `issue_refs` reads that prefix, and it is what makes the
@@ -619,8 +622,7 @@ https://github.com/orgs/stukans/projects/8
   pull request sidebar **Development** panel. Reference it with `Ref #N`.
 - Why: trunk-based development with feature flags means one issue spans several
   pull requests, and testing sends work back to coding. A merged pull request is
-  not finished work. The board moves the issue to `In Testing` on merge; a human
-  closes it once verified.
+  not finished work. A human closes the issue once it is verified.
 - `Ref #N` is **not** parsed by `issue_refs` — only closing keywords and the
   branch prefix are. That is why the branch prefix is mandatory here.
 
