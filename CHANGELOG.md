@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The default branch is now `master` (was `main`).** Links to files on
+  GitHub redirect on their own, but raw download links do not: if you saved
+  an install command such as
+  `curl -fsSLO https://raw.githubusercontent.com/artyomsv/marauder/main/deploy/docker-compose.ghcr.yml`,
+  replace `/main/` with `/master/`. The README, the getting-started guide and
+  marauder.cc show the new links. A local clone needs
+  `git branch -m main master && git fetch origin && git branch -u origin/master master && git remote set-head origin -a`.
+
 ## [1.21.3] - 2026-09-24
 
 ### Fixed

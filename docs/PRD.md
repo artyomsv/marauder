@@ -817,7 +817,7 @@ docker compose up -d
 
 ### 11.3 CI (GitHub Actions)
 
-Pipelines (all run on PR and on push to `main`):
+Pipelines (all run on PR and on push to `master`):
 
 1. `backend-lint-test` — go vet, golangci-lint, unit tests, govulncheck.
 2. `backend-integration` — testcontainers with Postgres 18.4.
@@ -839,7 +839,7 @@ Pipelines (all run on PR and on push to `main`):
 | `MARAUDER_MASTER_KEY` rotation story is messy | Medium | High | v1 requires manual re-encrypt script; v1.1 adds key versioning on each ciphertext so keys can be rotated without downtime. |
 | Memory growth under 1 000+ topics | Medium | Medium | Nightly soak test in CI; pprof endpoint (gated) for diagnostics. |
 | User points Marauder at a tracker they don't have rights to use | N/A | Legal/ethical | README disclaimer; Marauder does not ship pre-configured URLs; behavior is user's responsibility. |
-| Supply chain: a Go dep is compromised | Low | High | `govulncheck` in CI; `go.sum` committed; no auto-updates to `main`; renovate bot in dry-run mode. |
+| Supply chain: a Go dep is compromised | Low | High | `govulncheck` in CI; `go.sum` committed; no auto-updates to `master`; renovate bot in dry-run mode. |
 | Single-maintainer bus factor | Medium | High | Apache-2.0 licence, plugin-centric architecture, and first-class CONTRIBUTING guide lower the bar for others to take over. |
 
 ---

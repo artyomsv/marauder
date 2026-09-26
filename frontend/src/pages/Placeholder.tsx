@@ -29,7 +29,7 @@ export function PlaceholderPage({ title, blurb }: { title: string; blurb: string
           <div className="max-w-sm text-sm text-muted-foreground">
             This screen ships in a near-term milestone. See{" "}
             <a
-              href="https://github.com/artyomsv/marauder/blob/main/docs/ROADMAP.md"
+              href="https://github.com/artyomsv/marauder/blob/master/docs/ROADMAP.md"
               className="font-medium text-foreground underline underline-offset-4"
             >
               docs/ROADMAP.md

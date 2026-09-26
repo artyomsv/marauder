@@ -1,8 +1,8 @@
 name: Nightly build + verify (native multi-arch)
 
-# Build all three images from main HEAD natively on each architecture
+# Build all three images from master HEAD natively on each architecture
 # (amd64 + arm64) and confirm they actually run there. Catches arch/build
-# regressions on main between releases — issue #74: an arm64 image once
+# regressions on master between releases — issue #74: an arm64 image once
 # shipped an amd64 binary that died with "exec format error" on real aarch64.
 #
 # Why native runners and not QEMU: on an amd64 runner an amd64 binary inside an

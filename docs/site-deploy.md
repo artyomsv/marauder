@@ -19,7 +19,7 @@ In the repository settings:
 2. Source: **GitHub Actions** (not "Deploy from a branch")
 3. Save
 
-The first push to `main` that touches `site/**` will run
+The first push to `master` that touches `site/**` will run
 `.github/workflows/site.yml` and deploy to a temporary
 `https://artyomsv.github.io/marauder` URL. This proves the build works
 end-to-end before DNS gets involved.
@@ -129,7 +129,7 @@ hot-reloads on save.
 2. Import the layout: `import Page from "@/layouts/Page.astro"`
 3. Set the SEO frontmatter (`title`, `description`, `path`, `keywords`)
 4. Add any page-specific JSON-LD via the `schemas` prop
-5. Push to `main`. The site workflow rebuilds and redeploys.
+5. Push to `master`. The site workflow rebuilds and redeploys.
 
 The new page is **automatically added to the sitemap** because
 `@astrojs/sitemap` walks `pages/`.

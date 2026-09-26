@@ -29,8 +29,8 @@ const schemas = [
     description: "Run the full Marauder stack from prebuilt images on any host with Docker.",
     totalTime: "PT5M",
     steps: [
-      { name: "Download the compose file", text: "curl -fsSLO https://raw.githubusercontent.com/artyomsv/marauder/main/deploy/docker-compose.ghcr.yml" },
-      { name: "Create the env file", text: "curl -fsSL https://raw.githubusercontent.com/artyomsv/marauder/main/deploy/.env.example -o .env" },
+      { name: "Download the compose file", text: "curl -fsSLO https://raw.githubusercontent.com/artyomsv/marauder/master/deploy/docker-compose.ghcr.yml" },
+      { name: "Create the env file", text: "curl -fsSL https://raw.githubusercontent.com/artyomsv/marauder/master/deploy/.env.example -o .env" },
       { name: "Generate a master encryption key", text: "Run openssl rand -base64 32 and set it as MARAUDER_MASTER_KEY in .env" },
       { name: "Pull and start the stack", text: "docker compose -f docker-compose.ghcr.yml --env-file .env up -d" },
       { name: "Open the UI", text: "Open http://localhost:34080 in a browser and sign in as admin" },
@@ -41,8 +41,8 @@ const schemas = [
 const cmdPrebuilt = `mkdir marauder && cd marauder
 
 # 1. Compose file + example env (no git clone needed)
-curl -fsSLO https://raw.githubusercontent.com/artyomsv/marauder/main/deploy/docker-compose.ghcr.yml
-curl -fsSL  https://raw.githubusercontent.com/artyomsv/marauder/main/deploy/.env.example -o .env
+curl -fsSLO https://raw.githubusercontent.com/artyomsv/marauder/master/deploy/docker-compose.ghcr.yml
+curl -fsSL  https://raw.githubusercontent.com/artyomsv/marauder/master/deploy/.env.example -o .env
 
 # 2. Generate the required 32-byte master key
 sed -i "s|MARAUDER_MASTER_KEY=.*|MARAUDER_MASTER_KEY=$(openssl rand -base64 32)|" .env
@@ -178,7 +178,7 @@ const cmdLogin = `curl -sS -X POST http://localhost:34080/api/v1/auth/login \\
         Full details — the CNPG tier, the volume menu with per-backend examples,
         exposure options, secrets, and the Kustomize / plain-manifest paths — are
         in the
-        <a href={SITE.github + "/blob/main/docs/kubernetes.md"} rel="noopener external" class="text-foreground underline decoration-foreground/40 underline-offset-4 hover:decoration-foreground">Kubernetes deployment guide</a>.
+        <a href={SITE.github + "/blob/master/docs/kubernetes.md"} rel="noopener external" class="text-foreground underline decoration-foreground/40 underline-offset-4 hover:decoration-foreground">Kubernetes deployment guide</a>.
       </p>
     </section>
 
@@ -233,15 +233,15 @@ const cmdLogin = `curl -sS -X POST http://localhost:34080/api/v1/auth/login \\
           <h3 class="font-semibold text-foreground">Add tracker credentials</h3>
           <p class="mt-1 text-sm text-muted-foreground">Configure logins for the 13 supported trackers.</p>
         </a>
-        <a href={SITE.github + "/blob/main/docs/getting-started.md"} rel="noopener external" class="glass-card rounded-xl p-5 transition-colors hover:border-foreground/30">
+        <a href={SITE.github + "/blob/master/docs/getting-started.md"} rel="noopener external" class="glass-card rounded-xl p-5 transition-colors hover:border-foreground/30">
           <h3 class="font-semibold text-foreground">Full getting-started guide</h3>
           <p class="mt-1 text-sm text-muted-foreground">Version pinning, overlays, troubleshooting, and more.</p>
         </a>
-        <a href={SITE.github + "/blob/main/docs/oidc.md"} rel="noopener external" class="glass-card rounded-xl p-5 transition-colors hover:border-foreground/30">
+        <a href={SITE.github + "/blob/master/docs/oidc.md"} rel="noopener external" class="glass-card rounded-xl p-5 transition-colors hover:border-foreground/30">
           <h3 class="font-semibold text-foreground">Enable OIDC sign-in</h3>
           <p class="mt-1 text-sm text-muted-foreground">Drop in Keycloak via the bundled SSO compose profile.</p>
         </a>
-        <a href={SITE.github + "/blob/main/docs/kubernetes.md"} rel="noopener external" class="glass-card rounded-xl p-5 transition-colors hover:border-foreground/30">
+        <a href={SITE.github + "/blob/master/docs/kubernetes.md"} rel="noopener external" class="glass-card rounded-xl p-5 transition-colors hover:border-foreground/30">
           <h3 class="font-semibold text-foreground">Deploy on Kubernetes</h3>
           <p class="mt-1 text-sm text-muted-foreground">Helm / Kustomize / manifests, simple or CNPG + S3-backup tiers, and the volume model.</p>
         </a>

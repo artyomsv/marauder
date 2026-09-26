@@ -9,10 +9,10 @@
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Release: v1.21.3](https://img.shields.io/badge/release-v1.21.3-success.svg)](CHANGELOG.md)
 
-[![CI](https://github.com/artyomsv/marauder/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/artyomsv/marauder/actions/workflows/ci.yml)
-[![codecov](https://codecov.io/gh/artyomsv/marauder/branch/main/graph/badge.svg)](https://codecov.io/gh/artyomsv/marauder)
-[![CodeQL](https://github.com/artyomsv/marauder/actions/workflows/codeql.yml/badge.svg?branch=main)](https://github.com/artyomsv/marauder/actions/workflows/codeql.yml)
-[![Docker build + scan](https://github.com/artyomsv/marauder/actions/workflows/docker.yml/badge.svg?branch=main)](https://github.com/artyomsv/marauder/actions/workflows/docker.yml)
+[![CI](https://github.com/artyomsv/marauder/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/artyomsv/marauder/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/artyomsv/marauder/branch/master/graph/badge.svg)](https://codecov.io/gh/artyomsv/marauder)
+[![CodeQL](https://github.com/artyomsv/marauder/actions/workflows/codeql.yml/badge.svg?branch=master)](https://github.com/artyomsv/marauder/actions/workflows/codeql.yml)
+[![Docker build + scan](https://github.com/artyomsv/marauder/actions/workflows/docker.yml/badge.svg?branch=master)](https://github.com/artyomsv/marauder/actions/workflows/docker.yml)
 [![E2E (nightly)](https://github.com/artyomsv/marauder/actions/workflows/e2e.yml/badge.svg)](https://github.com/artyomsv/marauder/actions/workflows/e2e.yml)
 [![Client acceptance (nightly)](https://github.com/artyomsv/marauder/actions/workflows/client-acceptance.yml/badge.svg)](https://github.com/artyomsv/marauder/actions/workflows/client-acceptance.yml)
 [![Deploy site](https://github.com/artyomsv/marauder/actions/workflows/site.yml/badge.svg)](https://github.com/artyomsv/marauder/actions/workflows/site.yml)
@@ -147,8 +147,8 @@ No clone, no local build:
 mkdir marauder && cd marauder
 
 # 1. Compose file + example env
-curl -fsSLO https://raw.githubusercontent.com/artyomsv/marauder/main/deploy/docker-compose.ghcr.yml
-curl -fsSL  https://raw.githubusercontent.com/artyomsv/marauder/main/deploy/.env.example -o .env
+curl -fsSLO https://raw.githubusercontent.com/artyomsv/marauder/master/deploy/docker-compose.ghcr.yml
+curl -fsSL  https://raw.githubusercontent.com/artyomsv/marauder/master/deploy/.env.example -o .env
 
 # 2. Generate the required 32-byte master key
 sed -i "s|MARAUDER_MASTER_KEY=.*|MARAUDER_MASTER_KEY=$(openssl rand -base64 32)|" .env

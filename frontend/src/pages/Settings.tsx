@@ -281,7 +281,7 @@ function AboutCard() {
               GitHub
             </a>
             <a
-              href="https://github.com/artyomsv/marauder/blob/main/CHANGELOG.md"
+              href="https://github.com/artyomsv/marauder/blob/master/CHANGELOG.md"
               className="text-primary underline-offset-4 hover:underline"
               target="_blank"
               rel="noreferrer"
@@ -289,7 +289,7 @@ function AboutCard() {
               Changelog
             </a>
             <a
-              href="https://github.com/artyomsv/marauder/blob/main/docs/ROADMAP.md"
+              href="https://github.com/artyomsv/marauder/blob/master/docs/ROADMAP.md"
               className="text-primary underline-offset-4 hover:underline"
               target="_blank"
               rel="noreferrer"

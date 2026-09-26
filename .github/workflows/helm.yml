@@ -2,7 +2,7 @@ name: helm
 
 on:
   push:
-    branches: [main]
+    branches: [master]
     paths:
       - 'deploy/helm/**'
       - 'deploy/kustomize/**'

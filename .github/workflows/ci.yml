@@ -1,6 +1,6 @@
 name: CI
 
-# The fast-feedback pipeline. Runs on every PR and on every push to main.
+# The fast-feedback pipeline. Runs on every PR and on every push to master.
 # Should finish in under 3 minutes for a typical change.
 #
 # Heavyweight things (full compose stack E2E, Trivy on built images,
@@ -9,9 +9,9 @@ name: CI
 
 on:
   pull_request:
-    branches: [main]
+    branches: [master]
   push:
-    branches: [main]
+    branches: [master]
   workflow_dispatch:
 
 # Cancel any in-flight CI for the same ref/PR.

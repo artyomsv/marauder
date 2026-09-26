@@ -1,13 +1,13 @@
 name: Docker build + scan
 
-# Build all three Docker images on every push to main and on every tag.
+# Build all three Docker images on every push to master and on every tag.
 # Trivy scans block on HIGH/CRITICAL vulnerabilities. This workflow does
 # NOT push images — that's release.yml. Pull requests from forks do not
 # run this workflow because Trivy needs registry access for the DB.
 
 on:
   push:
-    branches: [main]
+    branches: [master]
     tags: ['v*']
   workflow_dispatch:
 

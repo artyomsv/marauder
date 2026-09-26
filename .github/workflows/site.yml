@@ -3,7 +3,7 @@ name: Deploy site (marauder.cc)
 # Builds the Astro project at site/ and deploys to GitHub Pages.
 #
 # Triggers:
-#   - push to main when site/** changes (the common case)
+#   - push to master when site/** changes (the common case)
 #   - workflow_dispatch (manual rebuild from the Actions tab)
 #
 # Pages source must be set to "GitHub Actions" in repo settings:
@@ -18,7 +18,7 @@ name: Deploy site (marauder.cc)
 
 on:
   push:
-    branches: [main]
+    branches: [master]
     paths:
       - "site/**"
       - ".github/workflows/site.yml"

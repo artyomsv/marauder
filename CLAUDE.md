@@ -570,7 +570,7 @@ an escape hatch). The flow:
   `contents: write`) is required — a tag pushed with the default `GITHUB_TOKEN`
   will **not** trigger `release.yml` (GitHub's recursion guard). Without it the
   tag is still created but `release.yml` must be dispatched manually.
-- `.github/workflows/auto-release.yml` runs on **PR merge to main**. It derives
+- `.github/workflows/auto-release.yml` runs on **PR merge to master**. It derives
   the next semver from the merged PR's Conventional Commit **title** (squash
   subject): `feat!`/`BREAKING CHANGE`→major, `feat`→minor, `fix`/`perf`→patch,
   everything else (`chore`/`docs`/`ci`/`test`/`refactor`/`build`, incl.

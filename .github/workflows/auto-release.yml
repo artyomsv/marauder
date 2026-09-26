@@ -1,6 +1,6 @@
 name: Auto release on merge
 
-# Cuts a release automatically when a PR is squash-merged to main.
+# Cuts a release automatically when a PR is squash-merged to master.
 #
 # It does NOT build anything itself — it derives the next semantic version from
 # the merged PR's Conventional Commit title, rolls CHANGELOG.md, and pushes an
@@ -29,12 +29,12 @@ name: Auto release on merge
 # by a FORK PR receives no repo secrets, so RELEASE_PAT was empty and the tag
 # push failed 403 as github-actions[bot] (first hit: PR #122). The _target
 # variant runs in base-repo context with secrets. Safe here because the job
-# only ever checks out `main` (never the PR head, so no untrusted code runs)
+# only ever checks out `master` (never the PR head, so no untrusted code runs)
 # and the attacker-controllable PR title/body are passed via env, not inline.
 on:
   pull_request_target:
     types: [closed]
-    branches: [main]
+    branches: [master]
 
 # Serialize merges so two PRs landing back-to-back can't compute the same next
 # version off the same latest tag. Never cancel — every merge must be processed.
@@ -43,7 +43,7 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  contents: write   # commit the CHANGELOG roll + push the tag to main
+  contents: write   # commit the CHANGELOG roll + push the tag to master
 
 jobs:
   tag:
@@ -52,10 +52,10 @@ jobs:
     if: github.event.pull_request.merged == true
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout main (full history + tags)
+      - name: Checkout master (full history + tags)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: main
+          ref: master
           fetch-depth: 0
           # Persist a PAT (if configured) so the `git push` of the tag below
           # triggers release.yml. Falls back to GITHUB_TOKEN (tag created, but
@@ -148,11 +148,11 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          # Commit the CHANGELOG roll to main. Do NOT add a CI-skip token to
+          # Commit the CHANGELOG roll to master. Do NOT add a CI-skip token to
           # this message: the annotated tag below points at THIS commit, and
           # GitHub evaluates the skip token on the tag's target commit — a skip
           # token here silently suppresses the tag-triggered release.yml (the
-          # exact failure this comment guards against). The main-branch push of
+          # exact failure this comment guards against). The master-branch push of
           # this commit therefore runs CI/Docker once per release; that
           # redundancy is acceptable and infrequent.
           git add CHANGELOG.md
@@ -169,7 +169,7 @@ jobs:
           } > .tagmsg
 
           git tag -a "v$VER" -F .tagmsg
-          git push origin main
+          git push origin master
           git push origin "v$VER"
 
           echo "### :rocket: Tagged v$VER" >> "$GITHUB_STEP_SUMMARY"

@@ -283,7 +283,7 @@ function AddClientCard({
           <p className="text-xs text-muted-foreground">
             Need help with the URL format?{" "}
             <a
-              href="https://github.com/artyomsv/marauder/blob/main/docs/clients.md"
+              href="https://github.com/artyomsv/marauder/blob/master/docs/clients.md"
               target="_blank"
               rel="noreferrer"
               className="text-primary underline-offset-4 hover:underline"

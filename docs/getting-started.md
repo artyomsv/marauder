@@ -47,8 +47,8 @@ From an empty directory — no `git clone`:
 mkdir marauder && cd marauder
 
 # 1. Grab the compose file and the example env
-curl -fsSLO https://raw.githubusercontent.com/artyomsv/marauder/main/deploy/docker-compose.ghcr.yml
-curl -fsSL  https://raw.githubusercontent.com/artyomsv/marauder/main/deploy/.env.example -o .env
+curl -fsSLO https://raw.githubusercontent.com/artyomsv/marauder/master/deploy/docker-compose.ghcr.yml
+curl -fsSL  https://raw.githubusercontent.com/artyomsv/marauder/master/deploy/.env.example -o .env
 
 # 2. Generate the required master encryption key
 sed -i "s|MARAUDER_MASTER_KEY=.*|MARAUDER_MASTER_KEY=$(openssl rand -base64 32)|" .env
@@ -229,7 +229,7 @@ Run these from the same directory as your `up` command above.
 **Option A (prebuilt images)** — grab the overlay next to your compose file:
 
 ```bash
-curl -fsSLO https://raw.githubusercontent.com/artyomsv/marauder/main/deploy/docker-compose.solver.yml
+curl -fsSLO https://raw.githubusercontent.com/artyomsv/marauder/master/deploy/docker-compose.solver.yml
 docker compose -f docker-compose.ghcr.yml -f docker-compose.solver.yml --env-file .env up -d
 ```
 

@@ -159,7 +159,7 @@ const sections = [
       "Six GitHub Actions workflows, golangci-lint with 12 rules, Trivy scans, cosign signing, CycloneDX SBOMs, Dependabot.",
     bullets: [
       "ci.yml: backend race-tests + golangci-lint + govulncheck, frontend tsc + build, cfsolver build/vet — under 3 minutes per PR",
-      "docker.yml: builds all 3 images on push to main, Trivy scan with HIGH/CRITICAL fail",
+      "docker.yml: builds all 3 images on push to master, Trivy scan with HIGH/CRITICAL fail",
       "e2e.yml: nightly + on-tag full compose-stack walkthrough (magnet → qBittorrent end-to-end)",
       "client-acceptance.yml: nightly matrix creating every supported client against a real container — pinned baseline + a latest-version canary that auto-files an issue when an upstream release breaks a client",
       "release.yml: tag-pushed multi-arch (amd64 + arm64) build, cosign keyless signing via OIDC, CycloneDX SBOM per image, GitHub Release with auto-extracted CHANGELOG",

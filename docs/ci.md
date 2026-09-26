@@ -8,11 +8,11 @@ runs, and what you should do if it fails.
 
 | Workflow | Trigger | What it does | Time budget |
 |---|---|---|---|
-| [`ci.yml`](../.github/workflows/ci.yml) | every PR + push to main | Backend test/vet/lint/govulncheck + frontend typecheck/build + cfsolver build | < 3 min |
-| [`docker.yml`](../.github/workflows/docker.yml) | push to main + tag | Build all 3 Docker images, Trivy scan (HIGH/CRITICAL) | ~3 min |
+| [`ci.yml`](../.github/workflows/ci.yml) | every PR + push to master | Backend test/vet/lint/govulncheck + frontend typecheck/build + cfsolver build | < 3 min |
+| [`docker.yml`](../.github/workflows/docker.yml) | push to master + tag | Build all 3 Docker images, Trivy scan (HIGH/CRITICAL) | ~3 min |
 | [`e2e.yml`](../.github/workflows/e2e.yml) | nightly + workflow_dispatch + tag | Full compose-stack walkthrough: magnet → qBittorrent end-to-end | ~5 min |
 | [`release.yml`](../.github/workflows/release.yml) | tag push (`v*`) | Multi-arch build, cosign sign, SBOM, GHCR push, GitHub Release | ~10 min |
-| [`codeql.yml`](../.github/workflows/codeql.yml) | every PR + push to main + weekly | GitHub CodeQL SAST (Go + TypeScript) | ~5 min |
+| [`codeql.yml`](../.github/workflows/codeql.yml) | every PR + push to master + weekly | GitHub CodeQL SAST (Go + TypeScript) | ~5 min |
 
 Plus [`.github/dependabot.yml`](../.github/dependabot.yml) — not a
 workflow but a config file. Updates Go modules, npm packages,
@@ -90,7 +90,7 @@ It's slow (~5 minutes including stack startup) and noisy. Putting it
 in the PR path would burn shared minutes and frustrate contributors.
 Instead it runs:
 
-- **Nightly** at 04:00 UTC against `main`
+- **Nightly** at 04:00 UTC against `master`
 - **On every tag push** (so a release is never tagged without a green E2E)
 - **On `workflow_dispatch`** when a maintainer wants to verify a
   specific commit
@@ -131,7 +131,7 @@ Triggered by a `v*` tag push. Builds, signs, and ships everything.
 ```bash
 # 1. Bump CHANGELOG.md: move [Unreleased] entries into a new
 #    [1.1.0] section dated today.
-# 2. Commit, push to main, wait for CI green.
+# 2. Commit, push to master, wait for CI green.
 git tag -a v1.1.0 -m "Marauder v1.1.0"
 git push origin v1.1.0
 # 3. Watch release.yml run. It produces the GHCR images and a
