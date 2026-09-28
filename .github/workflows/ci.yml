@@ -64,7 +64,7 @@ jobs:
       # repo-relative. A Codecov outage does not fail the job
       # (fail_ci_if_error defaults to false); a fork PR uploads tokenless.
       - name: Upload coverage reports to Codecov
-        uses: codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac # v5.5.5
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: backend/coverage.out
@@ -278,7 +278,7 @@ jobs:
       # Same pinned action as the backend job. Flags keep the two halves
       # apart in Codecov; the badge shows their combined total.
       - name: Upload coverage reports to Codecov
-        uses: codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac # v5.5.5
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: frontend/coverage/lcov.info
