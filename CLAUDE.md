@@ -260,6 +260,20 @@ matches pause/resume, not reset); the `check.*` events that follow are the
 record. Frontend: a `RefreshCw` row action hidden for paused topics, plus a
 bulk entry that fans out through `mapWithConcurrency`.
 
+**Per-topic check interval (issue #204):** `check_interval_sec` is the
+scheduler's base delay (`backoffDelay`). `POST /topics` and `PUT /topics/{id}`
+both take it; the range is `topics.MinCheckIntervalSec`..`MaxCheckIntervalSec`
+(300 s..7 days), and 0 on create means the 900 s default. `PUT` omitted keeps
+the stored value, and an **unchanged** out-of-range value is accepted so a topic
+created before the range existed stays editable. `Topics.Update` is therefore
+a fourth writer of `next_check_at`: a **shorter** interval pulls it in to
+`LEAST(next_check_at, now() + new interval)`, a longer or equal one leaves it.
+Like a recheck, a shortening edit during a running check discards that check's
+result via the token. The Sonarr poller passes the stored interval through.
+Frontend: `CheckIntervalSelect` (presets 15 min..7 days, a non-preset stored
+value gets its own option) in `TopicForm`, `CheckIntervalBadge` on the row, and
+`lib/check-interval.ts` for the presets and formatting.
+
 **Tracker check spacing (issue #198):** a tracker implementing
 `registry.WithCheckSpacing` (`CheckSpacing() time.Duration`; Tapochek, 5s) never
 has two topic checks start closer together than that, across all users.

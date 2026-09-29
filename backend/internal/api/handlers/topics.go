@@ -35,7 +35,7 @@ type topicStore interface {
 	ListForUser(ctx context.Context, userID uuid.UUID) ([]*domain.Topic, error)
 	Delete(ctx context.Context, id, userID uuid.UUID) error
 	UpdateStatus(ctx context.Context, id, userID uuid.UUID, status domain.TopicStatus) error
-	Update(ctx context.Context, id, userID uuid.UUID, displayName string, clientID, notifierID *uuid.UUID, downloadDir, category string, flags repo.TopicFlags, extra map[string]any) (*domain.Topic, error)
+	Update(ctx context.Context, id, userID uuid.UUID, displayName string, clientID, notifierID *uuid.UUID, downloadDir, category string, checkIntervalSec int, flags repo.TopicFlags, extra map[string]any) (*domain.Topic, error)
 	ResetCheckState(ctx context.Context, id, userID uuid.UUID) error
 	QueueRecheck(ctx context.Context, id, userID uuid.UUID) (repo.RecheckOutcome, error)
 }
@@ -244,7 +244,8 @@ func topicCreateProblem(err error, url string) error {
 		// err is "parse failed: <tracker error>" (multi-%w wrapped), so use
 		// its full message — errors.Unwrap returns nil on a multi-wrap.
 		return problem.ErrUnprocessable(err.Error())
-	case errors.Is(err, topics.ErrQualityUnsupported):
+	case errors.Is(err, topics.ErrQualityUnsupported),
+		errors.Is(err, topics.ErrCheckIntervalOutOfRange):
 		return problem.ErrUnprocessable(err.Error())
 	default:
 		return problem.ErrInternal("create topic: " + err.Error())
@@ -257,6 +258,9 @@ type updateTopicReq struct {
 	NotifierID  *uuid.UUID `json:"notifier_id"`
 	DownloadDir string     `json:"download_dir"`
 	Category    string     `json:"category"`
+	// CheckIntervalSec is a pointer so an omitted field preserves the topic's
+	// current interval (issue #204).
+	CheckIntervalSec *int `json:"check_interval_sec,omitempty"`
 	// ReplaceOnUpdate / ReplaceDeleteData are pointers so an omitted field
 	// preserves the topic's current value (issue #101).
 	ReplaceOnUpdate   *bool `json:"replace_on_update,omitempty"`
@@ -334,6 +338,18 @@ func (h *Topics) Update(w http.ResponseWriter, r *http.Request) {
 		extra["start_episode"] = *req.StartEpisode
 	}
 
+	// An unchanged value is accepted even when it is out of range: a topic
+	// created through the API before the range existed can hold one, and the
+	// edit form sends it back as-is. Refusing it would lock every other field.
+	checkIntervalSec := existing.CheckIntervalSec
+	if req.CheckIntervalSec != nil && *req.CheckIntervalSec != existing.CheckIntervalSec {
+		if !topics.ValidCheckInterval(*req.CheckIntervalSec) {
+			problem.Write(w, r, h.BaseURL, problem.ErrUnprocessable(topics.ErrCheckIntervalOutOfRange.Error()))
+			return
+		}
+		checkIntervalSec = *req.CheckIntervalSec
+	}
+
 	if perr := h.validateOwnership(r.Context(), uid, req.NotifierID, req.ClientID); perr != nil {
 		problem.Write(w, r, h.BaseURL, perr)
 		return
@@ -357,7 +373,7 @@ func (h *Topics) Update(w http.ResponseWriter, r *http.Request) {
 		notifyOnlyAnnounceCurrent = *req.NotifyOnlyAnnounceCurrent
 	}
 
-	updated, uerr := h.Topics.Update(r.Context(), id, uid, req.DisplayName, req.ClientID, req.NotifierID, req.DownloadDir, req.Category, repo.TopicFlags{
+	updated, uerr := h.Topics.Update(r.Context(), id, uid, req.DisplayName, req.ClientID, req.NotifierID, req.DownloadDir, req.Category, checkIntervalSec, repo.TopicFlags{
 		ReplaceOnUpdate:           replaceOnUpdate,
 		ReplaceDeleteData:         replaceDeleteData,
 		NotifyOnly:                notifyOnly,

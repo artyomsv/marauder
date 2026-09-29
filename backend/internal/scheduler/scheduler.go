@@ -1316,9 +1316,9 @@ func (s *Scheduler) backoffDelay(t *domain.Topic, failure bool, cause error) tim
 
 // floorDelay substitutes a sane retry for a non-positive delay, which can only
 // arise from misconfiguration (a zero/negative check interval or backoff cap).
-// It deliberately does NOT raise small positive delays: any positive
-// check_interval_sec is accepted at topic creation, so a deliberately short
-// interval is a user's choice, not a defect. A zero or negative delay is a
+// It deliberately does NOT raise small positive delays: the API now enforces a
+// 5-minute floor (issue #204), but topics created before that can hold any
+// positive interval, and that was a user's choice, not a defect. A zero or negative delay is a
 // defect — it makes DueForCheck match immediately and forever, which is the
 // failure this whole function exists to avoid.
 func floorDelay(d time.Duration) time.Duration {

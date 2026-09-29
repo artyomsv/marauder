@@ -48,7 +48,7 @@ type adminResolver interface {
 type topicsStore interface {
 	topics.Store
 	GetByURL(ctx context.Context, userID uuid.UUID, url string) (*domain.Topic, error)
-	Update(ctx context.Context, id, userID uuid.UUID, displayName string, clientID, notifierID *uuid.UUID, downloadDir, category string, flags repo.TopicFlags, extra map[string]any) (*domain.Topic, error)
+	Update(ctx context.Context, id, userID uuid.UUID, displayName string, clientID, notifierID *uuid.UUID, downloadDir, category string, checkIntervalSec int, flags repo.TopicFlags, extra map[string]any) (*domain.Topic, error)
 }
 
 // Poller periodically reads each enabled Sonarr instance's grab history and
@@ -327,7 +327,7 @@ func (p *Poller) handleExisting(ctx context.Context, inst domain.SonarrInstance,
 		category = inst.DefaultCategory
 	}
 	if _, err := p.topics.Update(ctx, existing.ID, ownerID, existing.DisplayName,
-		clientID, existing.NotifierID, downloadDir, category,
+		clientID, existing.NotifierID, downloadDir, category, existing.CheckIntervalSec,
 		repo.TopicFlags{
 			ReplaceOnUpdate:           existing.ReplaceOnUpdate,
 			ReplaceDeleteData:         existing.ReplaceDeleteData,

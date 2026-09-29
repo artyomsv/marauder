@@ -191,7 +191,7 @@ func TestTopicsNotifyOnlyRoundTrip(t *testing.T) {
 	}
 
 	// Update must persist both, and GetByID must read them back.
-	if _, err := topicsRepo.Update(ctx, plain.ID, userID, plain.DisplayName, nil, nil, "", "",
+	if _, err := topicsRepo.Update(ctx, plain.ID, userID, plain.DisplayName, nil, nil, "", "", plain.CheckIntervalSec,
 		TopicFlags{NotifyOnly: true, NotifyOnlyAnnounceCurrent: false}, map[string]any{}); err != nil {
 		t.Fatalf("Update: %v", err)
 	}
@@ -259,5 +259,61 @@ func TestMarkEpisodesDownloadedBulk(t *testing.T) {
 	after := reload(t, pool, topic.ID)
 	if n := len(after.Extra["downloaded_episodes"].([]any)); n != len(want) {
 		t.Errorf("a rejected bulk mark wrote %d episodes, want the original %d", n, len(want))
+	}
+}
+
+// TestTopicsUpdateCheckIntervalClamp runs the next_check_at CASE a mock can
+// only match as text (issue #204). Shortening the interval must pull a far
+// next check in to at most one new interval from now; lengthening it must
+// leave next_check_at alone, because the next check already comes sooner than
+// the new interval would put it.
+func TestTopicsUpdateCheckIntervalClamp(t *testing.T) {
+	pool := integrationPool(t)
+	topicsRepo := NewTopics(pool)
+	userID := seedUser(t, pool)
+	ctx := context.Background()
+
+	created, err := topicsRepo.Create(ctx, &domain.Topic{
+		UserID:           userID,
+		TrackerName:      "itest",
+		URL:              "https://tracker.invalid/topic/" + uuid.NewString(),
+		DisplayName:      "Interval Clamp",
+		Extra:            map[string]any{},
+		CheckIntervalSec: 86400,
+		NextCheckAt:      time.Now().UTC().Add(20 * time.Hour),
+		Status:           domain.TopicStatusActive,
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	update := func(sec int) *domain.Topic {
+		t.Helper()
+		got, uerr := topicsRepo.Update(ctx, created.ID, userID, created.DisplayName, nil, nil, "", "", sec, TopicFlags{}, map[string]any{})
+		if uerr != nil {
+			t.Fatalf("update to %ds: %v", sec, uerr)
+		}
+		return got
+	}
+
+	// 24h -> 1h: the next check was 20h away and must now be within 1h.
+	before := time.Now()
+	shorter := update(3600)
+	if shorter.CheckIntervalSec != 3600 {
+		t.Errorf("CheckIntervalSec = %d, want 3600", shorter.CheckIntervalSec)
+	}
+	if limit := before.Add(time.Hour + time.Minute); shorter.NextCheckAt.After(limit) {
+		t.Errorf("shortening left next_check_at at %v, want at most %v", shorter.NextCheckAt, limit)
+	}
+
+	// 1h -> 24h: next_check_at must not move.
+	longer := update(86400)
+	if !longer.NextCheckAt.Equal(shorter.NextCheckAt) {
+		t.Errorf("lengthening moved next_check_at from %v to %v", shorter.NextCheckAt, longer.NextCheckAt)
+	}
+
+	// Same interval: nothing to clamp, next_check_at must not move either.
+	same := update(86400)
+	if !same.NextCheckAt.Equal(longer.NextCheckAt) {
+		t.Errorf("unchanged interval moved next_check_at from %v to %v", longer.NextCheckAt, same.NextCheckAt)
 	}
 }

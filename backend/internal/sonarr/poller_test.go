@@ -128,7 +128,7 @@ func (f *fakeTopics) GetByURL(_ context.Context, _ uuid.UUID, url string) (*doma
 }
 func (f *fakeTopics) Update(_ context.Context, id, _ uuid.UUID, displayName string,
 	clientID, notifierID *uuid.UUID, downloadDir, category string,
-	flags repo.TopicFlags, extra map[string]any,
+	checkIntervalSec int, flags repo.TopicFlags, extra map[string]any,
 ) (*domain.Topic, error) {
 	updated := &domain.Topic{
 		ID:                        id,

@@ -517,7 +517,9 @@ func TestTopics_Update_HappyPath(t *testing.T) {
 
 	// Pattern asserts the lock-on-rename clause is present (not just any UPDATE),
 	// so an accidental removal of the CASE expression is caught at unit level.
-	mock.ExpectQuery(`UPDATE topics SET[\s\S]*notify_only = \$11, notify_only_announce_current = \$12,\s+display_name_is_placeholder = CASE WHEN display_name <> \$3`).
+	// It also pins the check-interval clamp: a shorter interval pulls the
+	// next check in, a longer one leaves it alone (issue #204).
+	mock.ExpectQuery(`UPDATE topics SET[\s\S]*notify_only = \$11, notify_only_announce_current = \$12,\s+check_interval_sec = \$13,\s+next_check_at = CASE WHEN \$13 < check_interval_sec\s+THEN LEAST\(next_check_at, now\(\) \+ \$13::int \* interval '1 second'\)\s+ELSE next_check_at END,\s+display_name_is_placeholder = CASE WHEN display_name <> \$3`).
 		WithArgs(
 			id, userID,
 			"Updated Name",    // $3 display_name
@@ -530,11 +532,12 @@ func TestTopics_Update_HappyPath(t *testing.T) {
 			false,             // $10 replace_delete_data
 			false,             // $11 notify_only
 			false,             // $12 notify_only_announce_current
+			3600,              // $13 check_interval_sec
 		).
 		WillReturnRows(rows)
 
 	extra := map[string]any{"quality": "720p", "start_season": 2}
-	got, err := r.Update(context.Background(), id, userID, "Updated Name", nil, nil, "", "series", TopicFlags{ReplaceOnUpdate: true, ReplaceDeleteData: false}, extra)
+	got, err := r.Update(context.Background(), id, userID, "Updated Name", nil, nil, "", "series", 3600, TopicFlags{ReplaceOnUpdate: true, ReplaceDeleteData: false}, extra)
 	if err != nil {
 		t.Fatalf("Update: unexpected error: %v", err)
 	}
@@ -556,10 +559,10 @@ func TestTopics_Update_NotFound(t *testing.T) {
 	userID := uuid.New()
 
 	mock.ExpectQuery(`UPDATE topics SET`).
-		WithArgs(id, userID, pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), false, false).
+		WithArgs(id, userID, pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), false, false, 900).
 		WillReturnError(pgx.ErrNoRows)
 
-	_, err := r.Update(context.Background(), id, userID, "X", nil, nil, "", "", TopicFlags{ReplaceOnUpdate: false, ReplaceDeleteData: true}, map[string]any{})
+	_, err := r.Update(context.Background(), id, userID, "X", nil, nil, "", "", 900, TopicFlags{ReplaceOnUpdate: false, ReplaceDeleteData: true}, map[string]any{})
 	if !errors.Is(err, ErrNotFound) {
 		t.Fatalf("Update: want ErrNotFound, got %v", err)
 	}
@@ -576,10 +579,10 @@ func TestTopics_Update_DBError(t *testing.T) {
 	dbErr := errors.New("connection reset")
 
 	mock.ExpectQuery(`UPDATE topics SET`).
-		WithArgs(id, userID, pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), false, false).
+		WithArgs(id, userID, pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), false, false, 900).
 		WillReturnError(dbErr)
 
-	_, err := r.Update(context.Background(), id, userID, "X", nil, nil, "", "", TopicFlags{ReplaceOnUpdate: false, ReplaceDeleteData: true}, map[string]any{})
+	_, err := r.Update(context.Background(), id, userID, "X", nil, nil, "", "", 900, TopicFlags{ReplaceOnUpdate: false, ReplaceDeleteData: true}, map[string]any{})
 	if err == nil {
 		t.Fatal("Update: want error, got nil")
 	}
