@@ -35,7 +35,7 @@ type topicStore interface {
 	ListForUser(ctx context.Context, userID uuid.UUID) ([]*domain.Topic, error)
 	Delete(ctx context.Context, id, userID uuid.UUID) error
 	UpdateStatus(ctx context.Context, id, userID uuid.UUID, status domain.TopicStatus) error
-	Update(ctx context.Context, id, userID uuid.UUID, displayName string, clientID, notifierID *uuid.UUID, downloadDir, category string, checkIntervalSec int, flags repo.TopicFlags, extra map[string]any) (*domain.Topic, error)
+	Update(ctx context.Context, id, userID uuid.UUID, displayName string, clientID, notifierID *uuid.UUID, downloadDir, category string, checkIntervalSec *int, flags repo.TopicFlags, extra map[string]any) (*domain.Topic, error)
 	ResetCheckState(ctx context.Context, id, userID uuid.UUID) error
 	QueueRecheck(ctx context.Context, id, userID uuid.UUID) (repo.RecheckOutcome, error)
 }
@@ -341,13 +341,16 @@ func (h *Topics) Update(w http.ResponseWriter, r *http.Request) {
 	// An unchanged value is accepted even when it is out of range: a topic
 	// created through the API before the range existed can hold one, and the
 	// edit form sends it back as-is. Refusing it would lock every other field.
-	checkIntervalSec := existing.CheckIntervalSec
+	// Omitted and unchanged both reach the store as nil, which leaves the
+	// column alone: passing `existing`'s value instead would write back a read
+	// that may be stale by the time the UPDATE runs.
+	var checkIntervalSec *int
 	if req.CheckIntervalSec != nil && *req.CheckIntervalSec != existing.CheckIntervalSec {
 		if !topics.ValidCheckInterval(*req.CheckIntervalSec) {
 			problem.Write(w, r, h.BaseURL, problem.ErrUnprocessable(topics.ErrCheckIntervalOutOfRange.Error()))
 			return
 		}
-		checkIntervalSec = *req.CheckIntervalSec
+		checkIntervalSec = req.CheckIntervalSec
 	}
 
 	if perr := h.validateOwnership(r.Context(), uid, req.NotifierID, req.ClientID); perr != nil {

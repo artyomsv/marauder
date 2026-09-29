@@ -82,7 +82,7 @@ type fakeTopicStore struct {
 	updateNotifierID        *uuid.UUID
 	updateDownloadDir       string
 	updateCategory          string
-	updateCheckIntervalSec  int
+	updateCheckIntervalSec  *int
 	updateReplaceOnUpdate   bool
 	updateReplaceDeleteData bool
 	lastFlags               repo.TopicFlags
@@ -134,7 +134,7 @@ func (s *fakeTopicStore) QueueRecheck(_ context.Context, id, userID uuid.UUID) (
 	s.recheckCalls = append(s.recheckCalls, [2]uuid.UUID{id, userID})
 	return s.recheckOutcome, s.recheckErr
 }
-func (s *fakeTopicStore) Update(_ context.Context, _, _ uuid.UUID, displayName string, clientID, notifierID *uuid.UUID, downloadDir, category string, checkIntervalSec int, flags repo.TopicFlags, extra map[string]any) (*domain.Topic, error) {
+func (s *fakeTopicStore) Update(_ context.Context, _, _ uuid.UUID, displayName string, clientID, notifierID *uuid.UUID, downloadDir, category string, checkIntervalSec *int, flags repo.TopicFlags, extra map[string]any) (*domain.Topic, error) {
 	s.updateCalled = true
 	s.updateCheckIntervalSec = checkIntervalSec
 	s.updateDisplayName = displayName
@@ -571,9 +571,9 @@ func TestTopicsUpdate_CheckInterval(t *testing.T) {
 		stored   int
 		body     map[string]any
 		wantCode int
-		wantSec  int
+		wantSec  int // 0: the store must get nil, i.e. "leave the column alone"
 	}{
-		{"omitted preserves stored", 3600, map[string]any{"display_name": "x"}, http.StatusOK, 3600},
+		{"omitted leaves the column alone", 3600, map[string]any{"display_name": "x"}, http.StatusOK, 0},
 		{"in range applied", 900, map[string]any{"display_name": "x", "check_interval_sec": 86400}, http.StatusOK, 86400},
 		{"below minimum refused", 900, map[string]any{"display_name": "x", "check_interval_sec": 60}, http.StatusUnprocessableEntity, 0},
 		{"above maximum refused", 900, map[string]any{"display_name": "x", "check_interval_sec": 700000}, http.StatusUnprocessableEntity, 0},
@@ -582,7 +582,7 @@ func TestTopicsUpdate_CheckInterval(t *testing.T) {
 		// interval outside it. The edit form sends the stored value back
 		// unchanged, and refusing it would make every other field of that
 		// topic uneditable.
-		{"unchanged legacy value accepted", 60, map[string]any{"display_name": "x", "check_interval_sec": 60}, http.StatusOK, 60},
+		{"unchanged legacy value accepted", 60, map[string]any{"display_name": "x", "check_interval_sec": 60}, http.StatusOK, 0},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -605,8 +605,15 @@ func TestTopicsUpdate_CheckInterval(t *testing.T) {
 				}
 				return
 			}
-			if store.updateCheckIntervalSec != tc.wantSec {
-				t.Errorf("check_interval_sec = %d, want %d", store.updateCheckIntervalSec, tc.wantSec)
+			// An unchanged interval must reach the store as nil, not as the value
+			// read above: that read can be stale by the time the UPDATE runs, and
+			// writing it back would undo a concurrent edit (PR #209, M-2).
+			got := store.updateCheckIntervalSec
+			switch {
+			case tc.wantSec == 0 && got != nil:
+				t.Errorf("check_interval_sec = %d, want nil", *got)
+			case tc.wantSec != 0 && (got == nil || *got != tc.wantSec):
+				t.Errorf("check_interval_sec = %v, want %d", got, tc.wantSec)
 			}
 		})
 	}

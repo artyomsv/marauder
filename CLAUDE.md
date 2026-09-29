@@ -263,13 +263,19 @@ bulk entry that fans out through `mapWithConcurrency`.
 **Per-topic check interval (issue #204):** `check_interval_sec` is the
 scheduler's base delay (`backoffDelay`). `POST /topics` and `PUT /topics/{id}`
 both take it; the range is `topics.MinCheckIntervalSec`..`MaxCheckIntervalSec`
-(300 s..7 days), and 0 on create means the 900 s default. `PUT` omitted keeps
-the stored value, and an **unchanged** out-of-range value is accepted so a topic
-created before the range existed stays editable. `Topics.Update` is therefore
-a fourth writer of `next_check_at`: a **shorter** interval pulls it in to
-`LEAST(next_check_at, now() + new interval)`, a longer or equal one leaves it.
-Like a recheck, a shortening edit during a running check discards that check's
-result via the token. The Sonarr poller passes the stored interval through.
+(300 s..7 days), and 0 on create means the 900 s default. An **unchanged**
+out-of-range value on `PUT` is accepted so a topic created before the range
+existed stays editable. `Topics.Update` takes the interval as `*int`: **nil
+leaves the column alone** (`COALESCE`), and every writer that is not changing
+it — an omitted or unchanged `PUT` field, the Sonarr poller — must pass nil,
+never the value it read, or a stale read undoes an edit saved in between (PR
+#209 review). `Topics.Update` is also a fourth writer of `next_check_at`: a
+**shorter** interval sets it to
+`LEAST(GREATEST(next_check_at, now()), now() + new interval)`, a longer or equal
+one leaves it. The `GREATEST` is load-bearing: a topic being checked has a past
+`next_check_at`, and without it the token would not move, so the running check
+would persist a next check from its snapshot of the OLD interval. With it, like
+a recheck, that check's result is discarded and the topic is due at once.
 Frontend: `CheckIntervalSelect` (presets 15 min..7 days, a non-preset stored
 value gets its own option) in `TopicForm`, `CheckIntervalBadge` on the row, and
 `lib/check-interval.ts` for the presets and formatting.
