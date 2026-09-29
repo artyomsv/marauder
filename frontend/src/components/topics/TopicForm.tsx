@@ -13,6 +13,7 @@ import { SeasonEpisodePicker, SELECT_CLASS } from "./SeasonEpisodePicker";
 import { TopicPreviewCard } from "./TopicPreviewCard";
 import { NotifierSelect } from "./NotifierSelect";
 import { CategoryField } from "./CategoryField";
+import { CheckIntervalSelect } from "./CheckIntervalSelect";
 
 // Shape of GET /trackers/match. Drives which optional sections the form
 // renders (quality, season/episode filter, credentials hint).
@@ -79,6 +80,8 @@ export interface TopicFormValues {
   // applies when notifyOnly is on.
   notifyOnly: boolean;
   notifyOnlyAnnounceCurrent: boolean;
+  // Seconds between checks (issue #204).
+  checkIntervalSec: number;
 }
 
 interface TopicFormProps {
@@ -256,6 +259,7 @@ export function TopicForm({
     replaceDeleteData: initial.replaceDeleteData,
     notifyOnly: initial.notifyOnly,
     notifyOnlyAnnounceCurrent: initial.notifyOnlyAnnounceCurrent,
+    checkIntervalSec: initial.checkIntervalSec,
   });
 
   // A notify-only topic whose events reach nobody is a topic that silently
@@ -299,6 +303,7 @@ export function TopicForm({
       replaceDeleteData: delivery.replaceDeleteData,
       notifyOnly: delivery.notifyOnly,
       notifyOnlyAnnounceCurrent: delivery.notifyOnlyAnnounceCurrent,
+      checkIntervalSec: delivery.checkIntervalSec,
     });
   };
 
@@ -534,6 +539,11 @@ export function TopicForm({
       <NotifierSelect
         value={delivery.notifierId}
         onChange={(v) => setDelivery((d) => ({ ...d, notifierId: v }))}
+      />
+
+      <CheckIntervalSelect
+        value={delivery.checkIntervalSec}
+        onChange={(v) => setDelivery((d) => ({ ...d, checkIntervalSec: v }))}
       />
 
       {error && (

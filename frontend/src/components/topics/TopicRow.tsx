@@ -33,6 +33,7 @@ import { ClientBadge, type ClientRef } from "@/components/topics/ClientBadge";
 import { NotifierBadge, type NotifierRef } from "@/components/topics/NotifierBadge";
 import { SonarrBadge } from "@/components/topics/SonarrBadge";
 import { NotifyOnlyBadge } from "@/components/topics/NotifyOnlyBadge";
+import { CheckIntervalBadge } from "@/components/topics/CheckIntervalBadge";
 import { StatusIndicator } from "@/components/topics/StatusIndicator";
 
 export interface TopicRowLookups {
@@ -116,6 +117,7 @@ export function TopicRow({
           </Badge>
           <SonarrBadge topic={topic} />
           <NotifyOnlyBadge topic={topic} />
+          <CheckIntervalBadge topic={topic} />
           <ClientBadge
             topic={topic}
             clientById={lookups.clientById}

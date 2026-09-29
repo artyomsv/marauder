@@ -8,6 +8,7 @@ import { cn } from "@/lib/utils";
 import { Card } from "@/components/ui/card";
 import { TopicForm, type TopicFormValues } from "./TopicForm";
 import { TrackerSearch } from "./TrackerSearch";
+import { DEFAULT_CHECK_INTERVAL_SEC } from "@/lib/check-interval";
 
 interface AddTopicCardProps {
   onClose: () => void;
@@ -32,6 +33,7 @@ const EMPTY: TopicFormValues = {
   // sub-option stays off so adding a topic is silent.
   notifyOnly: false,
   notifyOnlyAnnounceCurrent: false,
+  checkIntervalSec: DEFAULT_CHECK_INTERVAL_SEC,
 };
 
 type AddMode = "url" | "search";
@@ -86,6 +88,7 @@ export function AddTopicCard({ onClose, onCreated }: AddTopicCardProps) {
         replace_delete_data: v.replaceDeleteData,
         notify_only: v.notifyOnly,
         notify_only_announce_current: v.notifyOnlyAnnounceCurrent,
+        check_interval_sec: v.checkIntervalSec,
       }),
     onSuccess: () => onCreated(),
     onError: (err) => setError(err instanceof Error ? err.message : "Failed"),

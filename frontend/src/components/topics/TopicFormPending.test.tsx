@@ -48,6 +48,7 @@ const EMPTY: TopicFormValues = {
   replaceDeleteData: true,
   notifyOnly: false,
   notifyOnlyAnnounceCurrent: false,
+  checkIntervalSec: 900,
 };
 
 function renderForm() {

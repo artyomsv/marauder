@@ -82,6 +82,7 @@ type fakeTopicStore struct {
 	updateNotifierID        *uuid.UUID
 	updateDownloadDir       string
 	updateCategory          string
+	updateCheckIntervalSec  *int
 	updateReplaceOnUpdate   bool
 	updateReplaceDeleteData bool
 	lastFlags               repo.TopicFlags
@@ -133,8 +134,9 @@ func (s *fakeTopicStore) QueueRecheck(_ context.Context, id, userID uuid.UUID) (
 	s.recheckCalls = append(s.recheckCalls, [2]uuid.UUID{id, userID})
 	return s.recheckOutcome, s.recheckErr
 }
-func (s *fakeTopicStore) Update(_ context.Context, _, _ uuid.UUID, displayName string, clientID, notifierID *uuid.UUID, downloadDir, category string, flags repo.TopicFlags, extra map[string]any) (*domain.Topic, error) {
+func (s *fakeTopicStore) Update(_ context.Context, _, _ uuid.UUID, displayName string, clientID, notifierID *uuid.UUID, downloadDir, category string, checkIntervalSec *int, flags repo.TopicFlags, extra map[string]any) (*domain.Topic, error) {
 	s.updateCalled = true
+	s.updateCheckIntervalSec = checkIntervalSec
 	s.updateDisplayName = displayName
 	s.updateClientID = clientID
 	s.updateNotifierID = notifierID
@@ -557,5 +559,79 @@ func TestTopics_Create_NotifyOnlyAnnounceCurrent(t *testing.T) {
 	}
 	if !store.created.NotifyOnly || !store.created.NotifyOnlyAnnounceCurrent {
 		t.Errorf("want both flags true, got %+v", store.created)
+	}
+}
+
+// PUT /topics/{id} accepts check_interval_sec (issue #204). Omitted keeps the
+// stored interval, an in-range value is applied, and an out-of-range one is
+// refused before the store is touched.
+func TestTopicsUpdate_CheckInterval(t *testing.T) {
+	cases := []struct {
+		name     string
+		stored   int
+		body     map[string]any
+		wantCode int
+		wantSec  int // 0: the store must get nil, i.e. "leave the column alone"
+	}{
+		{"omitted leaves the column alone", 3600, map[string]any{"display_name": "x"}, http.StatusOK, 0},
+		{"in range applied", 900, map[string]any{"display_name": "x", "check_interval_sec": 86400}, http.StatusOK, 86400},
+		{"below minimum refused", 900, map[string]any{"display_name": "x", "check_interval_sec": 60}, http.StatusUnprocessableEntity, 0},
+		{"above maximum refused", 900, map[string]any{"display_name": "x", "check_interval_sec": 700000}, http.StatusUnprocessableEntity, 0},
+		{"zero refused", 900, map[string]any{"display_name": "x", "check_interval_sec": 0}, http.StatusUnprocessableEntity, 0},
+		// A topic created through the API before the range existed may hold an
+		// interval outside it. The edit form sends the stored value back
+		// unchanged, and refusing it would make every other field of that
+		// topic uneditable.
+		{"unchanged legacy value accepted", 60, map[string]any{"display_name": "x", "check_interval_sec": 60}, http.StatusOK, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			topicID, userID := uuid.New(), uuid.New()
+			store := &fakeTopicStore{getByID: &domain.Topic{
+				ID: topicID, UserID: userID, CheckIntervalSec: tc.stored, Extra: map[string]any{},
+			}}
+			h := &Topics{Topics: store, BaseURL: "http://test"}
+
+			w := httptest.NewRecorder()
+			req := withURLParam(authedReq(t, userID, tc.body), "id", topicID.String())
+			h.Update(w, req)
+
+			if w.Code != tc.wantCode {
+				t.Fatalf("status %d, want %d; body %s", w.Code, tc.wantCode, w.Body.String())
+			}
+			if tc.wantCode != http.StatusOK {
+				if store.updateCalled {
+					t.Error("an out-of-range interval must not reach the store")
+				}
+				return
+			}
+			// An unchanged interval must reach the store as nil, not as the value
+			// read above: that read can be stale by the time the UPDATE runs, and
+			// writing it back would undo a concurrent edit (PR #209, M-2).
+			got := store.updateCheckIntervalSec
+			switch {
+			case tc.wantSec == 0 && got != nil:
+				t.Errorf("check_interval_sec = %d, want nil", *got)
+			case tc.wantSec != 0 && (got == nil || *got != tc.wantSec):
+				t.Errorf("check_interval_sec = %v, want %d", got, tc.wantSec)
+			}
+		})
+	}
+}
+
+// POST /topics refuses an out-of-range interval with 422, not 500.
+func TestTopics_Create_CheckIntervalOutOfRange(t *testing.T) {
+	store := &fakeTopicStore{}
+	h := &Topics{Topics: store, BaseURL: "http://test"}
+
+	body := createTopicReq{URL: "fake-create://topic/interval", CheckIntervalSec: 10}
+	w := httptest.NewRecorder()
+	h.Create(w, authedReq(t, uuid.New(), body))
+
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want 422; body=%s", w.Code, w.Body.String())
+	}
+	if store.created != nil {
+		t.Error("an out-of-range interval must not reach the store")
 	}
 }
