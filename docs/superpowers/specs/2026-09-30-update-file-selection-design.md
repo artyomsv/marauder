@@ -276,6 +276,13 @@ answered an unknown hash with an empty list. qBittorrent 5.1.4 and 5.2.1 answer
 `torrents/start` 200 and `torrents/resume` 404, so the fallback is only for
 older servers.
 
+*Re-run after review (2026-09-30), against the same five clients:* version 2
+now also carries `Extras/E01.bin`, a same-size lookalike of the old `E01.bin`,
+and the check drives the scheduler's own `MapClientFiles` + `SkipIndices`
+over the client's real list. All five listed every file under the torrent's
+top folder (the rooted layout, asserted file by file), skipped only the old
+`E01.bin`, kept `Extras/E01.bin` and `E02.bin` wanted, and started.
+
 ### 4.3 Scheduler
 
 In `sendViaClient` (single-release topics only; per-episode trackers skip all of

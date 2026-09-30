@@ -108,7 +108,13 @@ func TestSkipOldFilesOnRealClients(t *testing.T) {
 
 			name := "TEST-205-" + uuid.NewString()[:8]
 			v1 := []domain.TorrentFile{{Path: "E01.bin", Size: 1 << 20}}
-			v2 := append(append([]domain.TorrentFile{}, v1...), domain.TorrentFile{Path: "E02.bin", Size: 2 << 20})
+			// v2 adds E02.bin and a same-size lookalike, Extras/E01.bin: with the
+			// client's top folder dropped it reads as the old E01.bin, which is
+			// what the per-file matcher got wrong (PR #210 review). It is new and
+			// must stay wanted.
+			v2 := append(append([]domain.TorrentFile{}, v1...),
+				domain.TorrentFile{Path: "Extras/E01.bin", Size: 1 << 20},
+				domain.TorrentFile{Path: "E02.bin", Size: 2 << 20})
 			data := torrentmetatest.Torrent(name, v2)
 			hash, err := infohash.FromTorrent(data)
 			if err != nil {
@@ -134,16 +140,25 @@ func TestSkipOldFilesOnRealClients(t *testing.T) {
 			waitFor(t, ctx, func() bool {
 				files, err = sel.Files(ctx, raw, hash)
 				return err == nil && len(files) == len(v2)
-			}, "client to list both files")
+			}, "client to list every file")
 			t.Logf("client files after add: %+v", files)
 
+			// The scheduler's own matching, against the client's real paths.
 			mapping, err := torrentmeta.MapClientFiles(files, v2)
 			if err != nil {
 				t.Fatalf("MapClientFiles(%+v): %v", files, err)
 			}
+			// Every client lists this multi-file torrent under its top folder,
+			// so the mapping must be the rooted layout, file by file.
+			for _, f := range files {
+				want := name + "/" + mapping[f.Index].Path
+				if got := strings.ReplaceAll(f.Path, `\`, "/"); got != want {
+					t.Fatalf("client file %d path %q, want rooted %q", f.Index, got, want)
+				}
+			}
 			indices := torrentmeta.SkipIndices(mapping, torrentmeta.SkipSet(v1, v2))
-			if len(indices) != 1 {
-				t.Fatalf("skip indices %v in %+v, want exactly the old file", indices, files)
+			if len(indices) != 1 || mapping[indices[0]] != v1[0] {
+				t.Fatalf("skip indices %v in %+v, want exactly the old E01.bin", indices, files)
 			}
 			if err := sel.SkipFiles(ctx, raw, hash, indices); err != nil {
 				t.Fatalf("SkipFiles: %v", err)
@@ -158,13 +173,13 @@ func TestSkipOldFilesOnRealClients(t *testing.T) {
 					return false
 				}
 				for _, f := range files {
-					isOld := strings.HasSuffix(f.Path, "E01.bin")
+					isOld := mapping[f.Index] == v1[0]
 					if f.Wanted == isOld {
 						return false
 					}
 				}
 				return true
-			}, "E01 skipped and E02 wanted")
+			}, "E01.bin skipped, Extras/E01.bin and E02.bin wanted")
 			t.Logf("client files after skip+start: %+v", files)
 			waitFor(t, ctx, func() bool {
 				s, ok := stopped(ctx, hash)
