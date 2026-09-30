@@ -109,6 +109,8 @@ const EXISTING_TOPIC: Topic = {
   ReplaceDeleteData: true,
   NotifyOnly: false,
   NotifyOnlyAnnounceCurrent: false,
+  AddPausedOnUpdate: false,
+  OnlyNewFiles: false,
   Extra: { quality: "1080p", start_season: 2, start_episode: 3 },
   LastHash: "",
   LastCheckedAt: null,

@@ -29,6 +29,8 @@ function topicWith(clientID: string | null): Topic {
     ReplaceDeleteData: true,
     NotifyOnly: false,
     NotifyOnlyAnnounceCurrent: false,
+    AddPausedOnUpdate: false,
+    OnlyNewFiles: false,
     Extra: null,
     LastHash: "",
     LastCheckedAt: null,
