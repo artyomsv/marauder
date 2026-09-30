@@ -33,6 +33,8 @@ const EMPTY: TopicFormValues = {
   // sub-option stays off so adding a topic is silent.
   notifyOnly: false,
   notifyOnlyAnnounceCurrent: false,
+  addPausedOnUpdate: false,
+  onlyNewFiles: false,
   checkIntervalSec: DEFAULT_CHECK_INTERVAL_SEC,
 };
 
@@ -88,6 +90,8 @@ export function AddTopicCard({ onClose, onCreated }: AddTopicCardProps) {
         replace_delete_data: v.replaceDeleteData,
         notify_only: v.notifyOnly,
         notify_only_announce_current: v.notifyOnlyAnnounceCurrent,
+        add_paused_on_update: v.addPausedOnUpdate,
+        only_new_files: v.onlyNewFiles,
         check_interval_sec: v.checkIntervalSec,
       }),
     onSuccess: () => onCreated(),

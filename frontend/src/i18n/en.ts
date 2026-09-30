@@ -329,6 +329,16 @@ const en: Record<string, string> = {
   "topics.replaceOnUpdate.help":
     "When a new release is detected, remove the previously downloaded torrent from the client instead of keeping every version. Best for single releases (movies, repacked seasons) — not per-episode shows.",
   "topics.replaceOnUpdate.deleteData": "Also delete the old files from disk",
+  "topics.updatePolicy.addPaused": "Add updates paused",
+  "topics.updatePolicy.addPausedHelp":
+    "When the torrent is updated, add the new version to the client paused so you can pick the files yourself. The first download starts as normal.",
+  "topics.updatePolicy.onlyNewFiles": "Download only new files",
+  "topics.updatePolicy.onlyNewFilesHelp":
+    "When the torrent is updated, skip the files the previous version already had (same name and size) and download only the added ones. If Marauder cannot tell which files are new, it adds the torrent paused.",
+  "topics.updatePolicy.deleteDataLocked":
+    "Deleting old files is off: with “Download only new files” the old files would be lost.",
+  "topics.updatePolicy.unsupported":
+    "{client} cannot pause or select files. These settings need qBittorrent, Transmission or Deluge.",
 
   // Notifier event subscriptions (which events a notifier fires on)
   "notifiers.events.prefix": "Notifies on",

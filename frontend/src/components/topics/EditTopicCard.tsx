@@ -34,6 +34,8 @@ function initialFrom(topic: Topic): TopicFormValues {
     replaceDeleteData: topic.ReplaceDeleteData ?? true,
     notifyOnly: topic.NotifyOnly ?? false,
     notifyOnlyAnnounceCurrent: topic.NotifyOnlyAnnounceCurrent ?? false,
+    addPausedOnUpdate: topic.AddPausedOnUpdate ?? false,
+    onlyNewFiles: topic.OnlyNewFiles ?? false,
     checkIntervalSec: topic.CheckIntervalSec || DEFAULT_CHECK_INTERVAL_SEC,
   };
 }
@@ -59,6 +61,8 @@ export function EditTopicCard({ topic, onClose, onSaved }: EditTopicCardProps) {
         replace_delete_data: v.replaceDeleteData,
         notify_only: v.notifyOnly,
         notify_only_announce_current: v.notifyOnlyAnnounceCurrent,
+        add_paused_on_update: v.addPausedOnUpdate,
+        only_new_files: v.onlyNewFiles,
         check_interval_sec: v.checkIntervalSec,
         quality: v.quality || undefined,
         start_season: v.startSeason ? parseInt(v.startSeason, 10) : undefined,

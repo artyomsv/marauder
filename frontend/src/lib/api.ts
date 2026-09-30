@@ -396,6 +396,9 @@ export interface UpdateTopicBody {
   // matters when notify_only is true.
   notify_only?: boolean;
   notify_only_announce_current?: boolean;
+  // Update policy (issue #205).
+  add_paused_on_update?: boolean;
+  only_new_files?: boolean;
   quality?: string;
   start_season?: number;
   start_episode?: number;
@@ -509,6 +512,8 @@ export type Topic = {
   ReplaceDeleteData: boolean;
   NotifyOnly: boolean;
   NotifyOnlyAnnounceCurrent: boolean;
+  AddPausedOnUpdate: boolean;
+  OnlyNewFiles: boolean;
   Extra: TopicExtra | null;
   LastHash: string;
   LastCheckedAt: string | null;
@@ -533,6 +538,6 @@ export type SystemInfo = {
     supports_search: boolean;
     supports_page_export: boolean;
   }[];
-  clients: { name: string; display_name: string }[];
+  clients: { name: string; display_name: string; supports_file_selection: boolean }[];
   notifiers: { name: string; display_name: string }[];
 };
