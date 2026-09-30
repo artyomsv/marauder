@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
-	"github.com/pashagolub/pgxmock/v3"
+	"github.com/pashagolub/pgxmock/v5"
 )
 
 func newMockCreds(t *testing.T) (*TrackerCredentials, pgxmock.PgxPoolIface) {

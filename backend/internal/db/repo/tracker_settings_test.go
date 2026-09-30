@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/pashagolub/pgxmock/v3"
+	"github.com/pashagolub/pgxmock/v5"
 )
 
 func newMockTrackerSettings(t *testing.T) (*TrackerSettings, pgxmock.PgxPoolIface) {
@@ -21,9 +21,11 @@ func TestTrackerSettings_List_ScansRows(t *testing.T) {
 	repo, mock := newMockTrackerSettings(t)
 	t.Cleanup(func() { assertExpectationsMet(t, mock) })
 
+	// A NULL active_domain reaches Scan as "" because the query COALESCEs it;
+	// the mock returns what Postgres would, not the raw NULL.
 	rows := pgxmock.NewRows([]string{"tracker_name", "active_domain", "custom_domains"}).
 		AddRow("kinozal", "kinozal.me", []byte(`["kinozal.example"]`)).
-		AddRow("rutracker", nil, []byte(`[]`))
+		AddRow("rutracker", "", []byte(`[]`))
 	mock.ExpectQuery(`SELECT tracker_name, COALESCE\(active_domain,''\), custom_domains FROM tracker_settings`).
 		WillReturnRows(rows)
 
