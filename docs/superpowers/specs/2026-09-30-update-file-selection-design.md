@@ -140,7 +140,12 @@ would have repeated them).
 
 - Its own small bencode decoder with the same depth bound as `infohash`
   (`maxBencodeDepth` 32) and a bound on list length, because the input is a
-  tracker response.
+  tracker response. *Amended after review:* also a cap on the total number of
+  values decoded per call (`maxValues` 250 000; a 5000-file torrent needs about
+  25 000). Each value costs tens of bytes of heap for one byte of input, and
+  this runs on every `.torrent` delivery, so without it an 8 MiB torrent of
+  tiny values decodes into hundreds of MB. Exceeding it is an error, which the
+  scheduler treats as an unreadable file list.
 - Multi-file: `info.files`; each entry's `path` list joined with `/`, `length`
   as size. Entries that are BEP 47 padding files (`attr` contains `p`, or the
   first path component is `.pad`) are dropped.
@@ -270,7 +275,10 @@ differences that shipped, in `scheduler/update_policy.go`):
   `WithFileSelection` cannot pause either, so the torrent is added **normally**
   (not paused) and all its files download. The plan does not mark it paused,
   and with `only_new_files` the note says `This client cannot pause or select
-  files, so all files download.`
+  files, so all files download.` *Amended after review:* with only
+  `add_paused_on_update` the note says `This client cannot pause, so the update
+  started.` (no metric — there is no file-selection outcome), so the user is
+  not left believing the update waits for them.
 - `planDelivery` (steps 1-3, including the `LatestFiles` read) runs **before**
   `VerifyCheckState`, so its database read does not widen the gap between that
   guard and `Add`. An infohash failure or a file list above `maxStoredFiles` is
@@ -290,6 +298,13 @@ differences that shipped, in `scheduler/update_policy.go`):
 - Step 5's `matched, err := SkipFiles(ctx, cfg, hash, skip)` is split to fit
   §4.2: the scheduler polls `Files`, calls `torrentmeta.MatchSkip`, refuses on
   `matched != len(skip)`, then `SkipFiles(indices)`.
+- *Amended after review:* **no new file** (step 5's first bullet) no longer
+  returns without touching the client, which left every file wanted, so a user
+  pressing Start re-downloaded the whole pack. It waits for the client's file
+  list, matches, and skips **every** file under the same rule (a partial match
+  is `failed` and nothing is skipped), then does not start. The result is still
+  `no_new_files`. Only a torrent with no content file at all skips the client
+  calls, since there is nothing to skip.
 - Every outcome is logged at Info; `failed` at Warn with the step.
 - Notification notes name the failed step (`could not list the files`,
   `the client listed N of M old files`, `skipping the old files failed`,
@@ -297,8 +312,10 @@ differences that shipped, in `scheduler/update_policy.go`):
   carry an HTML error page; that goes to the log only.
 - Note texts as shipped: `Downloading N new of M files.`, `Added paused with N
   new of M files selected.` (both settings on), `Added paused.` (paused only),
-  `Added paused: this update has no new files.`, and `Added paused: <reason>.
-  Pick the new files in your client.` for the fallbacks.
+  `Added paused: this update has no new files; all its files are skipped.`,
+  `This client cannot pause, so the update started.` (paused only, on a client
+  that cannot pause), and `Added paused: <reason>. Pick the new files in your
+  client.` for the fallbacks.
 
 ### 4.4 Interaction with replace-on-update (#101)
 

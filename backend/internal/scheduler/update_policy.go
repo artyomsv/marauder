@@ -58,6 +58,9 @@ type deliveryPlan struct {
 	// cannot run.
 	fallbackResult string
 	fallbackNote   string
+	// note is a notification note that has no file-selection outcome (and so
+	// no metric): add-paused-only on a client that cannot pause.
+	note string
 }
 
 type fileSelection struct {
@@ -105,6 +108,9 @@ func (s *Scheduler) planDelivery(ctx context.Context, log zerolog.Logger, t *dom
 		if t.OnlyNewFiles {
 			plan.fallbackResult = selUnsupported
 			plan.fallbackNote = "This client cannot pause or select files, so all files download."
+		} else {
+			// The user asked for paused updates; say it was not honoured.
+			plan.note = "This client cannot pause, so the update started."
 		}
 		return plan
 	}
@@ -174,19 +180,24 @@ func (s *Scheduler) finishDelivery(ctx context.Context, log zerolog.Logger, t *d
 	case plan.paused:
 		return "Added paused."
 	}
-	return ""
+	return plan.note
 }
 
 // selectNewFiles skips the previous version's files in a torrent that was
 // just added paused, then starts it unless the topic also asks for paused
-// updates.
+// updates. An update with no new file has every file skipped and is never
+// started, so a user who presses Start does not download the pack again.
 func (s *Scheduler) selectNewFiles(ctx context.Context, log zerolog.Logger, t *domain.Topic, clientName string, rawConfig []byte, sel *fileSelection) string {
 	newCount := sel.total - len(sel.skip)
-	if newCount == 0 {
+	noNewFiles := func() string {
 		log.Info().Str("client", clientName).Str("result", selNoNewFiles).
-			Msg("only-new-files: update has no new files; torrent left paused")
+			Msg("only-new-files: update has no new files; all skipped, torrent left paused")
 		metrics.SchedulerFileSelectionTotal.WithLabelValues(clientName, selNoNewFiles).Inc()
-		return "Added paused: this update has no new files."
+		return "Added paused: this update has no new files; all its files are skipped."
+	}
+	if sel.total == 0 {
+		// No content file at all: nothing to skip, nothing to wait for.
+		return noNewFiles()
 	}
 	ctx, cancel := context.WithTimeout(ctx, fileSelectionTimeout)
 	defer cancel()
@@ -215,6 +226,9 @@ func (s *Scheduler) selectNewFiles(ctx context.Context, log zerolog.Logger, t *d
 		if err := sel.selector.SkipFiles(ctx, rawConfig, sel.hash, indices); err != nil {
 			return fail("skipping the old files failed", err)
 		}
+	}
+	if newCount == 0 {
+		return noNewFiles()
 	}
 	if t.AddPausedOnUpdate {
 		log.Info().Str("client", clientName).Str("result", selSelected).

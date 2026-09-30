@@ -9,18 +9,29 @@ import (
 
 // The input is a tracker response, so the decoder is bounded: nesting depth
 // (the same bound infohash uses, turning a crafted payload's unbounded
-// recursion into an error) and list length. Everything else is bounded by the
-// input's own size, because every value consumes at least one byte.
+// recursion into an error), list length, and the total number of values.
+//
+// The value cap is about memory, not time. Every value consumes at least one
+// input byte, but decodes into an interface, a slice element or a map entry
+// costing tens of bytes of heap, so an 8 MiB torrent of tiny values would
+// become hundreds of MB — on every .torrent delivery. A real pack needs about
+// five values per file (the entry, its length, its path list and components),
+// so a 5000-file torrent stays well under 100k.
 const (
 	maxDepth   = 32
 	maxListLen = 100_000
+	maxValues  = 250_000
 )
 
-var errUnexpectedEnd = errors.New("bencode: unexpected end of data")
+var (
+	errUnexpectedEnd = errors.New("bencode: unexpected end of data")
+	errTooManyValues = errors.New("bencode: too many values")
+)
 
 type decoder struct {
-	data []byte
-	pos  int
+	data   []byte
+	pos    int
+	values int
 }
 
 // value decodes the value at d.pos. Integers become int64, strings string,
@@ -28,6 +39,10 @@ type decoder struct {
 func (d *decoder) value(depth int) (any, error) {
 	if depth > maxDepth {
 		return nil, errors.New("bencode: nested too deeply")
+	}
+	d.values++
+	if d.values > maxValues {
+		return nil, errTooManyValues
 	}
 	if d.pos >= len(d.data) {
 		return nil, errUnexpectedEnd

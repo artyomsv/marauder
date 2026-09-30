@@ -246,23 +246,60 @@ func TestRunCheck_AddPausedOnUpdate_UnsupportedClient_NoPausedClaim(t *testing.T
 	if f.clientPlugin.addCalls != 1 {
 		t.Fatalf("add calls = %d, want 1", f.clientPlugin.addCalls)
 	}
-	if body := submittedBody(t, f); strings.Contains(body, "paused") {
+	body := submittedBody(t, f)
+	if strings.Contains(body, "paused") {
 		t.Errorf("body = %q, want no paused claim for a client that cannot pause", body)
+	}
+	// The user asked for paused updates: say that it could not be honoured.
+	if !strings.Contains(body, "This client cannot pause, so the update started.") {
+		t.Errorf("body = %q, want the cannot-pause note", body)
 	}
 }
 
-func TestRunCheck_OnlyNewFiles_NoNewFilesStaysPaused(t *testing.T) {
-	f, sel := selectingFixture(t, torrentTracker(torrentmetatest.Torrent("Show S01", v1Files)))
+// An update with no new file is left paused with every file skipped, so a
+// user who presses Start does not re-download the whole pack.
+func TestRunCheck_OnlyNewFiles_NoNewFilesSkipsAllAndStaysPaused(t *testing.T) {
+	f, sel := selectingFixture(t, torrentTracker(torrentmetatest.Torrent("Show S01", v2Files)))
 	f.topic.OnlyNewFiles = true
-	f.deliveries.latestFiles = v1Files
+	f.deliveries.latestFiles = v2Files
+	sel.filesSeq = [][]domain.ClientFile{v2Client}
 
 	f.s.runCheck(context.Background(), f.s.log, f.topic)
 
-	if sel.filesCalls != 0 || sel.startCalls != 0 {
-		t.Errorf("files=%d start=%d, want no client calls", sel.filesCalls, sel.startCalls)
+	if !sel.lastOpts.Paused {
+		t.Error("no-new-files update not added paused")
 	}
-	if body := submittedBody(t, f); !strings.Contains(body, "no new files") {
+	if !reflect.DeepEqual(sel.skipped, []int{0, 1}) || sel.startCalls != 0 {
+		t.Errorf("skipped=%v start=%d, want every file skipped and no start", sel.skipped, sel.startCalls)
+	}
+	body := submittedBody(t, f)
+	if !strings.Contains(body, "Added paused: this update has no new files; all its files are skipped.") {
 		t.Errorf("body = %q, want the no-new-files note", body)
+	}
+	if rec := f.lastRecord(t); !rec.updated || rec.errMsg != "" {
+		t.Errorf("record = %+v, want a clean updated check", rec)
+	}
+}
+
+// The same safety rule as a normal selection: a file the client did not
+// show cannot be skipped, so the result is a failure note, not a claim that
+// every file is skipped.
+func TestRunCheck_OnlyNewFiles_NoNewFilesPartialMatchFails(t *testing.T) {
+	f, sel := selectingFixture(t, torrentTracker(torrentmetatest.Torrent("Show S01", v2Files)))
+	f.topic.OnlyNewFiles = true
+	f.deliveries.latestFiles = v2Files
+	sel.filesSeq = [][]domain.ClientFile{{
+		{Index: 0, Path: "Show S01/E01.mkv", Size: 100},
+		{Index: 1, Path: "Show S01/E02.mkv", Size: 999},
+	}}
+
+	f.s.runCheck(context.Background(), f.s.log, f.topic)
+
+	if sel.skipCalls != 0 || sel.startCalls != 0 {
+		t.Errorf("skip=%d start=%d, want neither", sel.skipCalls, sel.startCalls)
+	}
+	if body := submittedBody(t, f); !strings.Contains(body, "the client listed 1 of 2 old files") {
+		t.Errorf("body = %q, want the failed step named", body)
 	}
 }
 

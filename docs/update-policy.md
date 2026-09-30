@@ -63,8 +63,10 @@ torrent paused, so you can check the selection before it starts. The
 notification says, for example, `Added paused with 1 new of 12 files selected.`
 
 If the update has no new file at all (only old files, for example a torrent
-that was re-registered without changes), nothing is started and the torrent is
-left paused.
+that was re-registered without changes), Marauder marks **every** file "do not
+download" and leaves the torrent paused, so starting it by accident does not
+download the whole pack again. The notification says
+`Added paused: this update has no new files; all its files are skipped.`
 
 ## When Marauder adds paused instead
 
@@ -79,7 +81,7 @@ counts as successful: the topic does not turn red.
 | **No earlier file list.** Marauder stores each torrent's file list when it downloads it, starting with this version. The first update of a topic whose last download happened before you upgraded — for example, an old topic you just turned the setting on for — has nothing to compare with. Later updates do. The same applies to the update right after a version that came as a **magnet link**: Marauder never learned that version's files (and you may have picked some of them by hand), so it does not fall back to an older list, which would download them again. | `Added paused: no earlier file list to compare with. Pick the new files in your client.` |
 | The torrent file **could not be read** (or has more than 5000 files) | `Added paused: could not read the torrent's file list. Pick the new files in your client.` |
 | A **client call failed**: the client did not list the files within 15 seconds, did not show all the old files, or refused to skip or start | `Added paused: file selection did not finish (<step>). Check the torrent in your client.` — `<step>` names what failed, for example `skipping the old files failed` |
-| The update has **no new files** | `Added paused: this update has no new files.` |
+| The update has **no new files** (every file is skipped) | `Added paused: this update has no new files; all its files are skipped.` |
 
 The client's own error message is written to Marauder's log, not to the
 notification.
@@ -114,8 +116,9 @@ and 4.0.6, and Deluge 2.2.0.
 µTorrent and the download folder cannot pause a torrent or select its files.
 The form shows a note when the topic's client (or your default client) is one
 of them. If the settings are on anyway, the torrent is added normally and all
-files download; with **Download only new files** the notification says
-`This client cannot pause or select files, so all files download.`
+files download. The notification says so: with **Download only new files**
+`This client cannot pause or select files, so all files download.`, and with
+only **Add updates paused** `This client cannot pause, so the update started.`
 
 ## Not for per-episode trackers
 
@@ -132,7 +135,7 @@ Each outcome of **Download only new files** is counted in
 | `result` | Meaning |
 |---|---|
 | `selected` | The old files were skipped; the torrent started (or was left paused because "Add updates paused" is on too) |
-| `no_new_files` | The update had no new file; left paused |
+| `no_new_files` | The update had no new file; every file skipped, left paused |
 | `paused_no_baseline` | No earlier file list (including a previous version that came as a magnet link); left paused |
 | `paused_magnet` | Magnet link; left paused |
 | `paused_unreadable` | The torrent's file list could not be read; left paused |

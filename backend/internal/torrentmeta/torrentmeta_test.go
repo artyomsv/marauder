@@ -2,6 +2,7 @@ package torrentmeta
 
 import (
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -72,6 +73,38 @@ func TestFiles_V2OnlyIsReported(t *testing.T) {
 	data := []byte("d4:infod9:file treed0:dee4:name1:x12:piece lengthi16384eee")
 	if _, err := Files(data); !errors.Is(err, ErrV2Only) {
 		t.Errorf("err = %v, want ErrV2Only", err)
+	}
+}
+
+// Every decoded value costs far more heap than its byte in the input, so a
+// crafted torrent of tiny values would otherwise turn a few MiB into hundreds
+// of MB. Three lists of 90k integers stay under the list-length bound and
+// exceed the value cap.
+func TestFiles_TooManyValuesIsAnError(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("l")
+	for range 3 {
+		b.WriteString("l")
+		b.WriteString(strings.Repeat("i0e", 90_000))
+		b.WriteString("e")
+	}
+	b.WriteString("e")
+
+	if _, err := Files([]byte(b.String())); !errors.Is(err, errTooManyValues) {
+		t.Errorf("Files error = %v, want errTooManyValues", err)
+	}
+}
+
+// A large real-world pack stays well inside the value cap.
+func TestFiles_ManyFilesWithinValueCap(t *testing.T) {
+	files := make([]domain.TorrentFile, 5000)
+	for i := range files {
+		files[i] = domain.TorrentFile{Path: fmt.Sprintf("Season 1/E%04d.mkv", i), Size: int64(i + 1)}
+	}
+
+	got, err := Files(torrentmetatest.Torrent("Pack", files))
+	if err != nil || len(got) != len(files) {
+		t.Fatalf("Files = (%d files, %v), want %d files", len(got), err, len(files))
 	}
 }
 
