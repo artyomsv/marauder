@@ -137,9 +137,13 @@ func TestSkipOldFilesOnRealClients(t *testing.T) {
 			}, "client to list both files")
 			t.Logf("client files after add: %+v", files)
 
-			indices, matched := torrentmeta.MatchSkip(files, torrentmeta.SkipSet(v1, v2))
-			if matched != 1 {
-				t.Fatalf("matched %d old files in %+v, want 1", matched, files)
+			mapping, err := torrentmeta.MapClientFiles(files, v2)
+			if err != nil {
+				t.Fatalf("MapClientFiles(%+v): %v", files, err)
+			}
+			indices := torrentmeta.SkipIndices(mapping, torrentmeta.SkipSet(v1, v2))
+			if len(indices) != 1 {
+				t.Fatalf("skip indices %v in %+v, want exactly the old file", indices, files)
 			}
 			if err := sel.SkipFiles(ctx, raw, hash, indices); err != nil {
 				t.Fatalf("SkipFiles: %v", err)

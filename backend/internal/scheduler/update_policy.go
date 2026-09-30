@@ -66,8 +66,10 @@ type deliveryPlan struct {
 type fileSelection struct {
 	selector registry.WithFileSelection
 	hash     string
-	skip     []domain.TorrentFile
-	total    int
+	// files is the torrent's whole manifest: the client's list is laid over
+	// all of it, one to one, before any index is skipped.
+	files []domain.TorrentFile
+	skip  []domain.TorrentFile
 }
 
 // planDelivery decides the update policy for one payload. It runs before the
@@ -144,8 +146,8 @@ func (s *Scheduler) planDelivery(ctx context.Context, log zerolog.Logger, t *dom
 	plan.selection = &fileSelection{
 		selector: selector,
 		hash:     hash,
+		files:    plan.files,
 		skip:     torrentmeta.SkipSet(baseline, plan.files),
-		total:    len(plan.files),
 	}
 	return plan
 }
@@ -188,14 +190,15 @@ func (s *Scheduler) finishDelivery(ctx context.Context, log zerolog.Logger, t *d
 // updates. An update with no new file has every file skipped and is never
 // started, so a user who presses Start does not download the pack again.
 func (s *Scheduler) selectNewFiles(ctx context.Context, log zerolog.Logger, t *domain.Topic, clientName string, rawConfig []byte, sel *fileSelection) string {
-	newCount := sel.total - len(sel.skip)
+	total := len(sel.files)
+	newCount := total - len(sel.skip)
 	noNewFiles := func() string {
 		log.Info().Str("client", clientName).Str("result", selNoNewFiles).
 			Msg("only-new-files: update has no new files; all skipped, torrent left paused")
 		metrics.SchedulerFileSelectionTotal.WithLabelValues(clientName, selNoNewFiles).Inc()
 		return "Added paused: this update has no new files; all its files are skipped."
 	}
-	if sel.total == 0 {
+	if total == 0 {
 		// No content file at all: nothing to skip, nothing to wait for.
 		return noNewFiles()
 	}
@@ -217,12 +220,16 @@ func (s *Scheduler) selectNewFiles(ctx context.Context, log zerolog.Logger, t *d
 	if err != nil {
 		return fail("could not list the files", err)
 	}
+	// One layout for the whole torrent, one to one with its manifest. Without
+	// that, no index can be trusted to name the file it seems to: an old file
+	// the client did not show would download again, and a new file that looks
+	// like an old one would be skipped.
+	mapping, err := torrentmeta.MapClientFiles(clientFiles, sel.files)
+	if err != nil {
+		return fail("the client's file list does not match the torrent", err)
+	}
 	if len(sel.skip) > 0 {
-		indices, matched := torrentmeta.MatchSkip(clientFiles, sel.skip)
-		if matched != len(sel.skip) {
-			// Starting now would download an old file the client did not show.
-			return fail(fmt.Sprintf("the client listed %d of %d old files", matched, len(sel.skip)), nil)
-		}
+		indices := torrentmeta.SkipIndices(mapping, sel.skip)
 		if err := sel.selector.SkipFiles(ctx, rawConfig, sel.hash, indices); err != nil {
 			return fail("skipping the old files failed", err)
 		}
@@ -232,19 +239,19 @@ func (s *Scheduler) selectNewFiles(ctx context.Context, log zerolog.Logger, t *d
 	}
 	if t.AddPausedOnUpdate {
 		log.Info().Str("client", clientName).Str("result", selSelected).
-			Int("new", newCount).Int("total", sel.total).
+			Int("new", newCount).Int("total", total).
 			Msg("only-new-files: new files selected; torrent left paused")
 		metrics.SchedulerFileSelectionTotal.WithLabelValues(clientName, selSelected).Inc()
-		return fmt.Sprintf("Added paused with %d new of %d files selected.", newCount, sel.total)
+		return fmt.Sprintf("Added paused with %d new of %d files selected.", newCount, total)
 	}
 	if err := sel.selector.Start(ctx, rawConfig, sel.hash); err != nil {
 		return fail("starting the torrent failed", err)
 	}
 	log.Info().Str("client", clientName).Str("result", selSelected).
-		Int("new", newCount).Int("total", sel.total).
+		Int("new", newCount).Int("total", total).
 		Msg("only-new-files: new files selected; torrent started")
 	metrics.SchedulerFileSelectionTotal.WithLabelValues(clientName, selSelected).Inc()
-	return fmt.Sprintf("Downloading %d new of %d files.", newCount, sel.total)
+	return fmt.Sprintf("Downloading %d new of %d files.", newCount, total)
 }
 
 // waitForFiles polls the client until it lists the torrent's files.

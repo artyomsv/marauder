@@ -157,18 +157,45 @@ would have repeated them).
 `SkipSet(prev, next []domain.TorrentFile) []domain.TorrentFile` returns the
 entries of `next` whose `(Path, Size)` pair is in `prev` — the files to skip.
 
-`MatchesClientFile(c domain.ClientFile, f domain.TorrentFile) bool`
-— true when sizes are equal and the client path equals `f.Path`, or equals it
-after dropping **exactly** its first component. That absorbs the client's own
-top folder (qBittorrent "Original"/"Create subfolder" content layouts, a
-renamed root) without the looser suffix match, which would also let
-`A/Season 1/E01.mkv` match a file listed as `Season 1/E01.mkv` under a
-different parent.
+*Amended after review (PR #210):* the first version matched **each file on
+its own** — `MatchesClientFile` accepted a client path equal to `f.Path` or
+equal to it after dropping its first component, and `MatchSkip` skipped every
+client file that matched an old entry either way. Two readings per file, chosen
+independently, skipped new files:
 
-`MatchSkip(client []domain.ClientFile, skip []domain.TorrentFile) (indices []int, matched int)`
-maps the skip set onto the client's list: the sorted, de-duplicated client
-indices to skip, and how many skip entries matched at least one client file.
-A caller that gets `matched < len(skip)` must not start the torrent.
+- Rootless layout: old `E01.mkv` (100 B); new `E01.mkv` + `Extras/E01.mkv`
+  (both 100 B); the client lists `E01.mkv`, `Extras/E01.mkv`. Both matched the
+  one old file, both were skipped, and the note said "Downloading 1 new of 2
+  files" while the new file never downloaded.
+- Rooted layout: root `Show`, old `Show/E01.mkv`, new adds a same-size
+  `E01.mkv`; the client lists `Show/Show/E01.mkv`, `Show/E01.mkv`. Same result.
+
+A client chooses its layout once per torrent, so the replacement infers **one
+layout for the whole list**:
+
+`MapClientFiles(client []domain.ClientFile, manifest []domain.TorrentFile) (map[int]domain.TorrentFile, error)`
+
+- Client paths are normalised (`\` → `/`); entries with a `.pad` component are
+  ignored, mirroring `Files`.
+- *Verbatim:* every client path equals a manifest path (no top folder).
+- *Rooted:* every client path has at least two components, all share the same
+  first one, and the remainder equals a manifest path. That covers the
+  torrent's own name, a renamed root, and qBittorrent's "Create subfolder"
+  around a single-file torrent (`Movie/Movie.mkv` for manifest `Movie.mkv`).
+- A layout is valid only as a **bijection**: equal counts, every client file
+  paired with one manifest entry of equal path **and** size, every entry used
+  exactly once.
+- Exactly one valid layout → the mapping (client index → manifest entry). Both
+  valid with identical mappings → that mapping. Both valid but different, or
+  neither valid → `ErrLayoutMismatch`, with the counts in the message. (Both
+  valid cannot happen for a non-empty list — the rooted reading of every path
+  is strictly shorter — but it is refused rather than guessed.)
+
+`SkipIndices(mapping map[int]domain.TorrentFile, skip []domain.TorrentFile) []int`
+returns the sorted client indices whose manifest entry is in `skip`.
+
+The bijection subsumes the old `matched < len(skip)` refusal: an old file the
+client did not show breaks the count, so nothing is skipped or started.
 
 *Amended after implementation:* matching runs **once, in the scheduler**, not
 inside each client plugin (see §4.2).
@@ -296,18 +323,21 @@ differences that shipped, in `scheduler/update_policy.go`):
   qBittorrent add has landed is lost, leaving the torrent paused behind a
   "Downloading" note.
 - Step 5's `matched, err := SkipFiles(ctx, cfg, hash, skip)` is split to fit
-  §4.2: the scheduler polls `Files`, calls `torrentmeta.MatchSkip`, refuses on
-  `matched != len(skip)`, then `SkipFiles(indices)`.
+  §4.2: the scheduler polls `Files`, calls `torrentmeta.MapClientFiles` over
+  the full manifest (refusing on `ErrLayoutMismatch` with the step "the
+  client's file list does not match the torrent"; §4.1), then
+  `SkipFiles(SkipIndices(mapping, skip))`. The first version called
+  `MatchSkip` and refused on `matched != len(skip)`.
 - *Amended after review:* **no new file** (step 5's first bullet) no longer
   returns without touching the client, which left every file wanted, so a user
   pressing Start re-downloaded the whole pack. It waits for the client's file
-  list, matches, and skips **every** file under the same rule (a partial match
+  list, maps it, and skips **every** file under the same rule (a layout mismatch
   is `failed` and nothing is skipped), then does not start. The result is still
   `no_new_files`. Only a torrent with no content file at all skips the client
   calls, since there is nothing to skip.
 - Every outcome is logged at Info; `failed` at Warn with the step.
 - Notification notes name the failed step (`could not list the files`,
-  `the client listed N of M old files`, `skipping the old files failed`,
+  `the client's file list does not match the torrent`, `skipping the old files failed`,
   `starting the torrent failed`) but **never** the raw client error, which can
   carry an HTML error page; that goes to the log only.
 - Note texts as shipped: `Downloading N new of M files.`, `Added paused with N
@@ -349,13 +379,15 @@ but leaves its files on disk.
 
 - `torrentmeta`: single-file, multi-file, hybrid with padding files,
   `path.utf-8`, v2-only (error), malformed/deep bencode (error, no panic),
-  `SkipSet` and `MatchesClientFile` table tests (root rename, subfolder layout,
-  size change, suffix that is not at a `/` boundary).
+  `SkipSet`, `SkipIndices` and `MapClientFiles` table tests (both review
+  lookalike layouts, renamed root, single-file "Create subfolder", padding
+  ignored; count, size, mixed-root and ambiguous layouts refused).
 - Scheduler: first delivery, update with only paused, update with selection
   success, both settings on, magnet, no baseline, unsupported client, SkipFiles
-  error, partial match, no new files, Start error, per-episode tracker
+  error, layout mismatch, no new files, Start error, per-episode tracker
   (settings ignored), recorded `files` on every `.torrent` delivery, a retry
-  whose own row is already recorded, a magnet version in between.
+  whose own row is already recorded, a magnet version in between, and both
+  review lookalike layouts through `runCheck` (only the old file skipped).
 - Client plugins: `httptest` servers for qBittorrent (incl. `/start` 404 →
   `/resume`), Transmission, Deluge — wait, skip, start.
 - Repo integration tests (real Postgres): flags round-trip; `Record` with and

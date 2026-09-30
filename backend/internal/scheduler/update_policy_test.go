@@ -167,7 +167,7 @@ func TestRunCheck_OnlyNewFiles_PollsUntilClientListsFiles(t *testing.T) {
 	}
 }
 
-func TestRunCheck_OnlyNewFiles_PartialMatchStaysPaused(t *testing.T) {
+func TestRunCheck_OnlyNewFiles_LayoutMismatchStaysPaused(t *testing.T) {
 	f, sel := selectingFixture(t, torrentTracker(torrentmetatest.Torrent("Show S01", v2Files)))
 	f.topic.OnlyNewFiles = true
 	f.deliveries.latestFiles = v1Files
@@ -281,10 +281,10 @@ func TestRunCheck_OnlyNewFiles_NoNewFilesSkipsAllAndStaysPaused(t *testing.T) {
 	}
 }
 
-// The same safety rule as a normal selection: a file the client did not
-// show cannot be skipped, so the result is a failure note, not a claim that
-// every file is skipped.
-func TestRunCheck_OnlyNewFiles_NoNewFilesPartialMatchFails(t *testing.T) {
+// The same safety rule as a normal selection: a client list that does not
+// pair one to one with the torrent cannot be trusted to name the old files,
+// so the result is a failure note, not a claim that every file is skipped.
+func TestRunCheck_OnlyNewFiles_NoNewFilesLayoutMismatchFails(t *testing.T) {
 	f, sel := selectingFixture(t, torrentTracker(torrentmetatest.Torrent("Show S01", v2Files)))
 	f.topic.OnlyNewFiles = true
 	f.deliveries.latestFiles = v2Files
@@ -298,7 +298,7 @@ func TestRunCheck_OnlyNewFiles_NoNewFilesPartialMatchFails(t *testing.T) {
 	if sel.skipCalls != 0 || sel.startCalls != 0 {
 		t.Errorf("skip=%d start=%d, want neither", sel.skipCalls, sel.startCalls)
 	}
-	if body := submittedBody(t, f); !strings.Contains(body, "the client listed 1 of 2 old files") {
+	if body := submittedBody(t, f); !strings.Contains(body, "the client's file list does not match the torrent") {
 		t.Errorf("body = %q, want the failed step named", body)
 	}
 }
@@ -434,5 +434,52 @@ func TestRunCheck_UpdatePolicy_IgnoredForEpisodicTracker(t *testing.T) {
 
 	if sel.lastOpts.Paused || sel.filesCalls != 0 {
 		t.Errorf("paused=%v files=%d, want the plain delivery", sel.lastOpts.Paused, sel.filesCalls)
+	}
+}
+
+// Finding A (PR #210 review): a new file whose path equals an old file's path
+// after dropping its first folder must not be skipped as that old file. The
+// client lists this torrent without a top folder, so only the verbatim layout
+// fits and Extras/E01.mkv is a new file.
+func TestRunCheck_OnlyNewFiles_RootlessLayoutKeepsLookalikeNewFile(t *testing.T) {
+	next := []domain.TorrentFile{{Path: "E01.mkv", Size: 100}, {Path: "Extras/E01.mkv", Size: 100}}
+	f, sel := selectingFixture(t, torrentTracker(torrentmetatest.Torrent("Show S01", next)))
+	f.topic.OnlyNewFiles = true
+	f.deliveries.latestFiles = []domain.TorrentFile{{Path: "E01.mkv", Size: 100}}
+	sel.filesSeq = [][]domain.ClientFile{{
+		{Index: 0, Path: "E01.mkv", Size: 100, Wanted: true},
+		{Index: 1, Path: "Extras/E01.mkv", Size: 100, Wanted: true},
+	}}
+
+	f.s.runCheck(context.Background(), f.s.log, f.topic)
+
+	if !reflect.DeepEqual(sel.skipped, []int{0}) || sel.startCalls != 1 {
+		t.Errorf("skipped=%v start=%d, want only the old E01.mkv (index 0) skipped and a start", sel.skipped, sel.startCalls)
+	}
+	if body := submittedBody(t, f); !strings.Contains(body, "Downloading 1 new of 2 files") {
+		t.Errorf("body = %q, want the selection note", body)
+	}
+}
+
+// The rooted twin: the torrent's top folder is "Show", the old version had a
+// subfolder "Show" of its own, and the new version adds a same-size E01.mkv at
+// the top. Every client path carries the root, so only the rooted layout fits.
+func TestRunCheck_OnlyNewFiles_RootedLayoutKeepsLookalikeNewFile(t *testing.T) {
+	next := []domain.TorrentFile{{Path: "Show/E01.mkv", Size: 100}, {Path: "E01.mkv", Size: 100}}
+	f, sel := selectingFixture(t, torrentTracker(torrentmetatest.Torrent("Show", next)))
+	f.topic.OnlyNewFiles = true
+	f.deliveries.latestFiles = []domain.TorrentFile{{Path: "Show/E01.mkv", Size: 100}}
+	sel.filesSeq = [][]domain.ClientFile{{
+		{Index: 0, Path: "Show/Show/E01.mkv", Size: 100, Wanted: true},
+		{Index: 1, Path: "Show/E01.mkv", Size: 100, Wanted: true},
+	}}
+
+	f.s.runCheck(context.Background(), f.s.log, f.topic)
+
+	if !reflect.DeepEqual(sel.skipped, []int{0}) || sel.startCalls != 1 {
+		t.Errorf("skipped=%v start=%d, want only the old Show/E01.mkv (index 0) skipped and a start", sel.skipped, sel.startCalls)
+	}
+	if body := submittedBody(t, f); !strings.Contains(body, "Downloading 1 new of 2 files") {
+		t.Errorf("body = %q, want the selection note", body)
 	}
 }

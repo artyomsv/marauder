@@ -7,6 +7,7 @@ package torrentmeta
 import (
 	"errors"
 	"fmt"
+	"reflect"
 	"sort"
 	"strings"
 
@@ -128,49 +129,138 @@ func SkipSet(prev, next []domain.TorrentFile) []domain.TorrentFile {
 	return skip
 }
 
-// MatchesClientFile reports whether a client's file is f. Clients prefix the
-// path with the torrent's top folder, possibly renamed (qBittorrent content
-// layouts), or leave it out; so the client path must equal f.Path either as a
-// whole or after dropping exactly its first component. Sizes must be equal.
-func MatchesClientFile(c domain.ClientFile, f domain.TorrentFile) bool {
-	if c.Size != f.Size {
-		return false
+// ErrLayoutMismatch reports a client file list that cannot be laid over the
+// torrent's own list one to one. Nothing may be skipped or started then: a
+// file matched to the wrong entry would either download an old file again or
+// never download a new one.
+var ErrLayoutMismatch = errors.New("the client's file list does not match the torrent")
+
+// MapClientFiles pairs each file the client lists with the torrent's own
+// entry for it, keyed by the client's file index. Clients list a torrent
+// either without its top folder or under one — the torrent's own name, a
+// renamed one, or a folder the client created for a single-file torrent
+// (qBittorrent "Create subfolder") — and that choice is made once per
+// torrent, not per file. So ONE layout is inferred for the whole list:
+//
+//   - verbatim: every client path is a manifest path;
+//   - rooted: every client path has at least two components, all share the
+//     same first one, and the rest is a manifest path.
+//
+// A layout counts only as a bijection: as many client files as manifest
+// entries, each client file paired with an entry of equal path and size, and
+// every entry used exactly once. Matching each file on its own, both ways at
+// once, let Extras/E01.mkv pass for an old E01.mkv of the same size and be
+// skipped as it (PR #210 review). Client entries that are BEP 47 padding are
+// ignored, as Files ignores them in the manifest.
+//
+// Exactly one valid layout is the answer; two valid layouts are accepted only
+// when they pair every file identically. Anything else is ErrLayoutMismatch.
+func MapClientFiles(client []domain.ClientFile, manifest []domain.TorrentFile) (map[int]domain.TorrentFile, error) {
+	files := make([]domain.ClientFile, 0, len(client))
+	for _, c := range client {
+		c.Path = strings.ReplaceAll(c.Path, `\`, "/")
+		if isPaddingPath(c.Path) {
+			continue
+		}
+		files = append(files, c)
 	}
-	p := strings.ReplaceAll(c.Path, `\`, "/")
-	if p == f.Path {
-		return true
-	}
-	_, rest, ok := strings.Cut(p, "/")
-	return ok && rest == f.Path
+	verbatim, vok := bijection(files, manifest, func(p string) (string, bool) { return p, true })
+	rooted, rok := bijection(files, manifest, rootStripper(files))
+	return pickLayout(verbatim, vok, rooted, rok, len(files), len(manifest))
 }
 
-// MatchSkip maps skip onto the client's file list. It returns the sorted,
-// de-duplicated client indices to mark "do not download", and how many skip
-// entries matched at least one client file. A caller that gets matched <
-// len(skip) must not start the torrent: an old file the client did not show
-// would download again.
-func MatchSkip(client []domain.ClientFile, skip []domain.TorrentFile) (indices []int, matched int) {
-	bySize := make(map[int64][]domain.ClientFile, len(client))
-	for _, c := range client {
-		bySize[c.Size] = append(bySize[c.Size], c)
-	}
-	seen := make(map[int]bool, len(skip))
-	for _, f := range skip {
-		hit := false
-		for _, c := range bySize[f.Size] {
-			if !MatchesClientFile(c, f) {
-				continue
-			}
-			hit = true
-			if !seen[c.Index] {
-				seen[c.Index] = true
-				indices = append(indices, c.Index)
-			}
+// pickLayout decides between the two layouts' results. Both being valid
+// cannot happen for a non-empty list — the rooted reading of a path is
+// strictly shorter than the verbatim one, so both cannot equal the same
+// manifest — but an ambiguity must refuse rather than guess, so it is checked.
+func pickLayout(verbatim map[int]domain.TorrentFile, vok bool, rooted map[int]domain.TorrentFile, rok bool, clientCount, manifestCount int) (map[int]domain.TorrentFile, error) {
+	switch {
+	case vok && rok:
+		if reflect.DeepEqual(verbatim, rooted) {
+			return verbatim, nil
 		}
-		if hit {
-			matched++
+		return nil, fmt.Errorf("%w: %d client files fit two layouts differently", ErrLayoutMismatch, clientCount)
+	case vok:
+		return verbatim, nil
+	case rok:
+		return rooted, nil
+	}
+	return nil, fmt.Errorf("%w: %d client files cannot be paired one to one with the torrent's %d files",
+		ErrLayoutMismatch, clientCount, manifestCount)
+}
+
+// rootStripper returns the rooted layout's path mapping: drop the first
+// component, which must be present and the same for every client file.
+func rootStripper(files []domain.ClientFile) func(string) (string, bool) {
+	root := ""
+	if len(files) > 0 {
+		root, _, _ = strings.Cut(files[0].Path, "/")
+	}
+	return func(p string) (string, bool) {
+		first, rest, ok := strings.Cut(p, "/")
+		if !ok || first == "" || rest == "" || first != root {
+			return "", false
+		}
+		return rest, true
+	}
+}
+
+// bijection pairs files with manifest under one path mapping, or reports
+// false when that mapping is not one to one.
+func bijection(files []domain.ClientFile, manifest []domain.TorrentFile, mapPath func(string) (string, bool)) (map[int]domain.TorrentFile, bool) {
+	if len(files) != len(manifest) {
+		return nil, false
+	}
+	// Counted, not a set: a manifest could list the same path and size twice,
+	// and each copy may pair with one client file only.
+	remaining := make(map[domain.TorrentFile]int, len(manifest))
+	for _, f := range manifest {
+		remaining[f]++
+	}
+	out := make(map[int]domain.TorrentFile, len(files))
+	for _, c := range files {
+		p, ok := mapPath(c.Path)
+		if !ok {
+			return nil, false
+		}
+		key := domain.TorrentFile{Path: p, Size: c.Size}
+		if remaining[key] == 0 {
+			return nil, false
+		}
+		if _, dup := out[c.Index]; dup {
+			return nil, false
+		}
+		remaining[key]--
+		out[c.Index] = key
+	}
+	// Equal counts and every client file consuming one entry means every
+	// entry was used exactly once.
+	return out, true
+}
+
+// isPaddingPath mirrors isPadding for a client's path: any ".pad" component.
+func isPaddingPath(p string) bool {
+	for _, part := range strings.Split(p, "/") {
+		if part == ".pad" {
+			return true
+		}
+	}
+	return false
+}
+
+// SkipIndices returns the sorted client indices whose torrent entry is in
+// skip — the files to mark "do not download".
+func SkipIndices(mapping map[int]domain.TorrentFile, skip []domain.TorrentFile) []int {
+	old := make(map[domain.TorrentFile]struct{}, len(skip))
+	for _, f := range skip {
+		old[f] = struct{}{}
+	}
+	var indices []int
+	for idx, f := range mapping {
+		if _, ok := old[f]; ok {
+			indices = append(indices, idx)
 		}
 	}
 	sort.Ints(indices)
-	return indices, matched
+	return indices
 }

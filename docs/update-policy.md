@@ -49,6 +49,15 @@ What counts as the "same file":
 
 - **Same name and same size.** The name is the file's path inside the torrent;
   the torrent's top folder is ignored, so a renamed folder does not matter.
+- **The client's list must match the torrent one to one.** A client shows a
+  torrent's files either all without the top folder or all inside one folder
+  (the torrent's name, a renamed folder, or the subfolder qBittorrent can create
+  around a single file). Marauder works out which of the two the client used
+  for the whole torrent, then pairs every file the client lists with exactly
+  one file of the torrent. So a new `Extras/E01.mkv` is never mistaken for an
+  old `E01.mkv` of the same size. If the client's list cannot be paired this
+  way (a file is missing, has another size, or the files sit in different top
+  folders), nothing is skipped and the torrent stays paused.
 - **A re-encoded episode downloads again.** If the uploader replaced an episode
   with a new encode, it keeps its name but its size changes, so Marauder treats
   it as new. That is deliberate: it is a different file.
@@ -80,7 +89,7 @@ counts as successful: the topic does not turn red.
 | The tracker gave a **magnet link**, which carries no file list | `Added paused: a magnet link has no file list. Pick the new files in your client.` |
 | **No earlier file list.** Marauder stores each torrent's file list when it downloads it, starting with this version. The first update of a topic whose last download happened before you upgraded — for example, an old topic you just turned the setting on for — has nothing to compare with. Later updates do. The same applies to the update right after a version that came as a **magnet link**: Marauder never learned that version's files (and you may have picked some of them by hand), so it does not fall back to an older list, which would download them again. | `Added paused: no earlier file list to compare with. Pick the new files in your client.` |
 | The torrent file **could not be read** (or has more than 5000 files) | `Added paused: could not read the torrent's file list. Pick the new files in your client.` |
-| A **client call failed**: the client did not list the files within 15 seconds, did not show all the old files, or refused to skip or start | `Added paused: file selection did not finish (<step>). Check the torrent in your client.` — `<step>` names what failed, for example `skipping the old files failed` |
+| A **client call failed**: the client did not list the files within 15 seconds, listed files that do not match the torrent one to one, or refused to skip or start | `Added paused: file selection did not finish (<step>). Check the torrent in your client.` — `<step>` names what failed, for example `the client's file list does not match the torrent` or `skipping the old files failed` |
 | The update has **no new files** (every file is skipped) | `Added paused: this update has no new files; all its files are skipped.` |
 
 The client's own error message is written to Marauder's log, not to the
