@@ -34,6 +34,20 @@ const credentialWarmTimeout = 5 * time.Second
 // defaultCheckIntervalSec is used when the caller doesn't specify one.
 const defaultCheckIntervalSec = 900 // 15 min
 
+// The range a user may choose for a topic's check interval (issue #204). The
+// floor keeps one topic from hammering a tracker; the ceiling catches a units
+// mistake rather than expressing a real need — a release that updates less
+// than weekly is still worth seeing within the week.
+const (
+	MinCheckIntervalSec = 300     // 5 min
+	MaxCheckIntervalSec = 604_800 // 7 days
+)
+
+// ValidCheckInterval reports whether sec is inside the user-selectable range.
+func ValidCheckInterval(sec int) bool {
+	return sec >= MinCheckIntervalSec && sec <= MaxCheckIntervalSec
+}
+
 // Sentinels let callers map failures back to their own error surface
 // (HTTP problem documents, log lines, metrics) without string matching.
 var (
@@ -45,6 +59,10 @@ var (
 	// ErrQualityUnsupported means the requested quality is not in the
 	// tracker's declared quality list.
 	ErrQualityUnsupported = errors.New("quality not supported by this tracker")
+	// ErrCheckIntervalOutOfRange means a non-zero check interval falls outside
+	// [MinCheckIntervalSec, MaxCheckIntervalSec].
+	ErrCheckIntervalOutOfRange = fmt.Errorf("check_interval_sec must be between %d and %d seconds",
+		MinCheckIntervalSec, MaxCheckIntervalSec)
 )
 
 // Store is the minimal persistence seam BuildAndCreate needs. *repo.Topics
@@ -110,6 +128,11 @@ type Result struct {
 // fields, and persists the topic. A unique-constraint violation on
 // (user_id, url) is treated as an idempotent skip (Result{Created:false}).
 func BuildAndCreate(ctx context.Context, store Store, in CreateInput) (*Result, error) {
+	// Zero means "use the default"; anything else must be in range. Checked
+	// before Parse so a bad request costs no tracker work.
+	if in.CheckIntervalSec != 0 && !ValidCheckInterval(in.CheckIntervalSec) {
+		return nil, ErrCheckIntervalOutOfRange
+	}
 	tracker := registry.FindTrackerForURL(in.URL)
 	if tracker == nil {
 		return nil, ErrNoTracker
@@ -122,7 +145,7 @@ func BuildAndCreate(ctx context.Context, store Store, in CreateInput) (*Result, 
 	}
 
 	interval := in.CheckIntervalSec
-	if interval <= 0 {
+	if interval == 0 {
 		interval = defaultCheckIntervalSec
 	}
 	displayName := in.DisplayName

@@ -191,7 +191,7 @@ func TestTopicsNotifyOnlyRoundTrip(t *testing.T) {
 	}
 
 	// Update must persist both, and GetByID must read them back.
-	if _, err := topicsRepo.Update(ctx, plain.ID, userID, plain.DisplayName, nil, nil, "", "",
+	if _, err := topicsRepo.Update(ctx, plain.ID, userID, plain.DisplayName, nil, nil, "", "", nil,
 		TopicFlags{NotifyOnly: true, NotifyOnlyAnnounceCurrent: false}, map[string]any{}); err != nil {
 		t.Fatalf("Update: %v", err)
 	}
@@ -259,5 +259,140 @@ func TestMarkEpisodesDownloadedBulk(t *testing.T) {
 	after := reload(t, pool, topic.ID)
 	if n := len(after.Extra["downloaded_episodes"].([]any)); n != len(want) {
 		t.Errorf("a rejected bulk mark wrote %d episodes, want the original %d", n, len(want))
+	}
+}
+
+// TestTopicsUpdateCheckIntervalClamp runs the next_check_at CASE a mock can
+// only match as text (issue #204). Shortening the interval must pull a far
+// next check in to at most one new interval from now; lengthening it must
+// leave next_check_at alone, because the next check already comes sooner than
+// the new interval would put it.
+func TestTopicsUpdateCheckIntervalClamp(t *testing.T) {
+	pool := integrationPool(t)
+	topicsRepo := NewTopics(pool)
+	userID := seedUser(t, pool)
+	ctx := context.Background()
+
+	created, err := topicsRepo.Create(ctx, &domain.Topic{
+		UserID:           userID,
+		TrackerName:      "itest",
+		URL:              "https://tracker.invalid/topic/" + uuid.NewString(),
+		DisplayName:      "Interval Clamp",
+		Extra:            map[string]any{},
+		CheckIntervalSec: 86400,
+		NextCheckAt:      time.Now().UTC().Add(20 * time.Hour),
+		Status:           domain.TopicStatusActive,
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	update := func(sec int) *domain.Topic {
+		t.Helper()
+		got, uerr := topicsRepo.Update(ctx, created.ID, userID, created.DisplayName, nil, nil, "", "", &sec, TopicFlags{}, map[string]any{})
+		if uerr != nil {
+			t.Fatalf("update to %ds: %v", sec, uerr)
+		}
+		return got
+	}
+
+	// 24h -> 1h: the next check was 20h away and must now be within 1h.
+	before := time.Now()
+	shorter := update(3600)
+	if shorter.CheckIntervalSec != 3600 {
+		t.Errorf("CheckIntervalSec = %d, want 3600", shorter.CheckIntervalSec)
+	}
+	if limit := before.Add(time.Hour + time.Minute); shorter.NextCheckAt.After(limit) {
+		t.Errorf("shortening left next_check_at at %v, want at most %v", shorter.NextCheckAt, limit)
+	}
+
+	// 1h -> 24h: next_check_at must not move.
+	longer := update(86400)
+	if !longer.NextCheckAt.Equal(shorter.NextCheckAt) {
+		t.Errorf("lengthening moved next_check_at from %v to %v", shorter.NextCheckAt, longer.NextCheckAt)
+	}
+
+	// Same interval: nothing to clamp, next_check_at must not move either.
+	same := update(86400)
+	if !same.NextCheckAt.Equal(longer.NextCheckAt) {
+		t.Errorf("unchanged interval moved next_check_at from %v to %v", longer.NextCheckAt, same.NextCheckAt)
+	}
+}
+
+// TestTopicsUpdateShortenDuringCheck is PR #209 review finding M-1. A topic
+// that is being checked has a next_check_at in the past (that is what made it
+// due), so LEAST(next_check_at, now()+interval) alone keeps the old value, the
+// check-state token survives, and the running worker then persists a next
+// check computed from its snapshot of the OLD, longer interval. Shortening
+// must instead move the token so that worker's result is discarded, and leave
+// the topic due at once so the next tick checks it with the new interval.
+func TestTopicsUpdateShortenDuringCheck(t *testing.T) {
+	pool := integrationPool(t)
+	topicsRepo := NewTopics(pool)
+	userID := seedUser(t, pool)
+	ctx := context.Background()
+
+	created, err := topicsRepo.Create(ctx, &domain.Topic{
+		UserID:           userID,
+		TrackerName:      "itest",
+		URL:              "https://tracker.invalid/topic/" + uuid.NewString(),
+		DisplayName:      "Shorten During Check",
+		Extra:            map[string]any{},
+		CheckIntervalSec: 86400,
+		NextCheckAt:      time.Now().UTC().Add(-time.Minute), // due: dispatched
+		Status:           domain.TopicStatusActive,
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	observed := *reload(t, pool, created.ID) // the worker's dispatch snapshot
+
+	shorter := 3600
+	if _, err := topicsRepo.Update(ctx, created.ID, userID, created.DisplayName, nil, nil, "", "", &shorter, TopicFlags{}, map[string]any{}); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+
+	// The worker finishes and schedules from its 86400 s snapshot.
+	err = topicsRepo.RecordCheckResult(ctx, &observed, "hash-stale", true,
+		time.Now().Add(24*time.Hour), "", "")
+	if !errors.Is(err, ErrStaleCheckResult) {
+		t.Fatalf("want ErrStaleCheckResult for a check that outlived a shortened interval, got %v", err)
+	}
+	got := reload(t, pool, created.ID)
+	if got.CheckIntervalSec != 3600 {
+		t.Errorf("CheckIntervalSec = %d, want 3600", got.CheckIntervalSec)
+	}
+	if got.NextCheckAt.After(time.Now().Add(time.Minute)) {
+		t.Errorf("next_check_at = %v, want the topic due now", got.NextCheckAt)
+	}
+}
+
+// TestTopicsUpdateOmittedIntervalKeepsCurrent is PR #209 review finding M-2.
+// A writer that does not change the interval (an edit that left the field out,
+// the Sonarr poller) passes nil, and must not write back the interval it read
+// earlier over one a user saved in between.
+func TestTopicsUpdateOmittedIntervalKeepsCurrent(t *testing.T) {
+	pool := integrationPool(t)
+	topicsRepo := NewTopics(pool)
+	userID := seedUser(t, pool)
+	ctx := context.Background()
+
+	topic := seedTopic(t, pool, userID, domain.TopicStatusActive, map[string]any{})
+	stale := *topic // a background writer's earlier read
+
+	longer := 86400
+	if _, err := topicsRepo.Update(ctx, topic.ID, userID, topic.DisplayName, nil, nil, "", "", &longer, TopicFlags{}, map[string]any{}); err != nil {
+		t.Fatalf("user update: %v", err)
+	}
+	saved := reload(t, pool, topic.ID)
+
+	if _, err := topicsRepo.Update(ctx, stale.ID, userID, stale.DisplayName, nil, nil, "", "", nil, TopicFlags{}, map[string]any{}); err != nil {
+		t.Fatalf("background update: %v", err)
+	}
+	got := reload(t, pool, topic.ID)
+	if got.CheckIntervalSec != 86400 {
+		t.Errorf("CheckIntervalSec = %d, want the user's 86400 to survive", got.CheckIntervalSec)
+	}
+	if !got.NextCheckAt.Equal(saved.NextCheckAt) {
+		t.Errorf("an update without an interval moved next_check_at from %v to %v", saved.NextCheckAt, got.NextCheckAt)
 	}
 }

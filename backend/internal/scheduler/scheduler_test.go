@@ -2164,9 +2164,9 @@ func TestBackoffDelay_NeverNonPositive(t *testing.T) {
 
 // TestBackoffDelay_ShortIntervalNotRaised guards the boundary of the rescue
 // above: floorDelay exists to correct misconfiguration, not to impose a minimum
-// poll rate. Topic creation accepts any positive check_interval_sec
-// (topics/create.go only clamps <= 0), so a deliberately short interval is a
-// user's choice and must pass through unchanged.
+// poll rate. The API refuses intervals under 5 minutes (issue #204), but topics
+// created before that can hold any positive check_interval_sec, and such a
+// short interval was a user's choice and must pass through unchanged.
 func TestBackoffDelay_ShortIntervalNotRaised(t *testing.T) {
 	s := &Scheduler{cfg: &config.Config{CheckMaxBackoff: 6 * time.Hour}}
 	topic := &domain.Topic{CheckIntervalSec: 30}

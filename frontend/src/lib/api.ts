@@ -386,6 +386,8 @@ export interface UpdateTopicBody {
   notifier_id?: string | null;
   download_dir?: string;
   category?: string;
+  // Seconds between checks (issue #204). Omitted keeps the stored interval.
+  check_interval_sec?: number;
   // Replace-on-update policy (issue #101). replace_delete_data only matters
   // when replace_on_update is true.
   replace_on_update?: boolean;

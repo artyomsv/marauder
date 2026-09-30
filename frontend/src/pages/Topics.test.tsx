@@ -378,6 +378,25 @@ describe("AddTopicCard — client picker + download folder + category", () => {
     );
   });
 
+  it("sends the default check interval, or the picked one, in the create payload", async () => {
+    const user = userEvent.setup();
+    routeGet(() => Promise.resolve({ seasons: [] }));
+    mockApi.post.mockResolvedValue({});
+
+    renderCard();
+    await user.type(screen.getByLabelText(/url or magnet link/i), LOSTFILM_URL);
+    const intervalSelect = await screen.findByLabelText(/^check interval$/i);
+    expect((intervalSelect as HTMLSelectElement).value).toBe("900");
+
+    await user.selectOptions(intervalSelect, "604800");
+    await user.click(screen.getByRole("button", { name: /add topic/i }));
+
+    expect(mockApi.post).toHaveBeenCalledWith(
+      "/topics",
+      expect.objectContaining({ check_interval_sec: 604800 }),
+    );
+  });
+
   it("defaults replace-on-update off and hides the delete-data sub-option", async () => {
     const user = userEvent.setup();
     routeGet(() => Promise.resolve({ seasons: [] }));
@@ -549,6 +568,27 @@ describe("EditTopicCard — prefill + update", () => {
 
     const episodeSelect = screen.getByLabelText(/start from episode/i) as HTMLSelectElement;
     expect(episodeSelect.value).toBe("3");
+  });
+
+  it("prefills the stored check interval and sends the edited one", async () => {
+    const user = userEvent.setup();
+    routeGetWithQuality(() => Promise.resolve({ seasons: [] }));
+    mockApi.updateTopic.mockResolvedValue({});
+
+    renderEdit();
+
+    const intervalSelect = (await screen.findByLabelText(
+      /^check interval$/i,
+    )) as HTMLSelectElement;
+    expect(intervalSelect.value).toBe("900");
+
+    await user.selectOptions(intervalSelect, "86400");
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    expect(mockApi.updateTopic).toHaveBeenCalledWith(
+      "t-1",
+      expect.objectContaining({ check_interval_sec: 86400 }),
+    );
   });
 
   it("calls updateTopic with the topic id and edited fields", async () => {

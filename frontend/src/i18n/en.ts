@@ -314,6 +314,16 @@ const en: Record<string, string> = {
   "topics.notifyOnly.toggleBackNotice":
     "Releases seen while this topic was notify-only will not be downloaded — only the next change will. Use Reset on the topic if you want the current release fetched now.",
 
+  // Per-topic check interval (issue #204)
+  "topics.interval.label": "Check interval",
+  "topics.interval.help":
+    "How often Marauder looks for a new release. A series that updates once a week does not need a check every few minutes.",
+  "topics.interval.badgeTitle": "Checked every {interval}",
+  "topics.interval.seconds": "{n} s",
+  "topics.interval.minutes": "{n} min",
+  "topics.interval.hours": "{n} h",
+  "topics.interval.days": "{n} days",
+
   // Replace-on-update policy (issue #101)
   "topics.replaceOnUpdate.label": "Replace previous version on update",
   "topics.replaceOnUpdate.help":

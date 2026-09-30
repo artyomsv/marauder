@@ -109,6 +109,8 @@ type fakeTopics struct {
 	byURL   map[string]*domain.Topic
 	created []*domain.Topic
 	updated []*domain.Topic
+	// intervals records the check-interval argument of each Update call.
+	intervals []*int
 }
 
 func (f *fakeTopics) Create(_ context.Context, t *domain.Topic) (*domain.Topic, error) {
@@ -128,7 +130,7 @@ func (f *fakeTopics) GetByURL(_ context.Context, _ uuid.UUID, url string) (*doma
 }
 func (f *fakeTopics) Update(_ context.Context, id, _ uuid.UUID, displayName string,
 	clientID, notifierID *uuid.UUID, downloadDir, category string,
-	flags repo.TopicFlags, extra map[string]any,
+	checkIntervalSec *int, flags repo.TopicFlags, extra map[string]any,
 ) (*domain.Topic, error) {
 	updated := &domain.Topic{
 		ID:                        id,
@@ -144,6 +146,7 @@ func (f *fakeTopics) Update(_ context.Context, id, _ uuid.UUID, displayName stri
 		Extra:                     extra,
 	}
 	f.updated = append(f.updated, updated)
+	f.intervals = append(f.intervals, checkIntervalSec)
 	return updated, nil
 }
 
@@ -321,6 +324,11 @@ func TestPoller_ExistingTopicRefreshesVariantMetadata(t *testing.T) {
 	if updated.Category != "manual-category" || updated.DownloadDir != "/manual" {
 		t.Errorf("UpdateExisting=false must preserve routing, got category=%q dir=%q",
 			updated.Category, updated.DownloadDir)
+	}
+	// The poller never edits the interval. Passing the one it read would write
+	// that stale read back over an edit the user saved meanwhile (PR #209, M-2).
+	if ts.intervals[0] != nil {
+		t.Errorf("poller must not pass a check interval, got %d", *ts.intervals[0])
 	}
 }
 

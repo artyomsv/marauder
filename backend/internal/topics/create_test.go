@@ -421,3 +421,41 @@ func TestBuildAndCreate_NotifyOnlyFlags_DefaultOff(t *testing.T) {
 		t.Errorf("want both flags false by default, got %+v", store.created)
 	}
 }
+
+// A check interval outside the allowed range must be refused before anything
+// is parsed or persisted: a 10-second interval hammers the tracker, and one
+// longer than a week is almost certainly a units mistake (minutes as seconds
+// the other way round). Zero still means "use the default" (issue #204).
+func TestBuildAndCreate_CheckIntervalRange(t *testing.T) {
+	cases := []struct {
+		name    string
+		sec     int
+		wantErr bool
+		want    int
+	}{
+		{"zero uses default", 0, false, defaultCheckIntervalSec},
+		{"minimum accepted", MinCheckIntervalSec, false, MinCheckIntervalSec},
+		{"maximum accepted", MaxCheckIntervalSec, false, MaxCheckIntervalSec},
+		{"below minimum refused", MinCheckIntervalSec - 1, true, 0},
+		{"above maximum refused", MaxCheckIntervalSec + 1, true, 0},
+		{"negative refused", -60, true, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &fakeStore{}
+			res, err := BuildAndCreate(context.Background(), store, CreateInput{URL: goodURL, CheckIntervalSec: tc.sec})
+			if tc.wantErr {
+				if !errors.Is(err, ErrCheckIntervalOutOfRange) {
+					t.Fatalf("want ErrCheckIntervalOutOfRange, got %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if res.Topic.CheckIntervalSec != tc.want {
+				t.Errorf("CheckIntervalSec = %d, want %d", res.Topic.CheckIntervalSec, tc.want)
+			}
+		})
+	}
+}

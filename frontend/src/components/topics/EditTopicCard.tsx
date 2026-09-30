@@ -4,6 +4,7 @@ import { motion } from "framer-motion";
 
 import { api, type Topic } from "@/lib/api";
 import { Card } from "@/components/ui/card";
+import { DEFAULT_CHECK_INTERVAL_SEC } from "@/lib/check-interval";
 import { TopicForm, type TopicFormValues } from "./TopicForm";
 
 interface EditTopicCardProps {
@@ -33,6 +34,7 @@ function initialFrom(topic: Topic): TopicFormValues {
     replaceDeleteData: topic.ReplaceDeleteData ?? true,
     notifyOnly: topic.NotifyOnly ?? false,
     notifyOnlyAnnounceCurrent: topic.NotifyOnlyAnnounceCurrent ?? false,
+    checkIntervalSec: topic.CheckIntervalSec || DEFAULT_CHECK_INTERVAL_SEC,
   };
 }
 
@@ -57,6 +59,7 @@ export function EditTopicCard({ topic, onClose, onSaved }: EditTopicCardProps) {
         replace_delete_data: v.replaceDeleteData,
         notify_only: v.notifyOnly,
         notify_only_announce_current: v.notifyOnlyAnnounceCurrent,
+        check_interval_sec: v.checkIntervalSec,
         quality: v.quality || undefined,
         start_season: v.startSeason ? parseInt(v.startSeason, 10) : undefined,
         start_episode: v.startEpisode ? parseInt(v.startEpisode, 10) : undefined,

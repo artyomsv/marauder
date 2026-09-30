@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.22.0] - 2026-09-29
+
+### Added
+
+- **You can now choose how often each topic is checked.** The add and edit
+  topic forms have a "Check interval" list, from 15 minutes to 7 days. A series
+  that gets a new episode once a week no longer needs a check every 15 minutes.
+  Each topic row shows its interval. The default for a new topic is still
+  15 minutes. When you make the interval shorter, the next check moves closer,
+  so it comes within the new interval. The API refuses an interval shorter than
+  5 minutes or longer than 7 days (`check_interval_sec` on `POST /topics` and
+  now also on `PUT /topics/{id}`). Ref #204
+
 ### Changed
 
 - **The default branch is now `master` (was `main`).** Links to files on

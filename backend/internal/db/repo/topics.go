@@ -552,10 +552,25 @@ type TopicFlags struct {
 }
 
 // Update edits a topic's user-editable fields (display name, client, notifier,
-// download dir, category, and the capability Extra map). It does NOT
-// touch url/tracker/status/hash/scheduling. Returns ErrNotFound when the
-// topic doesn't belong to the user.
-func (r *Topics) Update(ctx context.Context, id, userID uuid.UUID, displayName string, clientID, notifierID *uuid.UUID, downloadDir, category string, flags TopicFlags, extra map[string]any) (*domain.Topic, error) {
+// download dir, category, check interval, and the capability Extra map). It
+// does NOT touch url/tracker/status/hash. Returns ErrNotFound when the topic
+// doesn't belong to the user.
+//
+// checkIntervalSec is nil when the caller is not changing the interval. That
+// leaves the column alone rather than writing back a value the caller read
+// earlier, which could undo an edit saved in between (PR #209 review, M-2).
+//
+// The one scheduling write: a SHORTER check interval pulls next_check_at in to
+// at most one new interval from now (issue #204), or a 24h→1h edit could still
+// wait up to 24h for its first check. A longer or unchanged interval leaves it
+// alone. A topic that is already due — including one a worker is checking now —
+// is set to now(), not kept at its past value: next_check_at is half of the
+// scheduler's check-state token, and only a changed token makes the running
+// check's RecordCheckResult miss. Otherwise that check would persist a next
+// check computed from the OLD, longer interval (PR #209 review, M-1). Its
+// result is discarded and the topic is re-checked on the next tick — the same
+// bounded, self-correcting trade QueueRecheck makes.
+func (r *Topics) Update(ctx context.Context, id, userID uuid.UUID, displayName string, clientID, notifierID *uuid.UUID, downloadDir, category string, checkIntervalSec *int, flags TopicFlags, extra map[string]any) (*domain.Topic, error) {
 	raw, err := json.Marshal(extra)
 	if err != nil {
 		return nil, fmt.Errorf("topics: marshal extra: %w", err)
@@ -567,10 +582,14 @@ func (r *Topics) Update(ctx context.Context, id, userID uuid.UUID, displayName s
 		display_name = $3, client_id = $4, notifier_id = $5, download_dir = $6, category = $7,
 		extra = $8, replace_on_update = $9, replace_delete_data = $10,
 		notify_only = $11, notify_only_announce_current = $12,
+		check_interval_sec = COALESCE($13::int, check_interval_sec),
+		next_check_at = CASE WHEN $13::int < check_interval_sec
+			THEN LEAST(GREATEST(next_check_at, now()), now() + $13::int * interval '1 second')
+			ELSE next_check_at END,
 		display_name_is_placeholder = CASE WHEN display_name <> $3 THEN false ELSE display_name_is_placeholder END,
 		updated_at = now()
 	WHERE id = $1 AND user_id = $2
-	RETURNING `+topicColumns, id, userID, displayName, clientID, notifierID, downloadDir, category, raw, flags.ReplaceOnUpdate, flags.ReplaceDeleteData, flags.NotifyOnly, flags.NotifyOnlyAnnounceCurrent)
+	RETURNING `+topicColumns, id, userID, displayName, clientID, notifierID, downloadDir, category, raw, flags.ReplaceOnUpdate, flags.ReplaceDeleteData, flags.NotifyOnly, flags.NotifyOnlyAnnounceCurrent, checkIntervalSec)
 	t, err := scanTopic(row)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound

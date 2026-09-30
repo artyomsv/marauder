@@ -312,6 +312,16 @@ const ru: Record<string, string> = {
   "topics.notifyOnly.toggleBackNotice":
     "Выпуски, замеченные, пока тема была в режиме «только уведомления», скачаны не будут — загрузится только следующее изменение. Если нужен текущий выпуск, используйте «Сбросить» для этой темы.",
 
+  // Интервал проверки темы (issue #204)
+  "topics.interval.label": "Интервал проверки",
+  "topics.interval.help":
+    "Как часто Marauder проверяет, не вышел ли новый выпуск. Сериалу, который обновляется раз в неделю, не нужна проверка каждые несколько минут.",
+  "topics.interval.badgeTitle": "Проверяется каждые {interval}",
+  "topics.interval.seconds": "{n} с",
+  "topics.interval.minutes": "{n} мин",
+  "topics.interval.hours": "{n} ч",
+  "topics.interval.days": "{n} дн.",
+
   // Политика замены предыдущей версии при обновлении (issue #101)
   "topics.replaceOnUpdate.label": "Заменять предыдущую версию при обновлении",
   "topics.replaceOnUpdate.help":
