@@ -142,7 +142,10 @@ func (p *plugin) Add(ctx context.Context, rawConfig []byte, payload *domain.Payl
 		_ = mw.WriteField("category", category)
 	}
 	if opts.Paused {
+		// qBittorrent 5.0 renamed this field to "stopped". Send both: each
+		// version reads its own name and ignores the other.
 		_ = mw.WriteField("paused", "true")
+		_ = mw.WriteField("stopped", "true")
 	}
 	_ = mw.Close()
 
