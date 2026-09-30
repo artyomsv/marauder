@@ -9,13 +9,13 @@ import { Label } from "@/components/ui/label";
 import { QK } from "@/lib/queryKeys";
 import { useT } from "@/i18n";
 import { useDebouncedValue } from "@/lib/hooks/useDebouncedValue";
-import { useSystemInfo } from "@/lib/hooks/useSystemInfo";
 import { SeasonEpisodePicker, SELECT_CLASS } from "./SeasonEpisodePicker";
 import { TopicPreviewCard } from "./TopicPreviewCard";
 import { NotifierSelect } from "./NotifierSelect";
 import { CategoryField } from "./CategoryField";
 import { CheckIntervalSelect } from "./CheckIntervalSelect";
 import { UpdatePolicyFields } from "./UpdatePolicyFields";
+import { useUnsupportedClient } from "./useUnsupportedClient";
 
 // Shape of GET /trackers/match. Drives which optional sections the form
 // renders (quality, season/episode filter, credentials hint).
@@ -295,16 +295,9 @@ export function TopicForm({
     ? categoriesQuery.data.categories
     : [];
 
-  // Name the receiving client when it cannot pause or select files, so the
-  // update-policy settings can say they will not work there (issue #205).
-  const systemInfo = useSystemInfo().data;
-  const effectiveClient = clients.find((c) => c.id === effectiveClientId);
-  const effectivePlugin = systemInfo?.clients?.find((p) => p.name === effectiveClient?.client_name);
-  const unsupportedClient =
-    effectiveClient && effectivePlugin && !effectivePlugin.supports_file_selection
-      ? effectiveClient.display_name
-      : null;
+  const unsupportedClient = useUnsupportedClient(clients, effectiveClientId);
 
+  const episodic = !!match?.supports_episode_filter;
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     onSubmit({
@@ -321,8 +314,9 @@ export function TopicForm({
       replaceDeleteData: delivery.replaceDeleteData,
       notifyOnly: delivery.notifyOnly,
       notifyOnlyAnnounceCurrent: delivery.notifyOnlyAnnounceCurrent,
-      addPausedOnUpdate: delivery.addPausedOnUpdate,
-      onlyNewFiles: delivery.onlyNewFiles,
+      // Hidden for per-episode trackers; do not save state the user cannot see.
+      addPausedOnUpdate: !episodic && delivery.addPausedOnUpdate,
+      onlyNewFiles: !episodic && delivery.onlyNewFiles,
       checkIntervalSec: delivery.checkIntervalSec,
     });
   };
@@ -534,7 +528,7 @@ export function TopicForm({
               onlyNewFiles: delivery.onlyNewFiles,
             }}
             onChange={(v) => setDelivery((d) => ({ ...d, ...v }))}
-            episodic={!!match?.supports_episode_filter}
+            episodic={episodic}
             unsupportedClient={unsupportedClient}
           />
         </>
