@@ -115,6 +115,7 @@ type deliveriesRecorder interface {
 	Record(ctx context.Context, d *domain.TopicDelivery) (bool, error)
 	ListForTopic(ctx context.Context, topicID uuid.UUID) ([]*domain.TopicDelivery, error)
 	DeleteByInfohashes(ctx context.Context, topicID uuid.UUID, hashes []string) (int64, error)
+	LatestFiles(ctx context.Context, topicID uuid.UUID) ([]domain.TorrentFile, error)
 }
 
 // domainRotator is the subset of *domains.Store the scheduler uses to
@@ -475,6 +476,7 @@ func (s *Scheduler) runCheck(ctx context.Context, log zerolog.Logger, t *domain.
 	updated := check.Hash != "" && check.Hash != t.LastHash
 	var anySubmitted bool
 	var delivered []string
+	var deliveryNote string
 	var authorComment string
 	if updated {
 		log.Info().Str("old_hash", t.LastHash).Str("new_hash", check.Hash).Msg("topic updated")
@@ -551,7 +553,7 @@ func (s *Scheduler) runCheck(ctx context.Context, log zerolog.Logger, t *domain.
 
 			var dlErr error
 			var deliveredHashes []string
-			delivered, deliveredHashes, dlErr = s.downloadAllPending(ctx, log, t, tr, check, creds)
+			delivered, deliveredHashes, deliveryNote, dlErr = s.downloadAllPending(ctx, log, t, tr, check, creds)
 			anySubmitted = len(delivered) > 0
 			if dlErr != nil {
 				// A failed download loop must NOT advance the persisted hash.
@@ -600,7 +602,7 @@ func (s *Scheduler) runCheck(ctx context.Context, log zerolog.Logger, t *domain.
 	// New releases were pushed to a client this tick — notify the user's
 	// notifiers subscribed to the "updated" event (best-effort).
 	if anySubmitted {
-		s.notifyUpdated(ctx, t, delivered, authorComment)
+		s.notifyUpdated(ctx, t, delivered, deliveryNote, authorComment)
 	}
 
 	metrics.SchedulerTopicChecksTotal.WithLabelValues(t.TrackerName, "ok").Inc()
@@ -617,9 +619,10 @@ func (s *Scheduler) runCheck(ctx context.Context, log zerolog.Logger, t *domain.
 
 // notifyUpdated emits a download.submitted event summarising what was
 // delivered this tick. Best-effort: a nil emitter or zero deliveries is a
-// no-op. authorComment (may be empty) is the release author's latest tracker
-// comment, fetched once by runCheck for the whole update.
-func (s *Scheduler) notifyUpdated(ctx context.Context, t *domain.Topic, labels []string, authorComment string) {
+// no-op. note (may be empty) is the update policy's outcome for the delivery
+// (issue #205). authorComment (may be empty) is the release author's latest
+// tracker comment, fetched once by runCheck for the whole update.
+func (s *Scheduler) notifyUpdated(ctx context.Context, t *domain.Topic, labels []string, note, authorComment string) {
 	if s.emit == nil || len(labels) == 0 {
 		return
 	}
@@ -640,6 +643,11 @@ func (s *Scheduler) notifyUpdated(ctx context.Context, t *domain.Topic, labels [
 		if overflow > 0 {
 			body += fmt.Sprintf(" (+%d more)", overflow)
 		}
+	}
+	// The update policy's outcome (issue #205) — the user may have to act in
+	// the client, so it rides on the same notification.
+	if note != "" {
+		body += "\n" + note
 	}
 	s.emit.Emit(ctx, events.Event{
 		UserID: t.UserID, TopicID: &t.ID, NotifierID: t.NotifierID,
@@ -903,12 +911,14 @@ func (s *Scheduler) loadCredentials(ctx context.Context, checkCtx context.Contex
 // downloadAllPending drains every pending episode for a topic in one
 // tick. The loop runs at most cfg.SchedulerMaxEpisodesPerTick times.
 //
-// Returns (delivered, deliveredHashes, error). delivered is the human label of
-// every payload successfully handed off to the client this tick (episodic:
-// "s05e01"; single-torrent: the topic display name); deliveredHashes is the
-// BitTorrent infohash of each of those payloads (used by the replace-on-update
-// policy to never remove a torrent it just delivered). error is non-nil if the
-// loop terminated abnormally. The caller uses len(delivered) > 0 to decide
+// Returns (delivered, deliveredHashes, note, error). delivered is the human
+// label of every payload successfully handed off to the client this tick
+// (episodic: "s05e01"; single-torrent: the topic display name);
+// deliveredHashes is the BitTorrent infohash of each of those payloads (used
+// by the replace-on-update policy to never remove a torrent it just
+// delivered). note is the update-policy outcome of the last delivery (issue
+// #205), empty for plain deliveries. error is non-nil if the loop terminated
+// abnormally. The caller uses len(delivered) > 0 to decide
 // whether to record an "updated" timestamp and notify even when an error
 // occurred mid-loop.
 //
@@ -916,7 +926,8 @@ func (s *Scheduler) loadCredentials(ctx context.Context, checkCtx context.Contex
 // TrackerHTTPTimeout deadline so a slow download cannot starve the
 // remaining iterations. Persistence calls (MarkEpisodeDownloaded) use
 // the parent ctx so they survive a per-iteration deadline expiry.
-func (s *Scheduler) downloadAllPending(ctx context.Context, log zerolog.Logger, t *domain.Topic, tr registry.Tracker, check *domain.Check, creds *domain.TrackerCredential) (delivered []string, deliveredHashes []string, err error) {
+func (s *Scheduler) downloadAllPending(ctx context.Context, log zerolog.Logger, t *domain.Topic, tr registry.Tracker, check *domain.Check, creds *domain.TrackerCredential) (delivered []string, deliveredHashes []string, note string, err error) {
+	episodic := isEpisodic(tr)
 	maxPerTick := s.cfg.SchedulerMaxEpisodesPerTick
 	if maxPerTick <= 0 {
 		maxPerTick = 25
@@ -949,12 +960,13 @@ func (s *Scheduler) downloadAllPending(ctx context.Context, log zerolog.Logger, 
 				// episode) is a legitimate no-op, not a failure; returning
 				// nil lets runCheck advance the hash to the now-current
 				// state instead of erroring and stranding the topic.
-				return delivered, deliveredHashes, nil
+				return delivered, deliveredHashes, note, nil
 			}
-			return delivered, deliveredHashes, derr
+			return delivered, deliveredHashes, note, derr
 		}
 
-		if err := s.submitToClient(ctx, log, t, payload, label); err != nil {
+		n, err := s.submitToClient(ctx, log, t, payload, label, episodic)
+		if err != nil {
 			if errors.Is(err, repo.ErrStaleCheckResult) {
 				// The pre-submit guard refused: the topic's check state changed
 				// after this worker was dispatched, so nothing was handed to the
@@ -965,7 +977,7 @@ func (s *Scheduler) downloadAllPending(ctx context.Context, log zerolog.Logger, 
 				// delivered stays delivered and reported.
 				log.Info().Str("label", label).
 					Msg("submission skipped: another write won the state guard")
-				return delivered, deliveredHashes, nil
+				return delivered, deliveredHashes, note, nil
 			}
 			metrics.SchedulerTopicChecksTotal.WithLabelValues(t.TrackerName, "submit_error").Inc()
 			// Returned as-is: sendViaClient marks the one failure that means
@@ -974,8 +986,9 @@ func (s *Scheduler) downloadAllPending(ctx context.Context, log zerolog.Logger, 
 			// undecryptable client config are outages, telling the user to
 			// check that a client is running when the actual fault is
 			// configuration they can see and fix.
-			return delivered, deliveredHashes, err
+			return delivered, deliveredHashes, note, err
 		}
+		note = n
 		// Record the human label of what was just delivered. Episodic
 		// trackers supply it via pending_human; single-torrent trackers fall
 		// back to the topic display name (same label recordDelivery uses).
@@ -997,7 +1010,7 @@ func (s *Scheduler) downloadAllPending(ctx context.Context, log zerolog.Logger, 
 		pending := extra.StringSlice(check.Extra, "pending_episodes")
 		if len(pending) == 0 {
 			// Single-payload plugin (most trackers) — done.
-			return delivered, deliveredHashes, nil
+			return delivered, deliveredHashes, note, nil
 		}
 		if err := s.topics.MarkEpisodeDownloaded(ctx, t, pending[0]); err != nil {
 			if errors.Is(err, repo.ErrStaleCheckResult) {
@@ -1008,15 +1021,15 @@ func (s *Scheduler) downloadAllPending(ctx context.Context, log zerolog.Logger, 
 				log.Info().
 					Str("packed", pending[0]).
 					Msg("episode mark discarded: another write won the state guard")
-				return delivered, deliveredHashes, nil
+				return delivered, deliveredHashes, note, nil
 			}
-			return delivered, deliveredHashes, fmt.Errorf("%w: %w", errStatePersist, err)
+			return delivered, deliveredHashes, note, fmt.Errorf("%w: %w", errStatePersist, err)
 		}
 		log.Info().Str("packed", pending[0]).Msg("marked episode downloaded")
 
 		// Derive remaining locally; no second tr.Check call needed.
 		if len(pending) <= 1 {
-			return delivered, deliveredHashes, nil
+			return delivered, deliveredHashes, note, nil
 		}
 		check.Extra["pending_episodes"] = pending[1:]
 		// Keep the human labels aligned with the packed list as we consume.
@@ -1031,7 +1044,7 @@ func (s *Scheduler) downloadAllPending(ctx context.Context, log zerolog.Logger, 
 		log.Warn().Int("max_per_tick", maxPerTick).Msg("scheduler hit per-tick episode cap")
 		metrics.SchedulerEpisodesPerTickCappedTotal.WithLabelValues(t.TrackerName).Inc()
 	}
-	return delivered, deliveredHashes, nil
+	return delivered, deliveredHashes, note, nil
 }
 
 // isNoPendingError reports whether err signals that a per-episode
@@ -1042,15 +1055,15 @@ func isNoPendingError(err error) bool {
 	return errors.Is(err, registry.ErrNoPendingEpisodes)
 }
 
-func (s *Scheduler) submitToClient(ctx context.Context, log zerolog.Logger, t *domain.Topic, payload *domain.Payload, label string) error {
+func (s *Scheduler) submitToClient(ctx context.Context, log zerolog.Logger, t *domain.Topic, payload *domain.Payload, label string, episodic bool) (string, error) {
 	if t.ClientID == nil {
 		// No explicit client — fall back to the user's default client,
 		// if any.
 		def, err := s.clients.GetDefault(ctx, t.UserID)
 		if err != nil {
-			return errors.New("no client configured for this topic and no default client")
+			return "", errors.New("no client configured for this topic and no default client")
 		}
-		return s.sendViaClient(ctx, log, def, t, payload, label)
+		return s.sendViaClient(ctx, log, def, t, payload, label, episodic)
 	}
 	cfg, err := s.clients.GetByID(ctx, *t.ClientID, t.UserID)
 	if err != nil {
@@ -1060,22 +1073,23 @@ func (s *Scheduler) submitToClient(ctx context.Context, log zerolog.Logger, t *d
 		// theoretical — RotateFailureThreshold is 2 within 5m, and rotation
 		// mutates the in-memory active domain before it persists, so it takes
 		// effect even while the DB that would record it is down.
-		return fmt.Errorf("%w: load client: %w", errStatePersist, err)
+		return "", fmt.Errorf("%w: load client: %w", errStatePersist, err)
 	}
-	return s.sendViaClient(ctx, log, cfg, t, payload, label)
+	return s.sendViaClient(ctx, log, cfg, t, payload, label, episodic)
 }
 
-func (s *Scheduler) sendViaClient(ctx context.Context, log zerolog.Logger, cfg *domain.Client, t *domain.Topic, payload *domain.Payload, label string) error {
+func (s *Scheduler) sendViaClient(ctx context.Context, log zerolog.Logger, cfg *domain.Client, t *domain.Topic, payload *domain.Payload, label string, episodic bool) (string, error) {
 	clientPlugin := s.lookupClient(cfg.ClientName)
 	if clientPlugin == nil {
 		metrics.ClientSubmitTotal.WithLabelValues(cfg.ClientName, "no_plugin").Inc()
-		return fmt.Errorf("client plugin %q not installed", cfg.ClientName)
+		return "", fmt.Errorf("client plugin %q not installed", cfg.ClientName)
 	}
 	rawConfig, err := s.master.Decrypt(cfg.ConfigEnc, cfg.ConfigNonce)
 	if err != nil {
 		metrics.ClientSubmitTotal.WithLabelValues(cfg.ClientName, "decrypt_error").Inc()
-		return fmt.Errorf("decrypt client config: %w", err)
+		return "", fmt.Errorf("decrypt client config: %w", err)
 	}
+	plan := s.planDelivery(ctx, log, t, episodic, clientPlugin, payload)
 	// Last check before the irreversible step. Handing a payload to the client
 	// is the one thing in this tick that a reset cannot undo afterwards: the
 	// reset removes exactly the torrents its delivery snapshot listed, so a
@@ -1090,7 +1104,7 @@ func (s *Scheduler) sendViaClient(ctx context.Context, log zerolog.Logger, cfg *
 	// removing torrents sees a valid one. See repo.Topics.VerifyCheckState.
 	if err := s.topics.VerifyCheckState(ctx, t); err != nil {
 		if errors.Is(err, repo.ErrStaleCheckResult) {
-			return err
+			return "", err
 		}
 		// A DB failure here is not evidence the topic moved on. Log it and
 		// submit anyway: refusing to deliver on an unrelated blip would strand
@@ -1100,6 +1114,7 @@ func (s *Scheduler) sendViaClient(ctx context.Context, log zerolog.Logger, cfg *
 	if err := clientPlugin.Add(ctx, rawConfig, payload, domain.AddOptions{
 		DownloadDir: t.DownloadDir,
 		Category:    t.Category,
+		Paused:      plan.paused,
 	}); err != nil {
 		metrics.ClientSubmitTotal.WithLabelValues(cfg.ClientName, "error").Inc()
 		// The one failure on the whole submit path that genuinely means "the
@@ -1110,11 +1125,12 @@ func (s *Scheduler) sendViaClient(ctx context.Context, log zerolog.Logger, cfg *
 		// client configured" and the client-row read in submitToClient, the
 		// caller. The last of those is DB-backed and carries errStatePersist
 		// for the same reason this one carries errClientDelivery.
-		return fmt.Errorf("%w: %w", errClientDelivery, err)
+		return "", fmt.Errorf("%w: %w", errClientDelivery, err)
 	}
 	metrics.ClientSubmitTotal.WithLabelValues(cfg.ClientName, "ok").Inc()
-	s.recordDelivery(ctx, log, t, cfg, payload, label)
-	return nil
+	note := s.finishDelivery(ctx, log, t, cfg.ClientName, rawConfig, plan)
+	s.recordDelivery(ctx, log, t, cfg, payload, label, plan.files)
+	return note, nil
 }
 
 // recordDelivery logs what was just pushed to a client into
@@ -1123,8 +1139,10 @@ func (s *Scheduler) sendViaClient(ctx context.Context, log zerolog.Logger, cfg *
 // payload is the key that links this record to the client's own torrent
 // list. This is best-effort Tier-1 tracking: any failure (no recorder
 // wired, an undecodable payload, a DB error) is logged and swallowed — it
-// must never turn a successful download into a failed check.
-func (s *Scheduler) recordDelivery(ctx context.Context, log zerolog.Logger, t *domain.Topic, cfg *domain.Client, payload *domain.Payload, label string) {
+// must never turn a successful download into a failed check. files is the
+// payload's file list (nil when unknown), the baseline for the next update's
+// only-new-files selection (issue #205).
+func (s *Scheduler) recordDelivery(ctx context.Context, log zerolog.Logger, t *domain.Topic, cfg *domain.Client, payload *domain.Payload, label string, files []domain.TorrentFile) {
 	if s.deliveries == nil {
 		return
 	}
@@ -1142,6 +1160,7 @@ func (s *Scheduler) recordDelivery(ctx context.Context, log zerolog.Logger, t *d
 		Infohash: hash,
 		Label:    label,
 		ClientID: &clientID,
+		Files:    files,
 	}); err != nil {
 		log.Warn().Err(err).Msg("record delivery failed")
 	}

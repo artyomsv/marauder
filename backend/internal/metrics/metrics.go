@@ -116,6 +116,19 @@ var (
 		},
 		[]string{"client", "result"},
 	)
+
+	// SchedulerFileSelectionTotal counts outcomes of the per-topic "download
+	// only new files" policy (issue #205) by client and result: selected,
+	// no_new_files, paused_no_baseline, paused_magnet, paused_unreadable,
+	// unsupported, failed. Every result but "selected" needs the user to act
+	// in the client; "unsupported" means the whole torrent downloads.
+	SchedulerFileSelectionTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "marauder_scheduler_file_selection_total",
+			Help: "Outcomes of the download-only-new-files policy, partitioned by client and result.",
+		},
+		[]string{"client", "result"},
+	)
 )
 
 // Topic reset metrics ------------------------------------------------------

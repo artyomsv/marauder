@@ -300,6 +300,11 @@ type fakeDeliveries struct {
 	listErr error
 	// deletedHashes captures the hashes passed to DeleteByInfohashes.
 	deletedHashes []string
+
+	// latestFiles/latestErr are returned by LatestFiles (the only-new-files
+	// baseline, issue #205).
+	latestFiles []domain.TorrentFile
+	latestErr   error
 }
 
 func (f *fakeDeliveries) Record(_ context.Context, d *domain.TopicDelivery) (bool, error) {
@@ -314,6 +319,10 @@ func (f *fakeDeliveries) ListForTopic(_ context.Context, _ uuid.UUID) ([]*domain
 func (f *fakeDeliveries) DeleteByInfohashes(_ context.Context, _ uuid.UUID, hashes []string) (int64, error) {
 	f.deletedHashes = append(f.deletedHashes, hashes...)
 	return int64(len(hashes)), nil
+}
+
+func (f *fakeDeliveries) LatestFiles(_ context.Context, _ uuid.UUID) ([]domain.TorrentFile, error) {
+	return f.latestFiles, f.latestErr
 }
 
 // fakeClientPlugin satisfies registry.Client (and registry.WithRemoval) and
@@ -355,6 +364,49 @@ func (f *fakeClientPlugin) Remove(_ context.Context, _ []byte, hashes []string, 
 	f.removeHashes = append(f.removeHashes, hashes...)
 	f.removeDeleteData = deleteData
 	return f.removeErr
+}
+
+// fakeSelectingClient adds registry.WithFileSelection to fakeClientPlugin.
+// filesSeq is returned by successive Files calls (the last entry repeats), so
+// a test can model qBittorrent's asynchronous add.
+type fakeSelectingClient struct {
+	fakeClientPlugin
+	filesSeq    [][]domain.ClientFile
+	filesCalls  int
+	filesErr    error
+	skipped     []int
+	skipCalls   int
+	skipErr     error
+	startCalls  int
+	startErr    error
+	startedHash string
+}
+
+func (f *fakeSelectingClient) Files(_ context.Context, _ []byte, _ string) ([]domain.ClientFile, error) {
+	f.filesCalls++
+	if f.filesErr != nil {
+		return nil, f.filesErr
+	}
+	i := f.filesCalls - 1
+	if i >= len(f.filesSeq) {
+		i = len(f.filesSeq) - 1
+	}
+	if i < 0 {
+		return nil, nil
+	}
+	return f.filesSeq[i], nil
+}
+
+func (f *fakeSelectingClient) SkipFiles(_ context.Context, _ []byte, _ string, indices []int) error {
+	f.skipCalls++
+	f.skipped = indices
+	return f.skipErr
+}
+
+func (f *fakeSelectingClient) Start(_ context.Context, _ []byte, hash string) error {
+	f.startCalls++
+	f.startedHash = hash
+	return f.startErr
 }
 
 // --- Test setup helpers ------------------------------------------------
@@ -2419,7 +2471,7 @@ func TestNotifyUpdated_RoutesToTopicNotifier(t *testing.T) {
 	notifierID := uuid.New()
 	topic := &domain.Topic{ID: topicID, UserID: uuid.New(), DisplayName: "My Show", NotifierID: &notifierID}
 
-	s.notifyUpdated(context.Background(), topic, []string{"s01e01"}, "")
+	s.notifyUpdated(context.Background(), topic, []string{"s01e01"}, "", "")
 
 	evs := emit.ofType(events.DownloadSubmitted)
 	if len(evs) != 1 {
@@ -2440,7 +2492,7 @@ func TestNotifyUpdated_SingleLabelEqualsDisplayName_NoTitleDuplication(t *testin
 	s := &Scheduler{cfg: &config.Config{PublicBaseURL: "http://x"}, emit: emit}
 	topic := &domain.Topic{ID: uuid.New(), UserID: uuid.New(), DisplayName: "My Show"}
 
-	s.notifyUpdated(context.Background(), topic, []string{"My Show"}, "")
+	s.notifyUpdated(context.Background(), topic, []string{"My Show"}, "", "")
 
 	evs := emit.ofType(events.DownloadSubmitted)
 	if len(evs) != 1 {
@@ -2460,7 +2512,7 @@ func TestNotifyUpdated_NilNotifierID_GlobalFanOut(t *testing.T) {
 
 	topic := &domain.Topic{ID: topicID, UserID: uuid.New(), DisplayName: "My Show", NotifierID: nil}
 
-	s.notifyUpdated(context.Background(), topic, []string{"s01e01"}, "")
+	s.notifyUpdated(context.Background(), topic, []string{"s01e01"}, "", "")
 
 	evs := emit.ofType(events.DownloadSubmitted)
 	if len(evs) != 1 {
