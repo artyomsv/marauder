@@ -271,7 +271,8 @@ func TestRunCheck_OnlyNewFiles_SkipErrorStaysPaused(t *testing.T) {
 	f.topic.OnlyNewFiles = true
 	f.deliveries.latestFiles = v1Files
 	sel.filesSeq = [][]domain.ClientFile{v2Client}
-	sel.skipErr = errors.New("boom")
+	// Shaped like qbitStatusError: an HTML body must never reach a notifier.
+	sel.skipErr = errors.New("setFilePrio -> 500: <html>internal failure</html>")
 
 	f.s.runCheck(context.Background(), f.s.log, f.topic)
 
@@ -280,6 +281,55 @@ func TestRunCheck_OnlyNewFiles_SkipErrorStaysPaused(t *testing.T) {
 	}
 	if rec := f.lastRecord(t); !rec.updated || rec.errMsg != "" {
 		t.Errorf("record = %+v, want a clean updated check", rec)
+	}
+	body := submittedBody(t, f)
+	if strings.Contains(body, "<html>") || strings.Contains(body, "setFilePrio") {
+		t.Errorf("body = %q leaks the raw client error", body)
+	}
+	if !strings.Contains(body, "skipping the old files failed") {
+		t.Errorf("body = %q, want the failed step named", body)
+	}
+}
+
+// With a baseline that shares no file with the update there is nothing to
+// skip, but Start must still wait until the client knows the torrent: a
+// qBittorrent add is asynchronous, and a Start sent too early is lost.
+func TestRunCheck_OnlyNewFiles_DisjointBaselineWaitsBeforeStart(t *testing.T) {
+	orig := filesPollInterval
+	filesPollInterval = time.Millisecond
+	t.Cleanup(func() { filesPollInterval = orig })
+
+	f, sel := selectingFixture(t, torrentTracker(torrentmetatest.Torrent("Show S01", v2Files)))
+	f.topic.OnlyNewFiles = true
+	f.deliveries.latestFiles = []domain.TorrentFile{{Path: "Old.mkv", Size: 1}}
+	sel.filesSeq = [][]domain.ClientFile{nil, v2Client}
+
+	f.s.runCheck(context.Background(), f.s.log, f.topic)
+
+	if sel.filesCalls != 2 || sel.skipCalls != 0 || sel.startCalls != 1 {
+		t.Errorf("files=%d skip=%d start=%d, want 2 polls, no skip, one start",
+			sel.filesCalls, sel.skipCalls, sel.startCalls)
+	}
+}
+
+// The delivery row (the next update's baseline) is written before file
+// selection starts, so a shutdown during the selection wait cannot lose it.
+func TestRunCheck_OnlyNewFiles_RecordsDeliveryBeforeSelection(t *testing.T) {
+	f, sel := selectingFixture(t, torrentTracker(torrentmetatest.Torrent("Show S01", v2Files)))
+	f.topic.OnlyNewFiles = true
+	f.deliveries.latestFiles = v1Files
+	sel.filesSeq = [][]domain.ClientFile{v2Client}
+	recordedAtSelection := -1
+	sel.onFiles = func() {
+		if recordedAtSelection < 0 {
+			recordedAtSelection = len(f.deliveries.recorded)
+		}
+	}
+
+	f.s.runCheck(context.Background(), f.s.log, f.topic)
+
+	if recordedAtSelection != 1 {
+		t.Errorf("deliveries recorded when selection began = %d, want 1", recordedAtSelection)
 	}
 }
 

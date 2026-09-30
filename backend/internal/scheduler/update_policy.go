@@ -163,6 +163,8 @@ func (s *Scheduler) finishDelivery(ctx context.Context, log zerolog.Logger, t *d
 	case plan.selection != nil:
 		return s.selectNewFiles(ctx, log, t, clientName, rawConfig, plan.selection)
 	case plan.fallbackResult != "":
+		log.Info().Str("client", clientName).Str("result", plan.fallbackResult).
+			Msg("only-new-files could not select files")
 		metrics.SchedulerFileSelectionTotal.WithLabelValues(clientName, plan.fallbackResult).Inc()
 		return plan.fallbackNote
 	case plan.paused:
@@ -177,37 +179,52 @@ func (s *Scheduler) finishDelivery(ctx context.Context, log zerolog.Logger, t *d
 func (s *Scheduler) selectNewFiles(ctx context.Context, log zerolog.Logger, t *domain.Topic, clientName string, rawConfig []byte, sel *fileSelection) string {
 	newCount := sel.total - len(sel.skip)
 	if newCount == 0 {
+		log.Info().Str("client", clientName).Str("result", selNoNewFiles).
+			Msg("only-new-files: update has no new files; torrent left paused")
 		metrics.SchedulerFileSelectionTotal.WithLabelValues(clientName, selNoNewFiles).Inc()
 		return "Added paused: this update has no new files."
 	}
 	ctx, cancel := context.WithTimeout(ctx, fileSelectionTimeout)
 	defer cancel()
-	fail := func(err error) string {
-		log.Warn().Err(err).Msg("file selection failed; torrent left paused")
+	// fail names the step for the notification and keeps the error for the
+	// log only: a client error can carry an HTTP body (an HTML error page),
+	// which has no place in a Telegram message or an email.
+	fail := func(step string, err error) string {
+		log.Warn().Err(err).Str("client", clientName).Str("result", selFailed).Str("step", step).
+			Msg("file selection failed; torrent left paused")
 		metrics.SchedulerFileSelectionTotal.WithLabelValues(clientName, selFailed).Inc()
-		return fmt.Sprintf("Added paused: file selection did not finish (%v). Check the torrent in your client.", err)
+		return fmt.Sprintf("Added paused: file selection did not finish (%s). Check the torrent in your client.", step)
+	}
+	// Always wait for the file list, even with nothing to skip: a qBittorrent
+	// add is asynchronous, and a Start sent before the client knows the
+	// torrent is lost, leaving it paused behind a "Downloading" note.
+	clientFiles, err := waitForFiles(ctx, rawConfig, sel)
+	if err != nil {
+		return fail("could not list the files", err)
 	}
 	if len(sel.skip) > 0 {
-		clientFiles, err := waitForFiles(ctx, rawConfig, sel)
-		if err != nil {
-			return fail(err)
-		}
 		indices, matched := torrentmeta.MatchSkip(clientFiles, sel.skip)
 		if matched != len(sel.skip) {
 			// Starting now would download an old file the client did not show.
-			return fail(fmt.Errorf("the client listed %d of %d old files", matched, len(sel.skip)))
+			return fail(fmt.Sprintf("the client listed %d of %d old files", matched, len(sel.skip)), nil)
 		}
 		if err := sel.selector.SkipFiles(ctx, rawConfig, sel.hash, indices); err != nil {
-			return fail(fmt.Errorf("skip files: %w", err))
+			return fail("skipping the old files failed", err)
 		}
 	}
 	if t.AddPausedOnUpdate {
+		log.Info().Str("client", clientName).Str("result", selSelected).
+			Int("new", newCount).Int("total", sel.total).
+			Msg("only-new-files: new files selected; torrent left paused")
 		metrics.SchedulerFileSelectionTotal.WithLabelValues(clientName, selSelected).Inc()
 		return fmt.Sprintf("Added paused with %d new of %d files selected.", newCount, sel.total)
 	}
 	if err := sel.selector.Start(ctx, rawConfig, sel.hash); err != nil {
-		return fail(fmt.Errorf("start: %w", err))
+		return fail("starting the torrent failed", err)
 	}
+	log.Info().Str("client", clientName).Str("result", selSelected).
+		Int("new", newCount).Int("total", sel.total).
+		Msg("only-new-files: new files selected; torrent started")
 	metrics.SchedulerFileSelectionTotal.WithLabelValues(clientName, selSelected).Inc()
 	return fmt.Sprintf("Downloading %d new of %d files.", newCount, sel.total)
 }

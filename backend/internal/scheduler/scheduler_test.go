@@ -380,10 +380,16 @@ type fakeSelectingClient struct {
 	startCalls  int
 	startErr    error
 	startedHash string
+	// onFiles runs at the top of every Files call, so a test can observe
+	// what the scheduler had already done when selection began.
+	onFiles func()
 }
 
 func (f *fakeSelectingClient) Files(_ context.Context, _ []byte, _ string) ([]domain.ClientFile, error) {
 	f.filesCalls++
+	if f.onFiles != nil {
+		f.onFiles()
+	}
 	if f.filesErr != nil {
 		return nil, f.filesErr
 	}

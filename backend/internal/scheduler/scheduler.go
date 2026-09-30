@@ -1128,9 +1128,12 @@ func (s *Scheduler) sendViaClient(ctx context.Context, log zerolog.Logger, cfg *
 		return "", fmt.Errorf("%w: %w", errClientDelivery, err)
 	}
 	metrics.ClientSubmitTotal.WithLabelValues(cfg.ClientName, "ok").Inc()
-	note := s.finishDelivery(ctx, log, t, cfg.ClientName, rawConfig, plan)
+	// Recorded before file selection, which can wait up to
+	// fileSelectionTimeout: a shutdown cancelling ctx in that wait must not
+	// lose the row, which is the next update's baseline and what reset,
+	// replace and the progress watcher act on.
 	s.recordDelivery(ctx, log, t, cfg, payload, label, plan.files)
-	return note, nil
+	return s.finishDelivery(ctx, log, t, cfg.ClientName, rawConfig, plan), nil
 }
 
 // recordDelivery logs what was just pushed to a client into
