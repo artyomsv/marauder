@@ -284,7 +284,7 @@ func TestFiles_DropsPaddingFiles(t *testing.T) {
 
 func TestFiles_PrefersUTF8Path(t *testing.T) {
 	data := []byte("d4:infod5:filesl" +
-		"d6:lengthi5e4:pathl3:bade10:path.utf-8l4:gooddee" +
+		"d6:lengthi5e4:pathl3:bade10:path.utf-8l4:goodee" +
 		"e4:name1:x12:piece lengthi16384e6:pieces0:ee")
 	got, err := Files(data)
 	if err != nil {
