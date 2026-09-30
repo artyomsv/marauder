@@ -41,7 +41,7 @@ const topicColumns = `id, user_id, tracker_name, url, display_name,
 		last_checked_at, last_updated_at, next_check_at,
 		check_interval_sec, consecutive_errors, status,
 		COALESCE(last_error,''), COALESCE(last_error_code,''), created_at, updated_at, display_name_is_placeholder,
-		replace_on_update, replace_delete_data, notify_only, notify_only_announce_current`
+		replace_on_update, replace_delete_data, notify_only, notify_only_announce_current, add_paused_on_update, only_new_files`
 
 func scanTopic(row pgx.Row) (*domain.Topic, error) {
 	var t domain.Topic
@@ -55,7 +55,7 @@ func scanTopic(row pgx.Row) (*domain.Topic, error) {
 		&lastChecked, &lastUpdated, &t.NextCheckAt,
 		&t.CheckIntervalSec, &t.ConsecutiveErrors, &status,
 		&t.LastError, &t.LastErrorCode, &t.CreatedAt, &t.UpdatedAt, &t.DisplayNameIsPlaceholder,
-		&t.ReplaceOnUpdate, &t.ReplaceDeleteData, &t.NotifyOnly, &t.NotifyOnlyAnnounceCurrent,
+		&t.ReplaceOnUpdate, &t.ReplaceDeleteData, &t.NotifyOnly, &t.NotifyOnlyAnnounceCurrent, &t.AddPausedOnUpdate, &t.OnlyNewFiles,
 	)
 	if err != nil {
 		return nil, err
@@ -87,14 +87,15 @@ func (r *Topics) Create(ctx context.Context, t *domain.Topic) (*domain.Topic, er
 INSERT INTO topics (user_id, tracker_name, url, display_name, image_url, client_id, notifier_id,
                     download_dir, category, extra, check_interval_sec, next_check_at, status,
                     display_name_is_placeholder, replace_on_update, replace_delete_data,
-                    notify_only, notify_only_announce_current)
-VALUES ($1,$2,$3,$4,NULLIF($5,''),$6,$7,NULLIF($8,''),NULLIF($9,''),$10,$11,$12,$13,$14,$15,$16,$17,$18)
+                    notify_only, notify_only_announce_current, add_paused_on_update, only_new_files)
+VALUES ($1,$2,$3,$4,NULLIF($5,''),$6,$7,NULLIF($8,''),NULLIF($9,''),$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
 RETURNING ` + topicColumns
 	row := r.pool.QueryRow(ctx, q,
 		t.UserID, t.TrackerName, t.URL, t.DisplayName, t.ImageURL, t.ClientID, t.NotifierID,
 		t.DownloadDir, t.Category, extra, t.CheckIntervalSec, t.NextCheckAt, string(t.Status),
 		t.DisplayNameIsPlaceholder, t.ReplaceOnUpdate, t.ReplaceDeleteData,
 		t.NotifyOnly, t.NotifyOnlyAnnounceCurrent,
+		t.AddPausedOnUpdate, t.OnlyNewFiles,
 	)
 	return scanTopic(row)
 }
@@ -549,6 +550,10 @@ type TopicFlags struct {
 	// (issue #184). See domain.Topic for the full semantics.
 	NotifyOnly                bool
 	NotifyOnlyAnnounceCurrent bool
+	// AddPausedOnUpdate / OnlyNewFiles are the update policy (issue #205).
+	// See domain.Topic for the full semantics.
+	AddPausedOnUpdate bool
+	OnlyNewFiles      bool
 }
 
 // Update edits a topic's user-editable fields (display name, client, notifier,
@@ -587,9 +592,10 @@ func (r *Topics) Update(ctx context.Context, id, userID uuid.UUID, displayName s
 			THEN LEAST(GREATEST(next_check_at, now()), now() + $13::int * interval '1 second')
 			ELSE next_check_at END,
 		display_name_is_placeholder = CASE WHEN display_name <> $3 THEN false ELSE display_name_is_placeholder END,
+		add_paused_on_update = $14, only_new_files = $15,
 		updated_at = now()
 	WHERE id = $1 AND user_id = $2
-	RETURNING `+topicColumns, id, userID, displayName, clientID, notifierID, downloadDir, category, raw, flags.ReplaceOnUpdate, flags.ReplaceDeleteData, flags.NotifyOnly, flags.NotifyOnlyAnnounceCurrent, checkIntervalSec)
+	RETURNING `+topicColumns, id, userID, displayName, clientID, notifierID, downloadDir, category, raw, flags.ReplaceOnUpdate, flags.ReplaceDeleteData, flags.NotifyOnly, flags.NotifyOnlyAnnounceCurrent, checkIntervalSec, flags.AddPausedOnUpdate, flags.OnlyNewFiles)
 	t, err := scanTopic(row)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound

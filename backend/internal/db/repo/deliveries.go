@@ -2,6 +2,8 @@ package repo
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -18,6 +20,7 @@ import (
 type deliveriesPool interface {
 	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 }
 
 // Deliveries is the repository for topic_deliveries — the record of every
@@ -34,17 +37,57 @@ func NewDeliveries(pool *pgxpool.Pool) *Deliveries {
 // Record inserts a delivery, idempotently: re-detecting the same release
 // (same topic + infohash) is a no-op rather than a duplicate row. Returns
 // true when a new row was inserted, false when the delivery already
-// existed. The label is only set on first insert.
+// existed. The label and file list are only set on first insert — an
+// infohash's file list cannot change, so there is nothing to update.
 func (r *Deliveries) Record(ctx context.Context, d *domain.TopicDelivery) (bool, error) {
 	const q = `
-INSERT INTO topic_deliveries (topic_id, infohash, label, client_id)
-VALUES ($1, $2, $3, $4)
+INSERT INTO topic_deliveries (topic_id, infohash, label, client_id, files)
+VALUES ($1, $2, $3, $4, $5)
 ON CONFLICT (topic_id, infohash) DO NOTHING`
-	ct, err := r.pool.Exec(ctx, q, d.TopicID, d.Infohash, d.Label, d.ClientID)
+	// A nil list is stored as NULL ("unknown"), which LatestFiles skips; an
+	// empty list is a known torrent with no content files and is stored as [].
+	var files any
+	if d.Files != nil {
+		raw, err := json.Marshal(d.Files)
+		if err != nil {
+			return false, fmt.Errorf("deliveries: marshal files: %w", err)
+		}
+		files = raw
+	}
+	ct, err := r.pool.Exec(ctx, q, d.TopicID, d.Infohash, d.Label, d.ClientID, files)
 	if err != nil {
 		return false, fmt.Errorf("deliveries: record: %w", err)
 	}
 	return ct.RowsAffected() > 0, nil
+}
+
+// LatestFiles returns the file list of the topic's newest delivery that has
+// one — the baseline the download-only-new-files policy (issue #205) compares
+// an update with. (nil, nil) means no delivery has a known list. Rows without
+// a list (magnets, pre-0017 rows) are skipped rather than ending the search,
+// so a magnet delivery in between does not erase the baseline.
+func (r *Deliveries) LatestFiles(ctx context.Context, topicID uuid.UUID) ([]domain.TorrentFile, error) {
+	const q = `
+SELECT files FROM topic_deliveries
+WHERE topic_id = $1 AND files IS NOT NULL
+ORDER BY delivered_at DESC
+LIMIT 1`
+	var raw []byte
+	err := r.pool.QueryRow(ctx, q, topicID).Scan(&raw)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("deliveries: latest files: %w", err)
+	}
+	var files []domain.TorrentFile
+	if err := json.Unmarshal(raw, &files); err != nil {
+		return nil, fmt.Errorf("deliveries: decode files: %w", err)
+	}
+	if files == nil {
+		files = []domain.TorrentFile{}
+	}
+	return files, nil
 }
 
 // ListForTopic returns a topic's deliveries, newest first.

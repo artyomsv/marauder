@@ -30,7 +30,7 @@ func TestDeliveries_Record_InsertsNew(t *testing.T) {
 	topicID := uuid.New()
 	clientID := uuid.New()
 	mock.ExpectExec(`INSERT INTO topic_deliveries`).
-		WithArgs(topicID, "abc123", "s02e06", &clientID).
+		WithArgs(topicID, "abc123", "s02e06", &clientID, nil).
 		WillReturnResult(pgconn.NewCommandTag("INSERT 0 1"))
 
 	inserted, err := repo.Record(context.Background(), &domain.TopicDelivery{
@@ -87,7 +87,7 @@ func TestDeliveries_Record_DuplicateIsNoOp(t *testing.T) {
 
 	topicID := uuid.New()
 	mock.ExpectExec(`INSERT INTO topic_deliveries`).
-		WithArgs(topicID, "dup", "", (*uuid.UUID)(nil)).
+		WithArgs(topicID, "dup", "", (*uuid.UUID)(nil), nil).
 		WillReturnResult(pgconn.NewCommandTag("INSERT 0 0")) // ON CONFLICT DO NOTHING
 
 	inserted, err := repo.Record(context.Background(), &domain.TopicDelivery{
@@ -261,5 +261,37 @@ func TestDeliveries_DeleteForTopic_DBError(t *testing.T) {
 
 	if _, err := repo.DeleteForTopic(context.Background(), uuid.New(), uuid.New()); !errors.Is(err, dbErr) {
 		t.Fatalf("DeleteForTopic: want wrapped %v, got %v", dbErr, err)
+	}
+}
+
+func TestDeliveries_Record_StoresFiles(t *testing.T) {
+	repo, mock := newMockDeliveries(t)
+	t.Cleanup(func() { assertExpectationsMet(t, mock) })
+
+	topicID := uuid.New()
+	mock.ExpectExec(`INSERT INTO topic_deliveries \(topic_id, infohash, label, client_id, files\)`).
+		WithArgs(topicID, "abc", "Show", (*uuid.UUID)(nil), []byte(`[{"path":"E01.mkv","size":100}]`)).
+		WillReturnResult(pgconn.NewCommandTag("INSERT 0 1"))
+
+	if _, err := repo.Record(context.Background(), &domain.TopicDelivery{
+		TopicID: topicID, Infohash: "abc", Label: "Show",
+		Files: []domain.TorrentFile{{Path: "E01.mkv", Size: 100}},
+	}); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+}
+
+func TestDeliveries_LatestFiles_NoRowsIsNil(t *testing.T) {
+	repo, mock := newMockDeliveries(t)
+	t.Cleanup(func() { assertExpectationsMet(t, mock) })
+
+	topicID := uuid.New()
+	mock.ExpectQuery(`SELECT files FROM topic_deliveries\s+WHERE topic_id = \$1 AND files IS NOT NULL\s+ORDER BY delivered_at DESC\s+LIMIT 1`).
+		WithArgs(topicID).
+		WillReturnRows(pgxmock.NewRows([]string{"files"}))
+
+	got, err := repo.LatestFiles(context.Background(), topicID)
+	if err != nil || got != nil {
+		t.Errorf("LatestFiles = (%v, %v), want (nil, nil)", got, err)
 	}
 }
