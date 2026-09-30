@@ -311,7 +311,7 @@ export function TopicForm({
       downloadDir: delivery.downloadDir,
       category: delivery.category,
       replaceOnUpdate: delivery.replaceOnUpdate,
-      replaceDeleteData: delivery.replaceDeleteData,
+      replaceDeleteData: delivery.replaceDeleteData && !delivery.onlyNewFiles,
       notifyOnly: delivery.notifyOnly,
       notifyOnlyAnnounceCurrent: delivery.notifyOnlyAnnounceCurrent,
       // Hidden for per-episode trackers; do not save state the user cannot see.

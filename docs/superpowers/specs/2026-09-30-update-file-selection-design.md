@@ -332,7 +332,11 @@ but leaves its files on disk.
   (565 lines today, limit 250, tracked in `techdebt/frontend/`).
 - The block stays hidden for per-episode trackers and notify-only topics.
 - When "Download only new files" is checked: the delete-data box is unchecked,
-  disabled, and a one-line note explains why.
+  disabled, and a one-line note explains why. *Amended after review:* the form
+  submits what the box shows (`replaceDeleteData && !onlyNewFiles`), not the
+  stored value behind it — a topic saved with replace-on-update off keeps
+  `replace_delete_data` true, and turning replace-on-update on would otherwise
+  send the combination the API rejects with 422.
 - When the selected client — or the user's default client when "Default" is
   selected — has `supports_file_selection: false` in its `/system/info`
   `clients` entry, a note under the two new checkboxes says they are not

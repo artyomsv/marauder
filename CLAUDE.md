@@ -229,7 +229,9 @@ the check, since the delivery itself succeeded.
 User guide: `docs/update-policy.md`. Frontend: `components/topics/
 UpdatePolicyFields.tsx` (replace-on-update + the two flags, hidden for
 per-episode trackers and notify-only; the flags are sent as false for
-per-episode trackers) and `useUnsupportedClient.ts` (reads
+per-episode trackers, and `TopicForm` submits `replaceDeleteData &&
+!onlyNewFiles` — what the locked box shows, never the hidden stored `true`
+that would draw the 422) and `useUnsupportedClient.ts` (reads
 `clients[].supports_file_selection` from `/system/info` for the effective
 client, including the default one).
 

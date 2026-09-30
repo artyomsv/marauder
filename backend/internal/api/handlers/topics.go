@@ -276,14 +276,14 @@ type updateTopicReq struct {
 	// (issue #184), matching the replace-* flags above.
 	NotifyOnly                *bool `json:"notify_only,omitempty"`
 	NotifyOnlyAnnounceCurrent *bool `json:"notify_only_announce_current,omitempty"`
-
 	// Pointers so an omitted field preserves the topic's current value
 	// (issue #205), matching the other flags.
-	AddPausedOnUpdate *bool  `json:"add_paused_on_update,omitempty"`
-	OnlyNewFiles      *bool  `json:"only_new_files,omitempty"`
-	Quality           string `json:"quality,omitempty"`
-	StartSeason       *int   `json:"start_season,omitempty"`
-	StartEpisode      *int   `json:"start_episode,omitempty"`
+	AddPausedOnUpdate *bool `json:"add_paused_on_update,omitempty"`
+	OnlyNewFiles      *bool `json:"only_new_files,omitempty"`
+
+	Quality      string `json:"quality,omitempty"`
+	StartSeason  *int   `json:"start_season,omitempty"`
+	StartEpisode *int   `json:"start_episode,omitempty"`
 }
 
 // Update handles PUT /topics/{id}.
