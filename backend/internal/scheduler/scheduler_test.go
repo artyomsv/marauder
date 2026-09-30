@@ -301,11 +301,17 @@ type fakeDeliveries struct {
 	// deletedHashes captures the hashes passed to DeleteByInfohashes.
 	deletedHashes []string
 
-	// latestFiles/latestErr are returned by LatestFiles (the only-new-files
-	// baseline, issue #205).
+	// history holds delivery rows from earlier ticks, oldest first, for the
+	// only-new-files baseline (issue #205). latestFiles is shorthand for one
+	// such row, older than every history row, under an infohash no test
+	// payload has. latestErr fails LatestFiles.
+	history     []*domain.TopicDelivery
 	latestFiles []domain.TorrentFile
 	latestErr   error
 }
+
+// priorLatestHash is the infohash of the row latestFiles stands for.
+const priorLatestHash = "prior-delivery"
 
 func (f *fakeDeliveries) Record(_ context.Context, d *domain.TopicDelivery) (bool, error) {
 	f.recorded = append(f.recorded, d)
@@ -321,8 +327,25 @@ func (f *fakeDeliveries) DeleteByInfohashes(_ context.Context, _ uuid.UUID, hash
 	return int64(len(hashes)), nil
 }
 
-func (f *fakeDeliveries) LatestFiles(_ context.Context, _ uuid.UUID) ([]domain.TorrentFile, error) {
-	return f.latestFiles, f.latestErr
+// LatestFiles mirrors the repository's query: the newest row (recorded rows
+// are newer than history, history newer than latestFiles) whose infohash is
+// not excludeInfohash, and its files even when that is nil.
+func (f *fakeDeliveries) LatestFiles(_ context.Context, _ uuid.UUID, excludeInfohash string) ([]domain.TorrentFile, error) {
+	if f.latestErr != nil {
+		return nil, f.latestErr
+	}
+	var rows []*domain.TopicDelivery
+	if f.latestFiles != nil {
+		rows = append(rows, &domain.TopicDelivery{Infohash: priorLatestHash, Files: f.latestFiles})
+	}
+	rows = append(rows, f.history...)
+	rows = append(rows, f.recorded...)
+	for i := len(rows) - 1; i >= 0; i-- {
+		if rows[i].Infohash != excludeInfohash {
+			return rows[i].Files, nil
+		}
+	}
+	return nil, nil
 }
 
 // fakeClientPlugin satisfies registry.Client (and registry.WithRemoval) and

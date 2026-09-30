@@ -121,16 +121,18 @@ func (s *Scheduler) planDelivery(ctx context.Context, log zerolog.Logger, t *dom
 		plan.fallbackNote = "Added paused: could not read the torrent's file list. Pick the new files in your client."
 		return plan
 	}
-	baseline := s.latestFiles(ctx, log, t.ID)
-	if baseline == nil {
-		plan.fallbackResult = selPausedNoBaseline
-		plan.fallbackNote = "Added paused: no earlier file list to compare with. Pick the new files in your client."
-		return plan
-	}
+	// The hash comes first: the baseline read must pass over this update's own
+	// row, which a retried delivery already recorded on an earlier tick.
 	hash, err := infohash.FromTorrent(payload.TorrentFile)
 	if err != nil {
 		plan.fallbackResult = selPausedUnreadable
 		plan.fallbackNote = "Added paused: could not read the torrent's file list. Pick the new files in your client."
+		return plan
+	}
+	baseline := s.latestFiles(ctx, log, t.ID, hash)
+	if baseline == nil {
+		plan.fallbackResult = selPausedNoBaseline
+		plan.fallbackNote = "Added paused: no earlier file list to compare with. Pick the new files in your client."
 		return plan
 	}
 	plan.selection = &fileSelection{
@@ -142,13 +144,15 @@ func (s *Scheduler) planDelivery(ctx context.Context, log zerolog.Logger, t *dom
 	return plan
 }
 
-// latestFiles loads the baseline. A read error degrades to "no baseline",
-// which adds the torrent paused — never to downloading everything.
-func (s *Scheduler) latestFiles(ctx context.Context, log zerolog.Logger, topicID uuid.UUID) []domain.TorrentFile {
+// latestFiles loads the baseline for the update with infohash hash: the
+// newest other delivery's list, nil when that is unknown. A read error
+// degrades to "no baseline", which adds the torrent paused — never to
+// downloading everything.
+func (s *Scheduler) latestFiles(ctx context.Context, log zerolog.Logger, topicID uuid.UUID, hash string) []domain.TorrentFile {
 	if s.deliveries == nil {
 		return nil
 	}
-	files, err := s.deliveries.LatestFiles(ctx, topicID)
+	files, err := s.deliveries.LatestFiles(ctx, topicID, hash)
 	if err != nil {
 		log.Warn().Err(err).Msg("only-new-files: load previous file list failed")
 		return nil

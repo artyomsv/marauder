@@ -333,6 +333,58 @@ func TestRunCheck_OnlyNewFiles_RecordsDeliveryBeforeSelection(t *testing.T) {
 	}
 }
 
+// A tick that delivered v2 but whose check result was then discarded (a
+// shutdown mid-selection, a stale check-state token) leaves last_hash on v1,
+// so the next tick delivers v2 again — and v2's own row is already recorded.
+// Comparing v2 with itself would skip every file; the baseline must be the
+// newest row of ANOTHER infohash.
+func TestRunCheck_OnlyNewFiles_RetryIgnoresOwnDeliveryRow(t *testing.T) {
+	data := torrentmetatest.Torrent("Show S01", v2Files)
+	hash, err := infohash.FromTorrent(data)
+	if err != nil {
+		t.Fatalf("infohash: %v", err)
+	}
+	f, sel := selectingFixture(t, torrentTracker(data))
+	f.topic.OnlyNewFiles = true
+	f.deliveries.history = []*domain.TopicDelivery{
+		{Infohash: "v1-hash", Files: v1Files},
+		{Infohash: hash, Files: v2Files},
+	}
+	sel.filesSeq = [][]domain.ClientFile{v2Client}
+
+	f.s.runCheck(context.Background(), f.s.log, f.topic)
+
+	if !reflect.DeepEqual(sel.skipped, []int{0}) || sel.startCalls != 1 {
+		t.Errorf("skipped=%v start=%d, want only v1's E01 skipped and a start", sel.skipped, sel.startCalls)
+	}
+	if body := submittedBody(t, f); !strings.Contains(body, "Downloading 1 new of 2 files") {
+		t.Errorf("body = %q, want the selection note", body)
+	}
+}
+
+// v1 (.torrent) -> v2 (magnet: no file list; the user picked files by hand)
+// -> v3 (.torrent). v2's files are unknown, so comparing v3 with v1 would
+// re-download everything v2 added: v3 must arrive paused for the user.
+func TestRunCheck_OnlyNewFiles_MagnetInBetweenMeansNoBaseline(t *testing.T) {
+	v3Files := append(append([]domain.TorrentFile{}, v2Files...), domain.TorrentFile{Path: "E03.mkv", Size: 300})
+	f, sel := selectingFixture(t, torrentTracker(torrentmetatest.Torrent("Show S01", v3Files)))
+	f.topic.OnlyNewFiles = true
+	f.deliveries.history = []*domain.TopicDelivery{
+		{Infohash: "v1-hash", Files: v1Files},
+		{Infohash: "v2-magnet-hash"},
+	}
+
+	f.s.runCheck(context.Background(), f.s.log, f.topic)
+
+	if !sel.lastOpts.Paused || sel.filesCalls != 0 || sel.skipCalls != 0 || sel.startCalls != 0 {
+		t.Errorf("paused=%v files=%d skip=%d start=%d, want paused and untouched",
+			sel.lastOpts.Paused, sel.filesCalls, sel.skipCalls, sel.startCalls)
+	}
+	if body := submittedBody(t, f); !strings.Contains(body, "no earlier file list") {
+		t.Errorf("body = %q, want the no-baseline note", body)
+	}
+}
+
 func TestRunCheck_UpdatePolicy_IgnoredForEpisodicTracker(t *testing.T) {
 	tr := torrentTracker(torrentmetatest.Torrent("Show S01", v2Files))
 	tr.episodic = true

@@ -45,6 +45,8 @@ func TestTopicsUpdatePolicyRoundTrip(t *testing.T) {
 	}
 }
 
+// LatestFiles is the only-new-files baseline: the newest delivery of ANOTHER
+// infohash, and no baseline at all when that row has no file list.
 func TestDeliveriesLatestFiles(t *testing.T) {
 	pool := integrationPool(t)
 	ctx := context.Background()
@@ -52,38 +54,53 @@ func TestDeliveriesLatestFiles(t *testing.T) {
 	topic := seedTopic(t, pool, userID, domain.TopicStatusActive, map[string]any{})
 	d := NewDeliveries(pool)
 
-	got, err := d.LatestFiles(ctx, topic.ID)
+	got, err := d.LatestFiles(ctx, topic.ID, "zzzz")
 	if err != nil || got != nil {
 		t.Fatalf("LatestFiles on a topic without deliveries = (%v, %v), want (nil, nil)", got, err)
 	}
 
 	older := []domain.TorrentFile{{Path: "E01.mkv", Size: 100}}
 	newer := []domain.TorrentFile{{Path: "E01.mkv", Size: 100}, {Path: "E02.mkv", Size: 200}}
-	for _, rec := range []*domain.TopicDelivery{
-		{TopicID: topic.ID, Infohash: "aaaa", Label: "v1", Files: older},
-		{TopicID: topic.ID, Infohash: "bbbb", Label: "v2", Files: newer},
-		// A later magnet delivery has no file list and must not hide v2's.
-		{TopicID: topic.ID, Infohash: "cccc", Label: "v3"},
-	} {
+	record := func(rec *domain.TopicDelivery, age string) {
+		t.Helper()
 		if _, err := d.Record(ctx, rec); err != nil {
 			t.Fatalf("Record %s: %v", rec.Label, err)
 		}
-	}
-	// Pin the order explicitly: rows written in one test can share a timestamp.
-	for hash, age := range map[string]string{"aaaa": "3 hours", "bbbb": "2 hours", "cccc": "1 hour"} {
+		// Pin the order explicitly: rows written in one test can share a timestamp.
 		if _, err := pool.Exec(ctx,
 			`UPDATE topic_deliveries SET delivered_at = now() - $2::interval WHERE topic_id = $1 AND infohash = $3`,
-			topic.ID, age, hash); err != nil {
-			t.Fatalf("age %s: %v", hash, err)
+			topic.ID, age, rec.Infohash); err != nil {
+			t.Fatalf("age %s: %v", rec.Infohash, err)
 		}
 	}
+	record(&domain.TopicDelivery{TopicID: topic.ID, Infohash: "aaaa", Label: "v1", Files: older}, "3 hours")
+	record(&domain.TopicDelivery{TopicID: topic.ID, Infohash: "bbbb", Label: "v2", Files: newer}, "2 hours")
 
-	got, err = d.LatestFiles(ctx, topic.ID)
-	if err != nil {
-		t.Fatalf("LatestFiles: %v", err)
+	latest := func(exclude string) []domain.TorrentFile {
+		t.Helper()
+		files, err := d.LatestFiles(ctx, topic.ID, exclude)
+		if err != nil {
+			t.Fatalf("LatestFiles(exclude %s): %v", exclude, err)
+		}
+		return files
 	}
-	if !reflect.DeepEqual(got, newer) {
-		t.Errorf("LatestFiles = %+v, want the newest non-NULL list %+v", got, newer)
+	if got := latest("zzzz"); !reflect.DeepEqual(got, newer) {
+		t.Errorf("LatestFiles = %+v, want the newest list %+v", got, newer)
+	}
+	// A retried delivery of v2 finds its own row already recorded; comparing
+	// v2 with itself would skip every file, so that row must be passed over.
+	if got := latest("bbbb"); !reflect.DeepEqual(got, older) {
+		t.Errorf("LatestFiles(exclude bbbb) = %+v, want the older list %+v", got, older)
+	}
+
+	// A later magnet delivery has no file list: the previous version's files
+	// are unknown, so there is no baseline — not a fallback to v2's list.
+	record(&domain.TopicDelivery{TopicID: topic.ID, Infohash: "cccc", Label: "v3"}, "1 hour")
+	if got := latest("zzzz"); got != nil {
+		t.Errorf("LatestFiles after a magnet delivery = %+v, want nil (no baseline)", got)
+	}
+	if got := latest("cccc"); !reflect.DeepEqual(got, newer) {
+		t.Errorf("LatestFiles(exclude cccc) = %+v, want %+v", got, newer)
 	}
 
 	var files []byte

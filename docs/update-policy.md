@@ -76,7 +76,7 @@ counts as successful: the topic does not turn red.
 | Situation | Notification text |
 |---|---|
 | The tracker gave a **magnet link**, which carries no file list | `Added paused: a magnet link has no file list. Pick the new files in your client.` |
-| **No earlier file list.** Marauder stores each torrent's file list when it downloads it, starting with this version. The first update of a topic whose last download happened before you upgraded — for example, an old topic you just turned the setting on for — has nothing to compare with. Later updates do. | `Added paused: no earlier file list to compare with. Pick the new files in your client.` |
+| **No earlier file list.** Marauder stores each torrent's file list when it downloads it, starting with this version. The first update of a topic whose last download happened before you upgraded — for example, an old topic you just turned the setting on for — has nothing to compare with. Later updates do. The same applies to the update right after a version that came as a **magnet link**: Marauder never learned that version's files (and you may have picked some of them by hand), so it does not fall back to an older list, which would download them again. | `Added paused: no earlier file list to compare with. Pick the new files in your client.` |
 | The torrent file **could not be read** (or has more than 5000 files) | `Added paused: could not read the torrent's file list. Pick the new files in your client.` |
 | A **client call failed**: the client did not list the files within 15 seconds, did not show all the old files, or refused to skip or start | `Added paused: file selection did not finish (<step>). Check the torrent in your client.` — `<step>` names what failed, for example `skipping the old files failed` |
 | The update has **no new files** | `Added paused: this update has no new files.` |
@@ -133,7 +133,7 @@ Each outcome of **Download only new files** is counted in
 |---|---|
 | `selected` | The old files were skipped; the torrent started (or was left paused because "Add updates paused" is on too) |
 | `no_new_files` | The update had no new file; left paused |
-| `paused_no_baseline` | No earlier file list; left paused |
+| `paused_no_baseline` | No earlier file list (including a previous version that came as a magnet link); left paused |
 | `paused_magnet` | Magnet link; left paused |
 | `paused_unreadable` | The torrent's file list could not be read; left paused |
 | `unsupported` | The client cannot pause or select files; every file downloads |

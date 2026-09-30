@@ -86,13 +86,28 @@ Down migration drops the three columns.
 - `Deliveries.Record` writes `files` (NULL when nil). `ON CONFLICT DO NOTHING`
   stays: the first recorded file list for an infohash is the file list of that
   infohash, so there is nothing to update.
-- New `Deliveries.LatestFiles(ctx, topicID) ([]domain.TorrentFile, error)`:
-  `files` of the newest row (`delivered_at DESC`) whose `files IS NOT NULL`;
-  `(nil, nil)` when there is none. Replace-on-update prunes prior rows only
-  after the new row is written, and the new row carries the full new list, so
-  the baseline survives replacement. A topic reset deletes every row, so the
-  first delivery after a reset has no baseline — consistent with it being a
-  first delivery.
+- New `Deliveries.LatestFiles(ctx, topicID, excludeInfohash) ([]domain.TorrentFile, error)`
+  (*amended after review*): `files` of the newest row (`delivered_at DESC`)
+  whose `infohash <> excludeInfohash` — the update's own infohash — whether or
+  not that row has a list. `(nil, nil)`, meaning no baseline, when there is no
+  such row **or its `files` is NULL**. The first version returned the newest
+  non-NULL row and was wrong twice:
+  - *A retry compared the torrent with itself.* The delivery row is recorded
+    before file selection (§4.3). If the tick's check result is then discarded
+    — a shutdown mid-selection, `ErrStaleCheckResult` after a recheck or an
+    interval edit, a failed `RecordCheckResult` — `last_hash` stays on the old
+    release and the next tick delivers the same one again. Its own row was the
+    newest, so every file was "old" and the new episode never downloaded.
+  - *A magnet in between made an older version the baseline.* v1 (.torrent) →
+    v2 (magnet, added paused, the user picked files by hand) → v3 (.torrent)
+    compared v3 with v1 and re-downloaded v2's files, contradicting Q1: the old
+    file list is unknown, so the update is added paused.
+
+  Replace-on-update prunes prior rows only after the new row is written, and
+  the new row carries the full new list, so the baseline survives replacement
+  (a retry of that same release then finds no other row and is added paused).
+  A topic reset deletes every row, so the first delivery after a reset has no
+  baseline — consistent with it being a first delivery.
 
 ### 3.4 API
 
@@ -263,7 +278,11 @@ differences that shipped, in `scheduler/update_policy.go`):
 - The delivery is **recorded before** file selection (step 6 moves ahead of
   step 5): the selection can wait up to its 15 s budget, and a shutdown in that
   wait must not lose the row that is the next update's baseline and what reset,
-  replace and the progress watcher act on.
+  replace and the progress watcher act on. Because the row exists before the
+  tick's result is persisted, a discarded result leads to the same release
+  being delivered again with its own row present; `planDelivery` therefore
+  computes the payload's infohash **before** the baseline read and passes it
+  to `LatestFiles` as the row to leave out (§3.3).
 - The scheduler **always** waits for the client's file list before `Start`,
   even when nothing is skipped: a `Start` sent before an asynchronous
   qBittorrent add has landed is lost, leaving the torrent paused behind a
@@ -314,11 +333,14 @@ but leaves its files on disk.
 - Scheduler: first delivery, update with only paused, update with selection
   success, both settings on, magnet, no baseline, unsupported client, SkipFiles
   error, partial match, no new files, Start error, per-episode tracker
-  (settings ignored), recorded `files` on every `.torrent` delivery.
+  (settings ignored), recorded `files` on every `.torrent` delivery, a retry
+  whose own row is already recorded, a magnet version in between.
 - Client plugins: `httptest` servers for qBittorrent (incl. `/start` 404 →
   `/resume`), Transmission, Deluge — wait, skip, start.
 - Repo integration tests (real Postgres): flags round-trip; `Record` with and
-  without `files`; `LatestFiles` picks the newest non-NULL row.
+  without `files`; `LatestFiles` picks the newest row of another infohash,
+  passes over the excluded infohash's own row, and returns no baseline when
+  that newest row is NULL (a magnet in between).
 - Handlers: the §3.4 422 on create and update; `/system/info`
   `clients[].supports_file_selection`.
 - Frontend: checkboxes, locked delete-data box, unsupported-client note.

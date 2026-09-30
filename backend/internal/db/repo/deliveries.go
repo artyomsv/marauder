@@ -44,7 +44,7 @@ func (r *Deliveries) Record(ctx context.Context, d *domain.TopicDelivery) (bool,
 INSERT INTO topic_deliveries (topic_id, infohash, label, client_id, files)
 VALUES ($1, $2, $3, $4, $5)
 ON CONFLICT (topic_id, infohash) DO NOTHING`
-	// A nil list is stored as NULL ("unknown"), which LatestFiles skips; an
+	// A nil list is stored as NULL ("unknown": no baseline for LatestFiles); an
 	// empty list is a known torrent with no content files and is stored as [].
 	var files any
 	if d.Files != nil {
@@ -61,24 +61,37 @@ ON CONFLICT (topic_id, infohash) DO NOTHING`
 	return ct.RowsAffected() > 0, nil
 }
 
-// LatestFiles returns the file list of the topic's newest delivery that has
-// one — the baseline the download-only-new-files policy (issue #205) compares
-// an update with. (nil, nil) means no delivery has a known list. Rows without
-// a list (magnets, pre-0017 rows) are skipped rather than ending the search,
-// so a magnet delivery in between does not erase the baseline.
-func (r *Deliveries) LatestFiles(ctx context.Context, topicID uuid.UUID) ([]domain.TorrentFile, error) {
+// LatestFiles returns the baseline the download-only-new-files policy (issue
+// #205) compares an update with: the file list of the topic's newest delivery
+// whose infohash is not excludeInfohash (the update being delivered).
+//
+// The exclusion matters on a retry: when a tick delivers a release but its
+// check result is discarded (a shutdown mid-selection, a stale check-state
+// token), last_hash stays on the old release and the next tick delivers the
+// same one again — with its own row already recorded. Comparing the update
+// with itself would skip every file.
+//
+// (nil, nil) means no baseline: no other delivery, or the newest one has no
+// known list (a magnet, a pre-0017 row, an unreadable torrent). Such a row is
+// NOT skipped in favour of an older list: the user may have picked that
+// version's files by hand, and comparing with an older version would download
+// them again. No baseline adds the update paused.
+func (r *Deliveries) LatestFiles(ctx context.Context, topicID uuid.UUID, excludeInfohash string) ([]domain.TorrentFile, error) {
 	const q = `
 SELECT files FROM topic_deliveries
-WHERE topic_id = $1 AND files IS NOT NULL
+WHERE topic_id = $1 AND infohash <> $2
 ORDER BY delivered_at DESC
 LIMIT 1`
 	var raw []byte
-	err := r.pool.QueryRow(ctx, q, topicID).Scan(&raw)
+	err := r.pool.QueryRow(ctx, q, topicID, excludeInfohash).Scan(&raw)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("deliveries: latest files: %w", err)
+	}
+	if raw == nil {
+		return nil, nil
 	}
 	var files []domain.TorrentFile
 	if err := json.Unmarshal(raw, &files); err != nil {

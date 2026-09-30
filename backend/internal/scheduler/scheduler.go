@@ -115,7 +115,7 @@ type deliveriesRecorder interface {
 	Record(ctx context.Context, d *domain.TopicDelivery) (bool, error)
 	ListForTopic(ctx context.Context, topicID uuid.UUID) ([]*domain.TopicDelivery, error)
 	DeleteByInfohashes(ctx context.Context, topicID uuid.UUID, hashes []string) (int64, error)
-	LatestFiles(ctx context.Context, topicID uuid.UUID) ([]domain.TorrentFile, error)
+	LatestFiles(ctx context.Context, topicID uuid.UUID, excludeInfohash string) ([]domain.TorrentFile, error)
 }
 
 // domainRotator is the subset of *domains.Store the scheduler uses to
@@ -1131,7 +1131,10 @@ func (s *Scheduler) sendViaClient(ctx context.Context, log zerolog.Logger, cfg *
 	// Recorded before file selection, which can wait up to
 	// fileSelectionTimeout: a shutdown cancelling ctx in that wait must not
 	// lose the row, which is the next update's baseline and what reset,
-	// replace and the progress watcher act on.
+	// replace and the progress watcher act on. If this tick's result is then
+	// discarded, the next tick delivers the same release again; the baseline
+	// read passes over this row by infohash, so the retry is not compared
+	// with itself.
 	s.recordDelivery(ctx, log, t, cfg, payload, label, plan.files)
 	return s.finishDelivery(ctx, log, t, cfg.ClientName, rawConfig, plan), nil
 }

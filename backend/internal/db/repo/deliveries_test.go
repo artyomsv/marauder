@@ -281,17 +281,54 @@ func TestDeliveries_Record_StoresFiles(t *testing.T) {
 	}
 }
 
+// latestFilesQuery pins the baseline rule (issue #205): the newest row of
+// ANOTHER infohash, with or without a file list.
+const latestFilesQuery = `SELECT files FROM topic_deliveries\s+WHERE topic_id = \$1 AND infohash <> \$2\s+ORDER BY delivered_at DESC\s+LIMIT 1`
+
 func TestDeliveries_LatestFiles_NoRowsIsNil(t *testing.T) {
 	repo, mock := newMockDeliveries(t)
 	t.Cleanup(func() { assertExpectationsMet(t, mock) })
 
 	topicID := uuid.New()
-	mock.ExpectQuery(`SELECT files FROM topic_deliveries\s+WHERE topic_id = \$1 AND files IS NOT NULL\s+ORDER BY delivered_at DESC\s+LIMIT 1`).
-		WithArgs(topicID).
+	mock.ExpectQuery(latestFilesQuery).
+		WithArgs(topicID, "cur").
 		WillReturnRows(pgxmock.NewRows([]string{"files"}))
 
-	got, err := repo.LatestFiles(context.Background(), topicID)
+	got, err := repo.LatestFiles(context.Background(), topicID, "cur")
 	if err != nil || got != nil {
 		t.Errorf("LatestFiles = (%v, %v), want (nil, nil)", got, err)
+	}
+}
+
+// A newest row without a list (a magnet) means the previous version's files
+// are unknown: no baseline, rather than falling back to an older list.
+func TestDeliveries_LatestFiles_NullNewestIsNil(t *testing.T) {
+	repo, mock := newMockDeliveries(t)
+	t.Cleanup(func() { assertExpectationsMet(t, mock) })
+
+	topicID := uuid.New()
+	mock.ExpectQuery(latestFilesQuery).
+		WithArgs(topicID, "cur").
+		WillReturnRows(pgxmock.NewRows([]string{"files"}).AddRow([]byte(nil)))
+
+	got, err := repo.LatestFiles(context.Background(), topicID, "cur")
+	if err != nil || got != nil {
+		t.Errorf("LatestFiles = (%v, %v), want (nil, nil)", got, err)
+	}
+}
+
+func TestDeliveries_LatestFiles_DecodesList(t *testing.T) {
+	repo, mock := newMockDeliveries(t)
+	t.Cleanup(func() { assertExpectationsMet(t, mock) })
+
+	topicID := uuid.New()
+	mock.ExpectQuery(latestFilesQuery).
+		WithArgs(topicID, "cur").
+		WillReturnRows(pgxmock.NewRows([]string{"files"}).AddRow([]byte(`[{"path":"E01.mkv","size":100}]`)))
+
+	got, err := repo.LatestFiles(context.Background(), topicID, "cur")
+	want := []domain.TorrentFile{{Path: "E01.mkv", Size: 100}}
+	if err != nil || len(got) != 1 || got[0] != want[0] {
+		t.Errorf("LatestFiles = (%v, %v), want (%v, nil)", got, err, want)
 	}
 }
