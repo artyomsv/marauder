@@ -86,6 +86,34 @@ Down migration drops the three columns.
 - `Deliveries.Record` writes `files` (NULL when nil). `ON CONFLICT DO NOTHING`
   stays: the first recorded file list for an infohash is the file list of that
   infohash, so there is nothing to update.
+- *Amended after review (PR #210):* a delivery's `files` means **"Marauder
+  knows the user got this version's files"** — the next update skips every one
+  of them. The first version stored the list of every `.torrent` delivery at
+  record time, before the selection ran, so a failed selection (or an update
+  left paused for hand-picking) became a trusted baseline and the next update
+  skipped files the user may never have downloaded. Now:
+  - a delivery that is **not paused** (a plain delivery, or a client that
+    cannot pause and so downloads everything) stores its list at record time;
+  - a delivery **with a selection** is recorded with `files` NULL (the record
+    stays before the selection, §4.3), and the list is stored by
+    `Deliveries.SetFiles(ctx, topicID, infohash, files)` (`UPDATE
+    topic_deliveries SET files = $3 WHERE topic_id = $1 AND infohash = $2`)
+    only once the selection **succeeds**: started, kept paused by add-paused
+    with the selection applied, or no new files with every file skipped.
+    Best-effort: a DB error is logged at Warn and does not fail the check;
+  - a delivery **paused without a selection** (add-paused only; the magnet,
+    no-baseline and unreadable fallbacks) and a **failed** selection keep
+    NULL, so the next update has no baseline and arrives paused.
+
+  Crash-safe: a stop between `Record` and `SetFiles` leaves NULL, and the
+  retry — which excludes its own infohash — compares with the previous row.
+
+  Known consequence: the no-baseline fallback is itself paused without a
+  selection, so its row stays NULL too, and once one version of a topic is
+  NULL every later only-new-files update arrives paused for hand-picking. It
+  recovers only after a version stored at record time — a plain delivery,
+  such as the first after a reset, which downloads every file. That errs
+  toward paused, as Q1 asks, at the cost of automation after one failure.
 - New `Deliveries.LatestFiles(ctx, topicID, excludeInfohash) ([]domain.TorrentFile, error)`
   (*amended after review*): `files` of the newest row (`delivered_at DESC`)
   whose `infohash <> excludeInfohash` — the update's own infohash — whether or
@@ -103,9 +131,12 @@ Down migration drops the three columns.
     compared v3 with v1 and re-downloaded v2's files, contradicting Q1: the old
     file list is unknown, so the update is added paused.
 
-  Replace-on-update prunes prior rows only after the new row is written, and
-  the new row carries the full new list, so the baseline survives replacement
-  (a retry of that same release then finds no other row and is added paused).
+  Replace-on-update prunes prior rows only after the new row is written and
+  its selection has finished, so after a successful selection the new row
+  carries the full new list and the baseline survives replacement (a retry of
+  that same release then finds no other row and is added paused); after a
+  failed one the new row is NULL, and the next update is added paused either
+  way.
   A topic reset deletes every row, so the first delivery after a reset has no
   baseline — consistent with it being a first delivery.
 
@@ -273,7 +304,8 @@ this):
      paused with a note.
    - Success note: "Downloading N new files of M".
 6. `recordDelivery` stores `files` (nil when unknown or above
-   `maxStoredFiles`).
+   `maxStoredFiles`). *Amended after review:* only for a delivery that is not
+   paused; see the amendments below and §3.3.
 
 Every failure after a successful `Add` is **fail-safe and non-fatal**: the
 torrent is in the client, paused, so the delivery is recorded and the check
@@ -318,6 +350,13 @@ differences that shipped, in `scheduler/update_policy.go`):
   being delivered again with its own row present; `planDelivery` therefore
   computes the payload's infohash **before** the baseline read and passes it
   to `LatestFiles` as the row to leave out (§3.3).
+- *Amended after review (PR #210):* step 6 no longer stores `files` for every
+  delivery. `recordDelivery` gets `deliveryPlan.filesAtRecord()` — the list
+  when the torrent is not paused, nil otherwise — and `finishDelivery` calls
+  `Deliveries.SetFiles` with the full manifest only after `selectNewFiles`
+  reports success (§3.3). A failed selection, add-paused only and every paused
+  fallback leave the row NULL, so the next update arrives paused with the
+  no-baseline note instead of skipping files the user may not have.
 - The scheduler **always** waits for the client's file list before `Start`,
   even when nothing is skipped: a `Start` sent before an asynchronous
   qBittorrent add has landed is lost, leaving the torrent paused behind a
@@ -385,7 +424,9 @@ but leaves its files on disk.
 - Scheduler: first delivery, update with only paused, update with selection
   success, both settings on, magnet, no baseline, unsupported client, SkipFiles
   error, layout mismatch, no new files, Start error, per-episode tracker
-  (settings ignored), recorded `files` on every `.torrent` delivery, a retry
+  (settings ignored), `files` stored at record for a plain delivery, after
+  success for a selection (SetFiles), and never for add-paused only, a
+  fallback or a failed selection (then update 2 has no baseline), a retry
   whose own row is already recorded, a magnet version in between, and both
   review lookalike layouts through `runCheck` (only the old file skipped).
 - Client plugins: `httptest` servers for qBittorrent (incl. `/start` 404 →
@@ -393,7 +434,8 @@ but leaves its files on disk.
 - Repo integration tests (real Postgres): flags round-trip; `Record` with and
   without `files`; `LatestFiles` picks the newest row of another infohash,
   passes over the excluded infohash's own row, and returns no baseline when
-  that newest row is NULL (a magnet in between).
+  that newest row is NULL (a magnet in between); `SetFiles` changes only the
+  named topic + infohash row.
 - Handlers: the §3.4 422 on create and update; `/system/info`
   `clients[].supports_file_selection`.
 - Frontend: checkboxes, locked delete-data box, unsupported-client note.

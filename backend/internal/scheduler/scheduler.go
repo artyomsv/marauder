@@ -116,6 +116,7 @@ type deliveriesRecorder interface {
 	ListForTopic(ctx context.Context, topicID uuid.UUID) ([]*domain.TopicDelivery, error)
 	DeleteByInfohashes(ctx context.Context, topicID uuid.UUID, hashes []string) (int64, error)
 	LatestFiles(ctx context.Context, topicID uuid.UUID, excludeInfohash string) ([]domain.TorrentFile, error)
+	SetFiles(ctx context.Context, topicID uuid.UUID, infohash string, files []domain.TorrentFile) error
 }
 
 // domainRotator is the subset of *domains.Store the scheduler uses to
@@ -1134,8 +1135,9 @@ func (s *Scheduler) sendViaClient(ctx context.Context, log zerolog.Logger, cfg *
 	// replace and the progress watcher act on. If this tick's result is then
 	// discarded, the next tick delivers the same release again; the baseline
 	// read passes over this row by infohash, so the retry is not compared
-	// with itself.
-	s.recordDelivery(ctx, log, t, cfg, payload, label, plan.files)
+	// with itself. A delivery with a file selection is recorded without its
+	// file list, which finishDelivery stores only once the selection succeeds.
+	s.recordDelivery(ctx, log, t, cfg, payload, label, plan.filesAtRecord())
 	return s.finishDelivery(ctx, log, t, cfg.ClientName, rawConfig, plan), nil
 }
 
@@ -1146,8 +1148,9 @@ func (s *Scheduler) sendViaClient(ctx context.Context, log zerolog.Logger, cfg *
 // list. This is best-effort Tier-1 tracking: any failure (no recorder
 // wired, an undecodable payload, a DB error) is logged and swallowed — it
 // must never turn a successful download into a failed check. files is the
-// payload's file list (nil when unknown), the baseline for the next update's
-// only-new-files selection (issue #205).
+// payload's file list when Marauder knows the user gets all of it (nil when
+// unknown or not yet known), the baseline for the next update's
+// only-new-files selection (issue #205; see deliveryPlan.filesAtRecord).
 func (s *Scheduler) recordDelivery(ctx context.Context, log zerolog.Logger, t *domain.Topic, cfg *domain.Client, payload *domain.Payload, label string, files []domain.TorrentFile) {
 	if s.deliveries == nil {
 		return

@@ -49,8 +49,9 @@ const (
 // deliveryPlan says how one payload is handed to the client.
 type deliveryPlan struct {
 	paused bool
-	// files is the payload's own file list, stored with the delivery so the
-	// next update has a baseline. Nil when unknown.
+	// files is the payload's own file list, nil when unknown. Stored with the
+	// delivery as the next update's baseline only when Marauder knows the
+	// user gets these files (filesAtRecord, finishDelivery).
 	files []domain.TorrentFile
 	// selection is set when only-new-files runs after Add.
 	selection *fileSelection
@@ -61,6 +62,24 @@ type deliveryPlan struct {
 	// note is a notification note that has no file-selection outcome (and so
 	// no metric): add-paused-only on a client that cannot pause.
 	note string
+}
+
+// filesAtRecord is the file list recordDelivery stores. A delivery's files
+// mean "the user got this version's files", and the next update skips every
+// one of them, so a list is stored only when that is known:
+//   - not paused (a plain delivery, or a client that cannot pause and so
+//     downloads everything): stored now;
+//   - paused with a selection: nil now, stored by finishDelivery once the
+//     selection has succeeded — a failed one leaves nil;
+//   - paused without a selection (add-paused only, or a fallback): nil. The
+//     user picks files by hand, and what they pick is unknown, so the next
+//     update has no baseline and arrives paused rather than skipping files
+//     the user may never have downloaded.
+func (p deliveryPlan) filesAtRecord() []domain.TorrentFile {
+	if p.paused {
+		return nil
+	}
+	return p.files
 }
 
 type fileSelection struct {
@@ -173,7 +192,11 @@ func (s *Scheduler) latestFiles(ctx context.Context, log zerolog.Logger, topicID
 func (s *Scheduler) finishDelivery(ctx context.Context, log zerolog.Logger, t *domain.Topic, clientName string, rawConfig []byte, plan deliveryPlan) string {
 	switch {
 	case plan.selection != nil:
-		return s.selectNewFiles(ctx, log, t, clientName, rawConfig, plan.selection)
+		note, ok := s.selectNewFiles(ctx, log, t, clientName, rawConfig, plan.selection)
+		if ok {
+			s.storeSelectedFiles(ctx, log, t.ID, plan.selection.hash, plan.files)
+		}
+		return note
 	case plan.fallbackResult != "":
 		log.Info().Str("client", clientName).Str("result", plan.fallbackResult).
 			Msg("only-new-files could not select files")
@@ -189,14 +212,16 @@ func (s *Scheduler) finishDelivery(ctx context.Context, log zerolog.Logger, t *d
 // just added paused, then starts it unless the topic also asks for paused
 // updates. An update with no new file has every file skipped and is never
 // started, so a user who presses Start does not download the pack again.
-func (s *Scheduler) selectNewFiles(ctx context.Context, log zerolog.Logger, t *domain.Topic, clientName string, rawConfig []byte, sel *fileSelection) string {
+// ok reports that the selection took effect — the old files are skipped and
+// the new ones wanted — which is what makes the file list a baseline.
+func (s *Scheduler) selectNewFiles(ctx context.Context, log zerolog.Logger, t *domain.Topic, clientName string, rawConfig []byte, sel *fileSelection) (note string, ok bool) {
 	total := len(sel.files)
 	newCount := total - len(sel.skip)
-	noNewFiles := func() string {
+	noNewFiles := func() (string, bool) {
 		log.Info().Str("client", clientName).Str("result", selNoNewFiles).
 			Msg("only-new-files: update has no new files; all skipped, torrent left paused")
 		metrics.SchedulerFileSelectionTotal.WithLabelValues(clientName, selNoNewFiles).Inc()
-		return "Added paused: this update has no new files; all its files are skipped."
+		return "Added paused: this update has no new files; all its files are skipped.", true
 	}
 	if total == 0 {
 		// No content file at all: nothing to skip, nothing to wait for.
@@ -207,11 +232,11 @@ func (s *Scheduler) selectNewFiles(ctx context.Context, log zerolog.Logger, t *d
 	// fail names the step for the notification and keeps the error for the
 	// log only: a client error can carry an HTTP body (an HTML error page),
 	// which has no place in a Telegram message or an email.
-	fail := func(step string, err error) string {
+	fail := func(step string, err error) (string, bool) {
 		log.Warn().Err(err).Str("client", clientName).Str("result", selFailed).Str("step", step).
 			Msg("file selection failed; torrent left paused")
 		metrics.SchedulerFileSelectionTotal.WithLabelValues(clientName, selFailed).Inc()
-		return fmt.Sprintf("Added paused: file selection did not finish (%s). Check the torrent in your client.", step)
+		return fmt.Sprintf("Added paused: file selection did not finish (%s). Check the torrent in your client.", step), false
 	}
 	// Always wait for the file list, even with nothing to skip: a qBittorrent
 	// add is asynchronous, and a Start sent before the client knows the
@@ -242,7 +267,7 @@ func (s *Scheduler) selectNewFiles(ctx context.Context, log zerolog.Logger, t *d
 			Int("new", newCount).Int("total", total).
 			Msg("only-new-files: new files selected; torrent left paused")
 		metrics.SchedulerFileSelectionTotal.WithLabelValues(clientName, selSelected).Inc()
-		return fmt.Sprintf("Added paused with %d new of %d files selected.", newCount, total)
+		return fmt.Sprintf("Added paused with %d new of %d files selected.", newCount, total), true
 	}
 	if err := sel.selector.Start(ctx, rawConfig, sel.hash); err != nil {
 		return fail("starting the torrent failed", err)
@@ -251,7 +276,20 @@ func (s *Scheduler) selectNewFiles(ctx context.Context, log zerolog.Logger, t *d
 		Int("new", newCount).Int("total", total).
 		Msg("only-new-files: new files selected; torrent started")
 	metrics.SchedulerFileSelectionTotal.WithLabelValues(clientName, selSelected).Inc()
-	return fmt.Sprintf("Downloading %d new of %d files.", newCount, total)
+	return fmt.Sprintf("Downloading %d new of %d files.", newCount, total), true
+}
+
+// storeSelectedFiles stores a delivery's file list once its selection has
+// succeeded (see deliveryPlan.filesAtRecord). Best-effort: the torrent is in
+// the client and selected, so a DB error is logged, not a failed check. The
+// row then keeps NULL and the next update arrives paused — the safe side.
+func (s *Scheduler) storeSelectedFiles(ctx context.Context, log zerolog.Logger, topicID uuid.UUID, hash string, files []domain.TorrentFile) {
+	if s.deliveries == nil {
+		return
+	}
+	if err := s.deliveries.SetFiles(ctx, topicID, hash, files); err != nil {
+		log.Warn().Err(err).Msg("only-new-files: store the selected delivery's file list failed; next update has no baseline")
+	}
 }
 
 // waitForFiles polls the client until it lists the torrent's files.

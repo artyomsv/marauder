@@ -87,13 +87,35 @@ counts as successful: the topic does not turn red.
 | Situation | Notification text |
 |---|---|
 | The tracker gave a **magnet link**, which carries no file list | `Added paused: a magnet link has no file list. Pick the new files in your client.` |
-| **No earlier file list.** Marauder stores each torrent's file list when it downloads it, starting with this version. The first update of a topic whose last download happened before you upgraded — for example, an old topic you just turned the setting on for — has nothing to compare with. Later updates do. The same applies to the update right after a version that came as a **magnet link**: Marauder never learned that version's files (and you may have picked some of them by hand), so it does not fall back to an older list, which would download them again. | `Added paused: no earlier file list to compare with. Pick the new files in your client.` |
+| **No earlier file list.** Marauder only compares with the previous version when it knows you got that version's files (see [When Marauder remembers a version's files](#when-marauder-remembers-a-versions-files)). The first update of a topic whose last download happened before you upgraded — for example, an old topic you just turned the setting on for — has nothing to compare with. So has the update right after a version that came as a **magnet link**, was **added paused for you to pick files by hand**, or whose **file selection failed**: Marauder does not know which of that version's files you have, and it does not fall back to an older list, which would download them again. | `Added paused: no earlier file list to compare with. Pick the new files in your client.` |
 | The torrent file **could not be read** (or has more than 5000 files) | `Added paused: could not read the torrent's file list. Pick the new files in your client.` |
 | A **client call failed**: the client did not list the files within 15 seconds, listed files that do not match the torrent one to one, or refused to skip or start | `Added paused: file selection did not finish (<step>). Check the torrent in your client.` — `<step>` names what failed, for example `the client's file list does not match the torrent` or `skipping the old files failed` |
 | The update has **no new files** (every file is skipped) | `Added paused: this update has no new files; all its files are skipped.` |
 
 The client's own error message is written to Marauder's log, not to the
 notification.
+
+## When Marauder remembers a version's files
+
+The next update skips every file of the version it compares with, so Marauder
+remembers a version's file list only when it knows you got those files:
+
+| How the version was delivered | File list remembered? |
+|---|---|
+| Downloaded normally (a first download, a topic without these settings, or a client that cannot pause and so downloads everything) | yes, when it is added |
+| **Download only new files** succeeded — the torrent started, or was left paused with the new files selected ("Add updates paused" on too), or every file was skipped because nothing was new | yes, once the selection has finished |
+| **Download only new files** failed (any `file selection did not finish` note) | no |
+| Added paused for you to pick files by hand (**Add updates paused** alone, or any `Pick the new files in your client` note) | no |
+| Magnet link | no (it has no file list) |
+
+So after an update you finished by hand, or one whose selection failed, the
+**next** update arrives paused with `no earlier file list to compare with`
+rather than skipping files you may never have downloaded.
+
+That next update is finished by hand too, so its list is not remembered
+either, and every later update keeps arriving paused. Automatic selection
+resumes after a version whose file list is remembered — for example, the first
+download after a **Reset**, which starts normally and downloads every file.
 
 ## With "Replace previous version"
 

@@ -308,6 +308,18 @@ type fakeDeliveries struct {
 	history     []*domain.TopicDelivery
 	latestFiles []domain.TorrentFile
 	latestErr   error
+
+	// filesAtRecord holds each recorded row's file list as Record received it
+	// (SetFiles later changes the row in recorded, not this). setFilesCalls
+	// captures SetFiles; setFilesErr fails it without touching any row.
+	filesAtRecord [][]domain.TorrentFile
+	setFilesCalls []setFilesCall
+	setFilesErr   error
+}
+
+type setFilesCall struct {
+	infohash string
+	files    []domain.TorrentFile
 }
 
 // priorLatestHash is the infohash of the row latestFiles stands for.
@@ -315,7 +327,23 @@ const priorLatestHash = "prior-delivery"
 
 func (f *fakeDeliveries) Record(_ context.Context, d *domain.TopicDelivery) (bool, error) {
 	f.recorded = append(f.recorded, d)
+	f.filesAtRecord = append(f.filesAtRecord, d.Files)
 	return f.err == nil, f.err
+}
+
+// SetFiles mirrors the repository's UPDATE: it changes the recorded row of
+// that infohash, so LatestFiles sees the stored list on the next update.
+func (f *fakeDeliveries) SetFiles(_ context.Context, _ uuid.UUID, infohash string, files []domain.TorrentFile) error {
+	f.setFilesCalls = append(f.setFilesCalls, setFilesCall{infohash: infohash, files: files})
+	if f.setFilesErr != nil {
+		return f.setFilesErr
+	}
+	for _, d := range f.recorded {
+		if d.Infohash == infohash {
+			d.Files = files
+		}
+	}
+	return nil
 }
 
 func (f *fakeDeliveries) ListForTopic(_ context.Context, _ uuid.UUID) ([]*domain.TopicDelivery, error) {

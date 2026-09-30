@@ -44,15 +44,9 @@ func (r *Deliveries) Record(ctx context.Context, d *domain.TopicDelivery) (bool,
 INSERT INTO topic_deliveries (topic_id, infohash, label, client_id, files)
 VALUES ($1, $2, $3, $4, $5)
 ON CONFLICT (topic_id, infohash) DO NOTHING`
-	// A nil list is stored as NULL ("unknown": no baseline for LatestFiles); an
-	// empty list is a known torrent with no content files and is stored as [].
-	var files any
-	if d.Files != nil {
-		raw, err := json.Marshal(d.Files)
-		if err != nil {
-			return false, fmt.Errorf("deliveries: marshal files: %w", err)
-		}
-		files = raw
+	files, err := encodeFiles(d.Files)
+	if err != nil {
+		return false, err
 	}
 	ct, err := r.pool.Exec(ctx, q, d.TopicID, d.Infohash, d.Label, d.ClientID, files)
 	if err != nil {
@@ -101,6 +95,38 @@ LIMIT 1`
 		files = []domain.TorrentFile{}
 	}
 	return files, nil
+}
+
+// SetFiles stores the file list of one delivery (issue #205). A delivery's
+// files mean "Marauder knows the user got this version's files", which for an
+// only-new-files selection is true only once the selection has succeeded: the
+// row is recorded with NULL before the selection starts and filled in here
+// afterwards. A stop between the two leaves NULL, so the next update has no
+// baseline and arrives paused — the safe side.
+func (r *Deliveries) SetFiles(ctx context.Context, topicID uuid.UUID, infohash string, files []domain.TorrentFile) error {
+	const q = `UPDATE topic_deliveries SET files = $3 WHERE topic_id = $1 AND infohash = $2`
+	raw, err := encodeFiles(files)
+	if err != nil {
+		return err
+	}
+	if _, err := r.pool.Exec(ctx, q, topicID, infohash, raw); err != nil {
+		return fmt.Errorf("deliveries: set files: %w", err)
+	}
+	return nil
+}
+
+// encodeFiles turns a file list into the files column's value. A nil list is
+// NULL ("unknown": no baseline for LatestFiles); an empty list is a known
+// torrent with no content files and is stored as [].
+func encodeFiles(files []domain.TorrentFile) (any, error) {
+	if files == nil {
+		return nil, nil
+	}
+	raw, err := json.Marshal(files)
+	if err != nil {
+		return nil, fmt.Errorf("deliveries: marshal files: %w", err)
+	}
+	return raw, nil
 }
 
 // ListForTopic returns a topic's deliveries, newest first.

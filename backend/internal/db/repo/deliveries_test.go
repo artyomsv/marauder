@@ -332,3 +332,35 @@ func TestDeliveries_LatestFiles_DecodesList(t *testing.T) {
 		t.Errorf("LatestFiles = (%v, %v), want (%v, nil)", got, err, want)
 	}
 }
+
+// SetFiles fills in the file list of one delivery once its only-new-files
+// selection has succeeded (issue #205).
+func TestDeliveries_SetFiles_UpdatesNamedRow(t *testing.T) {
+	repo, mock := newMockDeliveries(t)
+	t.Cleanup(func() { assertExpectationsMet(t, mock) })
+
+	topicID := uuid.New()
+	mock.ExpectExec(`UPDATE topic_deliveries SET files = \$3 WHERE topic_id = \$1 AND infohash = \$2`).
+		WithArgs(topicID, "abc", []byte(`[{"path":"E01.mkv","size":100}]`)).
+		WillReturnResult(pgconn.NewCommandTag("UPDATE 1"))
+
+	if err := repo.SetFiles(context.Background(), topicID, "abc",
+		[]domain.TorrentFile{{Path: "E01.mkv", Size: 100}}); err != nil {
+		t.Fatalf("SetFiles: %v", err)
+	}
+}
+
+func TestDeliveries_SetFiles_DBError(t *testing.T) {
+	repo, mock := newMockDeliveries(t)
+	t.Cleanup(func() { assertExpectationsMet(t, mock) })
+
+	dbErr := errors.New("connection reset")
+	mock.ExpectExec(`UPDATE topic_deliveries SET files`).
+		WithArgs(pgxmock.AnyArg(), "abc", pgxmock.AnyArg()).
+		WillReturnError(dbErr)
+
+	if err := repo.SetFiles(context.Background(), uuid.New(), "abc",
+		[]domain.TorrentFile{{Path: "E01.mkv", Size: 100}}); !errors.Is(err, dbErr) {
+		t.Fatalf("SetFiles: want wrapped %v, got %v", dbErr, err)
+	}
+}

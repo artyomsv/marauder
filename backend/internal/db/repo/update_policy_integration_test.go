@@ -112,3 +112,57 @@ func TestDeliveriesLatestFiles(t *testing.T) {
 		t.Errorf("magnet delivery files = %s, want NULL", files)
 	}
 }
+
+// SetFiles stores the list of exactly one delivery — the topic and infohash
+// named — and a stored list becomes the next update's baseline.
+func TestDeliveriesSetFiles(t *testing.T) {
+	pool := integrationPool(t)
+	ctx := context.Background()
+	userID := seedUser(t, pool)
+	topic := seedTopic(t, pool, userID, domain.TopicStatusActive, map[string]any{})
+	other := seedTopic(t, pool, userID, domain.TopicStatusActive, map[string]any{})
+	d := NewDeliveries(pool)
+
+	// Both topics have a NULL row under the same infohash, and the first topic
+	// has a second NULL row: only one of the three may change.
+	for _, rec := range []*domain.TopicDelivery{
+		{TopicID: topic.ID, Infohash: "aaaa", Label: "v1"},
+		{TopicID: topic.ID, Infohash: "bbbb", Label: "v2"},
+		{TopicID: other.ID, Infohash: "bbbb", Label: "other v2"},
+	} {
+		if _, err := d.Record(ctx, rec); err != nil {
+			t.Fatalf("Record %s: %v", rec.Label, err)
+		}
+	}
+	// Pin the order: aaaa is older, so bbbb is the topic's newest row.
+	if _, err := pool.Exec(ctx,
+		`UPDATE topic_deliveries SET delivered_at = now() - interval '1 hour' WHERE topic_id = $1 AND infohash = 'aaaa'`,
+		topic.ID); err != nil {
+		t.Fatalf("age aaaa: %v", err)
+	}
+
+	files := []domain.TorrentFile{{Path: "E01.mkv", Size: 100}, {Path: "E02.mkv", Size: 200}}
+	if err := d.SetFiles(ctx, topic.ID, "bbbb", files); err != nil {
+		t.Fatalf("SetFiles: %v", err)
+	}
+
+	stored := func(topicID any, hash string) []byte {
+		t.Helper()
+		var raw []byte
+		if err := pool.QueryRow(ctx,
+			`SELECT files FROM topic_deliveries WHERE topic_id = $1 AND infohash = $2`, topicID, hash).Scan(&raw); err != nil {
+			t.Fatalf("read %s: %v", hash, err)
+		}
+		return raw
+	}
+	if raw := stored(topic.ID, "aaaa"); raw != nil {
+		t.Errorf("other infohash files = %s, want NULL", raw)
+	}
+	if raw := stored(other.ID, "bbbb"); raw != nil {
+		t.Errorf("other topic's row files = %s, want NULL", raw)
+	}
+	if got, err := d.LatestFiles(ctx, topic.ID, "zzzz"); err != nil || !reflect.DeepEqual(got, files) {
+		// bbbb is the topic's newest row, so its stored list is the baseline.
+		t.Errorf("LatestFiles = (%+v, %v), want (%+v, nil)", got, err, files)
+	}
+}
