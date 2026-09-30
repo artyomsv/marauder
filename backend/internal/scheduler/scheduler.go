@@ -1148,8 +1148,8 @@ func (s *Scheduler) sendViaClient(ctx context.Context, log zerolog.Logger, cfg *
 // list. This is best-effort Tier-1 tracking: any failure (no recorder
 // wired, an undecodable payload, a DB error) is logged and swallowed — it
 // must never turn a successful download into a failed check. files is the
-// payload's file list when Marauder knows the user gets all of it (nil when
-// unknown or not yet known), the baseline for the next update's
+// payload's file list (nil when unknown, and nil while a file selection is
+// still to run), the baseline for the next update's
 // only-new-files selection (issue #205; see deliveryPlan.filesAtRecord).
 func (s *Scheduler) recordDelivery(ctx context.Context, log zerolog.Logger, t *domain.Topic, cfg *domain.Client, payload *domain.Payload, label string, files []domain.TorrentFile) {
 	if s.deliveries == nil {

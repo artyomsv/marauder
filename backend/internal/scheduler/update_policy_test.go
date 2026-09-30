@@ -3,6 +3,7 @@ package scheduler
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -486,9 +487,10 @@ func TestRunCheck_OnlyNewFiles_RootedLayoutKeepsLookalikeNewFile(t *testing.T) {
 
 // --- Finding B (PR #210 review): when a delivery's file list is stored ------
 //
-// A delivery's files mean "the user got this version's files". Stored at
-// record time only for a delivery that simply downloads; for a selection only
-// after it succeeds; never for a delivery left paused for the user.
+// A delivery's files mean "the version Marauder offered the user". Stored at
+// record time for every delivery without a selection (plain, add-paused only,
+// paused fallbacks); for a selection only after it succeeds, so only a failed
+// selection leaves no list.
 
 func lastSubmittedBody(t *testing.T, f *fixture) string {
 	t.Helper()
@@ -597,31 +599,33 @@ func TestRunCheck_OnlyNewFiles_SetFilesErrorDoesNotFailCheck(t *testing.T) {
 	}
 }
 
-// Paused for the user to pick files by hand: what they pick is unknown.
-func TestRunCheck_AddPausedOnUpdate_Only_StoresNoFiles(t *testing.T) {
+// Paused for the user to pick files by hand: they saw every file of this
+// version and chose, so its list is stored at record time and the next
+// update compares with it.
+func TestRunCheck_AddPausedOnUpdate_Only_StoresFilesAtRecord(t *testing.T) {
 	f, _ := selectingFixture(t, torrentTracker(torrentmetatest.Torrent("Show S01", v2Files)))
 	f.topic.AddPausedOnUpdate = true
 
 	f.s.runCheck(context.Background(), f.s.log, f.topic)
 
-	if len(f.deliveries.recorded) != 1 || f.deliveries.recorded[0].Files != nil {
-		t.Errorf("recorded = %+v, want one delivery with no file list", f.deliveries.recorded)
+	if len(f.deliveries.filesAtRecord) != 1 || !reflect.DeepEqual(f.deliveries.filesAtRecord[0], v2Files) {
+		t.Errorf("files at record = %+v, want v2's files", f.deliveries.filesAtRecord)
 	}
 	if len(f.deliveries.setFilesCalls) != 0 {
 		t.Errorf("SetFiles calls = %+v, want none", f.deliveries.setFilesCalls)
 	}
 }
 
-// The no-baseline fallback is paused for hand-picking too: its list is not
-// stored, even though the torrent's file list was read.
-func TestRunCheck_OnlyNewFiles_NoBaseline_StoresNoFiles(t *testing.T) {
+// The no-baseline fallback is paused for hand-picking too: its list is stored
+// at record time, so the update after it has a baseline again.
+func TestRunCheck_OnlyNewFiles_NoBaseline_StoresFilesAtRecord(t *testing.T) {
 	f, _ := selectingFixture(t, torrentTracker(torrentmetatest.Torrent("Show S01", v2Files)))
 	f.topic.OnlyNewFiles = true
 
 	f.s.runCheck(context.Background(), f.s.log, f.topic)
 
-	if len(f.deliveries.recorded) != 1 || f.deliveries.recorded[0].Files != nil {
-		t.Errorf("recorded = %+v, want one delivery with no file list", f.deliveries.recorded)
+	if len(f.deliveries.filesAtRecord) != 1 || !reflect.DeepEqual(f.deliveries.filesAtRecord[0], v2Files) {
+		t.Errorf("files at record = %+v, want v2's files", f.deliveries.filesAtRecord)
 	}
 }
 
@@ -639,44 +643,100 @@ func TestRunCheck_OnlyNewFiles_UnsupportedClient_StoresFilesAtRecord(t *testing.
 	}
 }
 
-// Update 1 fails its selection, so the user may not have its new file.
-// Update 2 must not treat update 1's files as "already had": it arrives
-// paused with the no-baseline note instead of skipping them.
-func TestRunCheck_OnlyNewFiles_FailedSelectionLeavesNextUpdateWithoutBaseline(t *testing.T) {
-	v3Files := append(append([]domain.TorrentFile{}, v2Files...), domain.TorrentFile{Path: "E03.mkv", Size: 300})
-	tr := &fakeTracker{
-		name: "faketracker",
-		checks: []checkResult{
-			{check: &domain.Check{Hash: "v2-hash", Extra: map[string]any{}}},
-			{check: &domain.Check{Hash: "v3-hash", Extra: map[string]any{}}},
-		},
-		downloads: []downloadResult{
-			{payload: &domain.Payload{TorrentFile: torrentmetatest.Torrent("Show S01", v2Files), FileName: "v2.torrent"}},
-			{payload: &domain.Payload{TorrentFile: torrentmetatest.Torrent("Show S01", v3Files), FileName: "v3.torrent"}},
-		},
+// seqTracker delivers one .torrent per update, in order, each under its own
+// check hash.
+func seqTracker(versions ...[]domain.TorrentFile) *fakeTracker {
+	tr := &fakeTracker{name: "faketracker"}
+	for i, files := range versions {
+		tr.checks = append(tr.checks, checkResult{check: &domain.Check{Hash: fmt.Sprintf("v%d-hash", i+2), Extra: map[string]any{}}})
+		tr.downloads = append(tr.downloads, downloadResult{payload: &domain.Payload{
+			TorrentFile: torrentmetatest.Torrent("Show S01", files), FileName: fmt.Sprintf("v%d.torrent", i+2),
+		}})
 	}
-	f, sel := selectingFixture(t, tr)
+	return tr
+}
+
+// rootedClient lists files the way the fixtures' client does: under the
+// torrent's top folder, numbered by position.
+func rootedClient(files []domain.TorrentFile) []domain.ClientFile {
+	out := make([]domain.ClientFile, len(files))
+	for i, f := range files {
+		out[i] = domain.ClientFile{Index: i, Path: "Show S01/" + f.Path, Size: f.Size, Wanted: true}
+	}
+	return out
+}
+
+// Update 1 fails its selection (Marauder's own failure), so its row has no
+// list and update 2 arrives paused once. Update 2 is offered to the user whole
+// and stores its list, so update 3 selects normally against it: the policy
+// does not stay paused after one failure.
+func TestRunCheck_OnlyNewFiles_FailedSelectionPausesOnlyTheNextUpdate(t *testing.T) {
+	v3Files := append(append([]domain.TorrentFile{}, v2Files...), domain.TorrentFile{Path: "E03.mkv", Size: 300})
+	v4Files := append(append([]domain.TorrentFile{}, v3Files...), domain.TorrentFile{Path: "E04.mkv", Size: 400})
+	f, sel := selectingFixture(t, seqTracker(v2Files, v3Files, v4Files))
 	f.topic.OnlyNewFiles = true
 	f.deliveries.latestFiles = v1Files
-	sel.filesSeq = [][]domain.ClientFile{v2Client}
-	sel.skipErr = errors.New("skip refused")
 
+	// Update 1 (v2): the skip fails; the row keeps no list.
+	sel.filesSeq = [][]domain.ClientFile{rootedClient(v2Files)}
+	sel.skipErr = errors.New("skip refused")
 	f.s.runCheck(context.Background(), f.s.log, f.topic)
 	if body := lastSubmittedBody(t, f); !strings.Contains(body, "skipping the old files failed") {
 		t.Fatalf("update 1 body = %q, want the failed selection", body)
 	}
+	if f.deliveries.recorded[0].Files != nil || len(f.deliveries.setFilesCalls) != 0 {
+		t.Fatalf("update 1 row files = %+v, SetFiles = %+v; want NULL and no SetFiles",
+			f.deliveries.recorded[0].Files, f.deliveries.setFilesCalls)
+	}
 
+	// Update 2 (v3): no baseline, added paused, but its list is stored.
 	sel.skipErr = nil
 	f.topic.LastHash = "v2-hash"
 	f.s.runCheck(context.Background(), f.s.log, f.topic)
-
-	if sel.skipCalls != 1 || sel.startCalls != 0 {
-		t.Errorf("skip=%d start=%d, want update 2 left untouched (only update 1's failed skip)", sel.skipCalls, sel.startCalls)
-	}
-	if !sel.lastOpts.Paused {
-		t.Error("update 2 not added paused")
-	}
 	if body := lastSubmittedBody(t, f); !strings.Contains(body, "no earlier file list") {
-		t.Errorf("update 2 body = %q, want the no-baseline note", body)
+		t.Fatalf("update 2 body = %q, want the no-baseline note", body)
+	}
+	if !sel.lastOpts.Paused || sel.skipCalls != 1 || sel.startCalls != 0 {
+		t.Fatalf("update 2 paused=%v skip=%d start=%d, want paused and untouched", sel.lastOpts.Paused, sel.skipCalls, sel.startCalls)
+	}
+	if !reflect.DeepEqual(f.deliveries.filesAtRecord[1], v3Files) {
+		t.Fatalf("update 2 files at record = %+v, want v3's files", f.deliveries.filesAtRecord[1])
+	}
+
+	// Update 3 (v4): compared with v3, so only E04 downloads.
+	sel.filesSeq = [][]domain.ClientFile{rootedClient(v4Files)}
+	f.topic.LastHash = "v3-hash"
+	f.s.runCheck(context.Background(), f.s.log, f.topic)
+	if !reflect.DeepEqual(sel.skipped, []int{0, 1, 2}) || sel.startCalls != 1 {
+		t.Errorf("update 3 skipped=%v start=%d, want E01-E03 skipped and a start", sel.skipped, sel.startCalls)
+	}
+	if body := lastSubmittedBody(t, f); !strings.Contains(body, "Downloading 1 new of 4 files") {
+		t.Errorf("update 3 body = %q, want the selection note", body)
+	}
+}
+
+// An update the user finished by hand (add-paused only) is a baseline: when
+// only-new-files is then turned on, the next update selects against it.
+func TestRunCheck_AddPausedOnlyUpdate_IsNextUpdatesBaseline(t *testing.T) {
+	v3Files := append(append([]domain.TorrentFile{}, v2Files...), domain.TorrentFile{Path: "E03.mkv", Size: 300})
+	f, sel := selectingFixture(t, seqTracker(v2Files, v3Files))
+	f.topic.AddPausedOnUpdate = true
+
+	f.s.runCheck(context.Background(), f.s.log, f.topic)
+	if !sel.lastOpts.Paused || sel.filesCalls != 0 {
+		t.Fatalf("update 1 paused=%v files=%d, want paused and untouched", sel.lastOpts.Paused, sel.filesCalls)
+	}
+
+	f.topic.AddPausedOnUpdate = false
+	f.topic.OnlyNewFiles = true
+	f.topic.LastHash = "v2-hash"
+	sel.filesSeq = [][]domain.ClientFile{rootedClient(v3Files)}
+	f.s.runCheck(context.Background(), f.s.log, f.topic)
+
+	if !reflect.DeepEqual(sel.skipped, []int{0, 1}) || sel.startCalls != 1 {
+		t.Errorf("update 2 skipped=%v start=%d, want v2's E01-E02 skipped and a start", sel.skipped, sel.startCalls)
+	}
+	if body := lastSubmittedBody(t, f); !strings.Contains(body, "Downloading 1 new of 3 files") {
+		t.Errorf("update 2 body = %q, want the selection note", body)
 	}
 }

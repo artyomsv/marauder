@@ -50,8 +50,8 @@ const (
 type deliveryPlan struct {
 	paused bool
 	// files is the payload's own file list, nil when unknown. Stored with the
-	// delivery as the next update's baseline only when Marauder knows the
-	// user gets these files (filesAtRecord, finishDelivery).
+	// delivery as the next update's baseline: at record time, or after a
+	// successful selection (filesAtRecord, finishDelivery).
 	files []domain.TorrentFile
 	// selection is set when only-new-files runs after Add.
 	selection *fileSelection
@@ -65,18 +65,19 @@ type deliveryPlan struct {
 }
 
 // filesAtRecord is the file list recordDelivery stores. A delivery's files
-// mean "the user got this version's files", and the next update skips every
-// one of them, so a list is stored only when that is known:
-//   - not paused (a plain delivery, or a client that cannot pause and so
-//     downloads everything): stored now;
-//   - paused with a selection: nil now, stored by finishDelivery once the
-//     selection has succeeded — a failed one leaves nil;
-//   - paused without a selection (add-paused only, or a fallback): nil. The
-//     user picks files by hand, and what they pick is unknown, so the next
-//     update has no baseline and arrives paused rather than skipping files
-//     the user may never have downloaded.
+// mean "the version Marauder offered the user", and the next update skips
+// every one of them:
+//   - every delivery without a selection — plain, a client that cannot
+//     pause, add-paused only, and every paused fallback — stores its list
+//     now. A user asked to pick files by hand saw every file of that version
+//     and chose, so the next update comparing with it is right, and the
+//     policy keeps working after a hand-picked update;
+//   - a delivery with a selection stores nil now; finishDelivery stores the
+//     list once the selection has succeeded. Only a failed or interrupted
+//     selection — Marauder's own failure — leaves nil, so the next update
+//     arrives paused once, stores its own list, and the one after is normal.
 func (p deliveryPlan) filesAtRecord() []domain.TorrentFile {
-	if p.paused {
+	if p.selection != nil {
 		return nil
 	}
 	return p.files

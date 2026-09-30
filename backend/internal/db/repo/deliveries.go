@@ -98,11 +98,11 @@ LIMIT 1`
 }
 
 // SetFiles stores the file list of one delivery (issue #205). A delivery's
-// files mean "Marauder knows the user got this version's files", which for an
-// only-new-files selection is true only once the selection has succeeded: the
-// row is recorded with NULL before the selection starts and filled in here
-// afterwards. A stop between the two leaves NULL, so the next update has no
-// baseline and arrives paused — the safe side.
+// files mean "the version Marauder offered the user". A delivery that runs an
+// only-new-files selection has offered nothing definite until the selection
+// finishes, so its row is recorded with NULL before the selection starts and filled in
+// here once it succeeds. A failed selection, or a stop between the two,
+// leaves NULL: the next update has no baseline and arrives paused, once.
 func (r *Deliveries) SetFiles(ctx context.Context, topicID uuid.UUID, infohash string, files []domain.TorrentFile) error {
 	const q = `UPDATE topic_deliveries SET files = $3 WHERE topic_id = $1 AND infohash = $2`
 	raw, err := encodeFiles(files)

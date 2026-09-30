@@ -86,34 +86,35 @@ Down migration drops the three columns.
 - `Deliveries.Record` writes `files` (NULL when nil). `ON CONFLICT DO NOTHING`
   stays: the first recorded file list for an infohash is the file list of that
   infohash, so there is nothing to update.
-- *Amended after review (PR #210):* a delivery's `files` means **"Marauder
-  knows the user got this version's files"** — the next update skips every one
-  of them. The first version stored the list of every `.torrent` delivery at
-  record time, before the selection ran, so a failed selection (or an update
-  left paused for hand-picking) became a trusted baseline and the next update
-  skipped files the user may never have downloaded. Now:
-  - a delivery that is **not paused** (a plain delivery, or a client that
-    cannot pause and so downloads everything) stores its list at record time;
+- *Amended after review (PR #210):* a delivery's `files` means **"the
+  version Marauder offered the user"** — the next update skips every one of
+  them. The first version stored the list of every `.torrent` delivery at
+  record time, before the selection ran, so a **failed selection** became a
+  trusted baseline and the next update skipped files the selection never
+  settled. Now:
+  - every delivery **without a selection** stores its list at record time:
+    a plain delivery, a client that cannot pause, add-paused only, and every
+    paused fallback (magnet has no list anyway). A user asked to pick files
+    by hand saw every file of that version and chose, so the next update
+    comparing with it is correct;
   - a delivery **with a selection** is recorded with `files` NULL (the record
     stays before the selection, §4.3), and the list is stored by
     `Deliveries.SetFiles(ctx, topicID, infohash, files)` (`UPDATE
     topic_deliveries SET files = $3 WHERE topic_id = $1 AND infohash = $2`)
     only once the selection **succeeds**: started, kept paused by add-paused
     with the selection applied, or no new files with every file skipped.
-    Best-effort: a DB error is logged at Warn and does not fail the check;
-  - a delivery **paused without a selection** (add-paused only; the magnet,
-    no-baseline and unreadable fallbacks) and a **failed** selection keep
-    NULL, so the next update has no baseline and arrives paused.
+    Best-effort: a DB error is logged at Warn and does not fail the check.
 
+  So only a failed or interrupted selection — Marauder's own failure — leaves
+  NULL. The next update then has no baseline and arrives paused **once**; that
+  paused update stores its own list, so the one after selects normally again.
   Crash-safe: a stop between `Record` and `SetFiles` leaves NULL, and the
   retry — which excludes its own infohash — compares with the previous row.
 
-  Known consequence: the no-baseline fallback is itself paused without a
-  selection, so its row stays NULL too, and once one version of a topic is
-  NULL every later only-new-files update arrives paused for hand-picking. It
-  recovers only after a version stored at record time — a plain delivery,
-  such as the first after a reset, which downloads every file. That errs
-  toward paused, as Q1 asks, at the cost of automation after one failure.
+  (A first cut of this amendment also left add-paused-only and the paused
+  fallbacks NULL. That made the policy sticky: the no-baseline fallback is
+  itself paused, so after one failure every later update stayed paused until
+  a reset. Replaced by the rule above.)
 - New `Deliveries.LatestFiles(ctx, topicID, excludeInfohash) ([]domain.TorrentFile, error)`
   (*amended after review*): `files` of the newest row (`delivered_at DESC`)
   whose `infohash <> excludeInfohash` — the update's own infohash — whether or
@@ -304,8 +305,8 @@ this):
      paused with a note.
    - Success note: "Downloading N new files of M".
 6. `recordDelivery` stores `files` (nil when unknown or above
-   `maxStoredFiles`). *Amended after review:* only for a delivery that is not
-   paused; see the amendments below and §3.3.
+   `maxStoredFiles`). *Amended after review:* not for a delivery that runs a
+   selection, which stores its list only once the selection succeeds (§3.3).
 
 Every failure after a successful `Add` is **fail-safe and non-fatal**: the
 torrent is in the client, paused, so the delivery is recorded and the check
@@ -350,13 +351,13 @@ differences that shipped, in `scheduler/update_policy.go`):
   being delivered again with its own row present; `planDelivery` therefore
   computes the payload's infohash **before** the baseline read and passes it
   to `LatestFiles` as the row to leave out (§3.3).
-- *Amended after review (PR #210):* step 6 no longer stores `files` for every
-  delivery. `recordDelivery` gets `deliveryPlan.filesAtRecord()` — the list
-  when the torrent is not paused, nil otherwise — and `finishDelivery` calls
-  `Deliveries.SetFiles` with the full manifest only after `selectNewFiles`
-  reports success (§3.3). A failed selection, add-paused only and every paused
-  fallback leave the row NULL, so the next update arrives paused with the
-  no-baseline note instead of skipping files the user may not have.
+- *Amended after review (PR #210):* `recordDelivery` gets
+  `deliveryPlan.filesAtRecord()` — the list for every delivery without a
+  selection (plain, add-paused only, every paused fallback), nil for one with
+  a selection — and `finishDelivery` calls `Deliveries.SetFiles` with the full
+  manifest only after `selectNewFiles` reports success (§3.3). Only a failed
+  selection leaves the row NULL, so only the next update arrives paused with
+  the no-baseline note; it stores its own list, and the one after is normal.
 - The scheduler **always** waits for the client's file list before `Start`,
   even when nothing is skipped: a `Start` sent before an asynchronous
   qBittorrent add has landed is lost, leaving the torrent paused behind a
@@ -425,8 +426,10 @@ but leaves its files on disk.
   success, both settings on, magnet, no baseline, unsupported client, SkipFiles
   error, layout mismatch, no new files, Start error, per-episode tracker
   (settings ignored), `files` stored at record for a plain delivery, after
-  success for a selection (SetFiles), and never for add-paused only, a
-  fallback or a failed selection (then update 2 has no baseline), a retry
+  success for a selection (SetFiles), at record for add-paused only and the
+  paused fallbacks, never for a failed selection (update 2 is then paused
+  once, update 3 selects against it), an add-paused-only update as the next
+  update's baseline, a retry
   whose own row is already recorded, a magnet version in between, and both
   review lookalike layouts through `runCheck` (only the old file skipped).
 - Client plugins: `httptest` servers for qBittorrent (incl. `/start` 404 →
