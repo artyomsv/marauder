@@ -335,6 +335,8 @@ func (p *Poller) handleExisting(ctx context.Context, inst domain.SonarrInstance,
 			ReplaceDeleteData:         existing.ReplaceDeleteData,
 			NotifyOnly:                existing.NotifyOnly,
 			NotifyOnlyAnnounceCurrent: existing.NotifyOnlyAnnounceCurrent,
+			AddPausedOnUpdate:         existing.AddPausedOnUpdate,
+			OnlyNewFiles:              existing.OnlyNewFiles,
 		}, mergedExtra); err != nil {
 		p.log.Warn().Err(err).Str("url", existing.URL).Msg("update existing topic from sonarr grab failed")
 		metrics.SonarrRecordsProcessedTotal.WithLabelValues("error").Inc()

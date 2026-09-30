@@ -23,7 +23,7 @@ func (h *System) Info(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"version":   version.Current(),
 		"trackers":  listTrackerInfos(registry.ListTrackers()),
-		"clients":   listPluginNames(registry.ListClients()),
+		"clients":   listClientInfos(registry.ListClients()),
 		"notifiers": listPluginNames(registry.ListNotifiers()),
 	})
 }
@@ -112,6 +112,22 @@ func listTrackerInfos(items []registry.Tracker) []map[string]any {
 			"supports_credentials":       hasCreds,
 			"supports_search":            hasSearch,
 			"supports_page_export":       hasExport,
+		})
+	}
+	return out
+}
+
+// listClientInfos is like listPluginNames but adds the client capability the
+// topic form needs to warn that a client cannot pause or select files
+// (issue #205).
+func listClientInfos(items []registry.Client) []map[string]any {
+	out := make([]map[string]any, 0, len(items))
+	for _, c := range items {
+		_, selects := c.(registry.WithFileSelection)
+		out = append(out, map[string]any{
+			"name":                    c.Name(),
+			"display_name":            c.DisplayName(),
+			"supports_file_selection": selects,
 		})
 	}
 	return out

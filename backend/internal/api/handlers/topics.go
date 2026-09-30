@@ -127,6 +127,10 @@ type createTopicReq struct {
 	// "omitted means something else" case to express.
 	NotifyOnly                bool `json:"notify_only,omitempty"`
 	NotifyOnlyAnnounceCurrent bool `json:"notify_only_announce_current,omitempty"`
+
+	// Update policy (issue #205). Plain bools: false is the right default.
+	AddPausedOnUpdate bool `json:"add_paused_on_update,omitempty"`
+	OnlyNewFiles      bool `json:"only_new_files,omitempty"`
 	// Optional capability-driven fields. The frontend learns whether a
 	// tracker accepts these via GET /api/v1/trackers/match. Plugins read
 	// them from topic.Extra in Check / Download.
@@ -199,6 +203,8 @@ func (h *Topics) Create(w http.ResponseWriter, r *http.Request) {
 		ReplaceDeleteData:         req.ReplaceDeleteData,
 		NotifyOnly:                req.NotifyOnly,
 		NotifyOnlyAnnounceCurrent: req.NotifyOnlyAnnounceCurrent,
+		AddPausedOnUpdate:         req.AddPausedOnUpdate,
+		OnlyNewFiles:              req.OnlyNewFiles,
 		Quality:                   req.Quality,
 		StartSeason:               req.StartSeason,
 		StartEpisode:              req.StartEpisode,
@@ -245,6 +251,7 @@ func topicCreateProblem(err error, url string) error {
 		// its full message — errors.Unwrap returns nil on a multi-wrap.
 		return problem.ErrUnprocessable(err.Error())
 	case errors.Is(err, topics.ErrQualityUnsupported),
+		errors.Is(err, topics.ErrOnlyNewFilesDeletesData),
 		errors.Is(err, topics.ErrCheckIntervalOutOfRange):
 		return problem.ErrUnprocessable(err.Error())
 	default:
@@ -267,11 +274,16 @@ type updateTopicReq struct {
 	ReplaceDeleteData *bool `json:"replace_delete_data,omitempty"`
 	// Pointers so an omitted field preserves the topic's current value
 	// (issue #184), matching the replace-* flags above.
-	NotifyOnly                *bool  `json:"notify_only,omitempty"`
-	NotifyOnlyAnnounceCurrent *bool  `json:"notify_only_announce_current,omitempty"`
-	Quality                   string `json:"quality,omitempty"`
-	StartSeason               *int   `json:"start_season,omitempty"`
-	StartEpisode              *int   `json:"start_episode,omitempty"`
+	NotifyOnly                *bool `json:"notify_only,omitempty"`
+	NotifyOnlyAnnounceCurrent *bool `json:"notify_only_announce_current,omitempty"`
+
+	// Pointers so an omitted field preserves the topic's current value
+	// (issue #205), matching the other flags.
+	AddPausedOnUpdate *bool  `json:"add_paused_on_update,omitempty"`
+	OnlyNewFiles      *bool  `json:"only_new_files,omitempty"`
+	Quality           string `json:"quality,omitempty"`
+	StartSeason       *int   `json:"start_season,omitempty"`
+	StartEpisode      *int   `json:"start_episode,omitempty"`
 }
 
 // Update handles PUT /topics/{id}.
@@ -375,12 +387,28 @@ func (h *Topics) Update(w http.ResponseWriter, r *http.Request) {
 	if req.NotifyOnlyAnnounceCurrent != nil {
 		notifyOnlyAnnounceCurrent = *req.NotifyOnlyAnnounceCurrent
 	}
+	addPausedOnUpdate := existing.AddPausedOnUpdate
+	if req.AddPausedOnUpdate != nil {
+		addPausedOnUpdate = *req.AddPausedOnUpdate
+	}
+	onlyNewFiles := existing.OnlyNewFiles
+	if req.OnlyNewFiles != nil {
+		onlyNewFiles = *req.OnlyNewFiles
+	}
+	// Checked on the values the topic would store, so turning only-new-files
+	// on for a topic that already deletes old files is refused too.
+	if err := topics.ValidUpdatePolicy(replaceOnUpdate, replaceDeleteData, onlyNewFiles); err != nil {
+		problem.Write(w, r, h.BaseURL, problem.ErrUnprocessable(err.Error()))
+		return
+	}
 
 	updated, uerr := h.Topics.Update(r.Context(), id, uid, req.DisplayName, req.ClientID, req.NotifierID, req.DownloadDir, req.Category, checkIntervalSec, repo.TopicFlags{
 		ReplaceOnUpdate:           replaceOnUpdate,
 		ReplaceDeleteData:         replaceDeleteData,
 		NotifyOnly:                notifyOnly,
 		NotifyOnlyAnnounceCurrent: notifyOnlyAnnounceCurrent,
+		AddPausedOnUpdate:         addPausedOnUpdate,
+		OnlyNewFiles:              onlyNewFiles,
 	}, extra)
 	if uerr != nil {
 		if errors.Is(uerr, repo.ErrNotFound) {

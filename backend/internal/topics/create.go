@@ -94,9 +94,12 @@ type CreateInput struct {
 	// additionally announces the release already present at the first check.
 	NotifyOnly                bool
 	NotifyOnlyAnnounceCurrent bool
-	Quality                   string
-	StartSeason               *int
-	StartEpisode              *int
+	// AddPausedOnUpdate / OnlyNewFiles are the update policy (issue #205).
+	AddPausedOnUpdate bool
+	OnlyNewFiles      bool
+	Quality           string
+	StartSeason       *int
+	StartEpisode      *int
 	// Source tags how the topic was created (e.g. "sonarr"). Stored in
 	// extra["source"] so the UI can badge auto-imported topics. Empty for
 	// manually-added topics.
@@ -184,10 +187,15 @@ func BuildAndCreate(ctx context.Context, store Store, in CreateInput) (*Result, 
 	}
 
 	// Replace-on-update: keep the DB column's default (delete data = true) when
-	// the caller doesn't specify, so an omitted flag matches the column default.
-	replaceDeleteData := true
+	// the caller doesn't specify — except with only-new-files, where deleting
+	// the previous version's files would lose them (issue #205), so an omitted
+	// flag defaults to keeping them. An explicit true is rejected below.
+	replaceDeleteData := !in.OnlyNewFiles
 	if in.ReplaceDeleteData != nil {
 		replaceDeleteData = *in.ReplaceDeleteData
+	}
+	if err := ValidUpdatePolicy(in.ReplaceOnUpdate, replaceDeleteData, in.OnlyNewFiles); err != nil {
+		return nil, err
 	}
 
 	t := &domain.Topic{
@@ -205,6 +213,8 @@ func BuildAndCreate(ctx context.Context, store Store, in CreateInput) (*Result, 
 		ReplaceDeleteData:         replaceDeleteData,
 		NotifyOnly:                in.NotifyOnly,
 		NotifyOnlyAnnounceCurrent: in.NotifyOnlyAnnounceCurrent,
+		AddPausedOnUpdate:         in.AddPausedOnUpdate,
+		OnlyNewFiles:              in.OnlyNewFiles,
 		Extra:                     extra,
 		CheckIntervalSec:          interval,
 		NextCheckAt:               time.Now().UTC(),

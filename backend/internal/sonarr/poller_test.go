@@ -143,6 +143,8 @@ func (f *fakeTopics) Update(_ context.Context, id, _ uuid.UUID, displayName stri
 		ReplaceDeleteData:         flags.ReplaceDeleteData,
 		NotifyOnly:                flags.NotifyOnly,
 		NotifyOnlyAnnounceCurrent: flags.NotifyOnlyAnnounceCurrent,
+		AddPausedOnUpdate:         flags.AddPausedOnUpdate,
+		OnlyNewFiles:              flags.OnlyNewFiles,
 		Extra:                     extra,
 	}
 	f.updated = append(f.updated, updated)
@@ -438,6 +440,7 @@ func TestPoller_UpdateExistingRealigns(t *testing.T) {
 		fakeURL: {
 			ID: uuid.New(), URL: fakeURL, Category: "old-category", // differs
 			NotifyOnly: true, NotifyOnlyAnnounceCurrent: true,
+			AddPausedOnUpdate: true, OnlyNewFiles: true,
 		},
 	}}
 
@@ -449,6 +452,10 @@ func TestPoller_UpdateExistingRealigns(t *testing.T) {
 	if !ts.updated[0].NotifyOnly || !ts.updated[0].NotifyOnlyAnnounceCurrent {
 		t.Errorf("notify-only flags not preserved: NotifyOnly=%t NotifyOnlyAnnounceCurrent=%t",
 			ts.updated[0].NotifyOnly, ts.updated[0].NotifyOnlyAnnounceCurrent)
+	}
+	if !ts.updated[0].AddPausedOnUpdate || !ts.updated[0].OnlyNewFiles {
+		t.Errorf("update-policy flags not preserved: AddPausedOnUpdate=%t OnlyNewFiles=%t",
+			ts.updated[0].AddPausedOnUpdate, ts.updated[0].OnlyNewFiles)
 	}
 }
 
