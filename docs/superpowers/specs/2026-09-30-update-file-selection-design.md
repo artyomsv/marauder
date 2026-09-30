@@ -98,14 +98,24 @@ Down migration drops the three columns.
 
 `POST /topics` and `PUT /topics/{id}` accept `add_paused_on_update` and
 `only_new_files`; the topic view returns them. Validation (both endpoints):
-`only_new_files && replace_on_update && replace_delete_data` → **400**
+`only_new_files && replace_on_update && replace_delete_data` → **422**
 ("download only new files cannot be combined with deleting the previous
-version's files: the old files would be lost"). This is checked on the values
+version's files: the old files would be lost"; `topics.ValidUpdatePolicy`,
+sentinel `topics.ErrOnlyNewFilesDeletesData`). This is checked on the values
 the request would store, so a `PUT` that turns on `only_new_files` on a topic
 that already deletes data is rejected too.
 
-`GET /system/info` gains `client_plugins: [{name, supports_file_selection}]`.
-The existing `clients` name list stays for compatibility.
+*Amended after implementation:* the status is 422, matching the other
+create-validation failures (`ErrQualityUnsupported`, the check-interval range),
+not 400. And on **create**, an omitted `replace_delete_data` defaults to
+**false** when `only_new_files` is on (it stays true otherwise), so a client
+that sends only `replace_on_update` + `only_new_files` gets the safe
+combination instead of a rejection; only an explicit `true` is refused.
+
+`GET /system/info` extends each entry of the existing `clients` list with
+`supports_file_selection` (*amended:* no separate `client_plugins` list — the
+`clients` entries already carried `name` and `display_name`, so a second list
+would have repeated them).
 
 ## 4. Delivery flow
 
@@ -127,37 +137,65 @@ The existing `clients` name list stays for compatibility.
 `SkipSet(prev, next []domain.TorrentFile) []domain.TorrentFile` returns the
 entries of `next` whose `(Path, Size)` pair is in `prev` — the files to skip.
 
-`MatchesClientFile(clientPath string, clientSize int64, f domain.TorrentFile) bool`
-— true when sizes are equal and `clientPath == f.Path` or `clientPath` ends
-with `"/" + f.Path`. Suffix matching absorbs the client's own top folder
-(qBittorrent "Original"/"Create subfolder" content layouts, a renamed root).
-Used by all three client plugins so the rule exists once.
+`MatchesClientFile(c domain.ClientFile, f domain.TorrentFile) bool`
+— true when sizes are equal and the client path equals `f.Path`, or equals it
+after dropping **exactly** its first component. That absorbs the client's own
+top folder (qBittorrent "Original"/"Create subfolder" content layouts, a
+renamed root) without the looser suffix match, which would also let
+`A/Season 1/E01.mkv` match a file listed as `Season 1/E01.mkv` under a
+different parent.
+
+`MatchSkip(client []domain.ClientFile, skip []domain.TorrentFile) (indices []int, matched int)`
+maps the skip set onto the client's list: the sorted, de-duplicated client
+indices to skip, and how many skip entries matched at least one client file.
+A caller that gets `matched < len(skip)` must not start the torrent.
+
+*Amended after implementation:* matching runs **once, in the scheduler**, not
+inside each client plugin (see §4.2).
 
 ### 4.2 Client capability — `registry.WithFileSelection`
 
+*Amended after implementation:* the capability is three thin calls. Waiting
+and matching live in the scheduler, so each exists once instead of three
+times, and the plugins only translate to their client's API.
+
 ```go
 type WithFileSelection interface {
-    // SkipFiles sets every file of the torrent `hash` that matches an entry of
-    // skip (torrentmeta.MatchesClientFile) to "do not download". It waits,
-    // bounded by ctx, until the client knows the torrent's file list. It
-    // returns how many entries of skip matched at least one client file.
-    SkipFiles(ctx context.Context, rawConfig []byte, hash string, skip []domain.TorrentFile) (int, error)
+    Client
+    // Files lists the torrent's files the way the client numbers them. An
+    // empty list, not an error, while the client does not know the torrent
+    // or its file list yet — a qBittorrent add is asynchronous.
+    Files(ctx context.Context, rawConfig []byte, hash string) ([]domain.ClientFile, error)
+    // SkipFiles marks the given client file indices "do not download".
+    SkipFiles(ctx context.Context, rawConfig []byte, hash string, indices []int) error
     // Start resumes a torrent that was added paused.
     Start(ctx context.Context, rawConfig []byte, hash string) error
 }
 ```
 
-| Client | Wait for file list | Skip | Start |
-|---|---|---|---|
-| qBittorrent | poll `GET /api/v2/torrents/files?hash=` until non-empty | `POST /api/v2/torrents/filePrio` `id=i|j|…&priority=0` (client `index` values) | `POST /api/v2/torrents/start` (5.x), falling back to `/resume` (4.x) on 404 |
-| Transmission | `torrent-get` `fields: [files]` until non-empty | `torrent-set` `files-unwanted: [i, j, …]` | `torrent-start` |
-| Deluge | `core.get_torrent_status(hash, ["files"])` until non-empty | `core.set_torrent_file_priorities(hash, [..])` — full list, 0 for skipped, current priority kept for the rest | `core.resume_torrent([hash])` |
+`domain.ClientFile{Index, Path, Size, Wanted}`: `Index` is the client's own file
+id, `Wanted` is false for a file marked "do not download".
 
-The wait polls every 500 ms and stops at ctx's deadline. A `.torrent` add is
-known to the client almost at once; the wait exists because qBittorrent's add
-is asynchronous.
+| Client | Files | SkipFiles | Start |
+|---|---|---|---|
+| qBittorrent | `GET /api/v2/torrents/files?hash=` (404 → empty list; `index`, else position, for pre-4.4) | `POST /api/v2/torrents/filePrio` `id=i\|j\|…&priority=0` | `POST /api/v2/torrents/start`, falling back to `/resume` on 404 (pre-5.0) |
+| Transmission | `torrent-get` `fields: [files, fileStats]` (unknown hash → `torrents: []`) | `torrent-set` `files-unwanted: [i, j, …]` | `torrent-start` |
+| Deluge | `core.get_torrent_status(hash, ["files", "file_priorities"])` (unknown id → `{}`) | `core.set_torrent_options([hash], {file_priorities: [..]})` — full list, 0 for skipped, current priority kept for the rest; Deluge 2 dropped `set_torrent_file_priorities` | `core.resume_torrent(hash)` |
+
+The scheduler polls `Files` every 500 ms within a 15 s `fileSelectionTimeout`.
+
+qBittorrent's paused add sends **both** `paused=true` and `stopped=true`
+(5.0 renamed the field; each version ignores the name it does not know).
 
 µTorrent and downloadfolder do not implement it.
+
+**Real-client results (2026-09-30)**, from the build-tagged
+`backend/internal/plugins/clients/fileselectioncheck` test: qBittorrent 5.2.1
+and 5.1.4, Transmission 4.1.2 and 4.0.6, and Deluge 2.2.0 each honoured the
+paused add, listed both files, skipped exactly the old one, started, and
+answered an unknown hash with an empty list. qBittorrent 5.1.4 and 5.2.1 answer
+`torrents/start` 200 and `torrents/resume` 404, so the fallback is only for
+older servers.
 
 ### 4.3 Scheduler
 
@@ -197,7 +235,7 @@ Marauder meant to skip; the worst case is "paused, pick by hand". Each outcome
 is logged and metered:
 `marauder_scheduler_file_selection_total{client, result}` with `result` in
 `selected`, `no_new_files`, `paused_no_baseline`, `paused_magnet`,
-`paused_unsupported`, `paused_unreadable`, `failed`.
+`unsupported`, `paused_unreadable`, `failed`.
 
 `add_paused_on_update` on a client that cannot pause (µTorrent, downloadfolder)
 adds normally — the plugin ignores `Paused`, as today — and logs a Warn. The
@@ -209,6 +247,39 @@ appended to the `download.submitted` event body, one line per delivery.
 
 `VerifyCheckState` still runs immediately before `Add`. `SkipFiles`/`Start` run
 after it; they act only on the torrent this tick just added.
+
+*Amended after implementation* (the flow above is the plan; these are the
+differences that shipped, in `scheduler/update_policy.go`):
+
+- The result is **`unsupported`**, not `paused_unsupported`: a client without
+  `WithFileSelection` cannot pause either, so the torrent is added **normally**
+  (not paused) and all its files download. The plan does not mark it paused,
+  and with `only_new_files` the note says `This client cannot pause or select
+  files, so all files download.`
+- `planDelivery` (steps 1-3, including the `LatestFiles` read) runs **before**
+  `VerifyCheckState`, so its database read does not widen the gap between that
+  guard and `Add`. An infohash failure or a file list above `maxStoredFiles` is
+  `paused_unreadable`; a `LatestFiles` error degrades to `paused_no_baseline`.
+- The delivery is **recorded before** file selection (step 6 moves ahead of
+  step 5): the selection can wait up to its 15 s budget, and a shutdown in that
+  wait must not lose the row that is the next update's baseline and what reset,
+  replace and the progress watcher act on.
+- The scheduler **always** waits for the client's file list before `Start`,
+  even when nothing is skipped: a `Start` sent before an asynchronous
+  qBittorrent add has landed is lost, leaving the torrent paused behind a
+  "Downloading" note.
+- Step 5's `matched, err := SkipFiles(ctx, cfg, hash, skip)` is split to fit
+  §4.2: the scheduler polls `Files`, calls `torrentmeta.MatchSkip`, refuses on
+  `matched != len(skip)`, then `SkipFiles(indices)`.
+- Every outcome is logged at Info; `failed` at Warn with the step.
+- Notification notes name the failed step (`could not list the files`,
+  `the client listed N of M old files`, `skipping the old files failed`,
+  `starting the torrent failed`) but **never** the raw client error, which can
+  carry an HTML error page; that goes to the log only.
+- Note texts as shipped: `Downloading N new of M files.`, `Added paused with N
+  new of M files selected.` (both settings on), `Added paused.` (paused only),
+  `Added paused: this update has no new files.`, and `Added paused: <reason>.
+  Pick the new files in your client.` for the fallbacks.
 
 ### 4.4 Interaction with replace-on-update (#101)
 
@@ -227,9 +298,11 @@ but leaves its files on disk.
 - When "Download only new files" is checked: the delete-data box is unchecked,
   disabled, and a one-line note explains why.
 - When the selected client — or the user's default client when "Default" is
-  selected — has `supports_file_selection: false` in `/system/info`
-  `client_plugins`, a note under the two new checkboxes says they are not
-  supported by that client.
+  selected — has `supports_file_selection: false` in its `/system/info`
+  `clients` entry, a note under the two new checkboxes says they are not
+  supported by that client (`components/topics/useUnsupportedClient.ts`).
+- *Amended:* for per-episode trackers the two flags are sent as `false`, so
+  the form never saves state the user cannot see.
 - `lib/api.ts` types, `AddTopicCard`/`EditTopicCard` payloads, en/ru strings.
 
 ## 6. Testing
@@ -246,10 +319,11 @@ but leaves its files on disk.
   `/resume`), Transmission, Deluge — wait, skip, start.
 - Repo integration tests (real Postgres): flags round-trip; `Record` with and
   without `files`; `LatestFiles` picks the newest non-NULL row.
-- Handlers: the §3.4 400 on create and update; `/system/info` `client_plugins`.
+- Handlers: the §3.4 422 on create and update; `/system/info`
+  `clients[].supports_file_selection`.
 - Frontend: checkboxes, locked delete-data box, unsupported-client note.
 - **Real-client check** on the `deploy/docker-compose.test-clients.yml` matrix
-  (qBittorrent 5.2.1 and 5.1.4, Transmission 4.1.2, Deluge 2.2.0): add a
+  (qBittorrent 5.2.1 and 5.1.4, Transmission 4.1.2 and 4.0.6, Deluge 2.2.0): add a
   self-made two-version multi-file `.torrent` (version 2 = version 1 + one file)
   and confirm the client skips exactly the old file and starts. This also
   answers whether qBittorrent 5.x still honours `paused` on `torrents/add` or

@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Per-topic "Add updates paused" and "Download only new files" settings.**
+  When a torrent is updated (for example a season pack gains an episode),
+  Marauder can add the new version paused, or skip the files the previous
+  version already had and download only the new ones. A file counts as the
+  same when its name and size match. When Marauder cannot tell which files are
+  new (a magnet link, or no earlier file list to compare with), it adds the
+  torrent paused and says so in the notification. Works with qBittorrent,
+  Transmission and Deluge. See `docs/update-policy.md`. Ref #205
+
 ## [1.22.0] - 2026-09-29
 
 ### Added
