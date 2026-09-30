@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strconv"
+	"strings"
 	"sync"
 	"testing"
 
@@ -142,5 +144,28 @@ func TestStart_UsesStartOn5x(t *testing.T) {
 	}
 	if srv.startCalls != 1 || srv.resumeHash != "" {
 		t.Errorf("start calls = %d, resume = %q; want start only", srv.startCalls, srv.resumeHash)
+	}
+}
+
+// A body cut short must fail, even when what did arrive is valid JSON: a
+// truncated file list would pair with the torrent wrongly or not at all.
+func TestFiles_TruncatedBodyIsAnError(t *testing.T) {
+	const body = `[{"index":0,"name":"Show/E01.mkv","size":100,"priority":1}]`
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v2/auth/login", func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("Ok.")) })
+	mux.HandleFunc("/api/v2/torrents/files", func(w http.ResponseWriter, _ *http.Request) {
+		// Promise more bytes than are sent; the connection then closes early.
+		w.Header().Set("Content-Length", strconv.Itoa(len(body)+64))
+		w.Write([]byte(body))
+	})
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+
+	got, err := newRemovePlugin().Files(context.Background(), selectCfg(ts.URL), "abc")
+	if err == nil {
+		t.Fatalf("Files = %+v, want an error for a truncated body", got)
+	}
+	if !strings.Contains(err.Error(), "read files") {
+		t.Errorf("err = %v, want it to say the file list could not be read", err)
 	}
 }

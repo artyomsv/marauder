@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/artyomsv/marauder/backend/internal/domain"
@@ -84,5 +86,31 @@ func TestStart_SendsTorrentStart(t *testing.T) {
 	last := (*calls)[len(*calls)-1]
 	if last["method"] != "torrent-start" {
 		t.Errorf("method = %v, want torrent-start", last["method"])
+	}
+}
+
+// A body cut short must fail, even when what did arrive is valid JSON: a
+// truncated file list would pair with the torrent wrongly or not at all.
+func TestFiles_TruncatedBodyIsAnError(t *testing.T) {
+	const sessionID = "sess-1"
+	const body = `{"result":"success","arguments":{"torrents":[{"files":[{"name":"Show/E01.mkv","length":100}],"fileStats":[{"wanted":true}]}]}}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Transmission-Session-Id") != sessionID {
+			w.Header().Set("X-Transmission-Session-Id", sessionID)
+			w.WriteHeader(http.StatusConflict)
+			return
+		}
+		// Promise more bytes than are sent; the connection then closes early.
+		w.Header().Set("Content-Length", strconv.Itoa(len(body)+64))
+		w.Write([]byte(body))
+	}))
+	t.Cleanup(srv.Close)
+
+	got, err := newPlugin().Files(context.Background(), []byte(`{"url":"`+srv.URL+`"}`), "abc")
+	if err == nil {
+		t.Fatalf("Files = %+v, want an error for a truncated body", got)
+	}
+	if !strings.Contains(err.Error(), "read rpc response") {
+		t.Errorf("err = %v, want it to say the response could not be read", err)
 	}
 }

@@ -31,6 +31,8 @@ func (p *plugin) torrentFiles(ctx context.Context, rawConfig []byte, hash string
 	if err != nil {
 		return nil, c, nil, err
 	}
+	// Safe to drop the error: out came from json.Unmarshal, so it holds only
+	// types json.Marshal encodes.
 	raw, _ := json.Marshal(out["result"])
 	var tf torrentFiles
 	if err := json.Unmarshal(raw, &tf); err != nil {
@@ -49,7 +51,9 @@ func (p *plugin) Files(ctx context.Context, rawConfig []byte, hash string) ([]do
 	out := make([]domain.ClientFile, 0, len(tf.Files))
 	for _, f := range tf.Files {
 		wanted := true
-		if f.Index < len(tf.FilePriorities) {
+		// Bounds-checked both ways: a negative index from a misbehaving
+		// server would otherwise panic the scheduler goroutine.
+		if f.Index >= 0 && f.Index < len(tf.FilePriorities) {
 			wanted = tf.FilePriorities[f.Index] != 0
 		}
 		out = append(out, domain.ClientFile{Index: f.Index, Path: f.Path, Size: f.Size, Wanted: wanted})

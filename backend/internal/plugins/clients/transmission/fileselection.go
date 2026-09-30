@@ -27,6 +27,8 @@ func (p *plugin) Files(ctx context.Context, rawConfig []byte, hash string) ([]do
 		return nil, fmt.Errorf("transmission rejected torrent-get: %v", result)
 	}
 	// Re-decode through a typed struct rather than walking map[string]any.
+	// The error is safe to drop: the value came out of json.Unmarshal, so it
+	// holds only types json.Marshal encodes.
 	raw, _ := json.Marshal(resp["arguments"])
 	var args struct {
 		Torrents []struct {

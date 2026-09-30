@@ -39,7 +39,12 @@ func (p *plugin) Files(ctx context.Context, rawConfig []byte, hash string) ([]do
 	if resp.StatusCode == http.StatusNotFound {
 		return nil, nil
 	}
-	body, _ := io.ReadAll(resp.Body)
+	// A read error is fatal even when the bytes that did arrive decode: a
+	// truncated file list would be paired with the torrent wrongly.
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("qbit read files response (status %d): %w", resp.StatusCode, err)
+	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("qbit files status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
@@ -124,6 +129,8 @@ func (p *plugin) postForm(ctx context.Context, rawConfig []byte, path string, fo
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
+		// The body only enriches the status error being returned; a failed
+		// read leaves it partial, and the status alone already fails the call.
 		b, _ := io.ReadAll(resp.Body)
 		return &qbitStatusError{path: path, code: resp.StatusCode, body: strings.TrimSpace(string(b))}
 	}

@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/artyomsv/marauder/backend/internal/domain"
@@ -96,5 +98,47 @@ func TestStart_ResumesTorrent(t *testing.T) {
 	last := (*calls)[len(*calls)-1]
 	if last["method"] != "core.resume_torrent" || !reflect.DeepEqual(last["params"], []any{"abc"}) {
 		t.Errorf("call = %v, want core.resume_torrent(abc)", last)
+	}
+}
+
+// A body cut short must fail, even when what did arrive is valid JSON: a
+// truncated file list would pair with the torrent wrongly or not at all.
+func TestFiles_TruncatedBodyIsAnError(t *testing.T) {
+	const status = `{"id":3,"result":{"files":[{"index":0,"path":"Show/E01.mkv","size":100}],"file_priorities":[4]},"error":null}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var req map[string]any
+		_ = json.Unmarshal(body, &req)
+		switch req["method"] {
+		case "auth.login":
+			http.SetCookie(w, &http.Cookie{Name: "_session_id", Value: "abc"})
+			w.Write([]byte(`{"id":1,"result":true,"error":null}`))
+		case "web.connected":
+			w.Write([]byte(`{"id":2,"result":true,"error":null}`))
+		default:
+			// Promise more bytes than are sent; the connection then closes early.
+			w.Header().Set("Content-Length", strconv.Itoa(len(status)+64))
+			w.Write([]byte(status))
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	p := &plugin{sessions: map[string]*session{}}
+	got, err := p.Files(context.Background(), delugeCfg(srv.URL), "abc")
+	if err == nil {
+		t.Fatalf("Files = %+v, want an error for a truncated body", got)
+	}
+	if !strings.Contains(err.Error(), "read deluge response") {
+		t.Errorf("err = %v, want it to say the response could not be read", err)
+	}
+}
+
+// A negative index from a misbehaving server must not panic the caller.
+func TestFiles_NegativeIndexDoesNotPanic(t *testing.T) {
+	srv, _ := newSelectServer(t, `{"files":[{"index":-1,"path":"a","size":1}],"file_priorities":[0]}`)
+	p := &plugin{sessions: map[string]*session{}}
+	got, err := p.Files(context.Background(), delugeCfg(srv.URL), "abc")
+	if err != nil || len(got) != 1 || got[0].Index != -1 {
+		t.Errorf("Files = (%+v, %v), want the entry passed through", got, err)
 	}
 }
