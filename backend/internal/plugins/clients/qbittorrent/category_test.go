@@ -124,3 +124,24 @@ func TestAdd_CategoryField(t *testing.T) {
 		})
 	}
 }
+
+// qBittorrent 5.0 renamed torrents/add's "paused" to "stopped". Both are sent
+// so a paused add works on 4.x and 5.x; each version ignores the other name.
+func TestAdd_PausedSendsStoppedToo(t *testing.T) {
+	fields := captureAddFields(t, Config{Username: "admin", Password: "secret"},
+		&domain.Payload{MagnetURI: "magnet:?xt=urn:btih:abc"}, domain.AddOptions{Paused: true})
+	if fields["paused"] != "true" || fields["stopped"] != "true" {
+		t.Errorf("paused=%q stopped=%q, want both \"true\"", fields["paused"], fields["stopped"])
+	}
+}
+
+func TestAdd_NotPausedSendsNeither(t *testing.T) {
+	fields := captureAddFields(t, Config{Username: "admin", Password: "secret"},
+		&domain.Payload{MagnetURI: "magnet:?xt=urn:btih:abc"}, domain.AddOptions{})
+	if _, ok := fields["paused"]; ok {
+		t.Error("paused sent for a normal add")
+	}
+	if _, ok := fields["stopped"]; ok {
+		t.Error("stopped sent for a normal add")
+	}
+}

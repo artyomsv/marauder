@@ -635,3 +635,93 @@ func TestTopics_Create_CheckIntervalOutOfRange(t *testing.T) {
 		t.Error("an out-of-range interval must not reach the store")
 	}
 }
+
+func TestTopicsUpdate_PassesUpdatePolicyFlags(t *testing.T) {
+	store := &fakeTopicStore{getByID: &domain.Topic{ID: uuid.New(), TrackerName: fakeQualityTrackerName, DisplayName: "Show"}}
+	h := &Topics{Topics: store, BaseURL: "http://test"}
+
+	body := updateTopicReq{DisplayName: "Show", AddPausedOnUpdate: boolPtr(true), OnlyNewFiles: boolPtr(false)}
+	w := httptest.NewRecorder()
+	h.Update(w, withURLParam(authedReq(t, uuid.New(), body), "id", uuid.New().String()))
+
+	if w.Code != 200 {
+		t.Fatalf("status %d, want 200; body %s", w.Code, w.Body.String())
+	}
+	if !store.lastFlags.AddPausedOnUpdate || store.lastFlags.OnlyNewFiles {
+		t.Errorf("flags = %+v, want AddPausedOnUpdate only", store.lastFlags)
+	}
+}
+
+func TestTopicsUpdate_OmittedUpdatePolicyFlags_PreserveExisting(t *testing.T) {
+	store := &fakeTopicStore{getByID: &domain.Topic{
+		ID: uuid.New(), TrackerName: fakeQualityTrackerName, DisplayName: "Show",
+		AddPausedOnUpdate: true, OnlyNewFiles: true,
+	}}
+	h := &Topics{Topics: store, BaseURL: "http://test"}
+
+	w := httptest.NewRecorder()
+	h.Update(w, withURLParam(authedReq(t, uuid.New(), updateTopicReq{DisplayName: "Show"}), "id", uuid.New().String()))
+
+	if w.Code != 200 {
+		t.Fatalf("status %d, want 200; body %s", w.Code, w.Body.String())
+	}
+	if !store.lastFlags.AddPausedOnUpdate || !store.lastFlags.OnlyNewFiles {
+		t.Errorf("flags = %+v, want both preserved true", store.lastFlags)
+	}
+}
+
+// Turning only_new_files on for a topic that already deletes the previous
+// version's files must be refused: the old files would be deleted and never
+// downloaded again.
+func TestTopicsUpdate_OnlyNewFilesWithDeleteData_Rejected(t *testing.T) {
+	store := &fakeTopicStore{getByID: &domain.Topic{
+		ID: uuid.New(), TrackerName: fakeQualityTrackerName, DisplayName: "Show",
+		ReplaceOnUpdate: true, ReplaceDeleteData: true,
+	}}
+	h := &Topics{Topics: store, BaseURL: "http://test"}
+
+	w := httptest.NewRecorder()
+	h.Update(w, withURLParam(authedReq(t, uuid.New(), updateTopicReq{DisplayName: "Show", OnlyNewFiles: boolPtr(true)}), "id", uuid.New().String()))
+
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status %d, want 422; body %s", w.Code, w.Body.String())
+	}
+	if store.updateCalled {
+		t.Error("store.Update was called for a rejected policy")
+	}
+}
+
+func TestTopicsCreate_OnlyNewFiles_DefaultsToKeepData(t *testing.T) {
+	store := &fakeTopicStore{}
+	h := &Topics{Topics: store, BaseURL: "http://test"}
+
+	body := createTopicReq{URL: "fake-create://topic/only-new", ReplaceOnUpdate: true, OnlyNewFiles: true, AddPausedOnUpdate: true}
+	w := httptest.NewRecorder()
+	h.Create(w, authedReq(t, uuid.New(), body))
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body=%s", w.Code, w.Body.String())
+	}
+	if store.created.ReplaceDeleteData {
+		t.Error("omitted replace_delete_data must default to false with only_new_files")
+	}
+	if !store.created.OnlyNewFiles || !store.created.AddPausedOnUpdate {
+		t.Errorf("created flags = (%v, %v), want both true", store.created.AddPausedOnUpdate, store.created.OnlyNewFiles)
+	}
+}
+
+func TestTopicsCreate_OnlyNewFilesWithDeleteData_Rejected(t *testing.T) {
+	store := &fakeTopicStore{}
+	h := &Topics{Topics: store, BaseURL: "http://test"}
+
+	body := createTopicReq{URL: "fake-create://topic/lossy", ReplaceOnUpdate: true, ReplaceDeleteData: boolPtr(true), OnlyNewFiles: true}
+	w := httptest.NewRecorder()
+	h.Create(w, authedReq(t, uuid.New(), body))
+
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want 422; body=%s", w.Code, w.Body.String())
+	}
+	if store.created != nil {
+		t.Error("store.Create was called for a rejected policy")
+	}
+}

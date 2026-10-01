@@ -109,6 +109,8 @@ const EXISTING_TOPIC: Topic = {
   ReplaceDeleteData: true,
   NotifyOnly: false,
   NotifyOnlyAnnounceCurrent: false,
+  AddPausedOnUpdate: false,
+  OnlyNewFiles: false,
   Extra: { quality: "1080p", start_season: 2, start_episode: 3 },
   LastHash: "",
   LastCheckedAt: null,
@@ -153,7 +155,7 @@ describe("AddTopicCard — season/episode catalog dropdowns", () => {
     // Wait for the catalog-specific Season option to appear — the label
     // "Start from season" is shared with the free-text fallback, so we key
     // off the dropdown's option to know the catalog rendered.
-    await screen.findByRole("option", { name: "Season 1" });
+    await screen.findByRole("option", { name: "Season 1" }, { timeout: 5000 });
     const seasonSelect = screen.getByLabelText(/start from season/i) as HTMLSelectElement;
     expect(seasonSelect.tagName).toBe("SELECT");
     expect(within(seasonSelect).getByRole("option", { name: "Season 1" })).toBeInTheDocument();

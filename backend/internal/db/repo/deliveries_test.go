@@ -30,7 +30,7 @@ func TestDeliveries_Record_InsertsNew(t *testing.T) {
 	topicID := uuid.New()
 	clientID := uuid.New()
 	mock.ExpectExec(`INSERT INTO topic_deliveries`).
-		WithArgs(topicID, "abc123", "s02e06", &clientID).
+		WithArgs(topicID, "abc123", "s02e06", &clientID, nil).
 		WillReturnResult(pgconn.NewCommandTag("INSERT 0 1"))
 
 	inserted, err := repo.Record(context.Background(), &domain.TopicDelivery{
@@ -87,7 +87,7 @@ func TestDeliveries_Record_DuplicateIsNoOp(t *testing.T) {
 
 	topicID := uuid.New()
 	mock.ExpectExec(`INSERT INTO topic_deliveries`).
-		WithArgs(topicID, "dup", "", (*uuid.UUID)(nil)).
+		WithArgs(topicID, "dup", "", (*uuid.UUID)(nil), nil).
 		WillReturnResult(pgconn.NewCommandTag("INSERT 0 0")) // ON CONFLICT DO NOTHING
 
 	inserted, err := repo.Record(context.Background(), &domain.TopicDelivery{
@@ -261,5 +261,106 @@ func TestDeliveries_DeleteForTopic_DBError(t *testing.T) {
 
 	if _, err := repo.DeleteForTopic(context.Background(), uuid.New(), uuid.New()); !errors.Is(err, dbErr) {
 		t.Fatalf("DeleteForTopic: want wrapped %v, got %v", dbErr, err)
+	}
+}
+
+func TestDeliveries_Record_StoresFiles(t *testing.T) {
+	repo, mock := newMockDeliveries(t)
+	t.Cleanup(func() { assertExpectationsMet(t, mock) })
+
+	topicID := uuid.New()
+	mock.ExpectExec(`INSERT INTO topic_deliveries \(topic_id, infohash, label, client_id, files\)`).
+		WithArgs(topicID, "abc", "Show", (*uuid.UUID)(nil), []byte(`[{"path":"E01.mkv","size":100}]`)).
+		WillReturnResult(pgconn.NewCommandTag("INSERT 0 1"))
+
+	if _, err := repo.Record(context.Background(), &domain.TopicDelivery{
+		TopicID: topicID, Infohash: "abc", Label: "Show",
+		Files: []domain.TorrentFile{{Path: "E01.mkv", Size: 100}},
+	}); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+}
+
+// latestFilesQuery pins the baseline rule (issue #205): the newest row of
+// ANOTHER infohash, with or without a file list.
+const latestFilesQuery = `SELECT files FROM topic_deliveries\s+WHERE topic_id = \$1 AND infohash <> \$2\s+ORDER BY delivered_at DESC\s+LIMIT 1`
+
+func TestDeliveries_LatestFiles_NoRowsIsNil(t *testing.T) {
+	repo, mock := newMockDeliveries(t)
+	t.Cleanup(func() { assertExpectationsMet(t, mock) })
+
+	topicID := uuid.New()
+	mock.ExpectQuery(latestFilesQuery).
+		WithArgs(topicID, "cur").
+		WillReturnRows(pgxmock.NewRows([]string{"files"}))
+
+	got, err := repo.LatestFiles(context.Background(), topicID, "cur")
+	if err != nil || got != nil {
+		t.Errorf("LatestFiles = (%v, %v), want (nil, nil)", got, err)
+	}
+}
+
+// A newest row without a list (a magnet) means the previous version's files
+// are unknown: no baseline, rather than falling back to an older list.
+func TestDeliveries_LatestFiles_NullNewestIsNil(t *testing.T) {
+	repo, mock := newMockDeliveries(t)
+	t.Cleanup(func() { assertExpectationsMet(t, mock) })
+
+	topicID := uuid.New()
+	mock.ExpectQuery(latestFilesQuery).
+		WithArgs(topicID, "cur").
+		WillReturnRows(pgxmock.NewRows([]string{"files"}).AddRow([]byte(nil)))
+
+	got, err := repo.LatestFiles(context.Background(), topicID, "cur")
+	if err != nil || got != nil {
+		t.Errorf("LatestFiles = (%v, %v), want (nil, nil)", got, err)
+	}
+}
+
+func TestDeliveries_LatestFiles_DecodesList(t *testing.T) {
+	repo, mock := newMockDeliveries(t)
+	t.Cleanup(func() { assertExpectationsMet(t, mock) })
+
+	topicID := uuid.New()
+	mock.ExpectQuery(latestFilesQuery).
+		WithArgs(topicID, "cur").
+		WillReturnRows(pgxmock.NewRows([]string{"files"}).AddRow([]byte(`[{"path":"E01.mkv","size":100}]`)))
+
+	got, err := repo.LatestFiles(context.Background(), topicID, "cur")
+	want := []domain.TorrentFile{{Path: "E01.mkv", Size: 100}}
+	if err != nil || len(got) != 1 || got[0] != want[0] {
+		t.Errorf("LatestFiles = (%v, %v), want (%v, nil)", got, err, want)
+	}
+}
+
+// SetFiles fills in the file list of one delivery once its only-new-files
+// selection has succeeded (issue #205).
+func TestDeliveries_SetFiles_UpdatesNamedRow(t *testing.T) {
+	repo, mock := newMockDeliveries(t)
+	t.Cleanup(func() { assertExpectationsMet(t, mock) })
+
+	topicID := uuid.New()
+	mock.ExpectExec(`UPDATE topic_deliveries SET files = \$3 WHERE topic_id = \$1 AND infohash = \$2`).
+		WithArgs(topicID, "abc", []byte(`[{"path":"E01.mkv","size":100}]`)).
+		WillReturnResult(pgconn.NewCommandTag("UPDATE 1"))
+
+	if err := repo.SetFiles(context.Background(), topicID, "abc",
+		[]domain.TorrentFile{{Path: "E01.mkv", Size: 100}}); err != nil {
+		t.Fatalf("SetFiles: %v", err)
+	}
+}
+
+func TestDeliveries_SetFiles_DBError(t *testing.T) {
+	repo, mock := newMockDeliveries(t)
+	t.Cleanup(func() { assertExpectationsMet(t, mock) })
+
+	dbErr := errors.New("connection reset")
+	mock.ExpectExec(`UPDATE topic_deliveries SET files`).
+		WithArgs(pgxmock.AnyArg(), "abc", pgxmock.AnyArg()).
+		WillReturnError(dbErr)
+
+	if err := repo.SetFiles(context.Background(), uuid.New(), "abc",
+		[]domain.TorrentFile{{Path: "E01.mkv", Size: 100}}); !errors.Is(err, dbErr) {
+		t.Fatalf("SetFiles: want wrapped %v, got %v", dbErr, err)
 	}
 }

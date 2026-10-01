@@ -287,6 +287,20 @@ type WithRemoval interface {
 	Remove(ctx context.Context, rawConfig []byte, hashes []string, deleteData bool) error
 }
 
+// WithFileSelection is an optional client capability (issue #205): list a
+// torrent's files the way the client numbers them, mark some "do not
+// download", and start a torrent that was added paused. It powers the
+// per-topic "download only new files" policy. Files returns an empty slice,
+// not an error, while the client does not know the torrent or its file list
+// yet — a qBittorrent add is asynchronous — so the caller can poll. Matching
+// files and deciding what to skip is the caller's job, so it exists once.
+type WithFileSelection interface {
+	Client
+	Files(ctx context.Context, rawConfig []byte, hash string) ([]domain.ClientFile, error)
+	SkipFiles(ctx context.Context, rawConfig []byte, hash string, indices []int) error
+	Start(ctx context.Context, rawConfig []byte, hash string) error
+}
+
 // WithCategories is an optional client capability: enumerate the categories
 // the client already knows about, so the UI can offer them as suggestions when
 // picking a topic's category. Clients without a category concept (Transmission,

@@ -259,14 +259,20 @@ func (p *plugin) do(ctx context.Context, c Config, method string, args map[strin
 			continue
 		}
 
-		respBody, _ := io.ReadAll(resp.Body)
+		respBody, readErr := io.ReadAll(resp.Body)
 		resp.Body.Close()
 
 		if resp.StatusCode == http.StatusUnauthorized {
 			return nil, errors.New("transmission auth failed")
 		}
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			// A partial body only shortens this message; the status fails the call.
 			return nil, fmt.Errorf("transmission status %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
+		}
+		// Fatal even when the bytes that arrived decode: a truncated answer
+		// (a file list, say) would be taken for the whole one.
+		if readErr != nil {
+			return nil, fmt.Errorf("read rpc response: %w", readErr)
 		}
 
 		var out map[string]any

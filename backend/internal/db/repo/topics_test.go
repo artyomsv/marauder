@@ -301,7 +301,7 @@ func TestTopics_MarkEpisodesDownloaded_DBError(t *testing.T) {
 // ---------- scanTopic malformed extra ----------
 
 // topicRow returns a pgxmock row slice that matches topicColumns exactly
-// (27 columns as of migration 0016, which added the notify-only flags).
+// (29 columns as of migration 0017, which added the update policy flags).
 // Callers override individual fields as needed. The helper centralises
 // column-order so tests don't drift.
 func topicRow(id, userID uuid.UUID, now time.Time) []any {
@@ -320,10 +320,11 @@ func topicRow(id, userID uuid.UUID, now time.Time) []any {
 		false,       // display_name_is_placeholder
 		false, true, // replace_on_update, replace_delete_data
 		false, false, // notify_only, notify_only_announce_current
+		false, false, // add_paused_on_update, only_new_files
 	}
 }
 
-// topicColumnsAll mirrors the header slice for pgxmock.NewRows (27 cols).
+// topicColumnsAll mirrors the header slice for pgxmock.NewRows (29 cols).
 var topicColumnsAll = []string{
 	"id", "user_id", "tracker_name", "url", "display_name", "image_url", "client_id", "notifier_id",
 	"download_dir", "category", "extra", "last_hash",
@@ -332,6 +333,7 @@ var topicColumnsAll = []string{
 	"last_error", "last_error_code", "created_at", "updated_at", "display_name_is_placeholder",
 	"replace_on_update", "replace_delete_data",
 	"notify_only", "notify_only_announce_current",
+	"add_paused_on_update", "only_new_files",
 }
 
 // TestTopics_ScanTopic_MalformedExtra drives GetByID through a mocked
@@ -346,7 +348,7 @@ func TestTopics_ScanTopic_MalformedExtra(t *testing.T) {
 	userID := uuid.New()
 	now := time.Now().UTC()
 
-	// Build a row that matches topicColumns exactly (27 columns).
+	// Build a row that matches topicColumns exactly (29 columns).
 	rows := pgxmock.NewRows(topicColumnsAll).AddRow(
 		id, userID, "faketracker", "https://example.invalid/t/1",
 		"My Topic", "", // display_name, image_url
@@ -360,6 +362,7 @@ func TestTopics_ScanTopic_MalformedExtra(t *testing.T) {
 		false,       // display_name_is_placeholder
 		false, true, // replace_on_update, replace_delete_data
 		false, false, // notify_only, notify_only_announce_current
+		false, false, // add_paused_on_update, only_new_files
 	)
 
 	mock.ExpectQuery(`SELECT .* FROM topics WHERE id = \$1`).
@@ -454,8 +457,8 @@ func TestTopics_Create_RoundTripsCategory(t *testing.T) {
 	rows := pgxmock.NewRows(topicColumnsAll).AddRow(row...)
 
 	// Match INSERT containing the category column.
-	mock.ExpectQuery(`INSERT INTO topics.*category.*notify_only, notify_only_announce_current\) `+
-		`VALUES \(\$1,\$2,\$3,\$4,NULLIF\(\$5,''\),\$6,\$7,NULLIF\(\$8,''\),NULLIF\(\$9,''\),\$10,\$11,\$12,\$13,\$14,\$15,\$16,\$17,\$18\) RETURNING`).
+	mock.ExpectQuery(`INSERT INTO topics.*category.*notify_only, notify_only_announce_current, add_paused_on_update, only_new_files\) `+
+		`VALUES \(\$1,\$2,\$3,\$4,NULLIF\(\$5,''\),\$6,\$7,NULLIF\(\$8,''\),NULLIF\(\$9,''\),\$10,\$11,\$12,\$13,\$14,\$15,\$16,\$17,\$18,\$19,\$20\) RETURNING`).
 		WithArgs(
 			userID, "faketracker", "https://example.invalid/t/1",
 			"My Topic", "", // display_name, image_url
@@ -468,6 +471,7 @@ func TestTopics_Create_RoundTripsCategory(t *testing.T) {
 			false,       // display_name_is_placeholder
 			false, true, // replace_on_update, replace_delete_data
 			false, false, // notify_only, notify_only_announce_current
+			false, false, // add_paused_on_update, only_new_files
 		).
 		WillReturnRows(rows)
 
@@ -536,6 +540,8 @@ func TestTopics_Update_HappyPath(t *testing.T) {
 			false,             // $11 notify_only
 			false,             // $12 notify_only_announce_current
 			&interval,         // $13 check_interval_sec
+			false,             // $14 add_paused_on_update
+			false,             // $15 only_new_files
 		).
 		WillReturnRows(rows)
 
@@ -562,7 +568,7 @@ func TestTopics_Update_NotFound(t *testing.T) {
 	userID := uuid.New()
 
 	mock.ExpectQuery(`UPDATE topics SET`).
-		WithArgs(id, userID, pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), false, false, (*int)(nil)).
+		WithArgs(id, userID, pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), false, false, (*int)(nil), false, false).
 		WillReturnError(pgx.ErrNoRows)
 
 	_, err := r.Update(context.Background(), id, userID, "X", nil, nil, "", "", nil, TopicFlags{ReplaceOnUpdate: false, ReplaceDeleteData: true}, map[string]any{})
@@ -582,7 +588,7 @@ func TestTopics_Update_DBError(t *testing.T) {
 	dbErr := errors.New("connection reset")
 
 	mock.ExpectQuery(`UPDATE topics SET`).
-		WithArgs(id, userID, pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), false, false, (*int)(nil)).
+		WithArgs(id, userID, pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), false, false, (*int)(nil), false, false).
 		WillReturnError(dbErr)
 
 	_, err := r.Update(context.Background(), id, userID, "X", nil, nil, "", "", nil, TopicFlags{ReplaceOnUpdate: false, ReplaceDeleteData: true}, map[string]any{})
@@ -610,8 +616,8 @@ func TestTopics_Create_RoundTripsNotifierID(t *testing.T) {
 
 	rows := pgxmock.NewRows(topicColumnsAll).AddRow(row...)
 
-	mock.ExpectQuery(`INSERT INTO topics.*notifier_id.*notify_only, notify_only_announce_current\) `+
-		`VALUES \(\$1,\$2,\$3,\$4,NULLIF\(\$5,''\),\$6,\$7,NULLIF\(\$8,''\),NULLIF\(\$9,''\),\$10,\$11,\$12,\$13,\$14,\$15,\$16,\$17,\$18\) RETURNING`).
+	mock.ExpectQuery(`INSERT INTO topics.*notifier_id.*notify_only, notify_only_announce_current, add_paused_on_update, only_new_files\) `+
+		`VALUES \(\$1,\$2,\$3,\$4,NULLIF\(\$5,''\),\$6,\$7,NULLIF\(\$8,''\),NULLIF\(\$9,''\),\$10,\$11,\$12,\$13,\$14,\$15,\$16,\$17,\$18,\$19,\$20\) RETURNING`).
 		WithArgs(
 			userID, "faketracker", "https://example.invalid/t/1",
 			"My Topic", "",
@@ -623,6 +629,7 @@ func TestTopics_Create_RoundTripsNotifierID(t *testing.T) {
 			false,        // display_name_is_placeholder
 			false, false, // replace_on_update, replace_delete_data (unset on this raw topic)
 			false, false, // notify_only, notify_only_announce_current
+			false, false, // add_paused_on_update, only_new_files
 		).
 		WillReturnRows(rows)
 

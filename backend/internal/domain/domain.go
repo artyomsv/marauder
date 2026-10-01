@@ -101,15 +101,25 @@ type Topic struct {
 	// the topic's first check — and the first check after a reset, which also
 	// clears LastHash. Off by default so adding a topic is silent.
 	NotifyOnlyAnnounceCurrent bool
-	Extra                     map[string]any
-	LastHash                  string
-	LastCheckedAt             *time.Time
-	LastUpdatedAt             *time.Time
-	NextCheckAt               time.Time
-	CheckIntervalSec          int
-	ConsecutiveErrors         int
-	Status                    TopicStatus
-	LastError                 string
+	// AddPausedOnUpdate adds every update of the topic to the client paused
+	// (issue #205), so the user can pick files by hand. An update is a
+	// delivery made while the topic already has a known release (LastHash is
+	// set): the first delivery, and the first after a reset, start normally.
+	AddPausedOnUpdate bool
+	// OnlyNewFiles skips, on an update, every file the previous version of the
+	// torrent already had (same relative path and size) and downloads only the
+	// added ones (issue #205). When the scheduler cannot prove which files are
+	// new it adds the torrent paused instead. Ignored for per-episode trackers.
+	OnlyNewFiles      bool
+	Extra             map[string]any
+	LastHash          string
+	LastCheckedAt     *time.Time
+	LastUpdatedAt     *time.Time
+	NextCheckAt       time.Time
+	CheckIntervalSec  int
+	ConsecutiveErrors int
+	Status            TopicStatus
+	LastError         string
 	// LastErrorCode is a stable, machine-readable classification of
 	// LastError (timeout / unreachable / auth / cloudflare / solver / parse /
 	// plugin_missing / unknown) so the UI can render a localised,
@@ -153,6 +163,11 @@ type TopicDelivery struct {
 	Label       string
 	ClientID    *uuid.UUID
 	DeliveredAt time.Time
+	// Files is the delivered torrent's file list (issue #205), the baseline
+	// the next update of the topic is compared with. Nil when unknown: a
+	// magnet delivery, a delivery from before migration 0017, or a torrent
+	// whose list could not be read or was too long to store.
+	Files []TorrentFile
 }
 
 // InFlightDelivery is a not-yet-completed delivery joined with its topic's
@@ -242,6 +257,27 @@ type AddOptions struct {
 	DownloadDir string
 	Category    string
 	Paused      bool
+}
+
+// TorrentFile is one file of a .torrent's content as Marauder stores it per
+// delivery (issue #205). Path is relative to the torrent's top folder and
+// "/"-separated; Size is in bytes. Two files are "the same" when both match.
+type TorrentFile struct {
+	Path string `json:"path"`
+	Size int64  `json:"size"`
+}
+
+// ClientFile is one file of a torrent as a download client lists it. Index is
+// the client's own file id — the value it expects back when setting
+// priorities, which is not always the position in the .torrent (clients hide
+// BEP 47 padding files). Path is whatever the client reports, usually
+// prefixed with the torrent's top folder. Wanted is false for a file marked
+// "do not download".
+type ClientFile struct {
+	Index  int
+	Path   string
+	Size   int64
+	Wanted bool
 }
 
 // Message is a structured notification body. Link points at the Marauder

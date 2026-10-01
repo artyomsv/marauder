@@ -48,6 +48,8 @@ const EMPTY: TopicFormValues = {
   replaceDeleteData: true,
   notifyOnly: false,
   notifyOnlyAnnounceCurrent: false,
+  addPausedOnUpdate: false,
+  onlyNewFiles: false,
   checkIntervalSec: 900,
 };
 

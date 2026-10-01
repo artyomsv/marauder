@@ -241,7 +241,12 @@ func (p *plugin) callOnce(ctx context.Context, s *session, url, method string, p
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("deluge status %d", resp.StatusCode)
 	}
-	respBody, _ := io.ReadAll(resp.Body)
+	// Fatal even when the bytes that arrived decode: a truncated answer (a
+	// file list, say) would be taken for the whole one.
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read deluge response: %w", err)
+	}
 	var out map[string]any
 	if err := json.Unmarshal(respBody, &out); err != nil {
 		return nil, fmt.Errorf("decode: %w", err)

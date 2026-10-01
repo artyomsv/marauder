@@ -327,6 +327,16 @@ const ru: Record<string, string> = {
   "topics.replaceOnUpdate.help":
     "При обнаружении нового выпуска удалять из клиента ранее скачанный торрент вместо того, чтобы хранить все версии. Подходит для одиночных выпусков (фильмы, перевыпущенные сезоны) — не для сериалов по сериям.",
   "topics.replaceOnUpdate.deleteData": "Также удалить старые файлы с диска",
+  "topics.updatePolicy.addPaused": "Добавлять обновления на паузе",
+  "topics.updatePolicy.addPausedHelp":
+    "При обновлении торрента добавлять новую версию в клиент на паузе, чтобы вы сами выбрали файлы. Первая загрузка начинается как обычно.",
+  "topics.updatePolicy.onlyNewFiles": "Скачивать только новые файлы",
+  "topics.updatePolicy.onlyNewFilesHelp":
+    "При обновлении торрента пропускать файлы, которые были в предыдущей версии (то же имя и размер), и скачивать только добавленные. Если Marauder не может определить новые файлы, торрент добавляется на паузе.",
+  "topics.updatePolicy.deleteDataLocked":
+    "Удаление старых файлов выключено: при «Скачивать только новые файлы» старые файлы были бы потеряны.",
+  "topics.updatePolicy.unsupported":
+    "{client} не умеет ставить на паузу и выбирать файлы. Эти настройки работают с qBittorrent, Transmission и Deluge.",
 
   // Notifier event subscriptions (which events a notifier fires on)
   "notifiers.events.prefix": "Уведомлять о",

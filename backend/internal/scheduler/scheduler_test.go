@@ -300,11 +300,50 @@ type fakeDeliveries struct {
 	listErr error
 	// deletedHashes captures the hashes passed to DeleteByInfohashes.
 	deletedHashes []string
+
+	// history holds delivery rows from earlier ticks, oldest first, for the
+	// only-new-files baseline (issue #205). latestFiles is shorthand for one
+	// such row, older than every history row, under an infohash no test
+	// payload has. latestErr fails LatestFiles.
+	history     []*domain.TopicDelivery
+	latestFiles []domain.TorrentFile
+	latestErr   error
+
+	// filesAtRecord holds each recorded row's file list as Record received it
+	// (SetFiles later changes the row in recorded, not this). setFilesCalls
+	// captures SetFiles; setFilesErr fails it without touching any row.
+	filesAtRecord [][]domain.TorrentFile
+	setFilesCalls []setFilesCall
+	setFilesErr   error
 }
+
+type setFilesCall struct {
+	infohash string
+	files    []domain.TorrentFile
+}
+
+// priorLatestHash is the infohash of the row latestFiles stands for.
+const priorLatestHash = "prior-delivery"
 
 func (f *fakeDeliveries) Record(_ context.Context, d *domain.TopicDelivery) (bool, error) {
 	f.recorded = append(f.recorded, d)
+	f.filesAtRecord = append(f.filesAtRecord, d.Files)
 	return f.err == nil, f.err
+}
+
+// SetFiles mirrors the repository's UPDATE: it changes the recorded row of
+// that infohash, so LatestFiles sees the stored list on the next update.
+func (f *fakeDeliveries) SetFiles(_ context.Context, _ uuid.UUID, infohash string, files []domain.TorrentFile) error {
+	f.setFilesCalls = append(f.setFilesCalls, setFilesCall{infohash: infohash, files: files})
+	if f.setFilesErr != nil {
+		return f.setFilesErr
+	}
+	for _, d := range f.recorded {
+		if d.Infohash == infohash {
+			d.Files = files
+		}
+	}
+	return nil
 }
 
 func (f *fakeDeliveries) ListForTopic(_ context.Context, _ uuid.UUID) ([]*domain.TopicDelivery, error) {
@@ -314,6 +353,27 @@ func (f *fakeDeliveries) ListForTopic(_ context.Context, _ uuid.UUID) ([]*domain
 func (f *fakeDeliveries) DeleteByInfohashes(_ context.Context, _ uuid.UUID, hashes []string) (int64, error) {
 	f.deletedHashes = append(f.deletedHashes, hashes...)
 	return int64(len(hashes)), nil
+}
+
+// LatestFiles mirrors the repository's query: the newest row (recorded rows
+// are newer than history, history newer than latestFiles) whose infohash is
+// not excludeInfohash, and its files even when that is nil.
+func (f *fakeDeliveries) LatestFiles(_ context.Context, _ uuid.UUID, excludeInfohash string) ([]domain.TorrentFile, error) {
+	if f.latestErr != nil {
+		return nil, f.latestErr
+	}
+	var rows []*domain.TopicDelivery
+	if f.latestFiles != nil {
+		rows = append(rows, &domain.TopicDelivery{Infohash: priorLatestHash, Files: f.latestFiles})
+	}
+	rows = append(rows, f.history...)
+	rows = append(rows, f.recorded...)
+	for i := len(rows) - 1; i >= 0; i-- {
+		if rows[i].Infohash != excludeInfohash {
+			return rows[i].Files, nil
+		}
+	}
+	return nil, nil
 }
 
 // fakeClientPlugin satisfies registry.Client (and registry.WithRemoval) and
@@ -355,6 +415,55 @@ func (f *fakeClientPlugin) Remove(_ context.Context, _ []byte, hashes []string, 
 	f.removeHashes = append(f.removeHashes, hashes...)
 	f.removeDeleteData = deleteData
 	return f.removeErr
+}
+
+// fakeSelectingClient adds registry.WithFileSelection to fakeClientPlugin.
+// filesSeq is returned by successive Files calls (the last entry repeats), so
+// a test can model qBittorrent's asynchronous add.
+type fakeSelectingClient struct {
+	fakeClientPlugin
+	filesSeq    [][]domain.ClientFile
+	filesCalls  int
+	filesErr    error
+	skipped     []int
+	skipCalls   int
+	skipErr     error
+	startCalls  int
+	startErr    error
+	startedHash string
+	// onFiles runs at the top of every Files call, so a test can observe
+	// what the scheduler had already done when selection began.
+	onFiles func()
+}
+
+func (f *fakeSelectingClient) Files(_ context.Context, _ []byte, _ string) ([]domain.ClientFile, error) {
+	f.filesCalls++
+	if f.onFiles != nil {
+		f.onFiles()
+	}
+	if f.filesErr != nil {
+		return nil, f.filesErr
+	}
+	i := f.filesCalls - 1
+	if i >= len(f.filesSeq) {
+		i = len(f.filesSeq) - 1
+	}
+	if i < 0 {
+		return nil, nil
+	}
+	return f.filesSeq[i], nil
+}
+
+func (f *fakeSelectingClient) SkipFiles(_ context.Context, _ []byte, _ string, indices []int) error {
+	f.skipCalls++
+	f.skipped = indices
+	return f.skipErr
+}
+
+func (f *fakeSelectingClient) Start(_ context.Context, _ []byte, hash string) error {
+	f.startCalls++
+	f.startedHash = hash
+	return f.startErr
 }
 
 // --- Test setup helpers ------------------------------------------------
@@ -2419,7 +2528,7 @@ func TestNotifyUpdated_RoutesToTopicNotifier(t *testing.T) {
 	notifierID := uuid.New()
 	topic := &domain.Topic{ID: topicID, UserID: uuid.New(), DisplayName: "My Show", NotifierID: &notifierID}
 
-	s.notifyUpdated(context.Background(), topic, []string{"s01e01"}, "")
+	s.notifyUpdated(context.Background(), topic, []string{"s01e01"}, "", "")
 
 	evs := emit.ofType(events.DownloadSubmitted)
 	if len(evs) != 1 {
@@ -2440,7 +2549,7 @@ func TestNotifyUpdated_SingleLabelEqualsDisplayName_NoTitleDuplication(t *testin
 	s := &Scheduler{cfg: &config.Config{PublicBaseURL: "http://x"}, emit: emit}
 	topic := &domain.Topic{ID: uuid.New(), UserID: uuid.New(), DisplayName: "My Show"}
 
-	s.notifyUpdated(context.Background(), topic, []string{"My Show"}, "")
+	s.notifyUpdated(context.Background(), topic, []string{"My Show"}, "", "")
 
 	evs := emit.ofType(events.DownloadSubmitted)
 	if len(evs) != 1 {
@@ -2460,7 +2569,7 @@ func TestNotifyUpdated_NilNotifierID_GlobalFanOut(t *testing.T) {
 
 	topic := &domain.Topic{ID: topicID, UserID: uuid.New(), DisplayName: "My Show", NotifierID: nil}
 
-	s.notifyUpdated(context.Background(), topic, []string{"s01e01"}, "")
+	s.notifyUpdated(context.Background(), topic, []string{"s01e01"}, "", "")
 
 	evs := emit.ofType(events.DownloadSubmitted)
 	if len(evs) != 1 {

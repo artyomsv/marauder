@@ -14,6 +14,8 @@ import { TopicPreviewCard } from "./TopicPreviewCard";
 import { NotifierSelect } from "./NotifierSelect";
 import { CategoryField } from "./CategoryField";
 import { CheckIntervalSelect } from "./CheckIntervalSelect";
+import { UpdatePolicyFields } from "./UpdatePolicyFields";
+import { useUnsupportedClient } from "./useUnsupportedClient";
 
 // Shape of GET /trackers/match. Drives which optional sections the form
 // renders (quality, season/episode filter, credentials hint).
@@ -36,6 +38,7 @@ export interface TrackerMatch {
 interface ClientOption {
   id: string;
   display_name: string;
+  client_name: string;
   is_default: boolean;
 }
 
@@ -80,6 +83,9 @@ export interface TopicFormValues {
   // applies when notifyOnly is on.
   notifyOnly: boolean;
   notifyOnlyAnnounceCurrent: boolean;
+  // Update policy (issue #205).
+  addPausedOnUpdate: boolean;
+  onlyNewFiles: boolean;
   // Seconds between checks (issue #204).
   checkIntervalSec: number;
 }
@@ -259,6 +265,8 @@ export function TopicForm({
     replaceDeleteData: initial.replaceDeleteData,
     notifyOnly: initial.notifyOnly,
     notifyOnlyAnnounceCurrent: initial.notifyOnlyAnnounceCurrent,
+    addPausedOnUpdate: initial.addPausedOnUpdate,
+    onlyNewFiles: initial.onlyNewFiles,
     checkIntervalSec: initial.checkIntervalSec,
   });
 
@@ -287,6 +295,9 @@ export function TopicForm({
     ? categoriesQuery.data.categories
     : [];
 
+  const unsupportedClient = useUnsupportedClient(clients, effectiveClientId);
+
+  const episodic = !!match?.supports_episode_filter;
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     onSubmit({
@@ -300,9 +311,12 @@ export function TopicForm({
       downloadDir: delivery.downloadDir,
       category: delivery.category,
       replaceOnUpdate: delivery.replaceOnUpdate,
-      replaceDeleteData: delivery.replaceDeleteData,
+      replaceDeleteData: delivery.replaceDeleteData && !delivery.onlyNewFiles,
       notifyOnly: delivery.notifyOnly,
       notifyOnlyAnnounceCurrent: delivery.notifyOnlyAnnounceCurrent,
+      // Hidden for per-episode trackers; do not save state the user cannot see.
+      addPausedOnUpdate: !episodic && delivery.addPausedOnUpdate,
+      onlyNewFiles: !episodic && delivery.onlyNewFiles,
       checkIntervalSec: delivery.checkIntervalSec,
     });
   };
@@ -506,33 +520,17 @@ export function TopicForm({
             />
           </div>
 
-          <div className="space-y-2 rounded-md border border-border/60 bg-muted/20 p-3">
-            <label className="flex items-center gap-2 text-sm font-medium text-foreground">
-              <input
-                type="checkbox"
-                checked={delivery.replaceOnUpdate}
-                onChange={(e) =>
-                  setDelivery((d) => ({ ...d, replaceOnUpdate: e.target.checked }))
-                }
-              />
-              <span>{t("topics.replaceOnUpdate.label")}</span>
-            </label>
-            <p className="text-xs text-muted-foreground">
-              {t("topics.replaceOnUpdate.help")}
-            </p>
-            {delivery.replaceOnUpdate && (
-              <label className="flex items-center gap-2 pt-1 text-sm">
-                <input
-                  type="checkbox"
-                  checked={delivery.replaceDeleteData}
-                  onChange={(e) =>
-                    setDelivery((d) => ({ ...d, replaceDeleteData: e.target.checked }))
-                  }
-                />
-                <span>{t("topics.replaceOnUpdate.deleteData")}</span>
-              </label>
-            )}
-          </div>
+          <UpdatePolicyFields
+            value={{
+              replaceOnUpdate: delivery.replaceOnUpdate,
+              replaceDeleteData: delivery.replaceDeleteData,
+              addPausedOnUpdate: delivery.addPausedOnUpdate,
+              onlyNewFiles: delivery.onlyNewFiles,
+            }}
+            onChange={(v) => setDelivery((d) => ({ ...d, ...v }))}
+            episodic={episodic}
+            unsupportedClient={unsupportedClient}
+          />
         </>
       )}
 
