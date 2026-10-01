@@ -96,11 +96,14 @@ func pathOf(entry map[string]any) []string {
 	return nil
 }
 
+// isPadding reports a BEP 47 padding entry: the "p" attribute, or the
+// .pad/<n> path BEP 47 gives padding. A lone ".pad" or a .pad folder deeper in
+// the tree is ordinary content, and isPaddingPath must agree with this exactly.
 func isPadding(entry map[string]any, parts []string) bool {
 	if attr, ok := entry["attr"].(string); ok && strings.Contains(attr, "p") {
 		return true
 	}
-	return parts[0] == ".pad"
+	return len(parts) > 1 && parts[0] == ".pad"
 }
 
 func firstString(m map[string]any, keys ...string) string {
@@ -151,7 +154,9 @@ var ErrLayoutMismatch = errors.New("the client's file list does not match the to
 // every entry used exactly once. Matching each file on its own, both ways at
 // once, let Extras/E01.mkv pass for an old E01.mkv of the same size and be
 // skipped as it (PR #210 review). Client entries that are BEP 47 padding are
-// ignored, as Files ignores them in the manifest.
+// ignored, as Files ignores them in the manifest — judged on the path inside
+// the torrent, after the layout's root is removed, so a real file under a
+// nested .pad folder is not mistaken for padding (also PR #210 review).
 //
 // Exactly one valid layout is the answer; two valid layouts are accepted only
 // when they pair every file identically. Anything else is ErrLayoutMismatch.
@@ -159,9 +164,6 @@ func MapClientFiles(client []domain.ClientFile, manifest []domain.TorrentFile) (
 	files := make([]domain.ClientFile, 0, len(client))
 	for _, c := range client {
 		c.Path = strings.ReplaceAll(c.Path, `\`, "/")
-		if isPaddingPath(c.Path) {
-			continue
-		}
 		files = append(files, c)
 	}
 	verbatim, vok := bijection(files, manifest, func(p string) (string, bool) { return p, true })
@@ -206,11 +208,9 @@ func rootStripper(files []domain.ClientFile) func(string) (string, bool) {
 }
 
 // bijection pairs files with manifest under one path mapping, or reports
-// false when that mapping is not one to one.
+// false when that mapping is not one to one. Padding is recognised on the
+// mapped path, so each layout judges it on the same path Files does.
 func bijection(files []domain.ClientFile, manifest []domain.TorrentFile, mapPath func(string) (string, bool)) (map[int]domain.TorrentFile, bool) {
-	if len(files) != len(manifest) {
-		return nil, false
-	}
 	// Counted, not a set: a manifest could list the same path and size twice,
 	// and each copy may pair with one client file only.
 	remaining := make(map[domain.TorrentFile]int, len(manifest))
@@ -223,6 +223,9 @@ func bijection(files []domain.ClientFile, manifest []domain.TorrentFile, mapPath
 		if !ok {
 			return nil, false
 		}
+		if isPaddingPath(p) {
+			continue
+		}
 		key := domain.TorrentFile{Path: p, Size: c.Size}
 		if remaining[key] == 0 {
 			return nil, false
@@ -233,19 +236,17 @@ func bijection(files []domain.ClientFile, manifest []domain.TorrentFile, mapPath
 		remaining[key]--
 		out[c.Index] = key
 	}
-	// Equal counts and every client file consuming one entry means every
-	// entry was used exactly once.
+	// Every paired client file consumed one entry, so pairing as many as the
+	// manifest holds means every entry was used exactly once.
+	if len(out) != len(manifest) {
+		return nil, false
+	}
 	return out, true
 }
 
-// isPaddingPath mirrors isPadding for a client's path: any ".pad" component.
+// isPaddingPath mirrors isPadding for a path inside the torrent: .pad/<n>.
 func isPaddingPath(p string) bool {
-	for _, part := range strings.Split(p, "/") {
-		if part == ".pad" {
-			return true
-		}
-	}
-	return false
+	return strings.HasPrefix(p, ".pad/")
 }
 
 // SkipIndices returns the sorted client indices whose torrent entry is in

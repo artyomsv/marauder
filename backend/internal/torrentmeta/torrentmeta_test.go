@@ -193,6 +193,22 @@ func TestMapClientFiles_InfersOneLayout(t *testing.T) {
 			manifest: []domain.TorrentFile{tf("E01.mkv", 100), tf("E02.mkv", 200)},
 			want:     map[int]domain.TorrentFile{0: tf("E01.mkv", 100), 2: tf("E02.mkv", 200)},
 		},
+		{
+			// PR #210 review: only a top-level .pad/ entry is BEP 47 padding. A
+			// real file under a nested .pad folder is content on both sides.
+			name: "real file under a nested .pad folder",
+			client: []domain.ClientFile{
+				cf(0, "Show/E01.mkv", 100), cf(1, "Show/Extras/.pad/notes.txt", 5),
+			},
+			manifest: []domain.TorrentFile{tf("E01.mkv", 100), tf("Extras/.pad/notes.txt", 5)},
+			want:     map[int]domain.TorrentFile{0: tf("E01.mkv", 100), 1: tf("Extras/.pad/notes.txt", 5)},
+		},
+		{
+			name:     "single-file torrent named .pad",
+			client:   []domain.ClientFile{cf(0, ".pad", 5)},
+			manifest: []domain.TorrentFile{tf(".pad", 5)},
+			want:     map[int]domain.TorrentFile{0: tf(".pad", 5)},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

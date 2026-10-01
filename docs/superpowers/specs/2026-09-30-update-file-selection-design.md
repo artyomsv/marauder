@@ -179,8 +179,9 @@ would have repeated them).
   tiny values decodes into hundreds of MB. Exceeding it is an error, which the
   scheduler treats as an unreadable file list.
 - Multi-file: `info.files`; each entry's `path` list joined with `/`, `length`
-  as size. Entries that are BEP 47 padding files (`attr` contains `p`, or the
-  first path component is `.pad`) are dropped.
+  as size. Entries that are BEP 47 padding files (`attr` contains `p`, or a
+  `.pad/<n>` path — `.pad` as the first of at least two components) are
+  dropped. A lone `.pad` file or a deeper `.pad` folder is ordinary content.
 - Single-file: one entry `{info.name, info.length}`.
 - A v2-only torrent (`file tree`, no `files`/`length`) returns an error; the
   caller treats that as "unknown".
@@ -207,8 +208,11 @@ layout for the whole list**:
 
 `MapClientFiles(client []domain.ClientFile, manifest []domain.TorrentFile) (map[int]domain.TorrentFile, error)`
 
-- Client paths are normalised (`\` → `/`); entries with a `.pad` component are
-  ignored, mirroring `Files`.
+- Client paths are normalised (`\` → `/`). A client entry is ignored as
+  padding when its path inside the torrent — after the layout's root is
+  removed — starts with `.pad/`, the same rule `Files` applies (PR #210
+  review: an any-`.pad`-component rule dropped real files under a nested
+  `.pad` folder and paused their updates).
 - *Verbatim:* every client path equals a manifest path (no top folder).
 - *Rooted:* every client path has at least two components, all share the same
   first one, and the remainder equals a manifest path. That covers the
