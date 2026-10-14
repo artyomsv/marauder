@@ -45,6 +45,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/chromedp"
 	"github.com/rs/zerolog"
@@ -235,25 +236,30 @@ func (s *server) solve(parent context.Context, req solveRequest) (solveResponse,
 	var lastTitle string
 	var lastHTMLLen int
 
-	err := chromedp.Run(ctx,
+	err := chromedp.Do(ctx,
 		chromedp.Navigate(req.URL),
-		chromedp.ActionFunc(func(ctx context.Context) error {
+		chromedp.Func(func(ctx context.Context, t *chromedp.Target) error {
 			// Poll until the challenge actually clears rather than sleeping a
 			// fixed interval and hoping. Cloudflare only issues the clearance
 			// cookie once its JS has run to completion.
 			for {
-				var html string
-				if err := chromedp.Evaluate(`document.documentElement.outerHTML`, &html).Do(ctx); err != nil {
-					return err
-				}
-				_ = chromedp.Evaluate(`document.title`, &lastTitle).Do(ctx)
-				// network.GetCookies on the page context returns HttpOnly
-				// cookies too (verified: it yields cf_clearance), so no
-				// browser-level Storage call is needed here.
-				c, err := network.GetCookies().Do(ctx)
+				html, err := chromedp.Evaluate[string](`document.documentElement.outerHTML`)(ctx, t)
 				if err != nil {
 					return err
 				}
+				// The title is diagnostics only; a failed read keeps the
+				// previous value rather than failing the solve.
+				if title, err := chromedp.Evaluate[string](`document.title`)(ctx, t); err == nil {
+					lastTitle = title
+				}
+				// network.GetCookies on the page context returns HttpOnly
+				// cookies too (verified: it yields cf_clearance), so no
+				// browser-level Storage call is needed here.
+				res, err := cdp.Call(ctx, t, network.GetCookies, network.GetCookiesParams{})
+				if err != nil {
+					return err
+				}
+				c := res.Cookies
 				cookies = c
 				lastHTMLLen = len(html)
 				if !isChallengePage(html) || hasClearance(c) {
