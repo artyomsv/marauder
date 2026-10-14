@@ -304,6 +304,10 @@ back from the client.
 - **Upgrade:** `helm upgrade marauder deploy/helm/marauder -n marauder --reuse-values`
   (re-using values keeps `MARAUDER_MASTER_KEY` stable). Bump `image.tag` to move
   Marauder versions.
+- **Upgrading past the `cfsolver` removal:** Helm deletes the old `cfsolver`
+  pod for you. Kustomize and plain-manifest installs do not, because
+  `kubectl apply` never deletes objects that left the manifests. Remove them
+  once: `kubectl -n marauder delete deployment,service,networkpolicy marauder-cfsolver --ignore-not-found`
 - **CNPG backups:** a daily `ScheduledBackup` plus continuous WAL archiving runs
   automatically when `database.cnpg.backup.enabled=true`. Trigger an on-demand
   backup with a `Backup` CR; restore via a CNPG `bootstrap.recovery` Cluster
