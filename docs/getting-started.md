@@ -38,7 +38,7 @@ Options A and B bring up the same Docker Compose stack on
 ## Option A — prebuilt images (recommended)
 
 Marauder publishes multi-arch (amd64 + arm64), cosign-signed images to
-`ghcr.io/artyomsv/marauder-{backend,frontend,cfsolver}` on every release. The
+`ghcr.io/artyomsv/marauder-{backend,frontend}` on every release. The
 prebuilt stack pulls those instead of compiling anything locally.
 
 From an empty directory — no `git clone`:
@@ -72,7 +72,7 @@ The compose file pins to a specific release via `MARAUDER_VERSION` (default
 ## Option B — build from source
 
 For contributors and anyone running an unreleased commit. This compiles the
-backend, frontend, and cfsolver images locally on first start.
+backend and frontend images locally on first start.
 
 ```bash
 git clone https://github.com/artyomsv/marauder.git
@@ -92,9 +92,6 @@ The source stack also ships two overlays you can layer on top:
 |---|---|---|
 | Dev | `-f docker-compose.yml -f docker-compose.dev.yml up` | publishes db/backend/frontend ports + real qBittorrent & Transmission for end-to-end testing |
 | SSO | `-f docker-compose.yml -f docker-compose.sso.yml up -d` | Keycloak 26 with a pre-imported realm and an `alice / marauder` test user |
-
-The Cloudflare-solver sidecar is opt-in on both stacks via the `cfsolver`
-profile: append `--profile cfsolver` to any `up` command.
 
 ---
 
@@ -282,8 +279,7 @@ requirement, are in **[trackers.md](trackers.md#rutracker-needs-a-cloudflare-sol
 
 Images pushed by CI with the default `GITHUB_TOKEN` start out **private**, even
 for a public repository. To let anyone pull them, the maintainer flips each
-package to public once — for `marauder-backend`, `marauder-frontend`, and
-`marauder-cfsolver`:
+package to public once — for `marauder-backend` and `marauder-frontend`:
 
 1. GitHub → **Packages** → select the package → **Package settings**.
 2. **Change visibility → Public**.

@@ -4,7 +4,7 @@ name: Release
 #
 # What it does:
 #   1. Re-runs CI on the tagged commit (paranoia)
-#   2. Builds backend, frontend, cfsolver as multi-arch images
+#   2. Builds backend and frontend as multi-arch images
 #      (linux/amd64, linux/arm64) and pushes to ghcr.io
 #   3. Signs each image with cosign (keyless via OIDC)
 #   4. Generates a CycloneDX SBOM per image with anchore/sbom-action
@@ -37,7 +37,6 @@ jobs:
     outputs:
       backend-digest: ${{ steps.export.outputs.backend-digest }}
       frontend-digest: ${{ steps.export.outputs.frontend-digest }}
-      cfsolver-digest: ${{ steps.export.outputs.cfsolver-digest }}
     strategy:
       # Don't let one image's arch-verify failure cancel the others' builds —
       # each image is independent and we want all results in one run.
@@ -50,9 +49,6 @@ jobs:
           - name: frontend
             context: ./frontend
             binpath: ''            # nginx static assets, no Go binary to arch-check
-          - name: cfsolver
-            context: ./cfsolver
-            binpath: /usr/local/bin/cfsolver
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -95,17 +91,13 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           # Stamp version metadata into the binary. The backend Dockerfile
-          # consumes these; frontend/cfsolver ignore unused build args.
+          # consumes these; the frontend ignores unused build args.
           build-args: |
             VERSION=${{ steps.meta.outputs.version }}
             COMMIT=${{ github.sha }}
             BUILD_DATE=${{ steps.bm.outputs.date }}
           provenance: true
           sbom: true
-          # cfsolver builds fresh so each release ships a chromium with the
-          # latest security patches rather than a frozen GHA cache layer that
-          # would silently go stale over weeks between releases.
-          no-cache: ${{ matrix.image.name == 'cfsolver' }}
           cache-from: type=gha,scope=release-${{ matrix.image.name }}
           cache-to: type=gha,scope=release-${{ matrix.image.name }},mode=max
 
@@ -333,7 +325,6 @@ jobs:
             printf '```\n'
             printf 'ghcr.io/%s/marauder-backend:%s\n'  "$OWNER" "$VER"
             printf 'ghcr.io/%s/marauder-frontend:%s\n' "$OWNER" "$VER"
-            printf 'ghcr.io/%s/marauder-cfsolver:%s\n' "$OWNER" "$VER"
             printf '```\n\n'
             printf 'or set `MARAUDER_VERSION=%s` in your `deploy/.env` and re-pull the GHCR stack.\n\n' "$VER"
             printf 'Please give it a try and let us know if it resolves the problem — thanks for the report! :pray:\n'

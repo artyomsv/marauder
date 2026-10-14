@@ -15,7 +15,7 @@ actionable message when a value combination would silently misbehave.
 {{- end }}
 
 {{- /* Reserved MARAUDER_* keys the chart sets itself (would duplicate a ConfigMap key). */ -}}
-{{- $reserved := list "MARAUDER_HTTP_ADDR" "MARAUDER_CFSOLVER_ENABLED" "MARAUDER_CFSOLVER_URL" "MARAUDER_ADMIN_INITIAL_USERNAME" -}}
+{{- $reserved := list "MARAUDER_HTTP_ADDR" "MARAUDER_ADMIN_INITIAL_USERNAME" -}}
 {{- range $k, $v := .Values.config }}
 {{- if has $k $reserved }}
 {{- fail (printf "config.%s is managed by the chart and must not be set in .Values.config (it would create a duplicate ConfigMap key). Remove it." $k) }}

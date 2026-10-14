@@ -56,9 +56,7 @@ assert_contains "backend mounts /downloads"     'mountPath: /downloads' --
 assert_contains "chart secret created"          'kind: Secret'         --
 assert_absent  "no chart secret w/ existing"    'name: t-marauder-secrets' -- --set secrets.existingSecret=mine
 assert_contains "backend refs existing secret"  'name: mine'           -- --set secrets.existingSecret=mine
-assert_contains "cfsolver deployment"           'name: t-marauder-cfsolver' --
-assert_contains "cfsolver port 9244"            'containerPort: 9244'  --
-assert_contains "cfsolver url 9244"             'cfsolver:9244'        --
+assert_absent  "no cfsolver (removed)"         'cfsolver'             --
 assert_contains "backend wait-for-db init"      'name: wait-for-db'    --
 assert_contains "backend uses PGPASSWORD"       'name: PGPASSWORD'     --
 assert_absent  "no password in DSN"             'postgres://[^@"]*:[^@"/]*@' --
@@ -140,9 +138,9 @@ if { "$HELM" template "$REL" "$CHART" --set secrets.masterKey=x 2>&1 || true; } 
 assert_contains "s3 creds guard fires" 'accessKeyId and secretAccessKey are required' -- $BK --set database.cnpg.backup.s3.credentials.create=true
 # S3 creds secret rendered when create=true + keys supplied
 assert_contains "s3 creds secret created" 'name: t-marauder-backup-s3' -- $BK --set database.cnpg.backup.s3.credentials.create=true --set database.cnpg.backup.s3.credentials.accessKeyId=ak --set database.cnpg.backup.s3.credentials.secretAccessKey=sk
-# enabling a client adds a matching NetworkPolicy allow-rule (6 base -> 7)
+# enabling a client adds a matching NetworkPolicy allow-rule (5 base -> 6)
 npq=$(render --set networkPolicy.enabled=true --set clients.qbittorrent.enabled=true $SHARED | grep -c 'kind: NetworkPolicy')
-if [ "$npq" -ge 7 ]; then PASS=$((PASS+1)); else echo "FAIL: NP client allow-rule (got $npq policies)"; FAIL=$((FAIL+1)); fi
+if [ "$npq" -ge 6 ]; then PASS=$((PASS+1)); else echo "FAIL: NP client allow-rule (got $npq policies)"; FAIL=$((FAIL+1)); fi
 
 # --- Validations (fail-fast guards) ---
 assert_contains "reserved config key fails" 'managed by the chart' -- --set config.MARAUDER_HTTP_ADDR=:9999

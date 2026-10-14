@@ -22,9 +22,9 @@ image:
 # Optional list of imagePullSecrets names (for private registries).
 imagePullSecrets: []
 
-# Security context for the FIRST-PARTY Marauder workloads (backend, cfsolver,
-# frontend, gateway). Conservative defaults that are safe for the Go services,
-# the nginx frontend/gateway and headless-Chromium cfsolver; fully overridable.
+# Security context for the FIRST-PARTY Marauder workloads (backend,
+# frontend, gateway). Conservative defaults that are safe for the Go backend
+# and the nginx frontend/gateway; fully overridable.
 # (Bundled linuxserver clients/arr need root + extra caps and are NOT covered.)
 podSecurityContext:
   seccompProfile:
@@ -226,14 +226,6 @@ backend:
   # No default anti-affinity is set. If you raise replicas for HA, add a
   # podAntiAffinity here (and consider a PodDisruptionBudget) to spread them.
   affinity: {}
-cfsolver:
-  replicas: 1
-  image:
-    repository: ghcr.io/artyomsv/marauder-cfsolver
-  # Headless Chromium is memory-hungry — keep a limit so it can't OOM the node.
-  resources:
-    requests: { cpu: 100m, memory: 256Mi }
-    limits: { memory: 1Gi }
 frontend:
   replicas: 1
   image:

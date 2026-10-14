@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- **The `cfsolver` Cloudflare sidecar.** Nothing in Marauder called it, and it
+  could not pass the current Cloudflare challenge. Cloudflare-gated trackers
+  use FlareSolverr (`deploy/docker-compose.solver.yml`). The Helm chart no
+  longer deploys a `cfsolver` pod, the Compose stacks lose the `cfsolver`
+  profile, and releases stop publishing `ghcr.io/artyomsv/marauder-cfsolver`.
+  The unused `MARAUDER_CFSOLVER_ENABLED` and `MARAUDER_CFSOLVER_URL` settings
+  are gone; leaving them set does nothing. Kustomize and plain-manifest
+  Kubernetes installs must delete the old pod once; see "Upgrades & backups"
+  in `docs/kubernetes.md`. A Compose stack started with `--profile cfsolver`
+  drops the old container with `docker compose up -d --remove-orphans`.
+
 ## [1.23.0] - 2026-10-01
 
 ### Added

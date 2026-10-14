@@ -47,7 +47,7 @@ count() { grep -cE "$1" "$2"; }
 # Every mirrored literal is now 9.9.9 ...
 check "compose VERSION arg"          "1" "$(count "VERSION: \"$VER\"" "$TMP/deploy/docker-compose.yml")"
 check "compose backend image"        "1" "$(count "image: marauder-backend:$VER" "$TMP/deploy/docker-compose.yml")"
-check "ghcr default fallbacks (x3)"  "3" "$(count ":-$VER}" "$TMP/deploy/docker-compose.ghcr.yml")"
+check "ghcr default fallbacks (x2)"  "2" "$(count ":-$VER}" "$TMP/deploy/docker-compose.ghcr.yml")"
 check "ghcr comment default"         "1" "$(count "defaults to $VER below" "$TMP/deploy/docker-compose.ghcr.yml")"
 check "env.example pin"              "1" "$(count "MARAUDER_VERSION=$VER" "$TMP/deploy/.env.example")"
 check "seo.ts software version"      "1" "$(count "version: \"$VER\"" "$TMP/site/src/data/seo.ts")"

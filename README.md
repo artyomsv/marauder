@@ -104,8 +104,8 @@ What works **today**:
 - Generic-magnet → qBittorrent end-to-end pipeline validated against
   a real qBittorrent docker container — see
   [`docs/test-e2e-magnet.md`](docs/test-e2e-magnet.md).
-- Cloudflare-bypass sidecar (`cfsolver` profile) for trackers wrapped
-  in CF interstitials.
+- Cloudflare clearance through FlareSolverr (`docker-compose.solver.yml`
+  overlay) for trackers wrapped in CF interstitials.
 - Audit log, Prometheus metrics, structured JSON logs, system status
   page.
 - English + Russian UI.
@@ -207,8 +207,8 @@ variables.**
            │ (Cloudflare-protected trackers only)
            ▼
      ┌────────────┐
-     │ cfsolver   │  sidecar container: chromium + chromedp
-     │ sidecar    │
+     │FlareSolverr│  solver container: mints cf_clearance once,
+     │  (overlay) │  plugins replay it from Go
      └────────────┘
 
      Optional: ────────────────────────────────────────

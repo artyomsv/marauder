@@ -16,7 +16,7 @@ var ErrNoPendingEpisodes = errors.New("no pending episodes")
 // ErrCaptchaRequired is returned by a plugin's Login when the tracker
 // gates authentication behind a captcha (bot protection), rather than
 // rejecting the credentials. Callers should surface an actionable
-// message ("solve the captcha in a browser / route via cfsolver")
+// message ("solve the captcha in a browser")
 // instead of the misleading "credentials likely wrong". Plugins wrap it
 // with %w so callers can match via errors.Is.
 var ErrCaptchaRequired = errors.New("tracker requires a captcha")

@@ -291,6 +291,10 @@ Anilibria, Transmission, Deluge, uTorrent, Email, Webhook, Pushover.
 
 ### 5.8 Cloudflare bypass
 
+> **Superseded (2026-10-14):** the `cfsolver` sidecar described below was
+> removed. It never passed the challenge. Clearance now comes from FlareSolverr
+> (`MARAUDER_FLARESOLVERR_URL`, `deploy/docker-compose.solver.yml`).
+
 - Marauder exposes a pluggable `cfsolver.Solver` interface with two
   implementations:
   - `noopsolver` — default; returns a "not supported" error. Safe for builds
@@ -749,8 +753,8 @@ button that focuses the URL input in the Add modal.
 │      │                                 │                     │
 │  HTTPS 443 (in front of nginx via      ▼                     │
 │  user's own reverse proxy / Traefik)   ┌─────────────┐       │
-│                                        │ cfsolver    │       │
-│                                        │ (chromedp)  │       │
+│                                        │FlareSolverr │       │
+│                                        │ (overlay)   │       │
 │                                        └─────────────┘       │
 │                                                              │
 │  ┌────────────────── profile: sso ────────────────────┐      │
@@ -765,7 +769,6 @@ button that focuses the URL input in the Add modal.
 |---|---|---|---|
 | `db` | `postgres:18.4-alpine` | 5432 (internal) | Named volume `marauder_pgdata`, healthcheck with `pg_isready`. |
 | `backend` | `ghcr.io/artyomsv/marauder-backend:<tag>` (multi-stage Go) | 8080 (internal) | Runs migrations on startup. Non-root user. |
-| `cfsolver` | `ghcr.io/artyomsv/marauder-cfsolver:<tag>` (chromium + chromedp) | 9222 (internal) | Optional; only started when `MARAUDER_CFSOLVER_ENABLED=true`. |
 | `frontend` | `ghcr.io/artyomsv/marauder-frontend:<tag>` (nginx + static bundle) | 8081 (internal) | Built with Vite, served by nginx unprivileged image. |
 | `gateway` | `nginx:1.27-alpine` | 34080 (host) | Optional in dev; the user can put their own reverse proxy (Traefik, Caddy) in front. Provides `/api` → backend, `/` → frontend. Container-internal port stays at 6688. |
 | `keycloak` | `quay.io/keycloak/keycloak:26.0` | 34643 (host, optional) | `profile: sso`. Not started by default. Container-internal port stays at 8643. |
@@ -784,7 +787,8 @@ Documented in `deploy/.env.example`. Critical ones:
   `MARAUDER_OIDC_CLIENT_SECRET`, `MARAUDER_OIDC_REDIRECT_URL` — optional.
 - `MARAUDER_LOG_LEVEL` — `debug|info|warn|error`, default `info`.
 - `MARAUDER_HTTPS_PROXY` — optional shared proxy for tracker HTTP.
-- `MARAUDER_CFSOLVER_URL` — e.g., `http://cfsolver:9222`.
+- `MARAUDER_FLARESOLVERR_URL` — optional FlareSolverr endpoint for
+  Cloudflare-gated trackers.
 
 ---
 
@@ -833,7 +837,7 @@ Pipelines (all run on PR and on push to `master`):
 
 | Risk | Probability | Impact | Mitigation |
 |---|---|---|---|
-| Cloudflare evolves faster than `chromedp` can keep up | High | High | Solver is a sidecar container; swap in a different solver (e.g., FlareSolverr) without backend changes. |
+| Cloudflare evolves faster than `chromedp` can keep up | High | High | Happened: the chromedp sidecar was replaced by FlareSolverr and removed (2026-10-14). |
 | RuTracker changes its HTML and breaks the plugin | High | Medium | Recorded fixture tests catch regressions; plugin API is small enough that a fix is a single PR. |
 | qBittorrent WebUI API v2 changes again | Medium | Medium | Version-sniff on connect; document supported versions per release. |
 | `MARAUDER_MASTER_KEY` rotation story is messy | Medium | High | v1 requires manual re-encrypt script; v1.1 adds key versioning on each ciphertext so keys can be rotated without downtime. |

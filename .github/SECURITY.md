@@ -22,7 +22,7 @@ Report privately via GitHub Security Advisories:
 
 Please include:
 
-- Affected component (backend, frontend, cfsolver, deploy stack) and version
+- Affected component (backend, frontend, deploy stack) and version
 - Steps to reproduce or a proof of concept
 - Impact assessment (what an attacker gains)
 

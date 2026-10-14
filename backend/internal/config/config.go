@@ -79,10 +79,6 @@ type Config struct {
 	EventsRetentionDays int           `env:"MARAUDER_EVENTS_RETENTION_DAYS" envDefault:"90"`
 	EventsPruneInterval time.Duration `env:"MARAUDER_EVENTS_PRUNE_INTERVAL" envDefault:"24h"`
 
-	// Optional Cloudflare solver sidecar
-	CFSolverEnabled bool   `env:"MARAUDER_CFSOLVER_ENABLED" envDefault:"false"`
-	CFSolverURL     string `env:"MARAUDER_CFSOLVER_URL" envDefault:""`
-
 	// FlareSolverr: fetches pages for challenge-gated trackers (RuTracker)
 	// through a real browser. Empty disables it and those trackers keep
 	// dialling directly — which Cloudflare blocks.
