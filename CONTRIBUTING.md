@@ -111,8 +111,9 @@ You may *also* implement these optional capability interfaces:
 - **`registry.WithQuality`** — your tracker exposes quality variants
   (LostFilm-style). Add `Qualities() []string` and `DefaultQuality() string`.
 - **`registry.WithCloudflare`** — your tracker may return a Cloudflare
-  challenge. Add `UsesCloudflare() bool`. The scheduler will route HTTP
-  failures through the Cloudflare solver sidecar.
+  challenge. Add `UsesCloudflare() bool`; it is reported as `uses_cloudflare`.
+  To get through the challenge, use the `cfclearance` package (see the
+  RuTracker and Kinozal plugins), which replays a FlareSolverr clearance.
 
 ### The minimum boilerplate
 

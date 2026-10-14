@@ -837,7 +837,7 @@ Pipelines (all run on PR and on push to `master`):
 
 | Risk | Probability | Impact | Mitigation |
 |---|---|---|---|
-| Cloudflare evolves faster than `chromedp` can keep up | High | High | Solver is a sidecar container; swap in a different solver (e.g., FlareSolverr) without backend changes. |
+| Cloudflare evolves faster than `chromedp` can keep up | High | High | Happened: the chromedp sidecar was replaced by FlareSolverr and removed (2026-10-14). |
 | RuTracker changes its HTML and breaks the plugin | High | Medium | Recorded fixture tests catch regressions; plugin API is small enough that a fix is a single PR. |
 | qBittorrent WebUI API v2 changes again | Medium | Medium | Version-sniff on connect; document supported versions per release. |
 | `MARAUDER_MASTER_KEY` rotation story is messy | Medium | High | v1 requires manual re-encrypt script; v1.1 adds key versioning on each ciphertext so keys can be rotated without downtime. |
