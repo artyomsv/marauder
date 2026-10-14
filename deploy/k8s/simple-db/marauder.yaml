@@ -52,8 +52,6 @@ metadata:
     app.kubernetes.io/part-of: marauder
 data:
   MARAUDER_HTTP_ADDR: ":8679"
-  MARAUDER_CFSOLVER_ENABLED: "true"
-  MARAUDER_CFSOLVER_URL: "http://marauder-cfsolver:9244"
   MARAUDER_ADMIN_INITIAL_USERNAME: "admin"
   MARAUDER_LOG_LEVEL: "info"
   MARAUDER_SCHEDULER_WORKERS: "8"
@@ -162,30 +160,6 @@ spec:
       port: 8679
       targetPort: http
 ---
-# Source: marauder/templates/cfsolver.yaml
-apiVersion: v1
-kind: Service
-metadata:
-  name: marauder-cfsolver
-  labels:
-    helm.sh/chart: marauder-0.1.0
-    app.kubernetes.io/name: marauder
-    app.kubernetes.io/instance: marauder
-    app.kubernetes.io/version: "1.9.0"
-    app.kubernetes.io/managed-by: Helm
-    app.kubernetes.io/part-of: marauder
-    app.kubernetes.io/component: cfsolver
-spec:
-  type: ClusterIP
-  selector:
-    app.kubernetes.io/name: marauder
-    app.kubernetes.io/instance: marauder
-    app.kubernetes.io/component: cfsolver
-  ports:
-    - name: http
-      port: 9244
-      targetPort: http
----
 # Source: marauder/templates/db-simple.yaml
 apiVersion: v1
 kind: Service
@@ -289,7 +263,7 @@ spec:
         app.kubernetes.io/part-of: marauder
         app.kubernetes.io/component: backend
       annotations:
-        checksum/config: 6844128a81a31d43fef53398c3d4cb7fbe0e4f7fbe6deb24136963479bd776d8
+        checksum/config: 1f13841aaa3ff177c813dd2dc648de1b3116304bb3a3296e6999b12ccc54adad
         checksum/secret: 628b2d086135bbd31c7ee1423e570e42a2284ec44783bc2740fe19bc5fc8828d
     spec:
       serviceAccountName: marauder
@@ -375,69 +349,6 @@ spec:
         - name: downloads
           persistentVolumeClaim:
             claimName: marauder-downloads
----
-# Source: marauder/templates/cfsolver.yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: marauder-cfsolver
-  labels:
-    helm.sh/chart: marauder-0.1.0
-    app.kubernetes.io/name: marauder
-    app.kubernetes.io/instance: marauder
-    app.kubernetes.io/version: "1.9.0"
-    app.kubernetes.io/managed-by: Helm
-    app.kubernetes.io/part-of: marauder
-    app.kubernetes.io/component: cfsolver
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app.kubernetes.io/name: marauder
-      app.kubernetes.io/instance: marauder
-      app.kubernetes.io/component: cfsolver
-  template:
-    metadata:
-      labels:
-        helm.sh/chart: marauder-0.1.0
-        app.kubernetes.io/name: marauder
-        app.kubernetes.io/instance: marauder
-        app.kubernetes.io/version: "1.9.0"
-        app.kubernetes.io/managed-by: Helm
-        app.kubernetes.io/part-of: marauder
-        app.kubernetes.io/component: cfsolver
-    spec:
-      serviceAccountName: marauder
-      securityContext:
-        seccompProfile:
-          type: RuntimeDefault
-      containers:
-        - name: cfsolver
-          image: ghcr.io/artyomsv/marauder-cfsolver:1.9.0
-          imagePullPolicy: IfNotPresent
-          securityContext:
-            allowPrivilegeEscalation: false
-          ports:
-            - name: http
-              containerPort: 9244
-          livenessProbe:
-            httpGet:
-              path: /health
-              port: http
-            initialDelaySeconds: 10
-            periodSeconds: 20
-          readinessProbe:
-            httpGet:
-              path: /health
-              port: http
-            initialDelaySeconds: 5
-            periodSeconds: 10
-          resources:
-            limits:
-              memory: 1Gi
-            requests:
-              cpu: 100m
-              memory: 256Mi
 ---
 # Source: marauder/templates/frontend.yaml
 apiVersion: apps/v1

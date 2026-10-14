@@ -296,8 +296,8 @@ flows. No credentials needed; do **not** add an NNM-Club account entry
 on `/accounts`.
 
 **No sidecar required.** Earlier revisions of this page told you to start
-a `cfsolver` profile. That is obsolete twice over: the `cfsolver` service
-was superseded by the FlareSolverr clearance minter, and NNM-Club does
+a `cfsolver` profile. That sidecar was removed (it never passed the
+challenge; the FlareSolverr clearance minter replaced it), and NNM-Club does
 not currently serve an interstitial to Marauder at all — topic pages
 return the real HTML to an ordinary Go request. Cloudflare policy is
 dynamic and per-IP, so the clearance path remains available if your
@@ -591,7 +591,7 @@ failure modes for credentialed trackers:
 | `lostfilm: no data-code or data-episode markers found` | LostFilm changed its HTML | Update `dataCodeRe` in `lostfilm.go` and open a PR |
 | `lostfilm v_search returned neither Location header nor meta-refresh` | Redirector signature changed | Inspect the v_search response in your browser, update `metaRefreshRe` |
 | `lostfilm download page: no per-quality torrent links found` | Quality button selector drifted | Update `qualityLinkRe` |
-| `lostfilm GET ... -> 403` | Cloudflare interstitial added | Wait for the cfsolver profile or pull updated cookies |
+| `lostfilm GET ... -> 403` | Cloudflare interstitial added | LostFilm has no clearance path yet (only RuTracker and Kinozal use FlareSolverr) — open an issue |
 | No Cloudflare solver is configured | RuTracker is challenge-gated and no solver was started | Layer `docker-compose.solver.yml` onto your stack (see [RuTracker](#rutracker-needs-a-cloudflare-solver)) |
 | The Cloudflare solver did not answer | FlareSolverr is down, still launching Chrome (~9s), or unreachable | Check the container is running; a boot-time occurrence clears itself on the next check |
 | Blocked by Cloudflare — the solver's clearance was rejected | Solver and backend egress from different public IPs | Put both behind the same exit, or neither |

@@ -8,8 +8,8 @@ runs, and what you should do if it fails.
 
 | Workflow | Trigger | What it does | Time budget |
 |---|---|---|---|
-| [`ci.yml`](../.github/workflows/ci.yml) | every PR + push to master | Backend test/vet/lint/govulncheck + frontend typecheck/build + cfsolver build | < 3 min |
-| [`docker.yml`](../.github/workflows/docker.yml) | push to master + tag | Build all 3 Docker images, Trivy scan (HIGH/CRITICAL) | ~3 min |
+| [`ci.yml`](../.github/workflows/ci.yml) | every PR + push to master | Backend test/vet/lint/govulncheck + frontend typecheck/build | < 3 min |
+| [`docker.yml`](../.github/workflows/docker.yml) | push to master + tag | Build both Docker images, Trivy scan (HIGH/CRITICAL) | ~3 min |
 | [`e2e.yml`](../.github/workflows/e2e.yml) | nightly + workflow_dispatch + tag | Full compose-stack walkthrough: magnet → qBittorrent end-to-end | ~5 min |
 | [`release.yml`](../.github/workflows/release.yml) | tag push (`v*`) | Multi-arch build, cosign sign, SBOM, GHCR push, GitHub Release | ~10 min |
 | [`codeql.yml`](../.github/workflows/codeql.yml) | every PR + push to master + weekly | GitHub CodeQL SAST (Go + TypeScript) | ~5 min |
@@ -36,8 +36,6 @@ blocked unless every job is green.
   total: errcheck, govet, ineffassign, staticcheck, unused,
   bodyclose, rowserrcheck, sqlclosecheck, errorlint, exhaustive,
   gosec.
-- **`cfsolver`** — separate job because the cfsolver service has its
-  own go.mod. Runs `go build` and `go vet`.
 - **`frontend`** — `npm ci`, `npm run typecheck`, `npm run build`.
   Prints the bundle size at the end so reviewers can see if a change
   blew the budget.
@@ -62,8 +60,8 @@ images — that's `release.yml`.
 
 ### Jobs
 
-- **`build-scan`** — matrix over the three images (`backend`,
-  `frontend`, `cfsolver`). Each one builds with buildx, loads the
+- **`build-scan`** — matrix over the two images (`backend`,
+  `frontend`). Each one builds with buildx, loads the
   resulting image into the local Docker daemon, then runs Trivy with
   `severity: HIGH,CRITICAL` and `exit-code: 1`. SARIF output is
   uploaded to GitHub's code-scanning view.
@@ -113,7 +111,7 @@ Triggered by a `v*` tag push. Builds, signs, and ships everything.
 
 ### Jobs
 
-- **`build`** — matrix over the three images. For each:
+- **`build`** — matrix over the two images (`backend`, `frontend`). For each:
   1. Multi-arch build (`linux/amd64`, `linux/arm64`) via QEMU + buildx
   2. Push to `ghcr.io/artyomsv/marauder-<image>:<version>` plus
      `:latest`, `:major.minor`, etc. (via `docker/metadata-action`)
@@ -180,10 +178,10 @@ Configured in [`.github/dependabot.yml`](../.github/dependabot.yml).
 
 | Ecosystem | Where | Cadence |
 |---|---|---|
-| Go modules | `/backend`, `/cfsolver` | Weekly Mon 06:00 UTC |
+| Go modules | `/backend` | Weekly Mon 06:00 UTC |
 | npm | `/frontend` | Weekly Mon 06:00 UTC |
 | GitHub Actions | `/` | Weekly Mon 06:00 UTC |
-| Docker | `/backend`, `/frontend`, `/cfsolver` | Weekly Mon |
+| Docker | `/backend`, `/frontend` | Weekly Mon |
 
 ### Grouping
 

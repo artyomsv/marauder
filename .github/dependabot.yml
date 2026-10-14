@@ -40,28 +40,6 @@ updates:
         patterns: ["*"]
         update-types: [minor, patch]
 
-  - package-ecosystem: gomod
-    directory: /cfsolver
-    schedule:
-      interval: weekly
-      day: monday
-      time: "06:00"
-      timezone: Etc/UTC
-    open-pull-requests-limit: 5
-    cooldown:
-      default-days: 7
-    labels:
-      - dependencies
-      - go
-      - cfsolver
-    commit-message:
-      prefix: "chore(deps,cfsolver)"
-      include: scope
-    groups:
-      cfsolver-minor-patch:
-        patterns: ["*"]
-        update-types: [minor, patch]
-
   # ------------------------------------------------------- npm
   - package-ecosystem: npm
     directory: /frontend
@@ -144,16 +122,3 @@ updates:
       - docker
     commit-message:
       prefix: "chore(deps,docker,frontend)"
-
-  - package-ecosystem: docker
-    directory: /cfsolver
-    schedule:
-      interval: weekly
-      day: monday
-    cooldown:
-      default-days: 7
-    labels:
-      - dependencies
-      - docker
-    commit-message:
-      prefix: "chore(deps,docker,cfsolver)"

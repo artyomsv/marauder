@@ -91,8 +91,8 @@ type WithQuality interface {
     DefaultQuality() string
 }
 
-// The tracker may return Cloudflare challenge pages — opt into the
-// cfsolver sidecar's bypass.
+// The tracker may return Cloudflare challenge pages. Reported as
+// `uses_cloudflare`; clearance comes from the `cfclearance` package.
 type WithCloudflare interface {
     Tracker
     UsesCloudflare() bool
@@ -417,6 +417,6 @@ to upstream servers and to keep Marauder's footprint small:
 - Look at existing plugins under `backend/internal/plugins/`. They
   are all small, all follow the same pattern, and most are under 200
   lines.
-- The shared `forumcommon` and `cfsolver` packages exist precisely to
+- The shared `forumcommon` and `cfclearance` packages exist precisely to
   handle the cross-cutting concerns that would otherwise be repeated
   in every plugin.

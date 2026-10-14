@@ -176,40 +176,6 @@ jobs:
             exit 1
           fi
 
-  # ---------------------------------------------------------------- cfsolver
-  cfsolver:
-    name: cfsolver build
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: cfsolver
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          # cfsolver's go.mod requires Go 1.27 (chromedp v0.19.x needs it).
-          # Keep in sync with cfsolver/Dockerfile's golang builder tag.
-          go-version: '1.27'
-          cache: true
-          cache-dependency-path: cfsolver/go.sum
-
-      - name: go mod download
-        run: go mod download
-
-      - name: go build
-        run: go build ./...
-
-      - name: go vet
-        run: go vet ./...
-
-      # cfsolver is its own Go module, so the backend job's `go test ./...`
-      # does not reach it — without this step its tests silently never run.
-      - name: go test
-        run: go test ./...
-
   # ------------------------------------------------------- release scripts
   # Unit-test the pure helper logic behind the auto-release pipeline
   # (Conventional Commit -> semver bump, next-version arithmetic, issue-ref

@@ -1,14 +1,8 @@
 // Package nnmclub implements the NNM-Club.to tracker plugin.
 //
 // NNM-Club is the third of the "big three" CIS forum trackers Marauder
-// targets. The site sits behind Cloudflare so this plugin opts into
-// the WithCloudflare capability — the scheduler will route HTTP failures
-// through the cfsolver sidecar (when configured) and re-try.
-//
-// **Validation status:** structurally complete with fixture-based unit
-// tests. Validation against the live site requires both an account and a
-// running cfsolver, neither of which were available in the original
-// implementation session.
+// targets. The site sits behind Cloudflare; its login is
+// Turnstile-gated, so the plugin is anonymous-only.
 package nnmclub
 
 import (

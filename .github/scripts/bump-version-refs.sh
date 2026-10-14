@@ -26,7 +26,7 @@ SEMVER='[0-9]+\.[0-9]+\.[0-9]+'
 
 # deploy/docker-compose.yml — source-build VERSION arg + marauder-* image tags.
 sed -i -E "s|(VERSION: \")[^\"]+(\")|\1${VER}\2|"                 "$ROOT/deploy/docker-compose.yml"
-sed -i -E "s#(image: marauder-(backend|frontend|cfsolver):).*#\1${VER}#" "$ROOT/deploy/docker-compose.yml"
+sed -i -E "s#(image: marauder-(backend|frontend):).*#\1${VER}#" "$ROOT/deploy/docker-compose.yml"
 
 # deploy/docker-compose.ghcr.yml — ${MARAUDER_VERSION:-X.Y.Z} fallbacks + the
 # "defaults to X.Y.Z below" comment.

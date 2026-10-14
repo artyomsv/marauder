@@ -1,6 +1,6 @@
 name: Nightly build + verify (native multi-arch)
 
-# Build all three images from master HEAD natively on each architecture
+# Build both images from master HEAD natively on each architecture
 # (amd64 + arm64) and confirm they actually run there. Catches arch/build
 # regressions on master between releases — issue #74: an arm64 image once
 # shipped an amd64 binary that died with "exec format error" on real aarch64.
@@ -44,9 +44,6 @@ jobs:
           - name: frontend
             context: ./frontend
             kind: nginx
-          - name: cfsolver
-            context: ./cfsolver
-            kind: go-server
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -92,28 +89,10 @@ jobs:
               # config-load error doesn't turn this into a spurious canary.
               printf '%s' "$out" | grep -qi 'load config' || fail "binary never reached config load"
               ;;
-            go-server)
-              # cfsolver has no DB dependency, so it should actually serve
-              # /health. Poll until healthy, bailing early if it crashes.
-              # Host port is in the project's mandated 30000-49999 range
-              # (local-port-ranges.md); each matrix leg is its own GitHub-hosted
-              # VM, so a fixed port cannot collide with another leg.
-              cid="$(docker run -d -p 39244:9244 "$IMG")"
-              ok=0
-              for _ in $(seq 1 30); do
-                if curl -fsS http://localhost:39244/health >/dev/null 2>&1; then ok=1; break; fi
-                docker ps -q --no-trunc | grep -q "$cid" || break   # container exited
-                sleep 1
-              done
-              logs="$(docker logs "$cid" 2>&1 | tail -n 20 || true)"
-              docker rm -f "$cid" >/dev/null 2>&1 || true
-              printf '%s\n' "$logs"
-              printf '%s' "$logs" | grep -q 'exec format error' && fail "exec format error"
-              [ "$ok" -eq 1 ] || fail "/health never became reachable"
-              ;;
             nginx)
               # Frontend is static nginx; confirm it serves its root page.
-              # Host port in the mandated 30000-49999 range (see go-server note).
+              # Host port in the mandated 30000-49999 range (local-port-ranges.md);
+              # each matrix leg is its own VM, so a fixed port cannot collide.
               cid="$(docker run -d -p 38081:8081 "$IMG")"
               ok=0
               for _ in $(seq 1 20); do

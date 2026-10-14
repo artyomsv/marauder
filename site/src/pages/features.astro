@@ -144,9 +144,9 @@ const sections = [
   {
     title: "Deployment that doesn't surprise you",
     intro:
-      "Docker compose, three Docker images, three compose overlays, one master key. No hidden state, no host dependencies, no manual cert ops.",
+      "Docker compose, two Docker images, three compose overlays, one master key. No hidden state, no host dependencies, no manual cert ops.",
     bullets: [
-      "Multi-stage Dockerfiles for backend, frontend, and cfsolver — non-root users, healthchecks, alpine/debian-slim bases",
+      "Multi-stage Dockerfiles for backend and frontend — non-root users, healthchecks, alpine bases",
       "deploy/docker-compose.yml: production stack (db + backend + frontend + nginx gateway)",
       "deploy/docker-compose.dev.yml: overlay with port publishing + real qBittorrent + Transmission for E2E testing",
       "deploy/docker-compose.sso.yml: overlay with Keycloak 26 + a pre-imported realm and a test user",
@@ -158,8 +158,8 @@ const sections = [
     intro:
       "Six GitHub Actions workflows, golangci-lint with 12 rules, Trivy scans, cosign signing, CycloneDX SBOMs, Dependabot.",
     bullets: [
-      "ci.yml: backend race-tests + golangci-lint + govulncheck, frontend tsc + build, cfsolver build/vet — under 3 minutes per PR",
-      "docker.yml: builds all 3 images on push to master, Trivy scan with HIGH/CRITICAL fail",
+      "ci.yml: backend race-tests + golangci-lint + govulncheck, frontend tsc + build — under 3 minutes per PR",
+      "docker.yml: builds both images on push to master, Trivy scan with HIGH/CRITICAL fail",
       "e2e.yml: nightly + on-tag full compose-stack walkthrough (magnet → qBittorrent end-to-end)",
       "client-acceptance.yml: nightly matrix creating every supported client against a real container — pinned baseline + a latest-version canary that auto-files an issue when an upstream release breaks a client",
       "release.yml: tag-pushed multi-arch (amd64 + arm64) build, cosign keyless signing via OIDC, CycloneDX SBOM per image, GitHub Release with auto-extracted CHANGELOG",

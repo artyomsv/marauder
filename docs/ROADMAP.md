@@ -89,7 +89,8 @@ scaffold into a usable product.
 - [x] Cloudflare solver sidecar (`chromedp`-based) — separate Go service
       `cfsolver/`, Debian-slim image with chromium, exposed via the
       `cfsolver` compose profile, in-process client at
-      `backend/internal/cfsolver`
+      `backend/internal/cfsolver`. **Removed 2026-10-14**: it never passed the
+      challenge; the FlareSolverr clearance minter replaced it
 - [ ] Per-topic quality selection UI (for trackers that support it)
 - [x] `transmission` client plugin (transmission-rpc) — handles the
       X-Transmission-Session-Id 409 dance, supports magnet + .torrent +

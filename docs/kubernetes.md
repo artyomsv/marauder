@@ -10,7 +10,7 @@ whichever fits your workflow.
 
 ## What you get
 
-- **Core (always):** backend, frontend, `cfsolver`, and an nginx **gateway**
+- **Core (always):** backend, frontend, and an nginx **gateway**
   (the single entrypoint), plus Postgres in one of two tiers.
 - **Two database tiers:**
   - `simple` — a single Postgres pod. No HA, no backups. Great for one user.

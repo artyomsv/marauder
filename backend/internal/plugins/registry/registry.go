@@ -105,7 +105,9 @@ type WithQuality interface {
 }
 
 // WithCloudflare is an optional marker: a tracker that may return a
-// Cloudflare challenge page, and should be routed through the cfsolver.
+// Cloudflare challenge page. It is reported as `uses_cloudflare` by
+// GET /trackers/match; the clearance itself comes from the FlareSolverr
+// provider (see SetClearanceProvider).
 type WithCloudflare interface {
 	Tracker
 	UsesCloudflare() bool
