@@ -25,6 +25,9 @@ const en: Record<string, string> = {
   "nav.audit": "Audit log",
   "nav.integrations": "Integrations",
   "nav.settings": "Settings",
+  "nav.menu": "Menu",
+  "nav.openMenu": "Open menu",
+  "nav.closeMenu": "Close menu",
 
   // Dashboard
   "dashboard.section": "overview",

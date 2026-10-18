@@ -88,7 +88,7 @@ export function CredentialsPage() {
 
   return (
     <div className="space-y-8">
-      <header className="flex items-start justify-between gap-4">
+      <header className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <div className="mb-1 text-xs font-mono uppercase tracking-wider text-muted-foreground">
             tracker accounts

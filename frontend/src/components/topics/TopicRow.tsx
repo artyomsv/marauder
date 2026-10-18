@@ -76,8 +76,10 @@ export function TopicRow({
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       className={cn(
-        "group flex items-center gap-4 hover:bg-accent/5",
-        compact ? "p-2" : "p-4",
+        // Tighter gaps and padding below sm: a phone leaves the text column
+        // ~180px with the desktop spacing, and the poster goes too.
+        "group flex items-center gap-3 hover:bg-accent/5 sm:gap-4",
+        compact ? "p-2" : "p-3 sm:p-4",
         selected && "bg-primary/5",
       )}
     >
@@ -90,12 +92,14 @@ export function TopicRow({
       />
       <StatusIndicator status={topic.Status} />
       {!compact && (
-        <PosterImage
-          src={topic.ImageURL}
-          alt={topic.DisplayName}
-          ghost
-          className="h-12 w-9 shrink-0 rounded object-cover"
-        />
+        <div className="hidden shrink-0 sm:block">
+          <PosterImage
+            src={topic.ImageURL}
+            alt={topic.DisplayName}
+            ghost
+            className="h-12 w-9 rounded object-cover"
+          />
+        </div>
       )}
       <div className="min-w-0 flex-1">
         <div className="flex items-start gap-2">
