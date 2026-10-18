@@ -38,8 +38,11 @@ export function NavLinks({ onNavigate }: NavLinksProps) {
   const user = useAuthStore((s) => s.user);
   const t = useT();
 
+  // min-h-0 + overflow-y-auto: on a short viewport (a phone in landscape)
+  // the list is taller than the drawer, and the drawer locks page scroll,
+  // so without its own scrolling the lower pages and sign-out are unreachable.
   return (
-    <nav className="flex-1 space-y-1 p-3">
+    <nav className="min-h-0 flex-1 space-y-1 overflow-y-auto p-3">
       {navItems
         .filter((item) => !item.adminOnly || user?.role === "admin")
         .map(({ to, labelKey, icon: Icon }) => (

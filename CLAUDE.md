@@ -440,8 +440,14 @@ src/
 │   │   ├── AppShell.tsx       Header + desktop sidebar (md+) + outlet
 │   │   ├── NavLinks.tsx       Page list (admin-only filter) shared by sidebar + drawer
 │   │   ├── SidebarFooter.tsx  Current user + sign-out, shared by sidebar + drawer
-│   │   ├── MobileNav.tsx      Below md: menu button + slide-out drawer (issue #199);
-│   │   │                      closes on link press, Escape, backdrop, route change
+│   │   ├── MobileNav.tsx      Below md: menu button + slide-out drawer (issue #199).
+│   │   │                      Radix Dialog used directly (portal, focus trap, scroll
+│   │   │                      lock) — the header's backdrop-blur makes it the containing
+│   │   │                      block of fixed children, so an in-place overlay filled only
+│   │   │                      the 64px header. Closes on link press, Escape, backdrop,
+│   │   │                      route change, and when the viewport crosses md (the portal
+│   │   │                      escapes md:hidden; a CSS-hidden dialog would keep the page
+│   │   │                      scroll-locked with focus trapped in it)
 │   │   └── LocaleSwitcher.tsx
 │   ├── shared/                Reusable across pages
 │   │   ├── DeleteConfirm.tsx  Two-click destructive confirm (uses useArmedConfirm)
