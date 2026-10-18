@@ -14,7 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the UI. The header now shows a menu button that opens a slide-out drawer
   with the same page list and sign-out as the sidebar. It closes on a link
   press, Escape, the close button, a backdrop press or any route change.
-  (Ref #199)
+  The rest of the chrome follows: below `sm` the header keeps only icons,
+  page headers stack their title above their buttons, the content gutter
+  shrinks, a topic row drops its poster and tightens its spacing, and a
+  delivery chip can no longer run past the card edge (which made phone
+  browsers zoom the page out, so it looked off-centre). (Ref #199)
 
 ### Removed
 

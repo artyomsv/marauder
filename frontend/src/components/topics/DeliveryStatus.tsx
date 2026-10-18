@@ -201,14 +201,16 @@ function DeliveryChip({ delivery, label, copyable, t }: DeliveryChipProps) {
   return (
     <span
       className={cn(
-        "inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-xs",
+        // max-w-full: the row's text column is ~180px on a phone, so a chip
+        // capped only at 16rem ran past the card edge and widened the page.
+        "inline-flex max-w-full items-center gap-1 rounded border px-1.5 py-0.5 text-xs",
         CHIP_STYLE[kind],
       )}
       title={title}
     >
       {kind === "downloading" && <Download className="size-3 shrink-0" />}
       {kind === "finished" && <CheckCircle2 className="size-3 shrink-0" />}
-      <span className={cn(copyable && "max-w-[16rem] truncate")}>{text}</span>
+      <span className={cn("min-w-0 truncate", copyable && "sm:max-w-[16rem]")}>{text}</span>
       {kind === "downloading" && (
         <span className="shrink-0">{Math.round((delivery.percent_done ?? 0) * 100)}%</span>
       )}

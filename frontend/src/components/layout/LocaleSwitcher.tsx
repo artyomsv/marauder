@@ -50,7 +50,7 @@ export function LocaleSwitcher() {
         className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-muted/40 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
         <Globe className="size-3.5" />
-        <span>{activeLabel}</span>
+        <span className="hidden sm:inline">{activeLabel}</span>
         <ChevronDown className={cn("size-3 transition-transform", open && "rotate-180")} />
       </button>
 
