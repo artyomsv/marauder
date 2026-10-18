@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Mobile navigation.** On screens narrower than the `md` breakpoint the
+  sidebar was hidden and nothing replaced it, so no page was reachable from
+  the UI. The header now shows a menu button that opens a slide-out drawer
+  with the same page list and sign-out as the sidebar. It closes on a link
+  press, Escape, the close button, a backdrop press or any route change.
+  (Ref #199)
+
 ### Removed
 
 - **The `cfsolver` Cloudflare sidecar.** Nothing in Marauder called it, and it

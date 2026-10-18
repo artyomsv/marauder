@@ -26,6 +26,9 @@ const ru: Record<string, string> = {
   "nav.audit": "Журнал аудита",
   "nav.integrations": "Интеграции",
   "nav.settings": "Настройки",
+  "nav.menu": "Меню",
+  "nav.openMenu": "Открыть меню",
+  "nav.closeMenu": "Закрыть меню",
 
   // Dashboard
   "dashboard.section": "обзор",
