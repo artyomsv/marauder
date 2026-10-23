@@ -131,6 +131,10 @@ type createTopicReq struct {
 	// Update policy (issue #205). Plain bools: false is the right default.
 	AddPausedOnUpdate bool `json:"add_paused_on_update,omitempty"`
 	OnlyNewFiles      bool `json:"only_new_files,omitempty"`
+	// Folder name (issue #225): default, custom or keep; empty is default.
+	// FolderName is used only in custom mode.
+	FolderNameMode string `json:"folder_name_mode,omitempty"`
+	FolderName     string `json:"folder_name,omitempty"`
 	// Optional capability-driven fields. The frontend learns whether a
 	// tracker accepts these via GET /api/v1/trackers/match. Plugins read
 	// them from topic.Extra in Check / Download.
@@ -205,6 +209,8 @@ func (h *Topics) Create(w http.ResponseWriter, r *http.Request) {
 		NotifyOnlyAnnounceCurrent: req.NotifyOnlyAnnounceCurrent,
 		AddPausedOnUpdate:         req.AddPausedOnUpdate,
 		OnlyNewFiles:              req.OnlyNewFiles,
+		FolderNameMode:            domain.FolderNameMode(req.FolderNameMode),
+		FolderName:                req.FolderName,
 		Quality:                   req.Quality,
 		StartSeason:               req.StartSeason,
 		StartEpisode:              req.StartEpisode,
@@ -252,6 +258,8 @@ func topicCreateProblem(err error, url string) error {
 		return problem.ErrUnprocessable(err.Error())
 	case errors.Is(err, topics.ErrQualityUnsupported),
 		errors.Is(err, topics.ErrOnlyNewFilesDeletesData),
+		errors.Is(err, topics.ErrFolderNameInvalid),
+		errors.Is(err, topics.ErrFolderNameDeletesData),
 		errors.Is(err, topics.ErrCheckIntervalOutOfRange):
 		return problem.ErrUnprocessable(err.Error())
 	default:
@@ -280,6 +288,10 @@ type updateTopicReq struct {
 	// (issue #205), matching the other flags.
 	AddPausedOnUpdate *bool `json:"add_paused_on_update,omitempty"`
 	OnlyNewFiles      *bool `json:"only_new_files,omitempty"`
+	// Pointers so an omitted field preserves the stored folder name setting
+	// (issue #225); sending either one rewrites the whole setting.
+	FolderNameMode *string `json:"folder_name_mode,omitempty"`
+	FolderName     *string `json:"folder_name,omitempty"`
 
 	Quality      string `json:"quality,omitempty"`
 	StartSeason  *int   `json:"start_season,omitempty"`
@@ -395,9 +407,19 @@ func (h *Topics) Update(w http.ResponseWriter, r *http.Request) {
 	if req.OnlyNewFiles != nil {
 		onlyNewFiles = *req.OnlyNewFiles
 	}
+	folder, ferr := folderPolicyFromRequest(existing, req.FolderNameMode, req.FolderName)
+	if ferr != nil {
+		problem.Write(w, r, h.BaseURL, problem.ErrUnprocessable(ferr.Error()))
+		return
+	}
+	folderMode := existing.FolderNameMode
+	if folder != nil {
+		folderMode = folder.Mode
+	}
 	// Checked on the values the topic would store, so turning only-new-files
-	// on for a topic that already deletes old files is refused too.
-	if err := topics.ValidUpdatePolicy(replaceOnUpdate, replaceDeleteData, onlyNewFiles, existing.FolderNameMode); err != nil {
+	// or a folder name on for a topic that already deletes old files is
+	// refused too.
+	if err := topics.ValidUpdatePolicy(replaceOnUpdate, replaceDeleteData, onlyNewFiles, folderMode); err != nil {
 		problem.Write(w, r, h.BaseURL, problem.ErrUnprocessable(err.Error()))
 		return
 	}
@@ -409,7 +431,7 @@ func (h *Topics) Update(w http.ResponseWriter, r *http.Request) {
 		NotifyOnlyAnnounceCurrent: notifyOnlyAnnounceCurrent,
 		AddPausedOnUpdate:         addPausedOnUpdate,
 		OnlyNewFiles:              onlyNewFiles,
-	}, nil, extra)
+	}, folder, extra)
 	if uerr != nil {
 		if errors.Is(uerr, repo.ErrNotFound) {
 			problem.Write(w, r, h.BaseURL, problem.ErrNotFound("topic not found"))
@@ -419,6 +441,33 @@ func (h *Topics) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, updated)
+}
+
+// folderPolicyFromRequest builds the folder name setting a PUT asks for
+// (issue #225). nil means neither field was sent, which leaves the stored
+// setting alone. A field that was not sent keeps its stored value, so a
+// request carrying only the mode keeps the stored name, and one carrying only
+// a name is validated against the stored mode.
+func folderPolicyFromRequest(existing *domain.Topic, mode, name *string) (*repo.FolderNamePolicy, error) {
+	if mode == nil && name == nil {
+		return nil, nil
+	}
+	m := existing.FolderNameMode
+	if mode != nil {
+		m = domain.FolderNameMode(*mode)
+	}
+	if m == "" {
+		m = domain.FolderNameDefault
+	}
+	n := existing.FolderName
+	if name != nil {
+		n = *name
+	}
+	normalized, err := topics.NormalizeFolderName(m, n)
+	if err != nil {
+		return nil, err
+	}
+	return &repo.FolderNamePolicy{Mode: m, Name: normalized}, nil
 }
 
 // Get handles GET /topics/{id}.
