@@ -286,20 +286,55 @@ func TestRunCheck_FolderName_Keep_FallsBackToRememberedName(t *testing.T) {
 	}
 }
 
-// The retry case: the torrent is already in the client under the wanted name
-// (and may be running). Nothing is renamed or rechecked.
-func TestRunCheck_FolderName_SameName_SkipsRenameAndRecheck(t *testing.T) {
+// The retry case: the torrent is already in the client under the wanted name.
+// Nothing is renamed. A stopped torrent with nothing on disk is rechecked —
+// the earlier tick may have renamed it and failed before its recheck — while a
+// running one is left alone (PR #226 review).
+func TestRunCheck_FolderName_SameName(t *testing.T) {
+	cases := []struct {
+		name    string
+		running bool
+		want    []string
+	}{
+		{"stopped, nothing on disk", false, []string{"Files", "DiskState", "Start", "Recheck"}},
+		{"running", true, []string{"Files", "DiskState", "Start"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f, rc := renamingFixture(t, torrentTracker(torrentmetatest.Torrent("Show S01", v2Files)))
+			customTopic(f, "Want")
+			rc.filesSeq = [][]domain.ClientFile{renamedClient}
+			rc.running = tc.running
+
+			f.s.runCheck(context.Background(), f.s.log, f.topic)
+
+			if !reflect.DeepEqual(rc.calls, tc.want) {
+				t.Errorf("calls = %v, want %v", rc.calls, tc.want)
+			}
+			if body := submittedBody(t, f); !strings.Contains(body, `Saved in folder "Want".`) {
+				t.Errorf("body = %q, want the saved note", body)
+			}
+		})
+	}
+}
+
+// qBittorrent acknowledges renameFolder before it moves anything; a rename
+// the client never shows is a failed rename, and the torrent stays paused
+// (PR #226 review).
+func TestRunCheck_FolderName_RenameNotShown_LeftPaused(t *testing.T) {
+	shortWaits(t)
 	f, rc := renamingFixture(t, torrentTracker(torrentmetatest.Torrent("Show S01", v2Files)))
 	customTopic(f, "Want")
-	rc.filesSeq = [][]domain.ClientFile{renamedClient}
+	rc.filesSeq = [][]domain.ClientFile{v2Client} // the old root, every time
 
 	f.s.runCheck(context.Background(), f.s.log, f.topic)
 
-	if want := []string{"Files", "Start"}; !reflect.DeepEqual(rc.calls, want) {
-		t.Errorf("calls = %v, want %v", rc.calls, want)
+	if rc.startCalls != 0 || containsString(rc.calls, "Recheck") {
+		t.Errorf("calls = %v, want the torrent left paused, not rechecked", rc.calls)
 	}
-	if body := submittedBody(t, f); !strings.Contains(body, `Saved in folder "Want".`) {
-		t.Errorf("body = %q, want the saved note", body)
+	want := "Added paused: renaming the folder failed (the client did not show the renamed folder)."
+	if body := submittedBody(t, f); !strings.Contains(body, want) {
+		t.Errorf("body = %q, want %q", body, want)
 	}
 }
 
@@ -523,9 +558,9 @@ func TestRunCheck_FolderName_StartFails(t *testing.T) {
 // hold a test for stoppedWait.
 func shortWaits(t *testing.T) {
 	t.Helper()
-	origPoll, origWait := filesPollInterval, stoppedWait
-	filesPollInterval, stoppedWait = time.Millisecond, 20*time.Millisecond
-	t.Cleanup(func() { filesPollInterval, stoppedWait = origPoll, origWait })
+	origPoll, origWait, origRename := filesPollInterval, stoppedWait, renameWait
+	filesPollInterval, stoppedWait, renameWait = time.Millisecond, 20*time.Millisecond, 20*time.Millisecond
+	t.Cleanup(func() { filesPollInterval, stoppedWait, renameWait = origPoll, origWait, origRename })
 }
 
 // Right after a paused add, qBittorrent and Transmission report the torrent

@@ -40,6 +40,10 @@ const (
 // 2026-10-23). A var so tests can shorten it.
 var stoppedWait = 10 * time.Second
 
+// renameWait is how long the client may take to list the files under the new
+// folder name after accepting a rename. A var so tests can shorten it.
+var renameWait = 10 * time.Second
+
 // Folder rename metric results (marauder_scheduler_folder_rename_total).
 const (
 	folderRenamed     = "renamed"
@@ -71,9 +75,10 @@ type folderPlan struct {
 	// client's top folder (torrentmeta.ClientRoot).
 	manifest []domain.TorrentFile
 	want     string
-	// renamed is set once RenameRoot succeeded; finishDelivery then
-	// rechecks the torrent as its last step.
-	renamed bool
+	// recheck is set once the folder carries the wanted name and its data is
+	// unverified (a confirmed rename, or a retry that finds it renamed and
+	// stopped); finishDelivery then rechecks the torrent as its last step.
+	recheck bool
 	result  string
 	note    string
 }
@@ -191,6 +196,12 @@ func (s *Scheduler) applyFolderName(ctx context.Context, log zerolog.Logger, cli
 		return clientFiles, cannotNote(fp.want, "the client does not put this torrent in a folder"), true
 	}
 	if root == fp.want {
+		// A retry: an earlier tick may have renamed the folder and failed
+		// before its recheck. A stopped torrent with nothing verified on disk
+		// gets the recheck now; a running one is left alone.
+		if state, err := fp.renamer.DiskState(ctx, rawConfig, fp.hash); err == nil && state.Stopped && state.BytesOnDisk == 0 {
+			fp.recheck = true
+		}
 		s.countFolder(log, clientName, folderSameName)
 		return clientFiles, savedNote(fp.want), true
 	}
@@ -212,17 +223,44 @@ func (s *Scheduler) applyFolderName(ctx context.Context, log zerolog.Logger, cli
 	if err := fp.renamer.RenameRoot(ctx, rawConfig, fp.hash, root, fp.want); err != nil {
 		return clientFiles, s.folderFailed(log, clientName, "renaming failed", err), false
 	}
-	fp.renamed = true
-	renamed, err := fp.selector.Files(ctx, rawConfig, fp.hash)
-	if err == nil && len(renamed) == 0 {
-		err = errors.New("the client listed no files after the rename")
-	}
+	// qBittorrent answers renameFolder before it moves anything, so the
+	// rename counts only once the client lists the files under the new name.
+	// Indices do not change with a rename, so on failure the old list still
+	// selects.
+	renamed, err := waitForRoot(ctx, rawConfig, fp)
 	if err != nil {
-		// Indices do not change with a rename, so the old list still selects.
 		return clientFiles, s.folderFailed(log, clientName, "could not list the renamed files", err), false
 	}
+	if renamed == nil {
+		return clientFiles, s.folderFailed(log, clientName, "the client did not show the renamed folder",
+			errors.New("the client still lists the old folder")), false
+	}
+	fp.recheck = true
 	s.countFolder(log, clientName, folderRenamed)
 	return renamed, savedNote(fp.want), true
+}
+
+// waitForRoot reads the client's file list until it shows the torrent under
+// fp.want, and returns that list; nil when renameWait passes first.
+func waitForRoot(ctx context.Context, rawConfig []byte, fp *folderPlan) ([]domain.ClientFile, error) {
+	deadline := time.Now().Add(renameWait)
+	for {
+		files, err := fp.selector.Files(ctx, rawConfig, fp.hash)
+		if err != nil {
+			return nil, err
+		}
+		if root, ok := torrentmeta.ClientRoot(files, fp.manifest); ok && root == fp.want {
+			return files, nil
+		}
+		if time.Now().After(deadline) {
+			return nil, nil
+		}
+		select {
+		case <-ctx.Done():
+			return nil, nil
+		case <-time.After(filesPollInterval):
+		}
+	}
 }
 
 // waitForStopped reads the torrent's disk state until it reports stopped or
@@ -248,7 +286,7 @@ func waitForStopped(ctx context.Context, rawConfig []byte, renamer registry.With
 // torrent's running or stopped state through one (measured on qBittorrent
 // 5.2.1/5.1.4, Transmission 4.1.2/4.0.6 and Deluge 2.2.0).
 func (s *Scheduler) recheckRenamed(ctx context.Context, log zerolog.Logger, clientName string, rawConfig []byte, fp *folderPlan) string {
-	if !fp.renamed {
+	if !fp.recheck {
 		return ""
 	}
 	if err := fp.renamer.Recheck(ctx, rawConfig, fp.hash); err != nil {
