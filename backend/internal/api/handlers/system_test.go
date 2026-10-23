@@ -32,6 +32,7 @@ func (f *fakeRenamingClient) RenameRoot(context.Context, []byte, string, string,
 	return nil
 }
 func (f *fakeRenamingClient) Recheck(context.Context, []byte, string) error { return nil }
+func (f *fakeRenamingClient) Stop(context.Context, []byte, string) error    { return nil }
 func (f *fakeRenamingClient) DiskState(context.Context, []byte, string) (registry.DiskState, error) {
 	return registry.DiskState{}, nil
 }

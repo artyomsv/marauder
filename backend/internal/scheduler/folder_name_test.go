@@ -34,6 +34,7 @@ type fakeRenamingClient struct {
 	checkingPolls int
 	renameErr     error
 	recheckErr    error
+	stopErr       error
 	renamedFrom   string
 	renamedTo     string
 }
@@ -61,6 +62,11 @@ func (f *fakeRenamingClient) RenameRoot(_ context.Context, _ []byte, _ string, o
 	f.calls = append(f.calls, "RenameRoot")
 	f.renamedFrom, f.renamedTo = oldName, newName
 	return f.renameErr
+}
+
+func (f *fakeRenamingClient) Stop(context.Context, []byte, string) error {
+	f.calls = append(f.calls, "Stop")
+	return f.stopErr
 }
 
 func (f *fakeRenamingClient) Recheck(context.Context, []byte, string) error {
@@ -579,20 +585,39 @@ func TestRunCheck_FolderName_WaitsForStoppedAfterAdd(t *testing.T) {
 	}
 }
 
-// A failed recheck comes after the start: say so, and do not blame the rename.
-func TestRunCheck_FolderName_RecheckFails(t *testing.T) {
-	f, rc := renamingFixture(t, torrentTracker(torrentmetatest.Torrent("Show S01", v2Files)))
-	customTopic(f, "Want")
-	rc.recheckErr = errors.New("<html>boom</html>")
-
-	f.s.runCheck(context.Background(), f.s.log, f.topic)
-
-	body := submittedBody(t, f)
-	if !strings.Contains(body, "Rechecking the torrent failed. Recheck it in your client.") {
-		t.Errorf("body = %q, want the recheck failure note", body)
+// A failed recheck comes after the start, so the torrent would download the
+// data already in the folder again: it is stopped, and the note says why
+// without blaming the rename (PR #226 review).
+func TestRunCheck_FolderName_RecheckFails_StopsTorrent(t *testing.T) {
+	cases := []struct {
+		name    string
+		stopErr error
+		note    string
+	}{
+		{"stop works", nil, "Added paused: rechecking the torrent failed. Recheck it in your client and start it."},
+		{"stop fails too", errors.New("<html>boom</html>"), "Rechecking the torrent failed and it could not be stopped. Stop and recheck it in your client."},
 	}
-	if strings.Contains(body, "renaming the folder failed") || strings.Contains(body, "boom") {
-		t.Errorf("body = %q blames the rename or carries the raw error", body)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f, rc := renamingFixture(t, torrentTracker(torrentmetatest.Torrent("Show S01", v2Files)))
+			customTopic(f, "Want")
+			rc.recheckErr = errors.New("<html>boom</html>")
+			rc.stopErr = tc.stopErr
+
+			f.s.runCheck(context.Background(), f.s.log, f.topic)
+
+			want := []string{"Files", "DiskState", "RenameRoot", "Files", "Start", "Recheck", "Stop"}
+			if !reflect.DeepEqual(rc.calls, want) {
+				t.Errorf("calls = %v, want %v", rc.calls, want)
+			}
+			body := submittedBody(t, f)
+			if !strings.Contains(body, tc.note) {
+				t.Errorf("body = %q, want %q", body, tc.note)
+			}
+			if strings.Contains(body, "renaming the folder failed") || strings.Contains(body, "boom") {
+				t.Errorf("body = %q blames the rename or carries the raw error", body)
+			}
+		})
 	}
 }
 

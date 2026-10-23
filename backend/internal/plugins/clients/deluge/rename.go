@@ -21,6 +21,12 @@ func (p *plugin) Recheck(ctx context.Context, rawConfig []byte, hash string) err
 	return p.simpleCall(ctx, rawConfig, "core.force_recheck", []any{[]string{hash}})
 }
 
+// Stop implements registry.WithRename. Deluge 2 takes one torrent id here,
+// as core.resume_torrent does for Start.
+func (p *plugin) Stop(ctx context.Context, rawConfig []byte, hash string) error {
+	return p.simpleCall(ctx, rawConfig, "core.pause_torrent", []any{hash})
+}
+
 // DiskState implements registry.WithRename: total_done, the bytes on disk,
 // and state. Deluge's "paused" flag clears before the state does after a
 // resume, so only state "Paused" counts as stopped.

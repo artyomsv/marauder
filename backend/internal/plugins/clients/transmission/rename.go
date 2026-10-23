@@ -25,6 +25,11 @@ func (p *plugin) Recheck(ctx context.Context, rawConfig []byte, hash string) err
 	return p.simple(ctx, rawConfig, "torrent-verify", map[string]any{"ids": []any{hash}})
 }
 
+// Stop implements registry.WithRename.
+func (p *plugin) Stop(ctx context.Context, rawConfig []byte, hash string) error {
+	return p.simple(ctx, rawConfig, "torrent-stop", map[string]any{"ids": []any{hash}})
+}
+
 // DiskState implements registry.WithRename: the bytes on disk, verified or
 // not (downloadedEver would miss data a check found, and data on disk is what
 // a rename could overwrite), and whether the torrent is stopped (status 0).

@@ -20,6 +20,9 @@ type renameServer struct {
 	recheckHash string
 	infoQuery   string
 	infoBody    string
+	stopCode    int // 0 => 200
+	stopHash    string
+	pauseHash   string
 }
 
 func (s *renameServer) handler() http.Handler {
@@ -39,6 +42,21 @@ func (s *renameServer) handler() http.Handler {
 		_ = r.ParseForm()
 		s.mu.Lock()
 		s.recheckHash = r.Form.Get("hashes")
+		s.mu.Unlock()
+	})
+	mux.HandleFunc("/api/v2/torrents/stop", func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		s.stopHash = r.Form.Get("hashes")
+		if s.stopCode != 0 {
+			w.WriteHeader(s.stopCode)
+		}
+	})
+	mux.HandleFunc("/api/v2/torrents/pause", func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		s.mu.Lock()
+		s.pauseHash = r.Form.Get("hashes")
 		s.mu.Unlock()
 	})
 	mux.HandleFunc("/api/v2/torrents/info", func(w http.ResponseWriter, r *http.Request) {
@@ -112,6 +130,25 @@ func TestDiskState_ReadsCompletedAndState(t *testing.T) {
 		}
 		if srv.infoQuery != "abc" {
 			t.Errorf("info hashes = %q, want abc", srv.infoQuery)
+		}
+	}
+}
+
+// qBittorrent 5.0 renamed torrents/pause to torrents/stop; a 404 from stop
+// means an older server.
+func TestStop_FallsBackToPause(t *testing.T) {
+	for _, code := range []int{0, http.StatusNotFound} {
+		srv := &renameServer{stopCode: code}
+		ts := httptest.NewServer(srv.handler())
+		if err := newRemovePlugin().Stop(context.Background(), selectCfg(ts.URL), "abc"); err != nil {
+			t.Fatalf("Stop (stop status %d): %v", code, err)
+		}
+		ts.Close()
+		if srv.stopHash != "abc" {
+			t.Errorf("stop hashes = %q, want abc", srv.stopHash)
+		}
+		if wantPause := code == http.StatusNotFound; (srv.pauseHash == "abc") != wantPause {
+			t.Errorf("stop status %d: pause hashes = %q, want pause called: %v", code, srv.pauseHash, wantPause)
 		}
 	}
 }

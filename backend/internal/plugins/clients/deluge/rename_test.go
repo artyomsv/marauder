@@ -70,6 +70,18 @@ func TestDiskState_ReadsTotalDoneAndState(t *testing.T) {
 	}
 }
 
+func TestStop_PausesTorrent(t *testing.T) {
+	srv, calls := newSelectServer(t, `{}`)
+	p := &plugin{sessions: map[string]*session{}}
+	if err := p.Stop(context.Background(), delugeCfg(srv.URL), "abc"); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	got := lastCall(calls, "core.pause_torrent")
+	if got == nil || !reflect.DeepEqual(got["params"], []any{"abc"}) {
+		t.Errorf("call = %v, want core.pause_torrent for abc", got)
+	}
+}
+
 // Deluge answers an unknown torrent id with an empty status dictionary.
 func TestDiskState_UnknownTorrentIsAnError(t *testing.T) {
 	srv, _ := newSelectServer(t, `{}`)

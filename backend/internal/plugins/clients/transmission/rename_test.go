@@ -78,6 +78,17 @@ func TestDiskState_SumsHaveAndReadsStatus(t *testing.T) {
 	}
 }
 
+func TestStop_SendsTorrentStop(t *testing.T) {
+	srv, calls := newSelectServer(t, `[]`)
+	if err := newPlugin().Stop(context.Background(), []byte(`{"url":"`+srv.URL+`"}`), "abc"); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	got := (*calls)[len(*calls)-1]
+	if got["method"] != "torrent-stop" || !reflect.DeepEqual(got["arguments"], map[string]any{"ids": []any{"abc"}}) {
+		t.Errorf("call = %v, want torrent-stop for abc", got)
+	}
+}
+
 func TestDiskState_UnknownTorrentIsAnError(t *testing.T) {
 	srv, _ := newSelectServer(t, `[]`)
 	if _, err := newPlugin().DiskState(context.Background(), []byte(`{"url":"`+srv.URL+`"}`), "abc"); err == nil {

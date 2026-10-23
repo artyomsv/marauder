@@ -29,6 +29,18 @@ func (p *plugin) Recheck(ctx context.Context, rawConfig []byte, hash string) err
 	return p.postForm(ctx, rawConfig, "/api/v2/torrents/recheck", url.Values{"hashes": {hash}})
 }
 
+// Stop implements registry.WithRename. qBittorrent 5.0 renamed
+// torrents/pause to torrents/stop; a 404 from stop means an older server.
+func (p *plugin) Stop(ctx context.Context, rawConfig []byte, hash string) error {
+	form := url.Values{"hashes": {hash}}
+	err := p.postForm(ctx, rawConfig, "/api/v2/torrents/stop", form)
+	var statusErr *qbitStatusError
+	if errors.As(err, &statusErr) && statusErr.code == http.StatusNotFound {
+		return p.postForm(ctx, rawConfig, "/api/v2/torrents/pause", form)
+	}
+	return err
+}
+
 // DiskState implements registry.WithRename. It reads "completed" — the bytes
 // the client has on disk, found by a check or downloaded — rather than
 // "downloaded", which counts only what came from peers this session, and

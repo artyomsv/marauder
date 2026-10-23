@@ -315,6 +315,9 @@ type WithRename interface {
 	Client
 	RenameRoot(ctx context.Context, rawConfig []byte, hash, oldName, newName string) error
 	Recheck(ctx context.Context, rawConfig []byte, hash string) error
+	// Stop stops a torrent whose recheck could not be requested after it
+	// was started, so it does not download data already in the folder.
+	Stop(ctx context.Context, rawConfig []byte, hash string) error
 	DiskState(ctx context.Context, rawConfig []byte, hash string) (DiskState, error)
 }
 

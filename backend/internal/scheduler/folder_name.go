@@ -289,13 +289,21 @@ func (s *Scheduler) recheckRenamed(ctx context.Context, log zerolog.Logger, clie
 	if !fp.recheck {
 		return ""
 	}
-	if err := fp.renamer.Recheck(ctx, rawConfig, fp.hash); err != nil {
-		log.Warn().Err(err).Str("client", clientName).Str("result", folderFailed).Str("step", "recheck").
-			Msg("folder renamed but the recheck failed")
-		metrics.SchedulerFolderRenameTotal.WithLabelValues(clientName, folderFailed).Inc()
-		return "Rechecking the torrent failed. Recheck it in your client."
+	err := fp.renamer.Recheck(ctx, rawConfig, fp.hash)
+	if err == nil {
+		return ""
 	}
-	return ""
+	log.Warn().Err(err).Str("client", clientName).Str("result", folderFailed).Str("step", "recheck").
+		Msg("folder renamed but the recheck failed; stopping the torrent")
+	metrics.SchedulerFolderRenameTotal.WithLabelValues(clientName, folderFailed).Inc()
+	// The torrent may already be running (started above, or by the
+	// selection), and unchecked it would download the data already in the
+	// folder again. Stopping a stopped torrent changes nothing.
+	if err := fp.renamer.Stop(ctx, rawConfig, fp.hash); err != nil {
+		log.Warn().Err(err).Str("client", clientName).Msg("stopping the torrent after a failed recheck failed")
+		return "Rechecking the torrent failed and it could not be stopped. Stop and recheck it in your client."
+	}
+	return "Added paused: rechecking the torrent failed. Recheck it in your client and start it."
 }
 
 // folderCannotApply counts and returns the note of a plan that could not
