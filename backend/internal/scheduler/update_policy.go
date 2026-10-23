@@ -62,6 +62,15 @@ type deliveryPlan struct {
 	// note is a notification note that has no file-selection outcome (and so
 	// no metric): add-paused-only on a client that cannot pause.
 	note string
+	// folder is the folder name plan (issue #225), nil when there is none.
+	// paused stays the update policy's own decision: a rename adds the
+	// torrent paused too (addPaused), and finishDelivery starts it again.
+	folder *folderPlan
+}
+
+// addPaused is the Paused flag Add gets: the update policy's, or a rename's.
+func (p deliveryPlan) addPaused() bool {
+	return p.paused || p.folder.renames()
 }
 
 // filesAtRecord is the file list recordDelivery stores. A delivery's files
@@ -189,11 +198,42 @@ func (s *Scheduler) latestFiles(ctx context.Context, log zerolog.Logger, topicID
 }
 
 // finishDelivery runs after a successful Add and returns the note for the
-// download.submitted notification ("" for a plain delivery).
+// download.submitted notification ("" for a plain delivery). With a folder
+// rename it waits once for the client's file list, renames, then runs the
+// update policy on the list as it is after the rename, and starts the torrent
+// itself when only the rename paused it.
 func (s *Scheduler) finishDelivery(ctx context.Context, log zerolog.Logger, t *domain.Topic, clientName string, rawConfig []byte, plan deliveryPlan) string {
+	fp := plan.folder
+	if !fp.renames() {
+		return joinNotes(
+			s.finishUpdatePolicy(ctx, log, t, clientName, rawConfig, plan, nil),
+			s.folderCannotApply(log, clientName, fp))
+	}
+	ctx, cancel := context.WithTimeout(ctx, folderSelectionTimeout)
+	defer cancel()
+	clientFiles, err := waitForFiles(ctx, rawConfig, fp.selector, fp.hash)
+	if err != nil {
+		return s.folderFailed(log, clientName, "could not list the files", err)
+	}
+	clientFiles, folderNote, ok := s.applyFolderName(ctx, log, clientName, rawConfig, fp, clientFiles)
+	if !ok {
+		return folderNote
+	}
+	policyNote := s.finishUpdatePolicy(ctx, log, t, clientName, rawConfig, plan, clientFiles)
+	if !plan.paused {
+		if err := fp.selector.Start(ctx, rawConfig, fp.hash); err != nil {
+			return joinNotes(policyNote, s.folderFailed(log, clientName, "starting the torrent failed", err))
+		}
+	}
+	return joinNotes(policyNote, folderNote)
+}
+
+// finishUpdatePolicy is the update policy's part of finishDelivery. clientFiles
+// is the client's file list when finishDelivery already read it, else nil.
+func (s *Scheduler) finishUpdatePolicy(ctx context.Context, log zerolog.Logger, t *domain.Topic, clientName string, rawConfig []byte, plan deliveryPlan, clientFiles []domain.ClientFile) string {
 	switch {
 	case plan.selection != nil:
-		note, ok := s.selectNewFiles(ctx, log, t, clientName, rawConfig, plan.selection)
+		note, ok := s.selectNewFiles(ctx, log, t, clientName, rawConfig, plan.selection, clientFiles)
 		if ok {
 			s.storeSelectedFiles(ctx, log, t.ID, plan.selection.hash, plan.files)
 		}
@@ -215,7 +255,9 @@ func (s *Scheduler) finishDelivery(ctx context.Context, log zerolog.Logger, t *d
 // started, so a user who presses Start does not download the pack again.
 // ok reports that the selection took effect — the old files are skipped and
 // the new ones wanted — which is what makes the file list a baseline.
-func (s *Scheduler) selectNewFiles(ctx context.Context, log zerolog.Logger, t *domain.Topic, clientName string, rawConfig []byte, sel *fileSelection) (note string, ok bool) {
+// clientFiles is the client's list when the caller already waited for it
+// (a folder rename), else nil and it is waited for here.
+func (s *Scheduler) selectNewFiles(ctx context.Context, log zerolog.Logger, t *domain.Topic, clientName string, rawConfig []byte, sel *fileSelection, clientFiles []domain.ClientFile) (note string, ok bool) {
 	total := len(sel.files)
 	newCount := total - len(sel.skip)
 	noNewFiles := func() (string, bool) {
@@ -242,9 +284,11 @@ func (s *Scheduler) selectNewFiles(ctx context.Context, log zerolog.Logger, t *d
 	// Always wait for the file list, even with nothing to skip: a qBittorrent
 	// add is asynchronous, and a Start sent before the client knows the
 	// torrent is lost, leaving it paused behind a "Downloading" note.
-	clientFiles, err := waitForFiles(ctx, rawConfig, sel)
-	if err != nil {
-		return fail("could not list the files", err)
+	if clientFiles == nil {
+		var err error
+		if clientFiles, err = waitForFiles(ctx, rawConfig, sel.selector, sel.hash); err != nil {
+			return fail("could not list the files", err)
+		}
 	}
 	// One layout for the whole torrent, one to one with its manifest. Without
 	// that, no index can be trusted to name the file it seems to: an old file
@@ -294,9 +338,9 @@ func (s *Scheduler) storeSelectedFiles(ctx context.Context, log zerolog.Logger, 
 }
 
 // waitForFiles polls the client until it lists the torrent's files.
-func waitForFiles(ctx context.Context, rawConfig []byte, sel *fileSelection) ([]domain.ClientFile, error) {
+func waitForFiles(ctx context.Context, rawConfig []byte, selector registry.WithFileSelection, hash string) ([]domain.ClientFile, error) {
 	for {
-		files, err := sel.selector.Files(ctx, rawConfig, sel.hash)
+		files, err := selector.Files(ctx, rawConfig, hash)
 		if err != nil {
 			return nil, fmt.Errorf("list files: %w", err)
 		}

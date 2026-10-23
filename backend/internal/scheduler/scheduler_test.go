@@ -122,6 +122,8 @@ type fakeTopics struct {
 	current  *domain.Topic
 	getErr   error
 	getCalls int
+	// seenCalls records SetFolderNameSeen, keep mode's memory (issue #225).
+	seenCalls []string
 }
 
 type recordCall struct {
@@ -167,6 +169,11 @@ func (f *fakeTopics) RecordCheckResult(_ context.Context, t *domain.Topic, hash 
 
 func (f *fakeTopics) UpdateDisplayName(_ context.Context, id uuid.UUID, name string) error {
 	f.updateDisplayNameCalls = append(f.updateDisplayNameCalls, updateDisplayNameCall{id, name})
+	return nil
+}
+
+func (f *fakeTopics) SetFolderNameSeen(_ context.Context, _ uuid.UUID, name string) error {
+	f.seenCalls = append(f.seenCalls, name)
 	return nil
 }
 
@@ -371,6 +378,23 @@ func (f *fakeDeliveries) LatestFiles(_ context.Context, _ uuid.UUID, excludeInfo
 	for i := len(rows) - 1; i >= 0; i-- {
 		if rows[i].Infohash != excludeInfohash {
 			return rows[i].Files, nil
+		}
+	}
+	return nil, nil
+}
+
+// LatestOther mirrors the repository's query over the same rows as
+// LatestFiles: the newest row whose infohash is not excludeInfohash.
+func (f *fakeDeliveries) LatestOther(_ context.Context, _ uuid.UUID, excludeInfohash string) (*domain.TopicDelivery, error) {
+	var rows []*domain.TopicDelivery
+	if f.latestFiles != nil {
+		rows = append(rows, &domain.TopicDelivery{Infohash: priorLatestHash, Files: f.latestFiles})
+	}
+	rows = append(rows, f.history...)
+	rows = append(rows, f.recorded...)
+	for i := len(rows) - 1; i >= 0; i-- {
+		if rows[i].Infohash != excludeInfohash {
+			return rows[i], nil
 		}
 	}
 	return nil, nil
