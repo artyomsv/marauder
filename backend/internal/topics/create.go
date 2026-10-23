@@ -97,9 +97,13 @@ type CreateInput struct {
 	// AddPausedOnUpdate / OnlyNewFiles are the update policy (issue #205).
 	AddPausedOnUpdate bool
 	OnlyNewFiles      bool
-	Quality           string
-	StartSeason       *int
-	StartEpisode      *int
+	// FolderNameMode / FolderName name the torrent's top folder in the client
+	// (issue #225). An empty mode is the default mode.
+	FolderNameMode domain.FolderNameMode
+	FolderName     string
+	Quality        string
+	StartSeason    *int
+	StartEpisode   *int
 	// Source tags how the topic was created (e.g. "sonarr"). Stored in
 	// extra["source"] so the UI can badge auto-imported topics. Empty for
 	// manually-added topics.
@@ -135,6 +139,14 @@ func BuildAndCreate(ctx context.Context, store Store, in CreateInput) (*Result, 
 	// before Parse so a bad request costs no tracker work.
 	if in.CheckIntervalSec != 0 && !ValidCheckInterval(in.CheckIntervalSec) {
 		return nil, ErrCheckIntervalOutOfRange
+	}
+	folderName, err := NormalizeFolderName(in.FolderNameMode, in.FolderName)
+	if err != nil {
+		return nil, err
+	}
+	folderMode := in.FolderNameMode
+	if folderMode == "" {
+		folderMode = domain.FolderNameDefault
 	}
 	tracker := registry.FindTrackerForURL(in.URL)
 	if tracker == nil {
@@ -189,12 +201,14 @@ func BuildAndCreate(ctx context.Context, store Store, in CreateInput) (*Result, 
 	// Replace-on-update: keep the DB column's default (delete data = true) when
 	// the caller doesn't specify — except with only-new-files, where deleting
 	// the previous version's files would lose them (issue #205), so an omitted
-	// flag defaults to keeping them. An explicit true is rejected below.
-	replaceDeleteData := !in.OnlyNewFiles
+	// flag defaults to keeping them. An explicit true is rejected below. The
+	// same holds for a folder name (issue #225): both versions share the
+	// folder, so deleting the old one's files would delete the new one's.
+	replaceDeleteData := !in.OnlyNewFiles && !usesFolderName(folderMode)
 	if in.ReplaceDeleteData != nil {
 		replaceDeleteData = *in.ReplaceDeleteData
 	}
-	if err := ValidUpdatePolicy(in.ReplaceOnUpdate, replaceDeleteData, in.OnlyNewFiles); err != nil {
+	if err := ValidUpdatePolicy(in.ReplaceOnUpdate, replaceDeleteData, in.OnlyNewFiles, folderMode); err != nil {
 		return nil, err
 	}
 
@@ -215,6 +229,8 @@ func BuildAndCreate(ctx context.Context, store Store, in CreateInput) (*Result, 
 		NotifyOnlyAnnounceCurrent: in.NotifyOnlyAnnounceCurrent,
 		AddPausedOnUpdate:         in.AddPausedOnUpdate,
 		OnlyNewFiles:              in.OnlyNewFiles,
+		FolderNameMode:            folderMode,
+		FolderName:                folderName,
 		Extra:                     extra,
 		CheckIntervalSec:          interval,
 		NextCheckAt:               time.Now().UTC(),

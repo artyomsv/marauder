@@ -397,7 +397,7 @@ func (h *Topics) Update(w http.ResponseWriter, r *http.Request) {
 	}
 	// Checked on the values the topic would store, so turning only-new-files
 	// on for a topic that already deletes old files is refused too.
-	if err := topics.ValidUpdatePolicy(replaceOnUpdate, replaceDeleteData, onlyNewFiles); err != nil {
+	if err := topics.ValidUpdatePolicy(replaceOnUpdate, replaceDeleteData, onlyNewFiles, existing.FolderNameMode); err != nil {
 		problem.Write(w, r, h.BaseURL, problem.ErrUnprocessable(err.Error()))
 		return
 	}
