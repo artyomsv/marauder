@@ -41,7 +41,8 @@ settings.
 The notification ends with `Saved in folder "<name>".`
 
 If a step fails, the torrent stays **paused** and the notification says which
-step failed, for example
+step failed. With "Download only new files" the old files are still skipped
+first, so starting the torrent by hand does not download them again. For example
 `Added paused: renaming the folder failed (renaming failed). Rename it in your client and start it.`
 The check itself does not fail: the torrent did reach your client.
 
@@ -54,10 +55,10 @@ why (`Could not use folder name "<name>": ...`):
 - **Single-file torrents.** There is no folder to rename.
 - **A client set to "no subfolder".** The client does not put the torrent in a
   folder (qBittorrent's "Don't create subfolder" content layout).
-- **A torrent that already has data on disk.** Marauder never renames a torrent
-  that has written files: the rename moves files and could overwrite the
-  previous version's files. This happens only on a retry, after you started the
-  torrent by hand.
+- **A torrent that is already running, or already has data on disk.** Marauder
+  renames only a stopped torrent with nothing written: the rename moves files
+  and could overwrite the previous version's files. This happens only on a
+  retry, after you started the torrent by hand.
 - **µTorrent and the download-folder client.** They cannot rename folders. The
   form shows a warning when one of them receives the topic.
 

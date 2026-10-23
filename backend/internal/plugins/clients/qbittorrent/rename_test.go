@@ -91,26 +91,37 @@ func TestRecheck_PostsHash(t *testing.T) {
 	}
 }
 
-func TestBytesDone_ReadsCompleted(t *testing.T) {
-	srv := &renameServer{infoBody: `[{"hash":"abc","completed":4096,"downloaded":0}]`}
-	ts := httptest.NewServer(srv.handler())
-	defer ts.Close()
-
-	got, err := newRemovePlugin().BytesDone(context.Background(), selectCfg(ts.URL), "abc")
-	if err != nil || got != 4096 {
-		t.Errorf("BytesDone = (%d, %v), want (4096, nil)", got, err)
+// DiskState reads "completed" (bytes on disk) and whether the torrent is
+// stopped: "paused*" before qBittorrent 5.0, "stopped*" since.
+func TestDiskState_ReadsCompletedAndState(t *testing.T) {
+	cases := []struct {
+		state       string
+		wantStopped bool
+	}{
+		{"stoppedDL", true}, {"pausedDL", true}, {"stoppedUP", true},
+		{"downloading", false}, {"checkingDL", false}, {"queuedDL", false},
 	}
-	if srv.infoQuery != "abc" {
-		t.Errorf("info hashes = %q, want abc", srv.infoQuery)
+	for _, tc := range cases {
+		srv := &renameServer{infoBody: `[{"hash":"abc","completed":4096,"downloaded":0,"state":"` + tc.state + `"}]`}
+		ts := httptest.NewServer(srv.handler())
+		got, err := newRemovePlugin().DiskState(context.Background(), selectCfg(ts.URL), "abc")
+		ts.Close()
+		want := registry.DiskState{BytesOnDisk: 4096, Stopped: tc.wantStopped}
+		if err != nil || got != want {
+			t.Errorf("state %s: DiskState = (%+v, %v), want (%+v, nil)", tc.state, got, err, want)
+		}
+		if srv.infoQuery != "abc" {
+			t.Errorf("info hashes = %q, want abc", srv.infoQuery)
+		}
 	}
 }
 
-func TestBytesDone_UnknownTorrentIsAnError(t *testing.T) {
+func TestDiskState_UnknownTorrentIsAnError(t *testing.T) {
 	srv := &renameServer{infoBody: `[]`}
 	ts := httptest.NewServer(srv.handler())
 	defer ts.Close()
 
-	if _, err := newRemovePlugin().BytesDone(context.Background(), selectCfg(ts.URL), "abc"); err == nil {
-		t.Error("BytesDone for an unknown torrent = nil error, want one")
+	if _, err := newRemovePlugin().DiskState(context.Background(), selectCfg(ts.URL), "abc"); err == nil {
+		t.Error("DiskState for an unknown torrent = nil error, want one")
 	}
 }

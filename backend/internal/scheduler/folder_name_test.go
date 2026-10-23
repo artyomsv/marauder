@@ -26,6 +26,7 @@ type fakeRenamingClient struct {
 	filesByHash map[string][]domain.ClientFile
 	bytesDone   int64
 	bytesErr    error
+	running     bool
 	renameErr   error
 	recheckErr  error
 	renamedFrom string
@@ -62,9 +63,9 @@ func (f *fakeRenamingClient) Recheck(context.Context, []byte, string) error {
 	return f.recheckErr
 }
 
-func (f *fakeRenamingClient) BytesDone(context.Context, []byte, string) (int64, error) {
-	f.calls = append(f.calls, "BytesDone")
-	return f.bytesDone, f.bytesErr
+func (f *fakeRenamingClient) DiskState(context.Context, []byte, string) (registry.DiskState, error) {
+	f.calls = append(f.calls, "DiskState")
+	return registry.DiskState{BytesOnDisk: f.bytesDone, Stopped: !f.running}, f.bytesErr
 }
 
 var _ registry.WithRename = (*fakeRenamingClient)(nil)
@@ -98,7 +99,7 @@ func TestRunCheck_FolderName_Custom_RenamesRechecksAndStarts(t *testing.T) {
 	if !rc.lastOpts.Paused {
 		t.Error("torrent not added paused before the rename")
 	}
-	want := []string{"Files", "BytesDone", "RenameRoot", "Files", "Recheck", "Start"}
+	want := []string{"Files", "DiskState", "RenameRoot", "Files", "Recheck", "Start"}
 	if !reflect.DeepEqual(rc.calls, want) {
 		t.Errorf("calls = %v, want %v", rc.calls, want)
 	}
@@ -299,6 +300,8 @@ func TestRunCheck_FolderName_CannotApplyAfterAdd(t *testing.T) {
 	}{
 		{"torrent already has data", func(rc *fakeRenamingClient) { rc.bytesDone = 5 },
 			`Could not use folder name "Want": the torrent already has data on disk.`},
+		{"torrent already running", func(rc *fakeRenamingClient) { rc.running = true },
+			`Could not use folder name "Want": the torrent is already running.`},
 		{"client shows no top folder", func(rc *fakeRenamingClient) {
 			rc.filesSeq = [][]domain.ClientFile{{
 				{Index: 0, Path: "E01.mkv", Size: 100}, {Index: 1, Path: "E02.mkv", Size: 200},
@@ -373,7 +376,7 @@ func TestRunCheck_FolderName_WithOnlyNewFiles(t *testing.T) {
 
 	f.s.runCheck(context.Background(), f.s.log, f.topic)
 
-	want := []string{"Files", "BytesDone", "RenameRoot", "Files", "Recheck", "SkipFiles", "Start"}
+	want := []string{"Files", "DiskState", "RenameRoot", "Files", "Recheck", "SkipFiles", "Start"}
 	if !reflect.DeepEqual(rc.calls, want) {
 		t.Errorf("calls = %v, want %v", rc.calls, want)
 	}
@@ -429,6 +432,79 @@ func TestRunCheck_FolderName_Keep_NoRedundantWrite(t *testing.T) {
 
 	if rc.renamedTo != "Want" || len(f.topics.seenCalls) != 0 {
 		t.Errorf("renamedTo=%q seen=%v, want renamed with no write", rc.renamedTo, f.topics.seenCalls)
+	}
+}
+
+// A failed rename must not abandon the only-new-files selection: the user is
+// told to start the torrent by hand, and the old files must already be
+// skipped by then. The selection does not start it, and its list becomes the
+// next update's baseline.
+func TestRunCheck_FolderName_RenameFails_StillSelectsNewFiles(t *testing.T) {
+	data := torrentmetatest.Torrent("Show S01", v2Files)
+	f, rc := renamingFixture(t, torrentTracker(data))
+	customTopic(f, "Want")
+	f.topic.OnlyNewFiles = true
+	f.deliveries.latestFiles = v1Files
+	rc.renameErr = errors.New("<html>409</html>")
+
+	f.s.runCheck(context.Background(), f.s.log, f.topic)
+
+	if !reflect.DeepEqual(rc.skipped, []int{0}) {
+		t.Errorf("skipped = %v, want [0] (E01) even though the rename failed", rc.skipped)
+	}
+	if rc.startCalls != 0 {
+		t.Errorf("start calls = %d, want the torrent left paused", rc.startCalls)
+	}
+	hash, _ := infohash.FromTorrent(data)
+	if len(f.deliveries.setFilesCalls) != 1 || f.deliveries.setFilesCalls[0].infohash != hash {
+		t.Errorf("setFiles = %+v, want the selected list stored as the baseline", f.deliveries.setFilesCalls)
+	}
+	body := submittedBody(t, f)
+	if !strings.Contains(body, "Added paused with 1 new of 2 files selected.") ||
+		!strings.Contains(body, "renaming the folder failed (renaming failed)") {
+		t.Errorf("body = %q, want the selection note and the rename failure", body)
+	}
+}
+
+// Keep mode confirms the previous torrent's folder with that torrent's own
+// file list: a client set to "no subfolder" shows a torrent whose files share
+// one inner folder as if it were the top folder.
+func TestRunCheck_FolderName_Keep_ConfirmsPreviousRootWithItsFiles(t *testing.T) {
+	f, rc := renamingFixture(t, torrentTracker(torrentmetatest.Torrent("Show S01", v2Files)))
+	f.topic.FolderNameMode = domain.FolderNameKeep
+	f.topic.FolderNameSeen = "Want"
+	cid := f.clients.client.ID
+	f.deliveries.history = []*domain.TopicDelivery{{
+		Infohash: "prev", ClientID: &cid,
+		Files: []domain.TorrentFile{{Path: "Season 1/E01.mkv", Size: 100}},
+	}}
+	rc.filesByHash = map[string][]domain.ClientFile{"prev": {{Index: 0, Path: "Season 1/E01.mkv", Size: 100}}}
+
+	f.s.runCheck(context.Background(), f.s.log, f.topic)
+
+	if rc.renamedTo != "Want" {
+		t.Errorf("renamedTo = %q, want the remembered Want, not the inner folder", rc.renamedTo)
+	}
+	if containsString(f.topics.seenCalls, "Season 1") {
+		t.Errorf("seen = %v: an inner folder must not be remembered", f.topics.seenCalls)
+	}
+}
+
+// The rename worked; only the start failed. The note must not say otherwise.
+func TestRunCheck_FolderName_StartFails(t *testing.T) {
+	f, rc := renamingFixture(t, torrentTracker(torrentmetatest.Torrent("Show S01", v2Files)))
+	customTopic(f, "Want")
+	rc.startErr = errors.New("<html>boom</html>")
+
+	f.s.runCheck(context.Background(), f.s.log, f.topic)
+
+	body := submittedBody(t, f)
+	if !strings.Contains(body, `Saved in folder "Want".`) ||
+		!strings.Contains(body, "Starting the torrent failed. Start it in your client.") {
+		t.Errorf("body = %q, want the saved note and the start failure", body)
+	}
+	if strings.Contains(body, "renaming the folder failed") || strings.Contains(body, "boom") {
+		t.Errorf("body = %q blames the rename or carries the raw error", body)
 	}
 }
 

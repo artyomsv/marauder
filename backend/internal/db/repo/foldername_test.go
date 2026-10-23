@@ -77,10 +77,10 @@ func TestDeliveries_LatestOther(t *testing.T) {
 
 	topicID, rowID, clientID := uuid.New(), uuid.New(), uuid.New()
 	now := time.Date(2026, 10, 23, 12, 0, 0, 0, time.UTC)
-	mock.ExpectQuery(`SELECT id, topic_id, infohash, label, client_id, delivered_at\s+FROM topic_deliveries\s+WHERE topic_id = \$1 AND infohash <> \$2\s+ORDER BY delivered_at DESC\s+LIMIT 1`).
+	mock.ExpectQuery(`SELECT id, topic_id, infohash, label, client_id, delivered_at, files\s+FROM topic_deliveries\s+WHERE topic_id = \$1 AND infohash <> \$2\s+ORDER BY delivered_at DESC\s+LIMIT 1`).
 		WithArgs(topicID, "own").
-		WillReturnRows(pgxmock.NewRows([]string{"id", "topic_id", "infohash", "label", "client_id", "delivered_at"}).
-			AddRow(rowID, topicID, "prev", "v1", &clientID, now))
+		WillReturnRows(pgxmock.NewRows([]string{"id", "topic_id", "infohash", "label", "client_id", "delivered_at", "files"}).
+			AddRow(rowID, topicID, "prev", "v1", &clientID, now, []byte(`[{"path":"E01.mkv","size":100}]`)))
 
 	got, err := d.LatestOther(context.Background(), topicID, "own")
 	if err != nil {
@@ -88,6 +88,9 @@ func TestDeliveries_LatestOther(t *testing.T) {
 	}
 	if got == nil || got.Infohash != "prev" || got.ClientID == nil || *got.ClientID != clientID {
 		t.Errorf("LatestOther = %+v, want the prev row on the client", got)
+	}
+	if got != nil && (len(got.Files) != 1 || got.Files[0] != (domain.TorrentFile{Path: "E01.mkv", Size: 100})) {
+		t.Errorf("LatestOther files = %+v, want the stored list", got.Files)
 	}
 }
 

@@ -51,24 +51,30 @@ func TestRecheck_SendsAList(t *testing.T) {
 	}
 }
 
-func TestBytesDone_ReadsTotalDone(t *testing.T) {
-	srv, calls := newSelectServer(t, `{"total_done":2048}`)
-	p := &plugin{sessions: map[string]*session{}}
-	got, err := p.BytesDone(context.Background(), delugeCfg(srv.URL), "abc")
-	if err != nil || got != 2048 {
-		t.Errorf("BytesDone = (%d, %v), want (2048, nil)", got, err)
-	}
-	call := lastCall(calls, "core.get_torrent_status")
-	if call == nil || !reflect.DeepEqual(call["params"], []any{"abc", []any{"total_done"}}) {
-		t.Errorf("call = %v, want get_torrent_status for total_done", call)
+func TestDiskState_ReadsTotalDoneAndState(t *testing.T) {
+	for _, tc := range []struct {
+		state       string
+		wantStopped bool
+	}{{"Paused", true}, {"Downloading", false}, {"Checking", false}, {"Queued", false}} {
+		srv, calls := newSelectServer(t, `{"total_done":2048,"state":"`+tc.state+`"}`)
+		p := &plugin{sessions: map[string]*session{}}
+		got, err := p.DiskState(context.Background(), delugeCfg(srv.URL), "abc")
+		want := registry.DiskState{BytesOnDisk: 2048, Stopped: tc.wantStopped}
+		if err != nil || got != want {
+			t.Errorf("state %s: DiskState = (%+v, %v), want (%+v, nil)", tc.state, got, err, want)
+		}
+		call := lastCall(calls, "core.get_torrent_status")
+		if call == nil || !reflect.DeepEqual(call["params"], []any{"abc", []any{"total_done", "state"}}) {
+			t.Errorf("call = %v, want get_torrent_status for total_done and state", call)
+		}
 	}
 }
 
 // Deluge answers an unknown torrent id with an empty status dictionary.
-func TestBytesDone_UnknownTorrentIsAnError(t *testing.T) {
+func TestDiskState_UnknownTorrentIsAnError(t *testing.T) {
 	srv, _ := newSelectServer(t, `{}`)
 	p := &plugin{sessions: map[string]*session{}}
-	if _, err := p.BytesDone(context.Background(), delugeCfg(srv.URL), "abc"); err == nil {
-		t.Error("BytesDone for an unknown torrent = nil error, want one")
+	if _, err := p.DiskState(context.Background(), delugeCfg(srv.URL), "abc"); err == nil {
+		t.Error("DiskState for an unknown torrent = nil error, want one")
 	}
 }

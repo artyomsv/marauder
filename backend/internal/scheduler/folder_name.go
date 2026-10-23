@@ -43,6 +43,7 @@ const (
 	folderUnreadable  = "unreadable"
 	folderNoRoot      = "no_root"
 	folderHasData     = "has_data"
+	folderRunning     = "running"
 	folderUnsupported = "unsupported"
 	folderFailed      = "failed"
 )
@@ -148,7 +149,10 @@ func (s *Scheduler) keepFolderName(ctx context.Context, log zerolog.Logger, t *d
 		log.Debug().Err(err).Msg("folder name: could not read the previous torrent's files")
 		return t.FolderNameSeen
 	}
-	root, ok := torrentmeta.ClientRoot(files, nil)
+	// The previous delivery's own file list (nil when unknown) confirms the
+	// folder: a client set to "no subfolder" shows a torrent whose files share
+	// one inner folder as if that were the top folder.
+	root, ok := torrentmeta.ClientRoot(files, prev.Files)
 	if !ok {
 		return t.FolderNameSeen
 	}
@@ -157,8 +161,10 @@ func (s *Scheduler) keepFolderName(ctx context.Context, log zerolog.Logger, t *d
 }
 
 // applyFolderName renames the just-added torrent's top folder and rechecks
-// it. It returns the client's file list as it is afterwards, the note, and
-// ok=false when a step failed and the torrent must stay paused.
+// it. It returns the client's file list as last read (after the rename when
+// that worked), the note, and ok=false when a step failed and the torrent
+// must stay paused. The list comes back on failure too, so the update policy
+// can still skip the old files of a torrent the user is told to start.
 func (s *Scheduler) applyFolderName(ctx context.Context, log zerolog.Logger, clientName string, rawConfig []byte, fp *folderPlan, clientFiles []domain.ClientFile) ([]domain.ClientFile, string, bool) {
 	root, hasRoot := torrentmeta.ClientRoot(clientFiles, fp.manifest)
 	if !hasRoot {
@@ -169,26 +175,34 @@ func (s *Scheduler) applyFolderName(ctx context.Context, log zerolog.Logger, cli
 		s.countFolder(log, clientName, folderSameName)
 		return clientFiles, savedNote(fp.want), true
 	}
-	done, err := fp.renamer.BytesDone(ctx, rawConfig, fp.hash)
+	// Only a stopped torrent with nothing on disk is renamed. A retried
+	// delivery is a duplicate add, which no client pauses, so the torrent may
+	// be running and write its first piece between this read and the rename.
+	state, err := fp.renamer.DiskState(ctx, rawConfig, fp.hash)
 	if err != nil {
-		return nil, s.folderFailed(log, clientName, "could not read the torrent's progress", err), false
+		return clientFiles, s.folderFailed(log, clientName, "could not read the torrent's progress", err), false
 	}
-	if done > 0 {
+	if !state.Stopped {
+		s.countFolder(log, clientName, folderRunning)
+		return clientFiles, cannotNote(fp.want, "the torrent is already running"), true
+	}
+	if state.BytesOnDisk > 0 {
 		s.countFolder(log, clientName, folderHasData)
 		return clientFiles, cannotNote(fp.want, "the torrent already has data on disk"), true
 	}
 	if err := fp.renamer.RenameRoot(ctx, rawConfig, fp.hash, root, fp.want); err != nil {
-		return nil, s.folderFailed(log, clientName, "renaming failed", err), false
+		return clientFiles, s.folderFailed(log, clientName, "renaming failed", err), false
 	}
 	renamed, err := fp.selector.Files(ctx, rawConfig, fp.hash)
 	if err == nil && len(renamed) == 0 {
 		err = errors.New("the client listed no files after the rename")
 	}
 	if err != nil {
-		return nil, s.folderFailed(log, clientName, "could not list the renamed files", err), false
+		// Indices do not change with a rename, so the old list still selects.
+		return clientFiles, s.folderFailed(log, clientName, "could not list the renamed files", err), false
 	}
 	if err := fp.renamer.Recheck(ctx, rawConfig, fp.hash); err != nil {
-		return nil, s.folderFailed(log, clientName, "rechecking failed", err), false
+		return renamed, s.folderFailed(log, clientName, "rechecking failed", err), false
 	}
 	s.countFolder(log, clientName, folderRenamed)
 	return renamed, savedNote(fp.want), true

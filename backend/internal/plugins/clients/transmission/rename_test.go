@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strconv"
 	"testing"
 
 	"github.com/artyomsv/marauder/backend/internal/plugins/registry"
@@ -56,24 +57,30 @@ func TestRecheck_SendsTorrentVerify(t *testing.T) {
 	}
 }
 
-// Bytes on disk are what can be overwritten, so BytesDone counts verified
-// and unverified data, not what was ever downloaded.
-func TestBytesDone_SumsHaveValidAndUnchecked(t *testing.T) {
-	srv, calls := newSelectServer(t, `[{"hashString":"abc","haveValid":1000,"haveUnchecked":24}]`)
-	got, err := newPlugin().BytesDone(context.Background(), []byte(`{"url":"`+srv.URL+`"}`), "abc")
-	if err != nil || got != 1024 {
-		t.Errorf("BytesDone = (%d, %v), want (1024, nil)", got, err)
-	}
-	args, _ := (*calls)[len(*calls)-1]["arguments"].(map[string]any)
-	raw, _ := json.Marshal(args["fields"])
-	if string(raw) != `["haveValid","haveUnchecked"]` {
-		t.Errorf("fields = %s, want haveValid and haveUnchecked", raw)
+// Bytes on disk are what can be overwritten, so DiskState counts verified
+// and unverified data, not what was ever downloaded. Status 0 is stopped.
+func TestDiskState_SumsHaveAndReadsStatus(t *testing.T) {
+	for _, tc := range []struct {
+		status      int
+		wantStopped bool
+	}{{0, true}, {2, false}, {4, false}, {6, false}} {
+		srv, calls := newSelectServer(t, `[{"hashString":"abc","haveValid":1000,"haveUnchecked":24,"status":`+strconv.Itoa(tc.status)+`}]`)
+		got, err := newPlugin().DiskState(context.Background(), []byte(`{"url":"`+srv.URL+`"}`), "abc")
+		want := registry.DiskState{BytesOnDisk: 1024, Stopped: tc.wantStopped}
+		if err != nil || got != want {
+			t.Errorf("status %d: DiskState = (%+v, %v), want (%+v, nil)", tc.status, got, err, want)
+		}
+		args, _ := (*calls)[len(*calls)-1]["arguments"].(map[string]any)
+		raw, _ := json.Marshal(args["fields"])
+		if string(raw) != `["haveValid","haveUnchecked","status"]` {
+			t.Errorf("fields = %s, want haveValid, haveUnchecked and status", raw)
+		}
 	}
 }
 
-func TestBytesDone_UnknownTorrentIsAnError(t *testing.T) {
+func TestDiskState_UnknownTorrentIsAnError(t *testing.T) {
 	srv, _ := newSelectServer(t, `[]`)
-	if _, err := newPlugin().BytesDone(context.Background(), []byte(`{"url":"`+srv.URL+`"}`), "abc"); err == nil {
-		t.Error("BytesDone for an unknown torrent = nil error, want one")
+	if _, err := newPlugin().DiskState(context.Background(), []byte(`{"url":"`+srv.URL+`"}`), "abc"); err == nil {
+		t.Error("DiskState for an unknown torrent = nil error, want one")
 	}
 }

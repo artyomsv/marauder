@@ -206,7 +206,7 @@ func (s *Scheduler) finishDelivery(ctx context.Context, log zerolog.Logger, t *d
 	fp := plan.folder
 	if !fp.renames() {
 		return joinNotes(
-			s.finishUpdatePolicy(ctx, log, t, clientName, rawConfig, plan, nil),
+			s.finishUpdatePolicy(ctx, log, t, clientName, rawConfig, plan, nil, true),
 			s.folderCannotApply(log, clientName, fp))
 	}
 	ctx, cancel := context.WithTimeout(ctx, folderSelectionTimeout)
@@ -216,24 +216,29 @@ func (s *Scheduler) finishDelivery(ctx context.Context, log zerolog.Logger, t *d
 		return s.folderFailed(log, clientName, "could not list the files", err)
 	}
 	clientFiles, folderNote, ok := s.applyFolderName(ctx, log, clientName, rawConfig, fp, clientFiles)
-	if !ok {
-		return folderNote
+	// The update policy runs even when the rename failed: the note tells the
+	// user to start the torrent, and its old files must be skipped by then.
+	// It may start the torrent only when the folder step did not fail.
+	policyNote := s.finishUpdatePolicy(ctx, log, t, clientName, rawConfig, plan, clientFiles, ok)
+	if !ok || plan.paused {
+		return joinNotes(policyNote, folderNote)
 	}
-	policyNote := s.finishUpdatePolicy(ctx, log, t, clientName, rawConfig, plan, clientFiles)
-	if !plan.paused {
-		if err := fp.selector.Start(ctx, rawConfig, fp.hash); err != nil {
-			return joinNotes(policyNote, s.folderFailed(log, clientName, "starting the torrent failed", err))
-		}
+	if err := fp.selector.Start(ctx, rawConfig, fp.hash); err != nil {
+		log.Warn().Err(err).Str("client", clientName).Str("result", folderFailed).Str("step", "start").
+			Msg("folder name applied but starting the torrent failed; torrent left paused")
+		metrics.SchedulerFolderRenameTotal.WithLabelValues(clientName, folderFailed).Inc()
+		return joinNotes(policyNote, folderNote, "Starting the torrent failed. Start it in your client.")
 	}
 	return joinNotes(policyNote, folderNote)
 }
 
 // finishUpdatePolicy is the update policy's part of finishDelivery. clientFiles
-// is the client's file list when finishDelivery already read it, else nil.
-func (s *Scheduler) finishUpdatePolicy(ctx context.Context, log zerolog.Logger, t *domain.Topic, clientName string, rawConfig []byte, plan deliveryPlan, clientFiles []domain.ClientFile) string {
+// is the client's file list when finishDelivery already read it, else nil;
+// mayStart is false when a failed folder rename keeps the torrent paused.
+func (s *Scheduler) finishUpdatePolicy(ctx context.Context, log zerolog.Logger, t *domain.Topic, clientName string, rawConfig []byte, plan deliveryPlan, clientFiles []domain.ClientFile, mayStart bool) string {
 	switch {
 	case plan.selection != nil:
-		note, ok := s.selectNewFiles(ctx, log, t, clientName, rawConfig, plan.selection, clientFiles)
+		note, ok := s.selectNewFiles(ctx, log, t, clientName, rawConfig, plan.selection, clientFiles, mayStart)
 		if ok {
 			s.storeSelectedFiles(ctx, log, t.ID, plan.selection.hash, plan.files)
 		}
@@ -256,8 +261,9 @@ func (s *Scheduler) finishUpdatePolicy(ctx context.Context, log zerolog.Logger, 
 // ok reports that the selection took effect — the old files are skipped and
 // the new ones wanted — which is what makes the file list a baseline.
 // clientFiles is the client's list when the caller already waited for it
-// (a folder rename), else nil and it is waited for here.
-func (s *Scheduler) selectNewFiles(ctx context.Context, log zerolog.Logger, t *domain.Topic, clientName string, rawConfig []byte, sel *fileSelection, clientFiles []domain.ClientFile) (note string, ok bool) {
+// (a folder rename), else nil and it is waited for here. mayStart false
+// leaves the torrent paused with the selection applied, as add-paused does.
+func (s *Scheduler) selectNewFiles(ctx context.Context, log zerolog.Logger, t *domain.Topic, clientName string, rawConfig []byte, sel *fileSelection, clientFiles []domain.ClientFile, mayStart bool) (note string, ok bool) {
 	total := len(sel.files)
 	newCount := total - len(sel.skip)
 	noNewFiles := func() (string, bool) {
@@ -307,7 +313,7 @@ func (s *Scheduler) selectNewFiles(ctx context.Context, log zerolog.Logger, t *d
 	if newCount == 0 {
 		return noNewFiles()
 	}
-	if t.AddPausedOnUpdate {
+	if t.AddPausedOnUpdate || !mayStart {
 		log.Info().Str("client", clientName).Str("result", selSelected).
 			Int("new", newCount).Int("total", total).
 			Msg("only-new-files: new files selected; torrent left paused")

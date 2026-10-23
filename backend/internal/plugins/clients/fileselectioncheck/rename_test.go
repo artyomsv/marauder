@@ -119,9 +119,10 @@ func TestRenameOnRealClients(t *testing.T) {
 			if !ok || root != trackerName {
 				t.Fatalf("ClientRoot(%+v) = (%q, %v), want (%q, true)", listed, root, ok, trackerName)
 			}
-			done, err := ren.BytesDone(ctx, raw, hash)
-			if err != nil || done != 0 {
-				t.Fatalf("BytesDone before rename = (%d, %v), want (0, nil)", done, err)
+			// The scheduler renames only a stopped torrent with nothing on disk.
+			state, err := ren.DiskState(ctx, raw, hash)
+			if err != nil || state != (registry.DiskState{BytesOnDisk: 0, Stopped: true}) {
+				t.Fatalf("DiskState before rename = (%+v, %v), want stopped with 0 bytes", state, err)
 			}
 
 			// 2. Rename onto the folder that holds the data, read the list back.
@@ -143,8 +144,8 @@ func TestRenameOnRealClients(t *testing.T) {
 				t.Fatalf("Start: %v", err)
 			}
 			waitFor(t, ctx, func() bool {
-				done, err = ren.BytesDone(ctx, raw, hash)
-				return err == nil && done == total
+				state, err = ren.DiskState(ctx, raw, hash)
+				return err == nil && state.BytesOnDisk == total
 			}, fmt.Sprintf("recheck to find all %d bytes in the renamed folder", total))
 			stopped := stateProbe(t, tg, raw)
 			waitFor(t, ctx, func() bool {

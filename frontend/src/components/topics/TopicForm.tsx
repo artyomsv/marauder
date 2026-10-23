@@ -309,7 +309,9 @@ export function TopicForm({
     setDelivery((d) => ({ ...d, ...v, replaceDeleteData: v.folderNameMode === "default" && d.replaceDeleteData }));
 
   const episodic = !!match?.supports_episode_filter;
-  const folderNameSet = !episodic && delivery.folderNameMode !== "default";
+  // Hidden (and sent as default) for per-episode trackers and notify-only topics.
+  const folderNameHidden = episodic || delivery.notifyOnly;
+  const folderNameSet = !folderNameHidden && delivery.folderNameMode !== "default";
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     onSubmit({
@@ -330,8 +332,8 @@ export function TopicForm({
       addPausedOnUpdate: !episodic && delivery.addPausedOnUpdate,
       onlyNewFiles: !episodic && delivery.onlyNewFiles,
       checkIntervalSec: delivery.checkIntervalSec,
-      // Hidden for per-episode trackers, like the update policy above.
-      folderNameMode: episodic ? "default" : delivery.folderNameMode,
+      // Hidden for per-episode trackers and notify-only topics.
+      folderNameMode: folderNameHidden ? "default" : delivery.folderNameMode,
       folderName: delivery.folderName,
     });
   };

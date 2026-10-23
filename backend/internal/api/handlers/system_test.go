@@ -32,8 +32,8 @@ func (f *fakeRenamingClient) RenameRoot(context.Context, []byte, string, string,
 	return nil
 }
 func (f *fakeRenamingClient) Recheck(context.Context, []byte, string) error { return nil }
-func (f *fakeRenamingClient) BytesDone(context.Context, []byte, string) (int64, error) {
-	return 0, nil
+func (f *fakeRenamingClient) DiskState(context.Context, []byte, string) (registry.DiskState, error) {
+	return registry.DiskState{}, nil
 }
 
 // Renaming needs the client's file list too, so a client without file

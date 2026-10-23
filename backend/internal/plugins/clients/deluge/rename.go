@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/artyomsv/marauder/backend/internal/plugins/registry"
 )
 
 // RenameRoot implements registry.WithRename via core.rename_folder
@@ -19,28 +21,31 @@ func (p *plugin) Recheck(ctx context.Context, rawConfig []byte, hash string) err
 	return p.simpleCall(ctx, rawConfig, "core.force_recheck", []any{[]string{hash}})
 }
 
-// BytesDone implements registry.WithRename: total_done, the bytes on disk.
-func (p *plugin) BytesDone(ctx context.Context, rawConfig []byte, hash string) (int64, error) {
+// DiskState implements registry.WithRename: total_done, the bytes on disk,
+// and state. Deluge's "paused" flag clears before the state does after a
+// resume, so only state "Paused" counts as stopped.
+func (p *plugin) DiskState(ctx context.Context, rawConfig []byte, hash string) (registry.DiskState, error) {
 	var c Config
 	if err := json.Unmarshal(rawConfig, &c); err != nil {
-		return 0, fmt.Errorf("bad config: %w", err)
+		return registry.DiskState{}, fmt.Errorf("bad config: %w", err)
 	}
 	s, err := p.session(ctx, c)
 	if err != nil {
-		return 0, err
+		return registry.DiskState{}, err
 	}
-	out, err := p.call(ctx, s, c.URL, "core.get_torrent_status", []any{hash, []string{"total_done"}})
+	out, err := p.call(ctx, s, c.URL, "core.get_torrent_status", []any{hash, []string{"total_done", "state"}})
 	if err != nil {
-		return 0, err
+		return registry.DiskState{}, err
 	}
 	// An unknown torrent id is an empty dictionary, so a missing key is
 	// "not found", not 0 bytes.
 	status, _ := out["result"].(map[string]any)
 	done, ok := status["total_done"].(float64)
 	if !ok {
-		return 0, errors.New("torrent not found")
+		return registry.DiskState{}, errors.New("torrent not found")
 	}
-	return int64(done), nil
+	state, _ := status["state"].(string)
+	return registry.DiskState{BytesOnDisk: int64(done), Stopped: state == "Paused"}, nil
 }
 
 func (p *plugin) simpleCall(ctx context.Context, rawConfig []byte, method string, params []any) error {

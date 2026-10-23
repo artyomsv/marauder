@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+
+	"github.com/artyomsv/marauder/backend/internal/plugins/registry"
 )
 
 // RenameRoot implements registry.WithRename via torrents/renameFolder
@@ -27,43 +29,47 @@ func (p *plugin) Recheck(ctx context.Context, rawConfig []byte, hash string) err
 	return p.postForm(ctx, rawConfig, "/api/v2/torrents/recheck", url.Values{"hashes": {hash}})
 }
 
-// BytesDone implements registry.WithRename. It reads "completed" — the bytes
+// DiskState implements registry.WithRename. It reads "completed" — the bytes
 // the client has on disk, found by a check or downloaded — rather than
-// "downloaded", which counts only what came from peers this session.
-func (p *plugin) BytesDone(ctx context.Context, rawConfig []byte, hash string) (int64, error) {
+// "downloaded", which counts only what came from peers this session, and
+// "state": a stopped torrent is "paused*" before qBittorrent 5.0 and
+// "stopped*" since.
+func (p *plugin) DiskState(ctx context.Context, rawConfig []byte, hash string) (registry.DiskState, error) {
 	var cfg Config
 	if err := json.Unmarshal(rawConfig, &cfg); err != nil {
-		return 0, fmt.Errorf("bad config: %w", err)
+		return registry.DiskState{}, fmt.Errorf("bad config: %w", err)
 	}
 	s, err := p.session(ctx, cfg)
 	if err != nil {
-		return 0, err
+		return registry.DiskState{}, err
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
 		strings.TrimRight(cfg.URL, "/")+"/api/v2/torrents/info?hashes="+url.QueryEscape(hash), nil)
 	if err != nil {
-		return 0, err
+		return registry.DiskState{}, err
 	}
 	resp, err := s.client.Do(req)
 	if err != nil {
-		return 0, fmt.Errorf("torrent info: %w", err)
+		return registry.DiskState{}, fmt.Errorf("torrent info: %w", err)
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return 0, fmt.Errorf("qbit read info response (status %d): %w", resp.StatusCode, err)
+		return registry.DiskState{}, fmt.Errorf("qbit read info response (status %d): %w", resp.StatusCode, err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return 0, fmt.Errorf("qbit info status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		return registry.DiskState{}, fmt.Errorf("qbit info status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 	var list []struct {
-		Completed int64 `json:"completed"`
+		Completed int64  `json:"completed"`
+		State     string `json:"state"`
 	}
 	if err := json.Unmarshal(body, &list); err != nil {
-		return 0, fmt.Errorf("decode info: %w", err)
+		return registry.DiskState{}, fmt.Errorf("decode info: %w", err)
 	}
 	if len(list) == 0 {
-		return 0, errors.New("torrent not found")
+		return registry.DiskState{}, errors.New("torrent not found")
 	}
-	return list[0].Completed, nil
+	stopped := strings.HasPrefix(list[0].State, "paused") || strings.HasPrefix(list[0].State, "stopped")
+	return registry.DiskState{BytesOnDisk: list[0].Completed, Stopped: stopped}, nil
 }

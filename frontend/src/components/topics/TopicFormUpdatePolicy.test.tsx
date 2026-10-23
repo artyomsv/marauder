@@ -140,6 +140,31 @@ describe("TopicForm update policy submit", () => {
     });
   });
 
+  // A notify-only topic hides the setting; a hidden, half-filled custom name
+  // must not reach the API (which would answer 422 for the empty name).
+  it("submits the default folder mode for a notify-only topic", async () => {
+    const onSubmit = vi.fn();
+    render(
+      <TopicForm
+        mode="edit"
+        initial={{ ...STORED, onlyNewFiles: false, folderNameMode: "custom", folderName: "" }}
+        submitLabel="Save"
+        heading="Edit topic"
+        isPending={false}
+        error={null}
+        onClose={() => {}}
+        onSubmit={onSubmit}
+      />,
+      { wrapper: wrap() },
+    );
+
+    await userEvent.click(await screen.findByLabelText(/notify only — do not download/i));
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(onSubmit.mock.calls[0][0]).toMatchObject({ notifyOnly: true, folderNameMode: "default" });
+  });
+
   it("submits the default folder mode for a per-episode tracker", async () => {
     mockApi.get.mockImplementation((path: string) => {
       if (path.startsWith("/trackers/match"))
