@@ -117,6 +117,15 @@ func (s *Scheduler) planFolderName(ctx context.Context, log zerolog.Logger, t *d
 		s.rememberFolderName(ctx, log, t, want)
 		return nil
 	}
+	// The rename needs the torrent's own file list to tell its top folder
+	// from an inner one. planDelivery drops the list above maxStoredFiles,
+	// a storage cap only, so read it here when it is missing.
+	if files == nil {
+		if files, err = torrentmeta.Files(payload.TorrentFile); err != nil {
+			log.Debug().Err(err).Msg("folder name: could not read the torrent's file list")
+			return cannot(folderUnreadable, "could not read the torrent")
+		}
+	}
 	renamer, canRename := clientPlugin.(registry.WithRename)
 	selector, canSelect := clientPlugin.(registry.WithFileSelection)
 	if !canRename || !canSelect {

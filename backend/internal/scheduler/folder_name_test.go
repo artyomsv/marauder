@@ -3,6 +3,7 @@ package scheduler
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -208,7 +209,7 @@ func TestRunCheck_FolderName_Keep_ReadsPreviousTorrent(t *testing.T) {
 	f, rc := renamingFixture(t, torrentTracker(torrentmetatest.Torrent("Show S01", v2Files)))
 	f.topic.FolderNameMode = domain.FolderNameKeep
 	cid := f.clients.client.ID
-	f.deliveries.history = []*domain.TopicDelivery{{Infohash: "prev", ClientID: &cid}}
+	f.deliveries.history = []*domain.TopicDelivery{{Infohash: "prev", ClientID: &cid, Files: v1Files}}
 	rc.filesByHash = map[string][]domain.ClientFile{"prev": {{Index: 0, Path: "Want/E01.mkv", Size: 100}}}
 
 	f.s.runCheck(context.Background(), f.s.log, f.topic)
@@ -236,8 +237,8 @@ func TestRunCheck_FolderName_Keep_ExcludesOwnHash(t *testing.T) {
 	f.topic.FolderNameMode = domain.FolderNameKeep
 	cid := f.clients.client.ID
 	f.deliveries.history = []*domain.TopicDelivery{
-		{Infohash: "prev", ClientID: &cid},
-		{Infohash: own, ClientID: &cid},
+		{Infohash: "prev", ClientID: &cid, Files: v1Files},
+		{Infohash: own, ClientID: &cid, Files: v2Files},
 	}
 	rc.filesByHash = map[string][]domain.ClientFile{"prev": {{Index: 0, Path: "Want/E01.mkv", Size: 100}}}
 
@@ -419,7 +420,7 @@ func TestRunCheck_FolderName_Keep_RemembersNameWithoutRename(t *testing.T) {
 	f, rc := renamingFixture(t, torrentTracker(torrentmetatest.Torrent("Show S01", v2Files)))
 	f.topic.FolderNameMode = domain.FolderNameKeep
 	cid := f.clients.client.ID
-	f.deliveries.history = []*domain.TopicDelivery{{Infohash: "prev", ClientID: &cid}}
+	f.deliveries.history = []*domain.TopicDelivery{{Infohash: "prev", ClientID: &cid, Files: v1Files}}
 	rc.filesByHash = map[string][]domain.ClientFile{"prev": {{Index: 0, Path: "Show S01/E01.mkv", Size: 100}}}
 
 	f.s.runCheck(context.Background(), f.s.log, f.topic)
@@ -570,6 +571,50 @@ func TestRunCheck_FolderName_WithAddPaused_RechecksWithoutStart(t *testing.T) {
 
 	if want := []string{"Files", "DiskState", "RenameRoot", "Files", "Recheck"}; !reflect.DeepEqual(rc.calls, want) {
 		t.Errorf("calls = %v, want %v", rc.calls, want)
+	}
+}
+
+// Without the previous delivery's file list (a magnet, a row from before
+// migration 0017) keep mode cannot tell the folder from an inner folder, so it
+// does not learn one from the client (PR #226 review).
+func TestRunCheck_FolderName_Keep_NoStoredListUsesRememberedName(t *testing.T) {
+	f, rc := renamingFixture(t, torrentTracker(torrentmetatest.Torrent("Show S01", v2Files)))
+	f.topic.FolderNameMode = domain.FolderNameKeep
+	f.topic.FolderNameSeen = "Want"
+	cid := f.clients.client.ID
+	f.deliveries.history = []*domain.TopicDelivery{{Infohash: "prev", ClientID: &cid}}
+	rc.filesByHash = map[string][]domain.ClientFile{"prev": {{Index: 0, Path: "Season 1/E01.mkv", Size: 100}}}
+
+	f.s.runCheck(context.Background(), f.s.log, f.topic)
+
+	if rc.renamedTo != "Want" || len(f.topics.seenCalls) != 0 {
+		t.Errorf("renamedTo=%q seen=%v, want the remembered Want and nothing learned", rc.renamedTo, f.topics.seenCalls)
+	}
+}
+
+// A torrent above the 5000-file storage cap has no stored list, but the
+// rename still checks the client's folder against the torrent's own list: a
+// "no subfolder" client showing every file under Extras/ is not renamed
+// (PR #226 review).
+func TestRunCheck_FolderName_LargeTorrentChecksItsOwnList(t *testing.T) {
+	manifest := make([]domain.TorrentFile, maxStoredFiles+1)
+	client := make([]domain.ClientFile, len(manifest))
+	for i := range manifest {
+		p := fmt.Sprintf("Extras/f%05d.bin", i)
+		manifest[i] = domain.TorrentFile{Path: p, Size: 1}
+		client[i] = domain.ClientFile{Index: i, Path: p, Size: 1}
+	}
+	f, rc := renamingFixture(t, torrentTracker(torrentmetatest.Torrent("Pack", manifest)))
+	customTopic(f, "Want")
+	rc.filesSeq = [][]domain.ClientFile{client}
+
+	f.s.runCheck(context.Background(), f.s.log, f.topic)
+
+	if containsString(rc.calls, "RenameRoot") {
+		t.Errorf("renamed %q -> %q: an inner folder must never be renamed", rc.renamedFrom, rc.renamedTo)
+	}
+	if body := submittedBody(t, f); !strings.Contains(body, `Could not use folder name "Want"`) {
+		t.Errorf("body = %q, want the cannot-apply note", body)
 	}
 }
 

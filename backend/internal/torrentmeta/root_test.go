@@ -52,11 +52,13 @@ func TestClientRoot(t *testing.T) {
 		wantOK   bool
 	}{
 		{"rooted", cf("Show/E01.mkv", "Show/E02.mkv"), manifest, "Show", true},
-		{"rooted, no manifest", cf("Show/E01.mkv", "Show/E02.mkv"), nil, "Show", true},
+		// Without the torrent's file list the shape cannot tell a top folder
+		// from an inner folder of a "no subfolder" layout (PR #226 review).
+		{"rooted, no manifest", cf("Show/E01.mkv", "Show/E02.mkv"), nil, "", false},
 		{"verbatim", cf("E01.mkv", "E02.mkv"), manifest, "", false},
-		{"mixed roots", cf("A/E01.mkv", "B/E02.mkv"), nil, "", false},
-		{"one file at the top", cf("Show/E01.mkv", "E02.mkv"), nil, "", false},
-		{"empty", nil, nil, "", false},
+		{"mixed roots", cf("A/E01.mkv", "B/E02.mkv"), manifest, "", false},
+		{"one file at the top", cf("Show/E01.mkv", "E02.mkv"), manifest, "", false},
+		{"empty", nil, manifest, "", false},
 		// A client with "no subfolder" shows the torrent's own inner folder
 		// first; it looks rooted, but the manifest says it is not.
 		{"inner folder, verbatim", cf("Extras/E01.mkv", "Extras/E02.mkv"),
