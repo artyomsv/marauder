@@ -199,9 +199,9 @@ func (s *Scheduler) latestFiles(ctx context.Context, log zerolog.Logger, topicID
 
 // finishDelivery runs after a successful Add and returns the note for the
 // download.submitted notification ("" for a plain delivery). With a folder
-// rename it waits once for the client's file list, renames, then runs the
-// update policy on the list as it is after the rename, and starts the torrent
-// itself when only the rename paused it.
+// rename it waits once for the client's file list, renames, runs the update
+// policy on the list as it is after the rename, starts the torrent itself when
+// only the rename paused it, and rechecks it last.
 func (s *Scheduler) finishDelivery(ctx context.Context, log zerolog.Logger, t *domain.Topic, clientName string, rawConfig []byte, plan deliveryPlan) string {
 	fp := plan.folder
 	if !fp.renames() {
@@ -220,16 +220,22 @@ func (s *Scheduler) finishDelivery(ctx context.Context, log zerolog.Logger, t *d
 	// user to start the torrent, and its old files must be skipped by then.
 	// It may start the torrent only when the folder step did not fail.
 	policyNote := s.finishUpdatePolicy(ctx, log, t, clientName, rawConfig, plan, clientFiles, ok)
-	if !ok || plan.paused {
-		return joinNotes(policyNote, folderNote)
+	startNote := ""
+	if ok && !plan.paused {
+		startNote = s.startRenamed(ctx, log, clientName, rawConfig, fp)
 	}
+	return joinNotes(policyNote, folderNote, startNote, s.recheckRenamed(ctx, log, clientName, rawConfig, fp))
+}
+
+// startRenamed starts a torrent that only the folder rename paused.
+func (s *Scheduler) startRenamed(ctx context.Context, log zerolog.Logger, clientName string, rawConfig []byte, fp *folderPlan) string {
 	if err := fp.selector.Start(ctx, rawConfig, fp.hash); err != nil {
 		log.Warn().Err(err).Str("client", clientName).Str("result", folderFailed).Str("step", "start").
 			Msg("folder name applied but starting the torrent failed; torrent left paused")
 		metrics.SchedulerFolderRenameTotal.WithLabelValues(clientName, folderFailed).Inc()
-		return joinNotes(policyNote, folderNote, "Starting the torrent failed. Start it in your client.")
+		return "Starting the torrent failed. Start it in your client."
 	}
-	return joinNotes(policyNote, folderNote)
+	return ""
 }
 
 // finishUpdatePolicy is the update policy's part of finishDelivery. clientFiles

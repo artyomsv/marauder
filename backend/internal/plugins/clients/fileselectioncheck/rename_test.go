@@ -120,9 +120,19 @@ func TestRenameOnRealClients(t *testing.T) {
 				t.Fatalf("ClientRoot(%+v) = (%q, %v), want (%q, true)", listed, root, ok, trackerName)
 			}
 			// The scheduler renames only a stopped torrent with nothing on disk.
-			state, err := ren.DiskState(ctx, raw, hash)
-			if err != nil || state != (registry.DiskState{BytesOnDisk: 0, Stopped: true}) {
-				t.Fatalf("DiskState before rename = (%+v, %v), want stopped with 0 bytes", state, err)
+			// Right after a paused add a client may still be checking it; log
+			// how long that lasts.
+			var state registry.DiskState
+			addedAt := time.Now()
+			probe := stateProbe(t, tg, raw)
+			waitFor(t, ctx, func() bool {
+				state, err = ren.DiskState(ctx, raw, hash)
+				probe(ctx, hash)
+				return err == nil && state.Stopped
+			}, "torrent to report stopped after the paused add")
+			t.Logf("stopped %v after the add", time.Since(addedAt).Round(100*time.Millisecond))
+			if state.BytesOnDisk != 0 {
+				t.Fatalf("DiskState before rename = %+v, want 0 bytes", state)
 			}
 
 			// 2. Rename onto the folder that holds the data, read the list back.
@@ -136,12 +146,14 @@ func TestRenameOnRealClients(t *testing.T) {
 			}, "client to list the renamed folder")
 			t.Logf("files after rename: %+v", listed)
 
-			// 3. Recheck, and start while it may still be running.
-			if err := ren.Recheck(ctx, raw, hash); err != nil {
-				t.Fatalf("Recheck: %v", err)
-			}
+			// 3. Start, then recheck last: a client keeps a torrent's running
+			// or stopped state through a recheck, while qBittorrent drops a
+			// start sent during one (measured: 5.2.1 and 5.1.4 stayed stopped).
 			if err := sel.Start(ctx, raw, hash); err != nil {
 				t.Fatalf("Start: %v", err)
+			}
+			if err := ren.Recheck(ctx, raw, hash); err != nil {
+				t.Fatalf("Recheck: %v", err)
 			}
 			waitFor(t, ctx, func() bool {
 				state, err = ren.DiskState(ctx, raw, hash)
@@ -151,7 +163,7 @@ func TestRenameOnRealClients(t *testing.T) {
 			waitFor(t, ctx, func() bool {
 				s, ok := stopped(ctx, hash)
 				return ok && !s
-			}, "torrent to leave the stopped state (a start sent during the recheck kept)")
+			}, "torrent to leave the stopped state (a start sent before the recheck kept)")
 
 			// 4. Renaming to the name it already has: the scheduler never does
 			// this (same_name skips it); record what the client says.

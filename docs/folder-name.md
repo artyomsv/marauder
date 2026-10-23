@@ -34,9 +34,9 @@ settings.
 1. Marauder adds the torrent to the client **paused**.
 2. It waits until the client lists the torrent's files.
 3. It renames the torrent's top folder.
-4. It asks the client to **recheck** the torrent, so the client finds the files
+4. It starts the torrent (unless "Add updates paused" keeps it paused).
+5. It asks the client to **recheck** the torrent, so the client finds the files
    already in that folder. Only the parts that changed download.
-5. It starts the torrent (unless "Add updates paused" keeps it paused).
 
 The notification ends with `Saved in folder "<name>".`
 

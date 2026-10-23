@@ -263,12 +263,17 @@ root already the wanted name → `same_name` (the retry case — no rename, no
 recheck); not stopped → `running` and bytes on disk → `has_data`: **only a
 stopped torrent with nothing on disk is renamed** (a rename is a per-file move
 that could overwrite the previous version's files, and a retried duplicate add
-is never paused by the client); else `RenameRoot`, re-read `Files`, `Recheck`.
-The only-new-files selection then runs on the list as last read
+is never paused by the client; `waitForStopped` first polls up to
+`stoppedWait` (10s), because right after a paused add qBittorrent and
+Transmission 4.0 report "checking" for 0.5-1.5s); else `RenameRoot`, re-read
+`Files`. The only-new-files selection then runs on the list as last read
 (`selectNewFiles` takes it) — **also when the rename failed**, with
 `mayStart=false`, because the note tells the user to start the torrent and the
 old files must already be skipped. The scheduler starts the torrent itself when
-only the rename paused it. A failed step leaves it paused with a note naming
+only the rename paused it, and **`Recheck` comes last, after any start**:
+qBittorrent drops a start sent during a recheck, while every client keeps the
+running or stopped state through one (all measured on the clientcheck matrix,
+2026-10-23). A failed step leaves it paused with a note naming
 the step, never fails the check. Notes join policy-first. Metric
 `marauder_scheduler_folder_rename_total{client,result}`. `topics.ValidUpdatePolicy`
 refuses a folder name with replace-on-update **and** delete-data (422): both

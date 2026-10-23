@@ -34,6 +34,12 @@ const (
 	folderReadTimeout = 10 * time.Second
 )
 
+// stoppedWait is how long a just-added torrent may report something other
+// than stopped before it is treated as running: right after a paused add,
+// qBittorrent and Transmission 4.0 report it checking for 0.5-1.5s (measured
+// 2026-10-23). A var so tests can shorten it.
+var stoppedWait = 10 * time.Second
+
 // Folder rename metric results (marauder_scheduler_folder_rename_total).
 const (
 	folderRenamed     = "renamed"
@@ -65,8 +71,11 @@ type folderPlan struct {
 	// client's top folder (torrentmeta.ClientRoot).
 	manifest []domain.TorrentFile
 	want     string
-	result   string
-	note     string
+	// renamed is set once RenameRoot succeeded; finishDelivery then
+	// rechecks the torrent as its last step.
+	renamed bool
+	result  string
+	note    string
 }
 
 // renames reports whether the plan renames after Add.
@@ -160,11 +169,12 @@ func (s *Scheduler) keepFolderName(ctx context.Context, log zerolog.Logger, t *d
 	return root
 }
 
-// applyFolderName renames the just-added torrent's top folder and rechecks
-// it. It returns the client's file list as last read (after the rename when
-// that worked), the note, and ok=false when a step failed and the torrent
-// must stay paused. The list comes back on failure too, so the update policy
-// can still skip the old files of a torrent the user is told to start.
+// applyFolderName renames the just-added torrent's top folder; the recheck
+// comes last, in finishDelivery, after any start. It returns the client's file
+// list as last read (after the rename when that worked), the note, and
+// ok=false when a step failed and the torrent must stay paused. The list comes
+// back on failure too, so the update policy can still skip the old files of a
+// torrent the user is told to start.
 func (s *Scheduler) applyFolderName(ctx context.Context, log zerolog.Logger, clientName string, rawConfig []byte, fp *folderPlan, clientFiles []domain.ClientFile) ([]domain.ClientFile, string, bool) {
 	root, hasRoot := torrentmeta.ClientRoot(clientFiles, fp.manifest)
 	if !hasRoot {
@@ -178,7 +188,7 @@ func (s *Scheduler) applyFolderName(ctx context.Context, log zerolog.Logger, cli
 	// Only a stopped torrent with nothing on disk is renamed. A retried
 	// delivery is a duplicate add, which no client pauses, so the torrent may
 	// be running and write its first piece between this read and the rename.
-	state, err := fp.renamer.DiskState(ctx, rawConfig, fp.hash)
+	state, err := waitForStopped(ctx, rawConfig, fp.renamer, fp.hash)
 	if err != nil {
 		return clientFiles, s.folderFailed(log, clientName, "could not read the torrent's progress", err), false
 	}
@@ -193,6 +203,7 @@ func (s *Scheduler) applyFolderName(ctx context.Context, log zerolog.Logger, cli
 	if err := fp.renamer.RenameRoot(ctx, rawConfig, fp.hash, root, fp.want); err != nil {
 		return clientFiles, s.folderFailed(log, clientName, "renaming failed", err), false
 	}
+	fp.renamed = true
 	renamed, err := fp.selector.Files(ctx, rawConfig, fp.hash)
 	if err == nil && len(renamed) == 0 {
 		err = errors.New("the client listed no files after the rename")
@@ -201,11 +212,43 @@ func (s *Scheduler) applyFolderName(ctx context.Context, log zerolog.Logger, cli
 		// Indices do not change with a rename, so the old list still selects.
 		return clientFiles, s.folderFailed(log, clientName, "could not list the renamed files", err), false
 	}
-	if err := fp.renamer.Recheck(ctx, rawConfig, fp.hash); err != nil {
-		return renamed, s.folderFailed(log, clientName, "rechecking failed", err), false
-	}
 	s.countFolder(log, clientName, folderRenamed)
 	return renamed, savedNote(fp.want), true
+}
+
+// waitForStopped reads the torrent's disk state until it reports stopped or
+// stoppedWait passes, and returns the last state read.
+func waitForStopped(ctx context.Context, rawConfig []byte, renamer registry.WithRename, hash string) (registry.DiskState, error) {
+	deadline := time.Now().Add(stoppedWait)
+	for {
+		state, err := renamer.DiskState(ctx, rawConfig, hash)
+		if err != nil || state.Stopped || time.Now().After(deadline) {
+			return state, err
+		}
+		select {
+		case <-ctx.Done():
+			return state, nil
+		case <-time.After(filesPollInterval):
+		}
+	}
+}
+
+// recheckRenamed is finishDelivery's last step after a rename: the client
+// verifies the data already in the folder. It comes after any start because
+// qBittorrent drops a start sent during a recheck, while every client keeps a
+// torrent's running or stopped state through one (measured on qBittorrent
+// 5.2.1/5.1.4, Transmission 4.1.2/4.0.6 and Deluge 2.2.0).
+func (s *Scheduler) recheckRenamed(ctx context.Context, log zerolog.Logger, clientName string, rawConfig []byte, fp *folderPlan) string {
+	if !fp.renamed {
+		return ""
+	}
+	if err := fp.renamer.Recheck(ctx, rawConfig, fp.hash); err != nil {
+		log.Warn().Err(err).Str("client", clientName).Str("result", folderFailed).Str("step", "recheck").
+			Msg("folder renamed but the recheck failed")
+		metrics.SchedulerFolderRenameTotal.WithLabelValues(clientName, folderFailed).Inc()
+		return "Rechecking the torrent failed. Recheck it in your client."
+	}
+	return ""
 }
 
 // folderCannotApply counts and returns the note of a plan that could not
