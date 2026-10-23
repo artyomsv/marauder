@@ -18,12 +18,12 @@ const CLIENTS = [
   { id: "c2", display_name: "Box B", client_name: "qbittorrent" },
 ];
 
-function run(clientId: string) {
+function run(clientId: string, capability?: "supports_file_selection" | "supports_rename") {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const wrapper = ({ children }: { children: ReactNode }) => (
     <QueryClientProvider client={qc}>{children}</QueryClientProvider>
   );
-  return renderHook(() => useUnsupportedClient(CLIENTS, clientId), { wrapper });
+  return renderHook(() => useUnsupportedClient(CLIENTS, clientId, capability), { wrapper });
 }
 
 describe("useUnsupportedClient", () => {
@@ -31,10 +31,16 @@ describe("useUnsupportedClient", () => {
     mockApi.get.mockReset();
     mockApi.get.mockResolvedValue({
       clients: [
-        { name: "utorrent", display_name: "µTorrent", supports_file_selection: false },
-        { name: "qbittorrent", display_name: "qBittorrent", supports_file_selection: true },
+        { name: "utorrent", display_name: "µTorrent", supports_file_selection: false, supports_rename: false },
+        { name: "qbittorrent", display_name: "qBittorrent", supports_file_selection: true, supports_rename: false },
       ],
     });
+  });
+
+  // Issue #225: the folder name asks about rename support instead.
+  it("checks the capability it is given", async () => {
+    const { result } = run("c2", "supports_rename");
+    await waitFor(() => expect(result.current).toBe("Box B"));
   });
 
   it("returns the display name of a client without file selection", async () => {

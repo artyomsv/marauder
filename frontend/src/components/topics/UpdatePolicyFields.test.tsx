@@ -36,6 +36,24 @@ describe("UpdatePolicyFields", () => {
     expect(screen.getByText(/old files would be lost/i)).toBeInTheDocument();
   });
 
+  // Issue #225: a folder name shares the folder between versions.
+  it("locks delete-files while a folder name is set", () => {
+    const value = { ...OFF, replaceOnUpdate: true, replaceDeleteData: true };
+    render(
+      <UpdatePolicyFields
+        value={value}
+        onChange={() => {}}
+        episodic={false}
+        unsupportedClient={null}
+        folderNameSet={true}
+      />,
+    );
+    const del = screen.getByLabelText("Also delete the old files from disk") as HTMLInputElement;
+    expect(del.disabled).toBe(true);
+    expect(del.checked).toBe(false);
+    expect(screen.getByText(/both versions share the folder/i)).toBeInTheDocument();
+  });
+
   it("hides the new settings for per-episode trackers", () => {
     render(<UpdatePolicyFields value={OFF} onChange={() => {}} episodic={true} unsupportedClient={null} />);
     expect(screen.queryByLabelText("Add updates paused")).toBeNull();

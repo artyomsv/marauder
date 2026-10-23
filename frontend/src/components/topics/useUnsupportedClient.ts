@@ -6,12 +6,19 @@ interface ClientRef {
   client_name: string;
 }
 
-// Name of the receiving client when it cannot pause or select files, so the
-// update-policy settings can say they will not work there (issue #205).
-// null when the client supports them or is not known.
-export function useUnsupportedClient(clients: ClientRef[], effectiveClientId: string): string | null {
+type ClientCapability = "supports_file_selection" | "supports_rename";
+
+// Name of the receiving client when it lacks a capability, so a setting can
+// say it will not work there: file selection for the update policy
+// (issue #205), rename for the folder name (issue #225). null when the client
+// supports it or is not known.
+export function useUnsupportedClient(
+  clients: ClientRef[],
+  effectiveClientId: string,
+  capability: ClientCapability = "supports_file_selection",
+): string | null {
   const info = useSystemInfo().data;
   const client = clients.find((c) => c.id === effectiveClientId);
   const plugin = info?.clients?.find((p) => p.name === client?.client_name);
-  return client && plugin && !plugin.supports_file_selection ? client.display_name : null;
+  return client && plugin && !plugin[capability] ? client.display_name : null;
 }

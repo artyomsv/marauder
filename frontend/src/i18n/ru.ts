@@ -340,6 +340,23 @@ const ru: Record<string, string> = {
     "Удаление старых файлов выключено: при «Скачивать только новые файлы» старые файлы были бы потеряны.",
   "topics.updatePolicy.unsupported":
     "{client} не умеет ставить на паузу и выбирать файлы. Эти настройки работают с qBittorrent, Transmission и Deluge.",
+  "topics.updatePolicy.deleteDataLockedFolder":
+    "Удаление старых файлов выключено: с именем папки обе версии лежат в одной папке, и новые файлы тоже были бы удалены.",
+
+  // Имя папки в клиенте (issue #225)
+  "topics.folderName.label": "Имя папки в клиенте",
+  "topics.folderName.mode.default": "Как на трекере",
+  "topics.folderName.mode.keep": "Сохранять имя из клиента",
+  "topics.folderName.mode.custom": "Своё имя",
+  "topics.folderName.help.default": "Папка торрента получает имя, которое даёт трекер.",
+  "topics.folderName.help.keep":
+    "Каждое обновление получает имя папки предыдущей версии в клиенте, поэтому переименованная там папка остаётся переименованной.",
+  "topics.folderName.help.custom": "Папка торрента получает это имя при каждой загрузке и обновлении.",
+  "topics.folderName.customLabel": "Своё имя папки",
+  "topics.folderName.limits":
+    "Обновления попадают в ту же папку и используют уже скачанные файлы. Magnet-ссылки и торренты из одного файла сохраняют имя с трекера.",
+  "topics.folderName.unsupported":
+    "{client} не умеет переименовывать папки. Эта настройка работает с qBittorrent, Transmission и Deluge.",
 
   // Notifier event subscriptions (which events a notifier fires on)
   "notifiers.events.prefix": "Уведомлять о",

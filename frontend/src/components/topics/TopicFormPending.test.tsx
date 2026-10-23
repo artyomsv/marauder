@@ -51,6 +51,8 @@ const EMPTY: TopicFormValues = {
   addPausedOnUpdate: false,
   onlyNewFiles: false,
   checkIntervalSec: 900,
+  folderNameMode: "default",
+  folderName: "",
 };
 
 function renderForm() {

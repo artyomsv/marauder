@@ -15,6 +15,7 @@ import { NotifierSelect } from "./NotifierSelect";
 import { CategoryField } from "./CategoryField";
 import { CheckIntervalSelect } from "./CheckIntervalSelect";
 import { UpdatePolicyFields } from "./UpdatePolicyFields";
+import { FolderNameFields, type FolderNameMode, type FolderNameValue } from "./FolderNameFields";
 import { useUnsupportedClient } from "./useUnsupportedClient";
 
 // Shape of GET /trackers/match. Drives which optional sections the form
@@ -88,6 +89,9 @@ export interface TopicFormValues {
   onlyNewFiles: boolean;
   // Seconds between checks (issue #204).
   checkIntervalSec: number;
+  // Folder name in the client (issue #225).
+  folderNameMode: FolderNameMode;
+  folderName: string;
 }
 
 interface TopicFormProps {
@@ -268,6 +272,8 @@ export function TopicForm({
     addPausedOnUpdate: initial.addPausedOnUpdate,
     onlyNewFiles: initial.onlyNewFiles,
     checkIntervalSec: initial.checkIntervalSec,
+    folderNameMode: initial.folderNameMode,
+    folderName: initial.folderName,
   });
 
   // A notify-only topic whose events reach nobody is a topic that silently
@@ -296,8 +302,14 @@ export function TopicForm({
     : [];
 
   const unsupportedClient = useUnsupportedClient(clients, effectiveClientId);
+  const renameUnsupported = useUnsupportedClient(clients, effectiveClientId, "supports_rename");
+  // Choosing a folder name turns delete-files off, as only-new-files does:
+  // both versions share the folder.
+  const setFolderName = (v: FolderNameValue) =>
+    setDelivery((d) => ({ ...d, ...v, replaceDeleteData: v.folderNameMode === "default" && d.replaceDeleteData }));
 
   const episodic = !!match?.supports_episode_filter;
+  const folderNameSet = !episodic && delivery.folderNameMode !== "default";
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     onSubmit({
@@ -311,13 +323,16 @@ export function TopicForm({
       downloadDir: delivery.downloadDir,
       category: delivery.category,
       replaceOnUpdate: delivery.replaceOnUpdate,
-      replaceDeleteData: delivery.replaceDeleteData && !delivery.onlyNewFiles,
+      replaceDeleteData: delivery.replaceDeleteData && !delivery.onlyNewFiles && !folderNameSet,
       notifyOnly: delivery.notifyOnly,
       notifyOnlyAnnounceCurrent: delivery.notifyOnlyAnnounceCurrent,
       // Hidden for per-episode trackers; do not save state the user cannot see.
       addPausedOnUpdate: !episodic && delivery.addPausedOnUpdate,
       onlyNewFiles: !episodic && delivery.onlyNewFiles,
       checkIntervalSec: delivery.checkIntervalSec,
+      // Hidden for per-episode trackers, like the update policy above.
+      folderNameMode: episodic ? "default" : delivery.folderNameMode,
+      folderName: delivery.folderName,
     });
   };
 
@@ -530,7 +545,15 @@ export function TopicForm({
             onChange={(v) => setDelivery((d) => ({ ...d, ...v }))}
             episodic={episodic}
             unsupportedClient={unsupportedClient}
+            folderNameSet={folderNameSet}
           />
+          {!episodic && (
+            <FolderNameFields
+              value={{ folderNameMode: delivery.folderNameMode, folderName: delivery.folderName }}
+              onChange={setFolderName}
+              unsupportedClient={renameUnsupported}
+            />
+          )}
         </>
       )}
 

@@ -399,6 +399,9 @@ export interface UpdateTopicBody {
   // Update policy (issue #205).
   add_paused_on_update?: boolean;
   only_new_files?: boolean;
+  // Folder name in the client (issue #225). Omitted keeps the stored setting.
+  folder_name_mode?: "default" | "keep" | "custom";
+  folder_name?: string;
   quality?: string;
   start_season?: number;
   start_episode?: number;
@@ -514,6 +517,9 @@ export type Topic = {
   NotifyOnlyAnnounceCurrent: boolean;
   AddPausedOnUpdate: boolean;
   OnlyNewFiles: boolean;
+  FolderNameMode: "default" | "keep" | "custom";
+  FolderName: string;
+  FolderNameSeen: string;
   Extra: TopicExtra | null;
   LastHash: string;
   LastCheckedAt: string | null;
@@ -538,6 +544,11 @@ export type SystemInfo = {
     supports_search: boolean;
     supports_page_export: boolean;
   }[];
-  clients: { name: string; display_name: string; supports_file_selection: boolean }[];
+  clients: {
+    name: string;
+    display_name: string;
+    supports_file_selection: boolean;
+    supports_rename: boolean;
+  }[];
   notifiers: { name: string; display_name: string }[];
 };

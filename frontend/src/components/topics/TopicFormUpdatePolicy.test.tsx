@@ -53,6 +53,8 @@ const STORED: TopicFormValues = {
   addPausedOnUpdate: false,
   onlyNewFiles: true,
   checkIntervalSec: 900,
+  folderNameMode: "default",
+  folderName: "",
 };
 
 beforeEach(() => {
@@ -105,5 +107,74 @@ describe("TopicForm update policy submit", () => {
       onlyNewFiles: true,
       replaceDeleteData: false,
     });
+  });
+
+  // Issue #225: the same rule for a folder name, whose versions share a folder.
+  it("submits a custom folder name with replaceDeleteData false", async () => {
+    const onSubmit = vi.fn();
+    const stored = { ...STORED, onlyNewFiles: false, replaceOnUpdate: true, replaceDeleteData: true };
+    render(
+      <TopicForm
+        mode="edit"
+        initial={stored}
+        submitLabel="Save"
+        heading="Edit topic"
+        isPending={false}
+        error={null}
+        onClose={() => {}}
+        onSubmit={onSubmit}
+      />,
+      { wrapper: wrap() },
+    );
+
+    await userEvent.selectOptions(await screen.findByLabelText("Folder name in the client"), "custom");
+    await userEvent.type(screen.getByLabelText("Custom folder name"), "My Show");
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(onSubmit.mock.calls[0][0]).toMatchObject({
+      folderNameMode: "custom",
+      folderName: "My Show",
+      replaceOnUpdate: true,
+      replaceDeleteData: false,
+    });
+  });
+
+  it("submits the default folder mode for a per-episode tracker", async () => {
+    mockApi.get.mockImplementation((path: string) => {
+      if (path.startsWith("/trackers/match"))
+        return Promise.resolve({
+          tracker_name: "lostfilm",
+          display_name: "LostFilm",
+          supports_episode_filter: true,
+          supports_season_catalog: false,
+          requires_credentials: false,
+          credentials_optional: false,
+          uses_cloudflare: false,
+        });
+      if (path.startsWith("/clients")) return Promise.resolve({ clients: [] });
+      if (path.startsWith("/credentials")) return Promise.resolve({ credentials: [] });
+      return Promise.resolve({});
+    });
+    const onSubmit = vi.fn();
+    render(
+      <TopicForm
+        mode="edit"
+        initial={{ ...STORED, onlyNewFiles: false, folderNameMode: "keep" }}
+        submitLabel="Save"
+        heading="Edit topic"
+        isPending={false}
+        error={null}
+        onClose={() => {}}
+        onSubmit={onSubmit}
+      />,
+      { wrapper: wrap() },
+    );
+
+    await waitFor(() => expect(screen.queryByLabelText("Folder name in the client")).toBeNull());
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(onSubmit.mock.calls[0][0]).toMatchObject({ folderNameMode: "default" });
   });
 });

@@ -342,6 +342,23 @@ const en: Record<string, string> = {
     "Deleting old files is off: with “Download only new files” the old files would be lost.",
   "topics.updatePolicy.unsupported":
     "{client} cannot pause or select files. These settings need qBittorrent, Transmission or Deluge.",
+  "topics.updatePolicy.deleteDataLockedFolder":
+    "Deleting old files is off: with a folder name both versions share the folder, so the new files would be deleted too.",
+
+  // Folder name in the client (issue #225)
+  "topics.folderName.label": "Folder name in the client",
+  "topics.folderName.mode.default": "Tracker's name",
+  "topics.folderName.mode.keep": "Keep the name from my client",
+  "topics.folderName.mode.custom": "Custom name",
+  "topics.folderName.help.default": "The torrent's folder gets the name the tracker gives it.",
+  "topics.folderName.help.keep":
+    "Each update gets the folder name the previous version has in your client, so a folder you renamed there stays renamed.",
+  "topics.folderName.help.custom": "The torrent's folder gets this name on every download and update.",
+  "topics.folderName.customLabel": "Custom folder name",
+  "topics.folderName.limits":
+    "Updates go into the same folder and reuse the files already there. Magnet links and single-file torrents keep the tracker's name.",
+  "topics.folderName.unsupported":
+    "{client} cannot rename folders. This setting needs qBittorrent, Transmission or Deluge.",
 
   // Notifier event subscriptions (which events a notifier fires on)
   "notifiers.events.prefix": "Notifies on",
