@@ -303,6 +303,20 @@ type WithFileSelection interface {
 	Start(ctx context.Context, rawConfig []byte, hash string) error
 }
 
+// WithRename is an optional client capability (issue #225): rename a
+// torrent's top folder, verify its data on disk, and report how much of it
+// the client has written. It powers the per-topic folder name. The scheduler
+// reads the current folder through WithFileSelection.Files, so a client needs
+// both. It renames only a torrent with 0 bytes done: the rename is a plain
+// per-file move, and moving written files onto a folder that holds the
+// previous version's files could overwrite them.
+type WithRename interface {
+	Client
+	RenameRoot(ctx context.Context, rawConfig []byte, hash, oldName, newName string) error
+	Recheck(ctx context.Context, rawConfig []byte, hash string) error
+	BytesDone(ctx context.Context, rawConfig []byte, hash string) (int64, error)
+}
+
 // WithCategories is an optional client capability: enumerate the categories
 // the client already knows about, so the UI can offer them as suggestions when
 // picking a topic's category. Clients without a category concept (Transmission,
