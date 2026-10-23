@@ -99,6 +99,9 @@ type fileSelection struct {
 	// all of it, one to one, before any index is skipped.
 	files []domain.TorrentFile
 	skip  []domain.TorrentFile
+	// started is set when selectNewFiles started the torrent, which a
+	// folder recheck that follows has to wait for (issue #225).
+	started bool
 }
 
 // planDelivery decides the update policy for one payload. It runs before the
@@ -220,11 +223,12 @@ func (s *Scheduler) finishDelivery(ctx context.Context, log zerolog.Logger, t *d
 	// user to start the torrent, and its old files must be skipped by then.
 	// It may start the torrent only when the folder step did not fail.
 	policyNote := s.finishUpdatePolicy(ctx, log, t, clientName, rawConfig, plan, clientFiles, ok)
-	startNote := ""
+	startNote, started := "", plan.selection != nil && plan.selection.started
 	if ok && !plan.paused {
 		startNote = s.startRenamed(ctx, log, clientName, rawConfig, fp)
+		started = startNote == ""
 	}
-	return joinNotes(policyNote, folderNote, startNote, s.recheckRenamed(ctx, log, clientName, rawConfig, fp))
+	return joinNotes(policyNote, folderNote, startNote, s.recheckRenamed(ctx, log, clientName, rawConfig, fp, started))
 }
 
 // startRenamed starts a torrent that only the folder rename paused.
@@ -329,6 +333,7 @@ func (s *Scheduler) selectNewFiles(ctx context.Context, log zerolog.Logger, t *d
 	if err := sel.selector.Start(ctx, rawConfig, sel.hash); err != nil {
 		return fail("starting the torrent failed", err)
 	}
+	sel.started = true
 	log.Info().Str("client", clientName).Str("result", selSelected).
 		Int("new", newCount).Int("total", total).
 		Msg("only-new-files: new files selected; torrent started")

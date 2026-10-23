@@ -152,6 +152,13 @@ func TestRenameOnRealClients(t *testing.T) {
 			if err := sel.Start(ctx, raw, hash); err != nil {
 				t.Fatalf("Start: %v", err)
 			}
+			// As the scheduler does: wait until the client reports the start.
+			// Deluge's recheck captures a cached paused flag that the start
+			// does not refresh; reading the status refreshes it.
+			waitFor(t, ctx, func() bool {
+				state, err = ren.DiskState(ctx, raw, hash)
+				return err == nil && !state.Stopped
+			}, "torrent to report running after Start")
 			if err := ren.Recheck(ctx, raw, hash); err != nil {
 				t.Fatalf("Recheck: %v", err)
 			}

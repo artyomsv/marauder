@@ -35,8 +35,14 @@ type fakeRenamingClient struct {
 	renameErr     error
 	recheckErr    error
 	stopErr       error
-	renamedFrom   string
-	renamedTo     string
+	// started is set by Start; startLag is how many DiskState reads after it
+	// still report the torrent stopped (Deluge keeps a cached paused flag
+	// until its next status refresh). stopCtxErr is the context error Stop saw.
+	started     bool
+	startLag    int
+	stopCtxErr  error
+	renamedFrom string
+	renamedTo   string
 }
 
 func (f *fakeRenamingClient) Files(ctx context.Context, raw []byte, hash string) ([]domain.ClientFile, error) {
@@ -50,6 +56,7 @@ func (f *fakeRenamingClient) Files(ctx context.Context, raw []byte, hash string)
 
 func (f *fakeRenamingClient) Start(ctx context.Context, raw []byte, hash string) error {
 	f.calls = append(f.calls, "Start")
+	f.started = true
 	return f.fakeSelectingClient.Start(ctx, raw, hash)
 }
 
@@ -64,13 +71,17 @@ func (f *fakeRenamingClient) RenameRoot(_ context.Context, _ []byte, _ string, o
 	return f.renameErr
 }
 
-func (f *fakeRenamingClient) Stop(context.Context, []byte, string) error {
+func (f *fakeRenamingClient) Stop(ctx context.Context, _ []byte, _ string) error {
 	f.calls = append(f.calls, "Stop")
+	f.stopCtxErr = ctx.Err()
 	return f.stopErr
 }
 
-func (f *fakeRenamingClient) Recheck(context.Context, []byte, string) error {
+func (f *fakeRenamingClient) Recheck(ctx context.Context, _ []byte, _ string) error {
 	f.calls = append(f.calls, "Recheck")
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	return f.recheckErr
 }
 
@@ -80,7 +91,15 @@ func (f *fakeRenamingClient) DiskState(context.Context, []byte, string) (registr
 		f.checkingPolls--
 		return registry.DiskState{}, nil
 	}
-	return registry.DiskState{BytesOnDisk: f.bytesDone, Stopped: !f.running}, f.bytesErr
+	running := f.running
+	if f.started {
+		if f.startLag > 0 {
+			f.startLag--
+		} else {
+			running = true
+		}
+	}
+	return registry.DiskState{BytesOnDisk: f.bytesDone, Stopped: !running}, f.bytesErr
 }
 
 var _ registry.WithRename = (*fakeRenamingClient)(nil)
@@ -116,7 +135,7 @@ func TestRunCheck_FolderName_Custom_RenamesRechecksAndStarts(t *testing.T) {
 	}
 	// Recheck comes last: qBittorrent drops a start sent during a recheck,
 	// and every client keeps the running or stopped state through one.
-	want := []string{"Files", "DiskState", "RenameRoot", "Files", "Start", "Recheck"}
+	want := []string{"Files", "DiskState", "RenameRoot", "Files", "Start", "DiskState", "Recheck"}
 	if !reflect.DeepEqual(rc.calls, want) {
 		t.Errorf("calls = %v, want %v", rc.calls, want)
 	}
@@ -302,7 +321,7 @@ func TestRunCheck_FolderName_SameName(t *testing.T) {
 		running bool
 		want    []string
 	}{
-		{"stopped, nothing on disk", false, []string{"Files", "DiskState", "Start", "Recheck"}},
+		{"stopped, nothing on disk", false, []string{"Files", "DiskState", "Start", "DiskState", "Recheck"}},
 		{"running", true, []string{"Files", "DiskState", "Start"}},
 	}
 	for _, tc := range cases {
@@ -428,7 +447,7 @@ func TestRunCheck_FolderName_WithOnlyNewFiles(t *testing.T) {
 
 	f.s.runCheck(context.Background(), f.s.log, f.topic)
 
-	want := []string{"Files", "DiskState", "RenameRoot", "Files", "SkipFiles", "Start", "Recheck"}
+	want := []string{"Files", "DiskState", "RenameRoot", "Files", "SkipFiles", "Start", "DiskState", "Recheck"}
 	if !reflect.DeepEqual(rc.calls, want) {
 		t.Errorf("calls = %v, want %v", rc.calls, want)
 	}
@@ -564,9 +583,11 @@ func TestRunCheck_FolderName_StartFails(t *testing.T) {
 // hold a test for stoppedWait.
 func shortWaits(t *testing.T) {
 	t.Helper()
-	origPoll, origWait, origRename := filesPollInterval, stoppedWait, renameWait
-	filesPollInterval, stoppedWait, renameWait = time.Millisecond, 20*time.Millisecond, 20*time.Millisecond
-	t.Cleanup(func() { filesPollInterval, stoppedWait, renameWait = origPoll, origWait, origRename })
+	origPoll, origWait, origRename, origStart := filesPollInterval, stoppedWait, renameWait, startWait
+	filesPollInterval, stoppedWait, renameWait, startWait = time.Millisecond, 20*time.Millisecond, 20*time.Millisecond, 20*time.Millisecond
+	t.Cleanup(func() {
+		filesPollInterval, stoppedWait, renameWait, startWait = origPoll, origWait, origRename, origStart
+	})
 }
 
 // Right after a paused add, qBittorrent and Transmission report the torrent
@@ -606,7 +627,7 @@ func TestRunCheck_FolderName_RecheckFails_StopsTorrent(t *testing.T) {
 
 			f.s.runCheck(context.Background(), f.s.log, f.topic)
 
-			want := []string{"Files", "DiskState", "RenameRoot", "Files", "Start", "Recheck", "Stop"}
+			want := []string{"Files", "DiskState", "RenameRoot", "Files", "Start", "DiskState", "Recheck", "Stop"}
 			if !reflect.DeepEqual(rc.calls, want) {
 				t.Errorf("calls = %v, want %v", rc.calls, want)
 			}
@@ -675,6 +696,43 @@ func TestRunCheck_FolderName_LargeTorrentChecksItsOwnList(t *testing.T) {
 	}
 	if body := submittedBody(t, f); !strings.Contains(body, `Could not use folder name "Want"`) {
 		t.Errorf("body = %q, want the cannot-apply note", body)
+	}
+}
+
+// Deluge's recheck captures its cached paused flag, and a start does not
+// refresh it: a recheck sent before the client reports the torrent running
+// ends with the torrent paused again. After a start the scheduler waits for
+// the client to report it running (PR #226 review, M-1).
+func TestRunCheck_FolderName_RecheckWaitsForStartToShow(t *testing.T) {
+	shortWaits(t)
+	f, rc := renamingFixture(t, torrentTracker(torrentmetatest.Torrent("Show S01", v2Files)))
+	customTopic(f, "Want")
+	rc.startLag = 3
+
+	f.s.runCheck(context.Background(), f.s.log, f.topic)
+
+	want := []string{"Files", "DiskState", "RenameRoot", "Files", "Start",
+		"DiskState", "DiskState", "DiskState", "DiskState", "Recheck"}
+	if !reflect.DeepEqual(rc.calls, want) {
+		t.Errorf("calls = %v, want %v", rc.calls, want)
+	}
+}
+
+// The safety stop must run even when the delivery's own deadline has passed:
+// that is exactly when a started torrent's recheck fails (PR #226 review, M-4).
+func TestRecheckRenamed_StopsWithFreshContextAfterDeadline(t *testing.T) {
+	f, rc := renamingFixture(t, torrentTracker(torrentmetatest.Torrent("Show S01", v2Files)))
+	fp := &folderPlan{renamer: rc, selector: rc, hash: "abc", want: "Want", recheck: true}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	note := f.s.recheckRenamed(ctx, f.s.log, "fakeclient", nil, fp, false)
+
+	if !containsString(rc.calls, "Stop") || rc.stopCtxErr != nil {
+		t.Errorf("calls=%v stop ctx err=%v, want Stop sent on a live context", rc.calls, rc.stopCtxErr)
+	}
+	if note != "Added paused: rechecking the torrent failed. Recheck it in your client and start it." {
+		t.Errorf("note = %q", note)
 	}
 }
 

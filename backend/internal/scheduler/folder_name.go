@@ -40,8 +40,16 @@ const (
 var stoppedWait = 10 * time.Second
 
 // renameWait is how long the client may take to list the files under the new
-// folder name after accepting a rename. A var so tests can shorten it.
-var renameWait = 10 * time.Second
+// folder name after accepting a rename, and startWait how long it may take to
+// report a started torrent running. Vars so tests can shorten them.
+var (
+	renameWait = 10 * time.Second
+	startWait  = 10 * time.Second
+)
+
+// stopTimeout bounds the safety stop after a failed recheck, which runs on a
+// fresh context because the delivery's own may already have expired.
+const stopTimeout = 10 * time.Second
 
 // Folder rename metric results (marauder_scheduler_folder_rename_total).
 const (
@@ -283,10 +291,16 @@ func waitForStopped(ctx context.Context, rawConfig []byte, renamer registry.With
 // verifies the data already in the folder. It comes after any start because
 // qBittorrent drops a start sent during a recheck, while every client keeps a
 // torrent's running or stopped state through one (measured on qBittorrent
-// 5.2.1/5.1.4, Transmission 4.1.2/4.0.6 and Deluge 2.2.0).
-func (s *Scheduler) recheckRenamed(ctx context.Context, log zerolog.Logger, clientName string, rawConfig []byte, fp *folderPlan) string {
+// 5.2.1/5.1.4, Transmission 4.1.2/4.0.6 and Deluge 2.2.0). After a start it
+// first waits for the client to report the torrent running: Deluge's recheck
+// captures a cached paused flag that a start does not refresh, and would pause
+// the torrent again when the check ends; reading the status refreshes it.
+func (s *Scheduler) recheckRenamed(ctx context.Context, log zerolog.Logger, clientName string, rawConfig []byte, fp *folderPlan, started bool) string {
 	if !fp.recheck {
 		return ""
+	}
+	if started {
+		waitForRunning(ctx, rawConfig, fp.renamer, fp.hash)
 	}
 	err := fp.renamer.Recheck(ctx, rawConfig, fp.hash)
 	if err == nil {
@@ -297,12 +311,33 @@ func (s *Scheduler) recheckRenamed(ctx context.Context, log zerolog.Logger, clie
 	metrics.SchedulerFolderRenameTotal.WithLabelValues(clientName, folderFailed).Inc()
 	// The torrent may already be running (started above, or by the
 	// selection), and unchecked it would download the data already in the
-	// folder again. Stopping a stopped torrent changes nothing.
-	if err := fp.renamer.Stop(ctx, rawConfig, fp.hash); err != nil {
+	// folder again. Stopping a stopped torrent changes nothing. Its own
+	// bounded context: the recheck most likely failed because the delivery's
+	// deadline passed, and the stop must still be sent.
+	stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), stopTimeout)
+	defer cancel()
+	if err := fp.renamer.Stop(stopCtx, rawConfig, fp.hash); err != nil {
 		log.Warn().Err(err).Str("client", clientName).Msg("stopping the torrent after a failed recheck failed")
 		return "Rechecking the torrent failed and it could not be stopped. Stop and recheck it in your client."
 	}
 	return "Added paused: rechecking the torrent failed. Recheck it in your client and start it."
+}
+
+// waitForRunning reads the torrent's state until the client reports it not
+// stopped, or startWait passes. Best-effort: the recheck follows either way.
+func waitForRunning(ctx context.Context, rawConfig []byte, renamer registry.WithRename, hash string) {
+	deadline := time.Now().Add(startWait)
+	for {
+		state, err := renamer.DiskState(ctx, rawConfig, hash)
+		if err != nil || !state.Stopped || time.Now().After(deadline) {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(filesPollInterval):
+		}
+	}
 }
 
 // folderCannotApply counts and returns the note of a plan that could not

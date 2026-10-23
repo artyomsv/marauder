@@ -281,8 +281,12 @@ the user to start the torrent and the old files must already be skipped. The
 scheduler starts the torrent itself when only the rename paused it, and
 **`Recheck` comes last, after any start**: qBittorrent drops a start sent during
 a recheck, while every client keeps the running or stopped state through one
-(all measured on the clientcheck matrix, 2026-10-23). A failed recheck sends
-`Stop`, since the torrent may already be running unchecked. A failed step
+(all measured on the clientcheck matrix, 2026-10-23); after a start it first
+waits (`waitForRunning`, up to `startWait`) for the client to report the torrent
+running, because Deluge's recheck captures a cached paused flag a start does not
+refresh and would pause the torrent again when the check ends. A failed recheck
+sends `Stop` on a fresh 10s context (the delivery's own has often expired by
+then), since the torrent may already be running unchecked. A failed step
 leaves it paused with a note naming the step, never fails the check. Notes join
 policy-first. Metric
 `marauder_scheduler_folder_rename_total{client,result}`. `topics.ValidUpdatePolicy`
