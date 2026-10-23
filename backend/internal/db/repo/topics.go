@@ -659,13 +659,17 @@ func (r *Topics) UpdateDisplayName(ctx context.Context, id uuid.UUID, displayNam
 
 // SetFolderNameSeen stores keep mode's memory of the topic's folder name
 // (issue #225): the last name the scheduler saw in the client or set there.
-// Written only while the topic is still in keep mode, so a check that read
-// the topic before the user switched modes cannot leave a stale name behind.
-// It does not touch the check-state token.
-func (r *Topics) SetFolderNameSeen(ctx context.Context, id uuid.UUID, name string) error {
+// Written only while the topic is still in keep mode and the worker's
+// (last_checked_at, next_check_at) token still matches, so neither a mode
+// switch nor a reset (which forgets the name) landing mid-check is undone by
+// a stale name. A stale write affects no row and is not an error: the name is
+// best-effort memory. It does not change the token.
+func (r *Topics) SetFolderNameSeen(ctx context.Context, t *domain.Topic, name string) error {
 	_, err := r.pool.Exec(ctx,
-		`UPDATE topics SET folder_name_seen = $2 WHERE id = $1 AND folder_name_mode = 'keep'`,
-		id, name,
+		`UPDATE topics SET folder_name_seen = $2
+WHERE id = $1 AND folder_name_mode = 'keep'
+  AND last_checked_at IS NOT DISTINCT FROM $3 AND next_check_at = $4`,
+		t.ID, name, t.LastCheckedAt, t.NextCheckAt,
 	)
 	if err != nil {
 		return fmt.Errorf("topics: set folder name seen: %w", err)

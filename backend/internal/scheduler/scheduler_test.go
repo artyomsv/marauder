@@ -172,7 +172,7 @@ func (f *fakeTopics) UpdateDisplayName(_ context.Context, id uuid.UUID, name str
 	return nil
 }
 
-func (f *fakeTopics) SetFolderNameSeen(_ context.Context, _ uuid.UUID, name string) error {
+func (f *fakeTopics) SetFolderNameSeen(_ context.Context, _ *domain.Topic, name string) error {
 	f.seenCalls = append(f.seenCalls, name)
 	return nil
 }

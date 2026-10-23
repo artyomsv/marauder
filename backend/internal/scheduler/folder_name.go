@@ -6,7 +6,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 
 	"github.com/artyomsv/marauder/backend/internal/domain"
@@ -61,7 +60,7 @@ const (
 // folderNameSeenSetter is an optional capability of topicsRepo: it stores
 // keep mode's memory of the folder name. Best-effort.
 type folderNameSeenSetter interface {
-	SetFolderNameSeen(ctx context.Context, id uuid.UUID, name string) error
+	SetFolderNameSeen(ctx context.Context, t *domain.Topic, name string) error
 }
 
 // folderPlan says how one delivery's folder is named. A plan with a result
@@ -71,8 +70,8 @@ type folderPlan struct {
 	renamer  registry.WithRename
 	selector registry.WithFileSelection
 	hash     string
-	// manifest is the torrent's file list, nil when unknown; it confirms the
-	// client's top folder (torrentmeta.ClientRoot).
+	// manifest is the torrent's own file list; it confirms the client's top
+	// folder (torrentmeta.ClientRoot), which needs it.
 	manifest []domain.TorrentFile
 	want     string
 	// recheck is set once the folder carries the wanted name and its data is
@@ -344,7 +343,7 @@ func (s *Scheduler) rememberFolderName(ctx context.Context, log zerolog.Logger, 
 	if !ok {
 		return
 	}
-	if err := setter.SetFolderNameSeen(ctx, t.ID, name); err != nil {
+	if err := setter.SetFolderNameSeen(ctx, t, name); err != nil {
 		log.Warn().Err(err).Msg("folder name: store the remembered name failed")
 		return
 	}

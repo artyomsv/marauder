@@ -61,12 +61,16 @@ func TestTopics_SetFolderNameSeen(t *testing.T) {
 	r, mock := newMockTopics(t)
 	t.Cleanup(func() { assertExpectationsMet(t, mock) })
 
-	id := uuid.New()
-	mock.ExpectExec(`UPDATE topics SET folder_name_seen = \$2 WHERE id = \$1 AND folder_name_mode = 'keep'`).
-		WithArgs(id, "Renamed").
+	// Guarded by the worker's check-state token, like RecordCheckResult, so a
+	// reset that lands mid-check is not undone by a stale name (PR #226).
+	observed := time.Now().Add(-time.Minute)
+	next := time.Now().Add(time.Hour)
+	topic := &domain.Topic{ID: uuid.New(), LastCheckedAt: &observed, NextCheckAt: next}
+	mock.ExpectExec(`UPDATE topics SET folder_name_seen = \$2\s+WHERE id = \$1 AND folder_name_mode = 'keep'\s+AND last_checked_at IS NOT DISTINCT FROM \$3 AND next_check_at = \$4`).
+		WithArgs(topic.ID, "Renamed", &observed, next).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 
-	if err := r.SetFolderNameSeen(context.Background(), id, "Renamed"); err != nil {
+	if err := r.SetFolderNameSeen(context.Background(), topic, "Renamed"); err != nil {
 		t.Fatalf("SetFolderNameSeen: %v", err)
 	}
 }

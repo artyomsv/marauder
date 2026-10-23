@@ -47,7 +47,7 @@ func TestTopicsFolderNameRoundTrip(t *testing.T) {
 		t.Errorf("after keep = (%q, %q), want (keep, \"\")", got.FolderNameMode, got.FolderName)
 	}
 
-	if err := topicsRepo.SetFolderNameSeen(ctx, topic.ID, "Renamed"); err != nil {
+	if err := topicsRepo.SetFolderNameSeen(ctx, reload(t, pool, topic.ID), "Renamed"); err != nil {
 		t.Fatalf("SetFolderNameSeen: %v", err)
 	}
 	if got = reload(t, pool, topic.ID); got.FolderNameSeen != "Renamed" {
@@ -63,7 +63,8 @@ func TestTopicsFolderNameRoundTrip(t *testing.T) {
 	}
 
 	update(&FolderNamePolicy{Mode: domain.FolderNameKeep})
-	if err := topicsRepo.SetFolderNameSeen(ctx, topic.ID, "Renamed again"); err != nil {
+	snapshot := reload(t, pool, topic.ID) // what a worker dispatched now holds
+	if err := topicsRepo.SetFolderNameSeen(ctx, snapshot, "Renamed again"); err != nil {
 		t.Fatalf("SetFolderNameSeen: %v", err)
 	}
 	if err := topicsRepo.ResetCheckState(ctx, topic.ID, userID); err != nil {
@@ -71,6 +72,14 @@ func TestTopicsFolderNameRoundTrip(t *testing.T) {
 	}
 	if got = reload(t, pool, topic.ID); got.FolderNameSeen != "" || got.FolderNameMode != domain.FolderNameKeep {
 		t.Errorf("after reset = (%q, seen %q), want (keep, seen empty)", got.FolderNameMode, got.FolderNameSeen)
+	}
+	// The worker dispatched before the reset finishes late: its stale token
+	// must not bring the forgotten name back.
+	if err := topicsRepo.SetFolderNameSeen(ctx, snapshot, "Stale"); err != nil {
+		t.Fatalf("SetFolderNameSeen (stale): %v", err)
+	}
+	if got = reload(t, pool, topic.ID); got.FolderNameSeen != "" {
+		t.Errorf("stale worker restored FolderNameSeen = %q after a reset", got.FolderNameSeen)
 	}
 }
 
