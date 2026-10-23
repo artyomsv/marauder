@@ -350,22 +350,10 @@ func TestTopics_ScanTopic_MalformedExtra(t *testing.T) {
 	userID := uuid.New()
 	now := time.Now().UTC()
 
-	// Build a row that matches topicColumns exactly (29 columns).
-	rows := pgxmock.NewRows(topicColumnsAll).AddRow(
-		id, userID, "faketracker", "https://example.invalid/t/1",
-		"My Topic", "", // display_name, image_url
-		(*uuid.UUID)(nil), // client_id
-		(*uuid.UUID)(nil), // notifier_id
-		"", "",
-		[]byte("{not valid json"), "",
-		(*time.Time)(nil), (*time.Time)(nil), now,
-		3600, 0, "active",
-		"", "", now, now, // last_error, last_error_code, created_at, updated_at
-		false,       // display_name_is_placeholder
-		false, true, // replace_on_update, replace_delete_data
-		false, false, // notify_only, notify_only_announce_current
-		false, false, // add_paused_on_update, only_new_files
-	)
+	// The shared row, with an extra column that is not valid JSON.
+	row := topicRow(id, userID, now)
+	row[10] = []byte("{not valid json")
+	rows := pgxmock.NewRows(topicColumnsAll).AddRow(row...)
 
 	mock.ExpectQuery(`SELECT .* FROM topics WHERE id = \$1`).
 		WithArgs(id).

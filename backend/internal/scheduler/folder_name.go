@@ -234,7 +234,11 @@ func (s *Scheduler) rememberFolderName(ctx context.Context, log zerolog.Logger, 
 	}
 	if err := setter.SetFolderNameSeen(ctx, t.ID, name); err != nil {
 		log.Warn().Err(err).Msg("folder name: store the remembered name failed")
+		return
 	}
+	// The worker's copy, so a later step of the same delivery does not
+	// write the same name again.
+	t.FolderNameSeen = name
 }
 
 func savedNote(name string) string {

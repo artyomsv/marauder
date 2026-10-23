@@ -228,13 +228,13 @@ func TestRunCheck_FolderName_Keep_ExcludesOwnHash(t *testing.T) {
 		{Infohash: "prev", ClientID: &cid},
 		{Infohash: own, ClientID: &cid},
 	}
-	rc.filesByHash = map[string][]domain.ClientFile{
-		"prev": {{Index: 0, Path: "Want/E01.mkv", Size: 100}},
-		own:    {{Index: 0, Path: "Wrong/E01.mkv", Size: 100}},
-	}
+	rc.filesByHash = map[string][]domain.ClientFile{"prev": {{Index: 0, Path: "Want/E01.mkv", Size: 100}}}
 
 	f.s.runCheck(context.Background(), f.s.log, f.topic)
 
+	if len(rc.calls) == 0 || rc.calls[0] != "Files(prev)" {
+		t.Errorf("calls = %v, want the previous version read first, not the payload's own row", rc.calls)
+	}
 	if rc.renamedTo != "Want" {
 		t.Errorf("renamedTo = %q, want Want from the previous version", rc.renamedTo)
 	}
