@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Folder name in the client.** A topic can now name its torrent's top
+  folder: the tracker's name (default, unchanged), a custom name, or "keep
+  the name from my client", which gives each update the folder name the
+  previous version has there, so a folder renamed by hand stays renamed.
+  Marauder adds the torrent paused, renames the folder, and has the client
+  recheck it, so an update reuses the files already in that folder instead
+  of downloading everything again into a second folder. Works with
+  qBittorrent, Transmission and Deluge; magnets and single-file torrents
+  keep the tracker's name. Combined with replace-on-update, "delete the old
+  files" is refused, because both versions share the folder. See
+  `docs/folder-name.md`. (Ref #225)
+
 ## [1.24.0] - 2026-10-18
 
 ### Added
