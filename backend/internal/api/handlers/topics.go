@@ -35,7 +35,7 @@ type topicStore interface {
 	ListForUser(ctx context.Context, userID uuid.UUID) ([]*domain.Topic, error)
 	Delete(ctx context.Context, id, userID uuid.UUID) error
 	UpdateStatus(ctx context.Context, id, userID uuid.UUID, status domain.TopicStatus) error
-	Update(ctx context.Context, id, userID uuid.UUID, displayName string, clientID, notifierID *uuid.UUID, downloadDir, category string, checkIntervalSec *int, flags repo.TopicFlags, extra map[string]any) (*domain.Topic, error)
+	Update(ctx context.Context, id, userID uuid.UUID, displayName string, clientID, notifierID *uuid.UUID, downloadDir, category string, checkIntervalSec *int, flags repo.TopicFlags, folder *repo.FolderNamePolicy, extra map[string]any) (*domain.Topic, error)
 	ResetCheckState(ctx context.Context, id, userID uuid.UUID) error
 	QueueRecheck(ctx context.Context, id, userID uuid.UUID) (repo.RecheckOutcome, error)
 }
@@ -409,7 +409,7 @@ func (h *Topics) Update(w http.ResponseWriter, r *http.Request) {
 		NotifyOnlyAnnounceCurrent: notifyOnlyAnnounceCurrent,
 		AddPausedOnUpdate:         addPausedOnUpdate,
 		OnlyNewFiles:              onlyNewFiles,
-	}, extra)
+	}, nil, extra)
 	if uerr != nil {
 		if errors.Is(uerr, repo.ErrNotFound) {
 			problem.Write(w, r, h.BaseURL, problem.ErrNotFound("topic not found"))

@@ -301,7 +301,7 @@ func TestTopics_MarkEpisodesDownloaded_DBError(t *testing.T) {
 // ---------- scanTopic malformed extra ----------
 
 // topicRow returns a pgxmock row slice that matches topicColumns exactly
-// (29 columns as of migration 0017, which added the update policy flags).
+// (32 columns as of migration 0018, which added the folder name settings).
 // Callers override individual fields as needed. The helper centralises
 // column-order so tests don't drift.
 func topicRow(id, userID uuid.UUID, now time.Time) []any {
@@ -321,10 +321,11 @@ func topicRow(id, userID uuid.UUID, now time.Time) []any {
 		false, true, // replace_on_update, replace_delete_data
 		false, false, // notify_only, notify_only_announce_current
 		false, false, // add_paused_on_update, only_new_files
+		"default", "", "", // folder_name_mode, folder_name, folder_name_seen
 	}
 }
 
-// topicColumnsAll mirrors the header slice for pgxmock.NewRows (29 cols).
+// topicColumnsAll mirrors the header slice for pgxmock.NewRows (32 cols).
 var topicColumnsAll = []string{
 	"id", "user_id", "tracker_name", "url", "display_name", "image_url", "client_id", "notifier_id",
 	"download_dir", "category", "extra", "last_hash",
@@ -334,6 +335,7 @@ var topicColumnsAll = []string{
 	"replace_on_update", "replace_delete_data",
 	"notify_only", "notify_only_announce_current",
 	"add_paused_on_update", "only_new_files",
+	"folder_name_mode", "folder_name", "folder_name_seen",
 }
 
 // TestTopics_ScanTopic_MalformedExtra drives GetByID through a mocked
@@ -457,8 +459,8 @@ func TestTopics_Create_RoundTripsCategory(t *testing.T) {
 	rows := pgxmock.NewRows(topicColumnsAll).AddRow(row...)
 
 	// Match INSERT containing the category column.
-	mock.ExpectQuery(`INSERT INTO topics.*category.*notify_only, notify_only_announce_current, add_paused_on_update, only_new_files\) `+
-		`VALUES \(\$1,\$2,\$3,\$4,NULLIF\(\$5,''\),\$6,\$7,NULLIF\(\$8,''\),NULLIF\(\$9,''\),\$10,\$11,\$12,\$13,\$14,\$15,\$16,\$17,\$18,\$19,\$20\) RETURNING`).
+	mock.ExpectQuery(`INSERT INTO topics.*category.*notify_only, notify_only_announce_current, add_paused_on_update, only_new_files,\s+folder_name_mode, folder_name\) `+
+		`VALUES \(\$1,\$2,\$3,\$4,NULLIF\(\$5,''\),\$6,\$7,NULLIF\(\$8,''\),NULLIF\(\$9,''\),\$10,\$11,\$12,\$13,\$14,\$15,\$16,\$17,\$18,\$19,\$20,\$21,NULLIF\(\$22,''\)\) RETURNING`).
 		WithArgs(
 			userID, "faketracker", "https://example.invalid/t/1",
 			"My Topic", "", // display_name, image_url
@@ -472,6 +474,7 @@ func TestTopics_Create_RoundTripsCategory(t *testing.T) {
 			false, true, // replace_on_update, replace_delete_data
 			false, false, // notify_only, notify_only_announce_current
 			false, false, // add_paused_on_update, only_new_files
+			"default", "", // folder_name_mode (empty means default), folder_name
 		).
 		WillReturnRows(rows)
 
@@ -542,11 +545,13 @@ func TestTopics_Update_HappyPath(t *testing.T) {
 			&interval,         // $13 check_interval_sec
 			false,             // $14 add_paused_on_update
 			false,             // $15 only_new_files
+			(*string)(nil),    // $16 folder_name_mode (nil policy: keep)
+			(*string)(nil),    // $17 folder_name
 		).
 		WillReturnRows(rows)
 
 	extra := map[string]any{"quality": "720p", "start_season": 2}
-	got, err := r.Update(context.Background(), id, userID, "Updated Name", nil, nil, "", "series", &interval, TopicFlags{ReplaceOnUpdate: true, ReplaceDeleteData: false}, extra)
+	got, err := r.Update(context.Background(), id, userID, "Updated Name", nil, nil, "", "series", &interval, TopicFlags{ReplaceOnUpdate: true, ReplaceDeleteData: false}, nil, extra)
 	if err != nil {
 		t.Fatalf("Update: unexpected error: %v", err)
 	}
@@ -568,10 +573,10 @@ func TestTopics_Update_NotFound(t *testing.T) {
 	userID := uuid.New()
 
 	mock.ExpectQuery(`UPDATE topics SET`).
-		WithArgs(id, userID, pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), false, false, (*int)(nil), false, false).
+		WithArgs(id, userID, pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), false, false, (*int)(nil), false, false, (*string)(nil), (*string)(nil)).
 		WillReturnError(pgx.ErrNoRows)
 
-	_, err := r.Update(context.Background(), id, userID, "X", nil, nil, "", "", nil, TopicFlags{ReplaceOnUpdate: false, ReplaceDeleteData: true}, map[string]any{})
+	_, err := r.Update(context.Background(), id, userID, "X", nil, nil, "", "", nil, TopicFlags{ReplaceOnUpdate: false, ReplaceDeleteData: true}, nil, map[string]any{})
 	if !errors.Is(err, ErrNotFound) {
 		t.Fatalf("Update: want ErrNotFound, got %v", err)
 	}
@@ -588,10 +593,10 @@ func TestTopics_Update_DBError(t *testing.T) {
 	dbErr := errors.New("connection reset")
 
 	mock.ExpectQuery(`UPDATE topics SET`).
-		WithArgs(id, userID, pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), false, false, (*int)(nil), false, false).
+		WithArgs(id, userID, pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), false, false, (*int)(nil), false, false, (*string)(nil), (*string)(nil)).
 		WillReturnError(dbErr)
 
-	_, err := r.Update(context.Background(), id, userID, "X", nil, nil, "", "", nil, TopicFlags{ReplaceOnUpdate: false, ReplaceDeleteData: true}, map[string]any{})
+	_, err := r.Update(context.Background(), id, userID, "X", nil, nil, "", "", nil, TopicFlags{ReplaceOnUpdate: false, ReplaceDeleteData: true}, nil, map[string]any{})
 	if err == nil {
 		t.Fatal("Update: want error, got nil")
 	}
@@ -616,8 +621,8 @@ func TestTopics_Create_RoundTripsNotifierID(t *testing.T) {
 
 	rows := pgxmock.NewRows(topicColumnsAll).AddRow(row...)
 
-	mock.ExpectQuery(`INSERT INTO topics.*notifier_id.*notify_only, notify_only_announce_current, add_paused_on_update, only_new_files\) `+
-		`VALUES \(\$1,\$2,\$3,\$4,NULLIF\(\$5,''\),\$6,\$7,NULLIF\(\$8,''\),NULLIF\(\$9,''\),\$10,\$11,\$12,\$13,\$14,\$15,\$16,\$17,\$18,\$19,\$20\) RETURNING`).
+	mock.ExpectQuery(`INSERT INTO topics.*notifier_id.*notify_only, notify_only_announce_current, add_paused_on_update, only_new_files,\s+folder_name_mode, folder_name\) `+
+		`VALUES \(\$1,\$2,\$3,\$4,NULLIF\(\$5,''\),\$6,\$7,NULLIF\(\$8,''\),NULLIF\(\$9,''\),\$10,\$11,\$12,\$13,\$14,\$15,\$16,\$17,\$18,\$19,\$20,\$21,NULLIF\(\$22,''\)\) RETURNING`).
 		WithArgs(
 			userID, "faketracker", "https://example.invalid/t/1",
 			"My Topic", "",
@@ -630,6 +635,7 @@ func TestTopics_Create_RoundTripsNotifierID(t *testing.T) {
 			false, false, // replace_on_update, replace_delete_data (unset on this raw topic)
 			false, false, // notify_only, notify_only_announce_current
 			false, false, // add_paused_on_update, only_new_files
+			"default", "", // folder_name_mode (empty means default), folder_name
 		).
 		WillReturnRows(rows)
 

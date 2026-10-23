@@ -48,7 +48,7 @@ type adminResolver interface {
 type topicsStore interface {
 	topics.Store
 	GetByURL(ctx context.Context, userID uuid.UUID, url string) (*domain.Topic, error)
-	Update(ctx context.Context, id, userID uuid.UUID, displayName string, clientID, notifierID *uuid.UUID, downloadDir, category string, checkIntervalSec *int, flags repo.TopicFlags, extra map[string]any) (*domain.Topic, error)
+	Update(ctx context.Context, id, userID uuid.UUID, displayName string, clientID, notifierID *uuid.UUID, downloadDir, category string, checkIntervalSec *int, flags repo.TopicFlags, folder *repo.FolderNamePolicy, extra map[string]any) (*domain.Topic, error)
 }
 
 // Poller periodically reads each enabled Sonarr instance's grab history and
@@ -337,7 +337,7 @@ func (p *Poller) handleExisting(ctx context.Context, inst domain.SonarrInstance,
 			NotifyOnlyAnnounceCurrent: existing.NotifyOnlyAnnounceCurrent,
 			AddPausedOnUpdate:         existing.AddPausedOnUpdate,
 			OnlyNewFiles:              existing.OnlyNewFiles,
-		}, mergedExtra); err != nil {
+		}, nil, mergedExtra); err != nil {
 		p.log.Warn().Err(err).Str("url", existing.URL).Msg("update existing topic from sonarr grab failed")
 		metrics.SonarrRecordsProcessedTotal.WithLabelValues("error").Inc()
 		return

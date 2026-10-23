@@ -24,7 +24,7 @@ func TestTopicsUpdatePolicyRoundTrip(t *testing.T) {
 	}
 
 	if _, err := topicsRepo.Update(ctx, topic.ID, userID, topic.DisplayName, nil, nil, "", "", nil,
-		TopicFlags{AddPausedOnUpdate: true, OnlyNewFiles: false}, map[string]any{}); err != nil {
+		TopicFlags{AddPausedOnUpdate: true, OnlyNewFiles: false}, nil, map[string]any{}); err != nil {
 		t.Fatalf("Update: %v", err)
 	}
 	got := reload(t, pool, topic.ID)
@@ -36,7 +36,7 @@ func TestTopicsUpdatePolicyRoundTrip(t *testing.T) {
 	}
 
 	if _, err := topicsRepo.Update(ctx, topic.ID, userID, topic.DisplayName, nil, nil, "", "", nil,
-		TopicFlags{AddPausedOnUpdate: false, OnlyNewFiles: true}, map[string]any{}); err != nil {
+		TopicFlags{AddPausedOnUpdate: false, OnlyNewFiles: true}, nil, map[string]any{}); err != nil {
 		t.Fatalf("Update 2: %v", err)
 	}
 	got = reload(t, pool, topic.ID)

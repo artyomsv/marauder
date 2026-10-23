@@ -63,6 +63,20 @@ const (
 	TopicStatusError  TopicStatus = "error"
 )
 
+// FolderNameMode is how a topic names its torrent's top folder in the client
+// (issue #225).
+type FolderNameMode string
+
+const (
+	// FolderNameDefault keeps the tracker's name.
+	FolderNameDefault FolderNameMode = "default"
+	// FolderNameCustom uses the name the user typed (Topic.FolderName).
+	FolderNameCustom FolderNameMode = "custom"
+	// FolderNameKeep gives every update the name the previous version has in
+	// the client, so a rename done by hand there survives updates.
+	FolderNameKeep FolderNameMode = "keep"
+)
+
 // Topic represents a URL that Marauder is monitoring.
 type Topic struct {
 	ID          uuid.UUID
@@ -110,7 +124,15 @@ type Topic struct {
 	// torrent already had (same relative path and size) and downloads only the
 	// added ones (issue #205). When the scheduler cannot prove which files are
 	// new it adds the torrent paused instead. Ignored for per-episode trackers.
-	OnlyNewFiles      bool
+	OnlyNewFiles bool
+	// FolderNameMode / FolderName name the torrent's top folder in the client
+	// (issue #225); FolderName is set only in custom mode. FolderNameSeen is
+	// keep mode's memory of the last name the scheduler saw or set, used when
+	// the previous torrent is no longer in the client. Ignored for per-episode
+	// trackers and notify-only topics.
+	FolderNameMode    FolderNameMode
+	FolderName        string
+	FolderNameSeen    string
 	Extra             map[string]any
 	LastHash          string
 	LastCheckedAt     *time.Time

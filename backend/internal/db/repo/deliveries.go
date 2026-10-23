@@ -97,6 +97,29 @@ LIMIT 1`
 	return files, nil
 }
 
+// LatestOther returns the topic's newest delivery whose infohash is not
+// excludeInfohash, or (nil, nil) when there is none. Keep mode (issue #225)
+// reads the previous version's folder name from it; the exclusion passes over
+// a retried delivery's own row, as LatestFiles does.
+func (r *Deliveries) LatestOther(ctx context.Context, topicID uuid.UUID, excludeInfohash string) (*domain.TopicDelivery, error) {
+	const q = `
+SELECT id, topic_id, infohash, label, client_id, delivered_at
+FROM topic_deliveries
+WHERE topic_id = $1 AND infohash <> $2
+ORDER BY delivered_at DESC
+LIMIT 1`
+	var d domain.TopicDelivery
+	err := r.pool.QueryRow(ctx, q, topicID, excludeInfohash).
+		Scan(&d.ID, &d.TopicID, &d.Infohash, &d.Label, &d.ClientID, &d.DeliveredAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("deliveries: latest other: %w", err)
+	}
+	return &d, nil
+}
+
 // SetFiles stores the file list of one delivery (issue #205). A delivery's
 // files mean "the version Marauder offered the user". A delivery that runs an
 // only-new-files selection has offered nothing definite until the selection
