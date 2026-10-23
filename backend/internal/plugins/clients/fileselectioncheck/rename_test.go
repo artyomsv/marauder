@@ -165,7 +165,17 @@ func TestRenameOnRealClients(t *testing.T) {
 				return ok && !s
 			}, "torrent to leave the stopped state (a start sent before the recheck kept)")
 
-			// 4. Renaming to the name it already has: the scheduler never does
+			// 4. Stop, which the scheduler sends when a recheck after a start
+			// fails, and which DiskState must then report as stopped.
+			if err := ren.Stop(ctx, raw, hash); err != nil {
+				t.Fatalf("Stop: %v", err)
+			}
+			waitFor(t, ctx, func() bool {
+				state, err = ren.DiskState(ctx, raw, hash)
+				return err == nil && state.Stopped
+			}, "torrent to report stopped after Stop")
+
+			// 5. Renaming to the name it already has: the scheduler never does
 			// this (same_name skips it); record what the client says.
 			err = ren.RenameRoot(ctx, raw, hash, want, want)
 			t.Logf("RenameRoot to the current name: %v", err)
