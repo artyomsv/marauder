@@ -38,11 +38,13 @@ type fakeRenamingClient struct {
 	// started is set by Start; startLag is how many DiskState reads after it
 	// still report the torrent stopped (Deluge keeps a cached paused flag
 	// until its next status refresh). stopCtxErr is the context error Stop saw.
-	started     bool
-	startLag    int
-	stopCtxErr  error
-	renamedFrom string
-	renamedTo   string
+	started    bool
+	startLag   int
+	stopCtxErr error
+	// stateErrAfterStart fails every DiskState read once Start was called.
+	stateErrAfterStart error
+	renamedFrom        string
+	renamedTo          string
 }
 
 func (f *fakeRenamingClient) Files(ctx context.Context, raw []byte, hash string) ([]domain.ClientFile, error) {
@@ -90,6 +92,9 @@ func (f *fakeRenamingClient) DiskState(context.Context, []byte, string) (registr
 	if f.checkingPolls > 0 {
 		f.checkingPolls--
 		return registry.DiskState{}, nil
+	}
+	if f.started && f.stateErrAfterStart != nil {
+		return registry.DiskState{}, f.stateErrAfterStart
 	}
 	running := f.running
 	if f.started {
@@ -733,6 +738,46 @@ func TestRecheckRenamed_StopsWithFreshContextAfterDeadline(t *testing.T) {
 	}
 	if note != "Added paused: rechecking the torrent failed. Recheck it in your client and start it." {
 		t.Errorf("note = %q", note)
+	}
+}
+
+// A start the client never confirms — a failed status read, or no running
+// state before startWait — is not followed by a recheck that would report
+// success: Deluge could still hold its cached paused flag and pause the
+// torrent again. The torrent is stopped and the user is told to finish it
+// (PR #226 review, M-1).
+func TestRunCheck_FolderName_StartNotConfirmed_StopsWithoutRecheck(t *testing.T) {
+	cases := []struct {
+		name  string
+		setup func(rc *fakeRenamingClient)
+	}{
+		{"status read fails", func(rc *fakeRenamingClient) { rc.stateErrAfterStart = errors.New("<html>boom</html>") }},
+		{"never shows running", func(rc *fakeRenamingClient) { rc.startLag = 1 << 20 }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			shortWaits(t)
+			f, rc := renamingFixture(t, torrentTracker(torrentmetatest.Torrent("Show S01", v2Files)))
+			customTopic(f, "Want")
+			tc.setup(rc)
+
+			f.s.runCheck(context.Background(), f.s.log, f.topic)
+
+			if containsString(rc.calls, "Recheck") {
+				t.Errorf("calls = %v, want no recheck after an unconfirmed start", rc.calls)
+			}
+			if !containsString(rc.calls, "Stop") || rc.stopCtxErr != nil {
+				t.Errorf("calls=%v stop ctx err=%v, want Stop sent on a live context", rc.calls, rc.stopCtxErr)
+			}
+			want := "Added paused: the client did not confirm the start, so the folder was not rechecked. Recheck the torrent in your client and start it."
+			body := submittedBody(t, f)
+			if !strings.Contains(body, want) {
+				t.Errorf("body = %q, want %q", body, want)
+			}
+			if strings.Contains(body, "boom") {
+				t.Errorf("body = %q carries the raw client error", body)
+			}
+		})
 	}
 }
 

@@ -299,42 +299,65 @@ func (s *Scheduler) recheckRenamed(ctx context.Context, log zerolog.Logger, clie
 	if !fp.recheck {
 		return ""
 	}
+	// A recheck sent before the client confirmed the start could end with the
+	// torrent paused again (Deluge), and would still read as success. An
+	// unconfirmed start is a failed step: stop the torrent and leave the
+	// recheck to the user.
 	if started {
-		waitForRunning(ctx, rawConfig, fp.renamer, fp.hash)
+		if err := waitForRunning(ctx, rawConfig, fp.renamer, fp.hash); err != nil {
+			return s.stopUnchecked(ctx, log, clientName, rawConfig, fp, "start not confirmed", err,
+				"Added paused: the client did not confirm the start, so the folder was not rechecked. Recheck the torrent in your client and start it.")
+		}
 	}
-	err := fp.renamer.Recheck(ctx, rawConfig, fp.hash)
-	if err == nil {
-		return ""
+	if err := fp.renamer.Recheck(ctx, rawConfig, fp.hash); err != nil {
+		return s.stopUnchecked(ctx, log, clientName, rawConfig, fp, "recheck", err,
+			"Added paused: rechecking the torrent failed. Recheck it in your client and start it.")
 	}
-	log.Warn().Err(err).Str("client", clientName).Str("result", folderFailed).Str("step", "recheck").
-		Msg("folder renamed but the recheck failed; stopping the torrent")
+	return ""
+}
+
+// stopUnchecked stops a renamed torrent whose data was not rechecked: it may
+// already be running (started above, or by the selection), and unchecked it
+// would download the data already in the folder again. Stopping a stopped
+// torrent changes nothing. The stop gets its own bounded context, because the
+// failed step most likely ran out the delivery's deadline. It returns note,
+// or a note saying the torrent is still running when the stop fails too.
+func (s *Scheduler) stopUnchecked(ctx context.Context, log zerolog.Logger, clientName string, rawConfig []byte, fp *folderPlan, step string, cause error, note string) string {
+	log.Warn().Err(cause).Str("client", clientName).Str("result", folderFailed).Str("step", step).
+		Msg("folder renamed but not rechecked; stopping the torrent")
 	metrics.SchedulerFolderRenameTotal.WithLabelValues(clientName, folderFailed).Inc()
-	// The torrent may already be running (started above, or by the
-	// selection), and unchecked it would download the data already in the
-	// folder again. Stopping a stopped torrent changes nothing. Its own
-	// bounded context: the recheck most likely failed because the delivery's
-	// deadline passed, and the stop must still be sent.
 	stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), stopTimeout)
 	defer cancel()
 	if err := fp.renamer.Stop(stopCtx, rawConfig, fp.hash); err != nil {
-		log.Warn().Err(err).Str("client", clientName).Msg("stopping the torrent after a failed recheck failed")
+		log.Warn().Err(err).Str("client", clientName).Msg("stopping the unchecked torrent failed")
 		return "Rechecking the torrent failed and it could not be stopped. Stop and recheck it in your client."
 	}
-	return "Added paused: rechecking the torrent failed. Recheck it in your client and start it."
+	return note
 }
 
+// errStartNotConfirmed means the client did not report a started torrent as
+// running before startWait (or the delivery's deadline) passed.
+var errStartNotConfirmed = errors.New("the client did not report the torrent running")
+
 // waitForRunning reads the torrent's state until the client reports it not
-// stopped, or startWait passes. Best-effort: the recheck follows either way.
-func waitForRunning(ctx context.Context, rawConfig []byte, renamer registry.WithRename, hash string) {
+// stopped. It returns the read error, or errStartNotConfirmed when startWait
+// or the context runs out first.
+func waitForRunning(ctx context.Context, rawConfig []byte, renamer registry.WithRename, hash string) error {
 	deadline := time.Now().Add(startWait)
 	for {
 		state, err := renamer.DiskState(ctx, rawConfig, hash)
-		if err != nil || !state.Stopped || time.Now().After(deadline) {
-			return
+		if err != nil {
+			return err
+		}
+		if !state.Stopped {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return errStartNotConfirmed
 		}
 		select {
 		case <-ctx.Done():
-			return
+			return errStartNotConfirmed
 		case <-time.After(filesPollInterval):
 		}
 	}
