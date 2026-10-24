@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.25.0] - 2026-10-24
+
 ### Added
 
 - **Folder name in the client.** A topic can now name its torrent's top
