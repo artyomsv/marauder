@@ -36,6 +36,8 @@ const EMPTY: TopicFormValues = {
   addPausedOnUpdate: false,
   onlyNewFiles: false,
   checkIntervalSec: DEFAULT_CHECK_INTERVAL_SEC,
+  folderNameMode: "default",
+  folderName: "",
 };
 
 type AddMode = "url" | "search";
@@ -93,6 +95,8 @@ export function AddTopicCard({ onClose, onCreated }: AddTopicCardProps) {
         add_paused_on_update: v.addPausedOnUpdate,
         only_new_files: v.onlyNewFiles,
         check_interval_sec: v.checkIntervalSec,
+        folder_name_mode: v.folderNameMode,
+        folder_name: v.folderNameMode === "custom" ? v.folderName : undefined,
       }),
     onSuccess: () => onCreated(),
     onError: (err) => setError(err instanceof Error ? err.message : "Failed"),

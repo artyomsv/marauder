@@ -86,6 +86,7 @@ type fakeTopicStore struct {
 	updateReplaceOnUpdate   bool
 	updateReplaceDeleteData bool
 	lastFlags               repo.TopicFlags
+	updateFolder            *repo.FolderNamePolicy
 	updateExtra             map[string]any
 	updateReturn            *domain.Topic
 
@@ -134,7 +135,7 @@ func (s *fakeTopicStore) QueueRecheck(_ context.Context, id, userID uuid.UUID) (
 	s.recheckCalls = append(s.recheckCalls, [2]uuid.UUID{id, userID})
 	return s.recheckOutcome, s.recheckErr
 }
-func (s *fakeTopicStore) Update(_ context.Context, _, _ uuid.UUID, displayName string, clientID, notifierID *uuid.UUID, downloadDir, category string, checkIntervalSec *int, flags repo.TopicFlags, extra map[string]any) (*domain.Topic, error) {
+func (s *fakeTopicStore) Update(_ context.Context, _, _ uuid.UUID, displayName string, clientID, notifierID *uuid.UUID, downloadDir, category string, checkIntervalSec *int, flags repo.TopicFlags, folder *repo.FolderNamePolicy, extra map[string]any) (*domain.Topic, error) {
 	s.updateCalled = true
 	s.updateCheckIntervalSec = checkIntervalSec
 	s.updateDisplayName = displayName
@@ -145,6 +146,7 @@ func (s *fakeTopicStore) Update(_ context.Context, _, _ uuid.UUID, displayName s
 	s.updateReplaceOnUpdate = flags.ReplaceOnUpdate
 	s.updateReplaceDeleteData = flags.ReplaceDeleteData
 	s.lastFlags = flags
+	s.updateFolder = folder
 	s.updateExtra = extra
 	if s.updateReturn != nil {
 		return s.updateReturn, nil

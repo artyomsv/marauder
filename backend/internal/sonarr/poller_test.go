@@ -111,6 +111,8 @@ type fakeTopics struct {
 	updated []*domain.Topic
 	// intervals records the check-interval argument of each Update call.
 	intervals []*int
+	// folders records the folder name argument of each Update call.
+	folders []*repo.FolderNamePolicy
 }
 
 func (f *fakeTopics) Create(_ context.Context, t *domain.Topic) (*domain.Topic, error) {
@@ -130,7 +132,7 @@ func (f *fakeTopics) GetByURL(_ context.Context, _ uuid.UUID, url string) (*doma
 }
 func (f *fakeTopics) Update(_ context.Context, id, _ uuid.UUID, displayName string,
 	clientID, notifierID *uuid.UUID, downloadDir, category string,
-	checkIntervalSec *int, flags repo.TopicFlags, extra map[string]any,
+	checkIntervalSec *int, flags repo.TopicFlags, folder *repo.FolderNamePolicy, extra map[string]any,
 ) (*domain.Topic, error) {
 	updated := &domain.Topic{
 		ID:                        id,
@@ -149,6 +151,7 @@ func (f *fakeTopics) Update(_ context.Context, id, _ uuid.UUID, displayName stri
 	}
 	f.updated = append(f.updated, updated)
 	f.intervals = append(f.intervals, checkIntervalSec)
+	f.folders = append(f.folders, folder)
 	return updated, nil
 }
 
@@ -331,6 +334,10 @@ func TestPoller_ExistingTopicRefreshesVariantMetadata(t *testing.T) {
 	// that stale read back over an edit the user saved meanwhile (PR #209, M-2).
 	if ts.intervals[0] != nil {
 		t.Errorf("poller must not pass a check interval, got %d", *ts.intervals[0])
+	}
+	// Same for the folder name setting (issue #225).
+	if ts.folders[0] != nil {
+		t.Errorf("poller must not pass a folder name policy, got %+v", *ts.folders[0])
 	}
 }
 

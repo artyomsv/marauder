@@ -192,7 +192,7 @@ func TestTopicsNotifyOnlyRoundTrip(t *testing.T) {
 
 	// Update must persist both, and GetByID must read them back.
 	if _, err := topicsRepo.Update(ctx, plain.ID, userID, plain.DisplayName, nil, nil, "", "", nil,
-		TopicFlags{NotifyOnly: true, NotifyOnlyAnnounceCurrent: false}, map[string]any{}); err != nil {
+		TopicFlags{NotifyOnly: true, NotifyOnlyAnnounceCurrent: false}, nil, map[string]any{}); err != nil {
 		t.Fatalf("Update: %v", err)
 	}
 	got, err := topicsRepo.GetByID(ctx, plain.ID, &userID)
@@ -288,7 +288,7 @@ func TestTopicsUpdateCheckIntervalClamp(t *testing.T) {
 	}
 	update := func(sec int) *domain.Topic {
 		t.Helper()
-		got, uerr := topicsRepo.Update(ctx, created.ID, userID, created.DisplayName, nil, nil, "", "", &sec, TopicFlags{}, map[string]any{})
+		got, uerr := topicsRepo.Update(ctx, created.ID, userID, created.DisplayName, nil, nil, "", "", &sec, TopicFlags{}, nil, map[string]any{})
 		if uerr != nil {
 			t.Fatalf("update to %ds: %v", sec, uerr)
 		}
@@ -347,7 +347,7 @@ func TestTopicsUpdateShortenDuringCheck(t *testing.T) {
 	observed := *reload(t, pool, created.ID) // the worker's dispatch snapshot
 
 	shorter := 3600
-	if _, err := topicsRepo.Update(ctx, created.ID, userID, created.DisplayName, nil, nil, "", "", &shorter, TopicFlags{}, map[string]any{}); err != nil {
+	if _, err := topicsRepo.Update(ctx, created.ID, userID, created.DisplayName, nil, nil, "", "", &shorter, TopicFlags{}, nil, map[string]any{}); err != nil {
 		t.Fatalf("update: %v", err)
 	}
 
@@ -380,12 +380,12 @@ func TestTopicsUpdateOmittedIntervalKeepsCurrent(t *testing.T) {
 	stale := *topic // a background writer's earlier read
 
 	longer := 86400
-	if _, err := topicsRepo.Update(ctx, topic.ID, userID, topic.DisplayName, nil, nil, "", "", &longer, TopicFlags{}, map[string]any{}); err != nil {
+	if _, err := topicsRepo.Update(ctx, topic.ID, userID, topic.DisplayName, nil, nil, "", "", &longer, TopicFlags{}, nil, map[string]any{}); err != nil {
 		t.Fatalf("user update: %v", err)
 	}
 	saved := reload(t, pool, topic.ID)
 
-	if _, err := topicsRepo.Update(ctx, stale.ID, userID, stale.DisplayName, nil, nil, "", "", nil, TopicFlags{}, map[string]any{}); err != nil {
+	if _, err := topicsRepo.Update(ctx, stale.ID, userID, stale.DisplayName, nil, nil, "", "", nil, TopicFlags{}, nil, map[string]any{}); err != nil {
 		t.Fatalf("background update: %v", err)
 	}
 	got := reload(t, pool, topic.ID)

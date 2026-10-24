@@ -129,6 +129,19 @@ var (
 		},
 		[]string{"client", "result"},
 	)
+
+	// SchedulerFolderRenameTotal counts outcomes of the per-topic folder name
+	// (issue #225) by client and result: renamed, same_name, magnet,
+	// single_file, unreadable, no_root, running, has_data, unsupported, failed.
+	// "failed" leaves the torrent paused for the user; the cannot-apply
+	// results keep the tracker's folder name.
+	SchedulerFolderRenameTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "marauder_scheduler_folder_rename_total",
+			Help: "Outcomes of the per-topic folder name, partitioned by client and result.",
+		},
+		[]string{"client", "result"},
+	)
 )
 
 // Topic reset metrics ------------------------------------------------------

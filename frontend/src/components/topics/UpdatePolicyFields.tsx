@@ -18,6 +18,9 @@ interface UpdatePolicyFieldsProps {
   // Display name of the receiving client when it cannot pause or select
   // files; null when it can or is not known.
   unsupportedClient: string | null;
+  // A folder name is set (issue #225): both versions share the folder, so
+  // deleting the replaced version's files would delete the new ones too.
+  folderNameSet?: boolean;
 }
 
 // Replace-on-update (issue #101) and the update policy (issue #205). The two
@@ -28,9 +31,14 @@ export function UpdatePolicyFields({
   onChange,
   episodic,
   unsupportedClient,
+  folderNameSet = false,
 }: UpdatePolicyFieldsProps) {
   const t = useT();
   const set = (patch: Partial<UpdatePolicyValue>) => onChange({ ...value, ...patch });
+  const deleteDataLocked = value.onlyNewFiles || folderNameSet;
+  const lockReason = value.onlyNewFiles
+    ? t("topics.updatePolicy.deleteDataLocked")
+    : t("topics.updatePolicy.deleteDataLockedFolder");
 
   return (
     <div className="space-y-2 rounded-md border border-border/60 bg-muted/20 p-3">
@@ -47,15 +55,15 @@ export function UpdatePolicyFields({
         <label className="flex items-center gap-2 pt-1 text-sm">
           <input
             type="checkbox"
-            checked={value.replaceDeleteData && !value.onlyNewFiles}
-            disabled={value.onlyNewFiles}
+            checked={value.replaceDeleteData && !deleteDataLocked}
+            disabled={deleteDataLocked}
             onChange={(e) => set({ replaceDeleteData: e.target.checked })}
           />
           <span>{t("topics.replaceOnUpdate.deleteData")}</span>
         </label>
       )}
-      {value.replaceOnUpdate && value.onlyNewFiles && (
-        <p className="text-xs text-muted-foreground">{t("topics.updatePolicy.deleteDataLocked")}</p>
+      {value.replaceOnUpdate && deleteDataLocked && (
+        <p className="text-xs text-muted-foreground">{lockReason}</p>
       )}
 
       {!episodic && (

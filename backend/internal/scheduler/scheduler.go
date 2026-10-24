@@ -116,6 +116,7 @@ type deliveriesRecorder interface {
 	ListForTopic(ctx context.Context, topicID uuid.UUID) ([]*domain.TopicDelivery, error)
 	DeleteByInfohashes(ctx context.Context, topicID uuid.UUID, hashes []string) (int64, error)
 	LatestFiles(ctx context.Context, topicID uuid.UUID, excludeInfohash string) ([]domain.TorrentFile, error)
+	LatestOther(ctx context.Context, topicID uuid.UUID, excludeInfohash string) (*domain.TopicDelivery, error)
 	SetFiles(ctx context.Context, topicID uuid.UUID, infohash string, files []domain.TorrentFile) error
 }
 
@@ -1091,6 +1092,7 @@ func (s *Scheduler) sendViaClient(ctx context.Context, log zerolog.Logger, cfg *
 		return "", fmt.Errorf("decrypt client config: %w", err)
 	}
 	plan := s.planDelivery(ctx, log, t, episodic, clientPlugin, payload)
+	plan.folder = s.planFolderName(ctx, log, t, episodic, cfg, rawConfig, clientPlugin, payload, plan.files)
 	// Last check before the irreversible step. Handing a payload to the client
 	// is the one thing in this tick that a reset cannot undo afterwards: the
 	// reset removes exactly the torrents its delivery snapshot listed, so a
@@ -1115,7 +1117,7 @@ func (s *Scheduler) sendViaClient(ctx context.Context, log zerolog.Logger, cfg *
 	if err := clientPlugin.Add(ctx, rawConfig, payload, domain.AddOptions{
 		DownloadDir: t.DownloadDir,
 		Category:    t.Category,
-		Paused:      plan.paused,
+		Paused:      plan.addPaused(),
 	}); err != nil {
 		metrics.ClientSubmitTotal.WithLabelValues(cfg.ClientName, "error").Inc()
 		// The one failure on the whole submit path that genuinely means "the

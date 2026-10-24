@@ -37,6 +37,8 @@ function initialFrom(topic: Topic): TopicFormValues {
     addPausedOnUpdate: topic.AddPausedOnUpdate ?? false,
     onlyNewFiles: topic.OnlyNewFiles ?? false,
     checkIntervalSec: topic.CheckIntervalSec || DEFAULT_CHECK_INTERVAL_SEC,
+    folderNameMode: topic.FolderNameMode || "default",
+    folderName: topic.FolderName ?? "",
   };
 }
 
@@ -64,6 +66,8 @@ export function EditTopicCard({ topic, onClose, onSaved }: EditTopicCardProps) {
         add_paused_on_update: v.addPausedOnUpdate,
         only_new_files: v.onlyNewFiles,
         check_interval_sec: v.checkIntervalSec,
+        folder_name_mode: v.folderNameMode,
+        folder_name: v.folderName,
         quality: v.quality || undefined,
         start_season: v.startSeason ? parseInt(v.startSeason, 10) : undefined,
         start_episode: v.startEpisode ? parseInt(v.startEpisode, 10) : undefined,

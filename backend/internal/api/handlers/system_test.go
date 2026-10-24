@@ -26,6 +26,32 @@ func (f *fakeSelectingClient) Files(context.Context, []byte, string) ([]domain.C
 func (f *fakeSelectingClient) SkipFiles(context.Context, []byte, string, []int) error { return nil }
 func (f *fakeSelectingClient) Start(context.Context, []byte, string) error            { return nil }
 
+type fakeRenamingClient struct{ fakeSelectingClient }
+
+func (f *fakeRenamingClient) RenameRoot(context.Context, []byte, string, string, string) error {
+	return nil
+}
+func (f *fakeRenamingClient) Recheck(context.Context, []byte, string) error { return nil }
+func (f *fakeRenamingClient) Stop(context.Context, []byte, string) error    { return nil }
+func (f *fakeRenamingClient) DiskState(context.Context, []byte, string) (registry.DiskState, error) {
+	return registry.DiskState{}, nil
+}
+
+// Renaming needs the client's file list too, so a client without file
+// selection does not support it (issue #225).
+func TestListClientInfos_SupportsRename(t *testing.T) {
+	infos := listClientInfos([]registry.Client{
+		&fakeRenamingClient{fakeSelectingClient{fakeInfoClient{name: "renaming"}}},
+		&fakeSelectingClient{fakeInfoClient{name: "selecting"}},
+		&fakeInfoClient{name: "plain"},
+	})
+	for i, want := range []bool{true, false, false} {
+		if infos[i]["supports_rename"] != want {
+			t.Errorf("%s: supports_rename = %v, want %v", infos[i]["name"], infos[i]["supports_rename"], want)
+		}
+	}
+}
+
 func TestListClientInfos_SupportsFileSelection(t *testing.T) {
 	infos := listClientInfos([]registry.Client{
 		&fakeSelectingClient{fakeInfoClient{name: "selecting"}},

@@ -124,10 +124,13 @@ func listClientInfos(items []registry.Client) []map[string]any {
 	out := make([]map[string]any, 0, len(items))
 	for _, c := range items {
 		_, selects := c.(registry.WithFileSelection)
+		// Renaming reads the current folder through the file list (issue #225).
+		_, renames := c.(registry.WithRename)
 		out = append(out, map[string]any{
 			"name":                    c.Name(),
 			"display_name":            c.DisplayName(),
 			"supports_file_selection": selects,
+			"supports_rename":         selects && renames,
 		})
 	}
 	return out

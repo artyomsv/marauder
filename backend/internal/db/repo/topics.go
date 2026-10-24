@@ -41,13 +41,14 @@ const topicColumns = `id, user_id, tracker_name, url, display_name,
 		last_checked_at, last_updated_at, next_check_at,
 		check_interval_sec, consecutive_errors, status,
 		COALESCE(last_error,''), COALESCE(last_error_code,''), created_at, updated_at, display_name_is_placeholder,
-		replace_on_update, replace_delete_data, notify_only, notify_only_announce_current, add_paused_on_update, only_new_files`
+		replace_on_update, replace_delete_data, notify_only, notify_only_announce_current, add_paused_on_update, only_new_files,
+		folder_name_mode, COALESCE(folder_name,''), COALESCE(folder_name_seen,'')`
 
 func scanTopic(row pgx.Row) (*domain.Topic, error) {
 	var t domain.Topic
 	var extraRaw []byte
 	var lastChecked, lastUpdated *time.Time
-	var status string
+	var status, folderMode string
 	var clientID, notifierID *uuid.UUID
 	err := row.Scan(
 		&t.ID, &t.UserID, &t.TrackerName, &t.URL, &t.DisplayName,
@@ -56,6 +57,7 @@ func scanTopic(row pgx.Row) (*domain.Topic, error) {
 		&t.CheckIntervalSec, &t.ConsecutiveErrors, &status,
 		&t.LastError, &t.LastErrorCode, &t.CreatedAt, &t.UpdatedAt, &t.DisplayNameIsPlaceholder,
 		&t.ReplaceOnUpdate, &t.ReplaceDeleteData, &t.NotifyOnly, &t.NotifyOnlyAnnounceCurrent, &t.AddPausedOnUpdate, &t.OnlyNewFiles,
+		&folderMode, &t.FolderName, &t.FolderNameSeen,
 	)
 	if err != nil {
 		return nil, err
@@ -65,6 +67,7 @@ func scanTopic(row pgx.Row) (*domain.Topic, error) {
 	t.LastCheckedAt = lastChecked
 	t.LastUpdatedAt = lastUpdated
 	t.Status = domain.TopicStatus(status)
+	t.FolderNameMode = domain.FolderNameMode(folderMode)
 	if len(extraRaw) > 0 {
 		// Surface malformed JSON rather than silently treating a
 		// corrupted blob as an empty map. The caller logs and skips
@@ -87,8 +90,9 @@ func (r *Topics) Create(ctx context.Context, t *domain.Topic) (*domain.Topic, er
 INSERT INTO topics (user_id, tracker_name, url, display_name, image_url, client_id, notifier_id,
                     download_dir, category, extra, check_interval_sec, next_check_at, status,
                     display_name_is_placeholder, replace_on_update, replace_delete_data,
-                    notify_only, notify_only_announce_current, add_paused_on_update, only_new_files)
-VALUES ($1,$2,$3,$4,NULLIF($5,''),$6,$7,NULLIF($8,''),NULLIF($9,''),$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
+                    notify_only, notify_only_announce_current, add_paused_on_update, only_new_files,
+                    folder_name_mode, folder_name)
+VALUES ($1,$2,$3,$4,NULLIF($5,''),$6,$7,NULLIF($8,''),NULLIF($9,''),$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,NULLIF($22,''))
 RETURNING ` + topicColumns
 	row := r.pool.QueryRow(ctx, q,
 		t.UserID, t.TrackerName, t.URL, t.DisplayName, t.ImageURL, t.ClientID, t.NotifierID,
@@ -96,6 +100,7 @@ RETURNING ` + topicColumns
 		t.DisplayNameIsPlaceholder, t.ReplaceOnUpdate, t.ReplaceDeleteData,
 		t.NotifyOnly, t.NotifyOnlyAnnounceCurrent,
 		t.AddPausedOnUpdate, t.OnlyNewFiles,
+		string(folderNameModeOrDefault(t.FolderNameMode)), t.FolderName,
 	)
 	return scanTopic(row)
 }
@@ -453,6 +458,7 @@ UPDATE topics SET
     next_check_at      = now(),
     status             = CASE WHEN status = 'paused' THEN 'paused' ELSE 'active' END,
     extra              = COALESCE(extra, '{}'::jsonb) - 'downloaded_episodes',
+    folder_name_seen   = NULL,
     updated_at         = now()
 WHERE id = $1 AND user_id = $2`
 	ct, err := r.pool.Exec(ctx, q, id, userID)
@@ -556,6 +562,23 @@ type TopicFlags struct {
 	OnlyNewFiles      bool
 }
 
+// FolderNamePolicy is a topic's folder name setting (issue #225) as Update
+// writes it. Name is stored only in custom mode.
+type FolderNamePolicy struct {
+	Mode domain.FolderNameMode
+	Name string
+}
+
+// folderNameModeOrDefault maps the zero value to FolderNameDefault, so a
+// topic built without the setting (the Sonarr poller, older callers) inserts
+// a value the column's CHECK accepts.
+func folderNameModeOrDefault(m domain.FolderNameMode) domain.FolderNameMode {
+	if m == "" {
+		return domain.FolderNameDefault
+	}
+	return m
+}
+
 // Update edits a topic's user-editable fields (display name, client, notifier,
 // download dir, category, check interval, and the capability Extra map). It
 // does NOT touch url/tracker/status/hash. Returns ErrNotFound when the topic
@@ -575,13 +598,24 @@ type TopicFlags struct {
 // check computed from the OLD, longer interval (PR #209 review, M-1). Its
 // result is discarded and the topic is re-checked on the next tick — the same
 // bounded, self-correcting trade QueueRecheck makes.
-func (r *Topics) Update(ctx context.Context, id, userID uuid.UUID, displayName string, clientID, notifierID *uuid.UUID, downloadDir, category string, checkIntervalSec *int, flags TopicFlags, extra map[string]any) (*domain.Topic, error) {
+//
+// folder is nil when the caller is not changing the folder name setting
+// (issue #225), for the same reason as checkIntervalSec: the Sonarr poller
+// must not write back a setting it read before a user's edit. A mode change
+// also forgets keep mode's remembered name, so switching back to keep later
+// does not reuse a name from before.
+func (r *Topics) Update(ctx context.Context, id, userID uuid.UUID, displayName string, clientID, notifierID *uuid.UUID, downloadDir, category string, checkIntervalSec *int, flags TopicFlags, folder *FolderNamePolicy, extra map[string]any) (*domain.Topic, error) {
 	raw, err := json.Marshal(extra)
 	if err != nil {
 		return nil, fmt.Errorf("topics: marshal extra: %w", err)
 	}
 	if len(raw) == 0 {
 		raw = []byte("{}")
+	}
+	var folderMode, folderName *string
+	if folder != nil {
+		m := string(folderNameModeOrDefault(folder.Mode))
+		folderMode, folderName = &m, &folder.Name
 	}
 	row := r.pool.QueryRow(ctx, `UPDATE topics SET
 		display_name = $3, client_id = $4, notifier_id = $5, download_dir = $6, category = $7,
@@ -593,9 +627,12 @@ func (r *Topics) Update(ctx context.Context, id, userID uuid.UUID, displayName s
 			ELSE next_check_at END,
 		display_name_is_placeholder = CASE WHEN display_name <> $3 THEN false ELSE display_name_is_placeholder END,
 		add_paused_on_update = $14, only_new_files = $15,
+		folder_name_mode = COALESCE($16::text, folder_name_mode),
+		folder_name = CASE WHEN $16::text IS NULL THEN folder_name WHEN $16::text = 'custom' THEN NULLIF($17::text, '') ELSE NULL END,
+		folder_name_seen = CASE WHEN $16::text IS NOT NULL AND $16::text <> folder_name_mode THEN NULL ELSE folder_name_seen END,
 		updated_at = now()
 	WHERE id = $1 AND user_id = $2
-	RETURNING `+topicColumns, id, userID, displayName, clientID, notifierID, downloadDir, category, raw, flags.ReplaceOnUpdate, flags.ReplaceDeleteData, flags.NotifyOnly, flags.NotifyOnlyAnnounceCurrent, checkIntervalSec, flags.AddPausedOnUpdate, flags.OnlyNewFiles)
+	RETURNING `+topicColumns, id, userID, displayName, clientID, notifierID, downloadDir, category, raw, flags.ReplaceOnUpdate, flags.ReplaceDeleteData, flags.NotifyOnly, flags.NotifyOnlyAnnounceCurrent, checkIntervalSec, flags.AddPausedOnUpdate, flags.OnlyNewFiles, folderMode, folderName)
 	t, err := scanTopic(row)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
@@ -618,6 +655,26 @@ func (r *Topics) UpdateDisplayName(ctx context.Context, id uuid.UUID, displayNam
 		id, displayName,
 	)
 	return err
+}
+
+// SetFolderNameSeen stores keep mode's memory of the topic's folder name
+// (issue #225): the last name the scheduler saw in the client or set there.
+// Written only while the topic is still in keep mode and the worker's
+// (last_checked_at, next_check_at) token still matches, so neither a mode
+// switch nor a reset (which forgets the name) landing mid-check is undone by
+// a stale name. A stale write affects no row and is not an error: the name is
+// best-effort memory. It does not change the token.
+func (r *Topics) SetFolderNameSeen(ctx context.Context, t *domain.Topic, name string) error {
+	_, err := r.pool.Exec(ctx,
+		`UPDATE topics SET folder_name_seen = $2
+WHERE id = $1 AND folder_name_mode = 'keep'
+  AND last_checked_at IS NOT DISTINCT FROM $3 AND next_check_at = $4`,
+		t.ID, name, t.LastCheckedAt, t.NextCheckAt,
+	)
+	if err != nil {
+		return fmt.Errorf("topics: set folder name seen: %w", err)
+	}
+	return nil
 }
 
 // DueForCheck returns up to `limit` topics whose next_check_at is in the past
