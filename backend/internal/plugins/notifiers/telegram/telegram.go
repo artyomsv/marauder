@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/artyomsv/marauder/backend/internal/domain"
+	"github.com/artyomsv/marauder/backend/internal/events"
 	"github.com/artyomsv/marauder/backend/internal/plugins/registry"
 )
 
@@ -56,7 +57,7 @@ func (p *plugin) Test(ctx context.Context, rawConfig []byte) error {
 	return p.Send(ctx, rawConfig, domain.Message{
 		Title:    "Marauder",
 		Body:     "Test notification - your Telegram integration is working.",
-		Event:    "test",
+		Event:    testEventKey,
 		Severity: "info",
 	})
 }
@@ -96,16 +97,24 @@ func (p *plugin) Send(ctx context.Context, rawConfig []byte, msg domain.Message)
 // eventIcons marks what happened in the message head. Telegram's HTML parse
 // mode has no text colour, so the icon carries both roles: the event marker
 // and the colour cue (blue-ish actions, green done, red failure, amber
-// warning). Keyed on the canonical event type from events.Type; a message
-// with an unknown or empty Event renders without an icon.
+// warning). Keyed on the canonical events.Type — plus the plugin-local
+// "test" key Test() stamps its own message with, which is deliberately not
+// an events.Type (nothing to check, nothing to record). A message with an
+// unknown or empty Event renders without an icon.
 var eventIcons = map[string]string{
-	"release.found":      "🆕",
-	"download.submitted": "📤",
-	"download.completed": "✅",
-	"check.failed":       "⚠️",
-	"session.expired":    "🔑",
-	"test":               "🧪",
+	string(events.ReleaseFound):      "🆕",
+	string(events.DownloadSubmitted): "📤",
+	string(events.DownloadCompleted): "✅",
+	string(events.CheckFailed):       "⚠️",
+	string(events.SessionExpired):    "🔑",
+	testEventKey:                     "🧪",
 }
+
+// testEventKey is the Event value a notifier's own Test() message carries.
+// Not an events.Type: it exists only so the formatter can draw the test
+// marker, and is free-form precisely because no event taxonomy entry backs
+// it. Shared by the map above and Test() so the two cannot drift.
+const testEventKey = "test"
 
 // severityIcons prefix the head only for non-info severities, so a problem
 // stands out in a chat list without reading the title while ordinary

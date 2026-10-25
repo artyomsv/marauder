@@ -73,6 +73,38 @@ func TestSendHappyPath(t *testing.T) {
 	}
 }
 
+func TestTestMessage_IsMarkedAsTest(t *testing.T) {
+	// The notifier's own Test() message is the first thing a user sees when
+	// wiring a bot up: it must read as a test and carry the test marker.
+	var seenBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &seenBody)
+		w.WriteHeader(200)
+		w.Write([]byte(`{"ok":true}`))
+	}))
+	defer srv.Close()
+
+	p := &plugin{http: &http.Client{Timeout: 5 * time.Second, Transport: &rewriteRT{target: srv.URL}}}
+	cfg, _ := json.Marshal(Config{BotToken: "12345:abc", ChatID: "777"})
+
+	if err := p.Test(context.Background(), cfg); err != nil {
+		t.Fatalf("Test: %v", err)
+	}
+	text, _ := seenBody["text"].(string)
+	if !strings.HasPrefix(text, "🧪 ") {
+		t.Errorf("test message head = %q, want the 🧪 marker", text)
+	}
+	if !strings.Contains(text, "Test notification") {
+		t.Errorf("missing test body in text: %q", text)
+	}
+	// The map and Test() share one key, so the marker can't silently drift
+	// away from the Event value the message carries.
+	if icon := eventIcons[testEventKey]; icon != "🧪" {
+		t.Errorf("eventIcons[testEventKey] = %q, want 🧪", icon)
+	}
+}
+
 func TestFormatMessage_SourceURL(t *testing.T) {
 	tests := []struct {
 		name string

@@ -68,8 +68,35 @@ func TestEmit_ReleaseFound_PersistsNotifiesAndPublishes(t *testing.T) {
 	if notif.called != 1 || notif.event != string(ReleaseFound) {
 		t.Errorf("notifier called %d event %q", notif.called, notif.event)
 	}
+	// The message carries what happened, so a rich notifier can mark it
+	// (Telegram's icon + severity dot). Both are stamped here — nothing else
+	// in the pipeline fills them in.
+	if notif.msg.Event != string(ReleaseFound) {
+		t.Errorf("msg.Event = %q, want the canonical event type", notif.msg.Event)
+	}
+	if notif.msg.Severity != "info" {
+		t.Errorf("msg.Severity = %q, want info", notif.msg.Severity)
+	}
 	if pub.called != 1 || pub.id != 42 {
 		t.Errorf("publisher called %d id %d, want 1/42", pub.called, pub.id)
+	}
+}
+
+func TestEmit_EmptySeverity_DefaultsToInfo(t *testing.T) {
+	// Producers that don't think in severities (a plain new-release
+	// announcement) must still reach a rich notifier as "info", never as an
+	// empty string the formatter would have to guess about.
+	bus, _, notif, _ := newBus(t)
+	tid := uuid.New()
+	bus.Emit(context.Background(), Event{
+		UserID: uuid.New(), TopicID: &tid, Type: DownloadSubmitted,
+		Title: "X", Body: "Y",
+	})
+	if notif.msg.Severity != "info" {
+		t.Errorf("msg.Severity = %q, want info for an unstamped severity", notif.msg.Severity)
+	}
+	if notif.msg.Event != string(DownloadSubmitted) {
+		t.Errorf("msg.Event = %q, want download.submitted", notif.msg.Event)
 	}
 }
 

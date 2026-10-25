@@ -15,7 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   severity dot for warnings and errors, so a problem stands out in a chat
   list without reading the title. Telegram's HTML mode has no text
   colour, so the icon carries the colour cue. The author-comment block is
-  now a quoted `💬` line instead of the "Author update:" label (Ref #227).
+  now an italic `💬` line instead of the "Author update:" label (Ref #227).
 
 ## [1.25.0] - 2026-10-24
 
