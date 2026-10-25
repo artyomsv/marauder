@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Settings2 } from "lucide-react";
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api";
 import { QK } from "@/lib/queryKeys";
 import { useT } from "@/i18n";
@@ -16,7 +17,7 @@ import { useT } from "@/i18n";
 export function TopicDefaultsCard() {
   const t = useT();
   const queryClient = useQueryClient();
-  const { data } = useQuery({ queryKey: QK.settings, queryFn: () => api.getSettings() });
+  const settings = useQuery({ queryKey: QK.settings, queryFn: () => api.getSettings() });
 
   const save = useMutation({
     mutationFn: (v: boolean) => api.updateSettings({ default_follow_tracker_title: v }),
@@ -24,6 +25,13 @@ export function TopicDefaultsCard() {
       queryClient.setQueryData(QK.settings, next);
     },
   });
+
+  // The control must never invent a value: the stored default is unknown
+  // until the read settles, and an unreadable one is not "off". The checkbox
+  // stays disabled (and unwritable) until a real value is known, and a failed
+  // read says so with a retry instead of showing an enabled switch that would
+  // happily save the wrong thing over the truth.
+  const known = settings.isSuccess;
 
   return (
     <Card>
@@ -35,23 +43,34 @@ export function TopicDefaultsCard() {
         <CardDescription>{t("settings.topicDefaults.blurb")}</CardDescription>
       </CardHeader>
       <CardContent className="pt-0">
-        <label className="flex items-start gap-2 text-sm">
-          <input
-            type="checkbox"
-            checked={data?.default_follow_tracker_title ?? false}
-            disabled={save.isPending}
-            onChange={(e) => save.mutate(e.target.checked)}
-            className="mt-0.5"
-          />
-          <span>
-            <span className="font-medium text-foreground">
-              {t("topics.followTitle.label")}
+        {settings.isError ? (
+          <div className="space-y-2">
+            <p className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+              {t("settings.topicDefaults.loadFailed")}
+            </p>
+            <Button variant="outline" size="sm" onClick={() => settings.refetch()}>
+              {t("settings.topicDefaults.retry")}
+            </Button>
+          </div>
+        ) : (
+          <label className="flex items-start gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={known ? settings.data.default_follow_tracker_title : false}
+              disabled={!known || save.isPending}
+              onChange={(e) => save.mutate(e.target.checked)}
+              className="mt-0.5"
+            />
+            <span>
+              <span className="font-medium text-foreground">
+                {t("topics.followTitle.label")}
+              </span>
+              <span className="block text-xs text-muted-foreground">
+                {t("settings.topicDefaults.help")}
+              </span>
             </span>
-            <span className="block text-xs text-muted-foreground">
-              {t("settings.topicDefaults.help")}
-            </span>
-          </span>
-        </label>
+          </label>
+        )}
         {save.isError && (
           <p className="mt-2 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
             {t("settings.topicDefaults.saveFailed")}

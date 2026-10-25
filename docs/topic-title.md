@@ -16,18 +16,20 @@ When you add a topic, the name is taken from the first of these that answers:
 3. the name the tracker plugin parses out of the URL.
 
 A name that came from (3) is a **placeholder** (like `RuTracker topic 6635490`).
-Mauder replaces it with the real title on the first check and then **locks**
-the name: later checks never overwrite a resolved title, because some trackers
-report a noisier title on check than at add time (issue #90). Repair a
-mis-named topic by renaming it by hand.
+Marauder replaces it with the real title as soon as a successful check reports
+a usable, different one — a failed check, or a tracker that resolves no title,
+leaves the placeholder in place — and then **locks** the name while following
+is off: later checks never overwrite a resolved title, because some trackers
+report a noisier title on check than at add time. Repair a mis-named topic by
+renaming it by hand.
 
 ## Following the tracker's title
 
 Trackers do rename topics — a repack, a quality bump, a corrected release
 name. The per-topic **Follow the tracker's title** option opts back into
 keeping the name in sync: on every check, when the tracker's title differs
-from the stored one, Marauder updates it. This is the setting floated in issue
-#86 and deliberately left out of the #90 lock.
+from the stored one, Marauder updates it. It is the choice the name lock
+deliberately leaves to you.
 
 ### Enabling it
 
@@ -60,6 +62,6 @@ toggle always wins over it.
 
 The title comes from what the tracker plugin reads on **check**, and its
 quality varies per tracker. Most report the release name; some report a page
-title instead (this is exactly what issue #90 was about). Turning the option
+title instead of it. Turning the option
 on means trusting this tracker's titles — if the result is worse, rename the
 topic by hand, which turns the option off again.

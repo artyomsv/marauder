@@ -23,7 +23,7 @@ func TestTopicsUpdatePolicyRoundTrip(t *testing.T) {
 		t.Fatalf("defaults = (%v, %v), want both false", topic.AddPausedOnUpdate, topic.OnlyNewFiles)
 	}
 
-	if _, err := topicsRepo.Update(ctx, topic.ID, userID, topic.DisplayName, nil, nil, "", "", nil,
+	if _, err := topicsRepo.Update(ctx, topic.ID, userID, namePtr(topic.DisplayName), nil, nil, "", "", nil,
 		TopicFlags{AddPausedOnUpdate: true, OnlyNewFiles: false}, nil, map[string]any{}); err != nil {
 		t.Fatalf("Update: %v", err)
 	}
@@ -35,7 +35,7 @@ func TestTopicsUpdatePolicyRoundTrip(t *testing.T) {
 		t.Error("stored OnlyNewFiles = true, want false")
 	}
 
-	if _, err := topicsRepo.Update(ctx, topic.ID, userID, topic.DisplayName, nil, nil, "", "", nil,
+	if _, err := topicsRepo.Update(ctx, topic.ID, userID, namePtr(topic.DisplayName), nil, nil, "", "", nil,
 		TopicFlags{AddPausedOnUpdate: false, OnlyNewFiles: true}, nil, map[string]any{}); err != nil {
 		t.Fatalf("Update 2: %v", err)
 	}

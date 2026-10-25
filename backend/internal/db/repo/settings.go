@@ -12,7 +12,7 @@ import (
 // default is materialised onto a topic at create time, so editing it here
 // never changes an existing topic.
 type Settings struct {
-	pool *pgxpool.Pool
+	pool dbPool
 }
 
 // NewSettings constructs the repository.

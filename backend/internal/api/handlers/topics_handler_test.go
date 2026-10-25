@@ -77,7 +77,7 @@ type fakeTopicStore struct {
 
 	// Captured Update arguments.
 	updateCalled            bool
-	updateDisplayName       string
+	updateDisplayName       *string
 	updateClientID          *uuid.UUID
 	updateNotifierID        *uuid.UUID
 	updateDownloadDir       string
@@ -135,7 +135,7 @@ func (s *fakeTopicStore) QueueRecheck(_ context.Context, id, userID uuid.UUID) (
 	s.recheckCalls = append(s.recheckCalls, [2]uuid.UUID{id, userID})
 	return s.recheckOutcome, s.recheckErr
 }
-func (s *fakeTopicStore) Update(_ context.Context, _, _ uuid.UUID, displayName string, clientID, notifierID *uuid.UUID, downloadDir, category string, checkIntervalSec *int, flags repo.TopicFlags, folder *repo.FolderNamePolicy, extra map[string]any) (*domain.Topic, error) {
+func (s *fakeTopicStore) Update(_ context.Context, _, _ uuid.UUID, displayName *string, clientID, notifierID *uuid.UUID, downloadDir, category string, checkIntervalSec *int, flags repo.TopicFlags, folder *repo.FolderNamePolicy, extra map[string]any) (*domain.Topic, error) {
 	s.updateCalled = true
 	s.updateCheckIntervalSec = checkIntervalSec
 	s.updateDisplayName = displayName
@@ -152,9 +152,13 @@ func (s *fakeTopicStore) Update(_ context.Context, _, _ uuid.UUID, displayName s
 		return s.updateReturn, nil
 	}
 	// Echo back a topic reflecting the edit so the handler can render it.
+	name := ""
+	if displayName != nil {
+		name = *displayName
+	}
 	return &domain.Topic{
 		ID:          uuid.New(),
-		DisplayName: displayName,
+		DisplayName: name,
 		ClientID:    clientID,
 		NotifierID:  notifierID,
 		DownloadDir: downloadDir,
@@ -181,7 +185,7 @@ func TestTopicsUpdate_PreservesDownloadedEpisodes(t *testing.T) {
 	h := &Topics{Topics: store, BaseURL: "http://test"}
 
 	body := updateTopicReq{
-		DisplayName:  "New Name",
+		DisplayName:  strPtr("New Name"),
 		Quality:      "720p",
 		StartEpisode: intPtr(3),
 	}
@@ -212,8 +216,8 @@ func TestTopicsUpdate_PreservesDownloadedEpisodes(t *testing.T) {
 	if store.updateExtra["start_episode"] != 3 {
 		t.Errorf("start_episode = %#v, want 3", store.updateExtra["start_episode"])
 	}
-	if store.updateDisplayName != "New Name" {
-		t.Errorf("display_name = %q, want New Name", store.updateDisplayName)
+	if store.updateDisplayName == nil || *store.updateDisplayName != "New Name" {
+		t.Errorf("display_name = %v, want New Name", store.updateDisplayName)
 	}
 }
 
@@ -228,7 +232,7 @@ func TestTopicsUpdate_PassesReplaceFlags(t *testing.T) {
 	h := &Topics{Topics: store, BaseURL: "http://test"}
 
 	body := updateTopicReq{
-		DisplayName:       "Show",
+		DisplayName:       strPtr("Show"),
 		ReplaceOnUpdate:   boolPtr(true),
 		ReplaceDeleteData: boolPtr(false),
 	}
@@ -261,7 +265,7 @@ func TestTopicsUpdate_OmittedReplaceFlags_PreserveExisting(t *testing.T) {
 	}
 	h := &Topics{Topics: store, BaseURL: "http://test"}
 
-	body := updateTopicReq{DisplayName: "Show"} // no replace fields
+	body := updateTopicReq{DisplayName: strPtr("Show")} // no replace fields
 	w := httptest.NewRecorder()
 	req := withURLParam(authedReq(t, uuid.New(), body), "id", uuid.New().String())
 	h.Update(w, req)
@@ -320,7 +324,7 @@ func TestTopicsUpdate_NotFound(t *testing.T) {
 	h := &Topics{Topics: store, BaseURL: "http://test"}
 
 	w := httptest.NewRecorder()
-	req := withURLParam(authedReq(t, uuid.New(), updateTopicReq{DisplayName: "X"}), "id", uuid.New().String())
+	req := withURLParam(authedReq(t, uuid.New(), updateTopicReq{DisplayName: strPtr("X")}), "id", uuid.New().String())
 	h.Update(w, req)
 
 	if w.Code != 404 {
@@ -478,7 +482,7 @@ func TestTopics_Update_UnknownNotifierID(t *testing.T) {
 		BaseURL:   "http://x",
 	}
 
-	body := updateTopicReq{DisplayName: "X", NotifierID: &unknownID}
+	body := updateTopicReq{DisplayName: strPtr("X"), NotifierID: &unknownID}
 	w := httptest.NewRecorder()
 	req := withURLParam(authedReq(t, uuid.New(), body), "id", uuid.New().String())
 	h.Update(w, req)
@@ -500,7 +504,7 @@ func TestTopics_Update_PassesNotifierID(t *testing.T) {
 	}
 	h := &Topics{Topics: store, BaseURL: "http://x"}
 
-	body := updateTopicReq{DisplayName: "X", NotifierID: &notifierID}
+	body := updateTopicReq{DisplayName: strPtr("X"), NotifierID: &notifierID}
 	w := httptest.NewRecorder()
 	req := withURLParam(authedReq(t, uuid.New(), body), "id", uuid.New().String())
 	h.Update(w, req)
@@ -642,7 +646,7 @@ func TestTopicsUpdate_PassesUpdatePolicyFlags(t *testing.T) {
 	store := &fakeTopicStore{getByID: &domain.Topic{ID: uuid.New(), TrackerName: fakeQualityTrackerName, DisplayName: "Show"}}
 	h := &Topics{Topics: store, BaseURL: "http://test"}
 
-	body := updateTopicReq{DisplayName: "Show", AddPausedOnUpdate: boolPtr(true), OnlyNewFiles: boolPtr(false)}
+	body := updateTopicReq{DisplayName: strPtr("Show"), AddPausedOnUpdate: boolPtr(true), OnlyNewFiles: boolPtr(false)}
 	w := httptest.NewRecorder()
 	h.Update(w, withURLParam(authedReq(t, uuid.New(), body), "id", uuid.New().String()))
 
@@ -662,7 +666,7 @@ func TestTopicsUpdate_OmittedUpdatePolicyFlags_PreserveExisting(t *testing.T) {
 	h := &Topics{Topics: store, BaseURL: "http://test"}
 
 	w := httptest.NewRecorder()
-	h.Update(w, withURLParam(authedReq(t, uuid.New(), updateTopicReq{DisplayName: "Show"}), "id", uuid.New().String()))
+	h.Update(w, withURLParam(authedReq(t, uuid.New(), updateTopicReq{DisplayName: strPtr("Show")}), "id", uuid.New().String()))
 
 	if w.Code != 200 {
 		t.Fatalf("status %d, want 200; body %s", w.Code, w.Body.String())
@@ -683,7 +687,7 @@ func TestTopicsUpdate_OnlyNewFilesWithDeleteData_Rejected(t *testing.T) {
 	h := &Topics{Topics: store, BaseURL: "http://test"}
 
 	w := httptest.NewRecorder()
-	h.Update(w, withURLParam(authedReq(t, uuid.New(), updateTopicReq{DisplayName: "Show", OnlyNewFiles: boolPtr(true)}), "id", uuid.New().String()))
+	h.Update(w, withURLParam(authedReq(t, uuid.New(), updateTopicReq{DisplayName: strPtr("Show"), OnlyNewFiles: boolPtr(true)}), "id", uuid.New().String()))
 
 	if w.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("status %d, want 422; body %s", w.Code, w.Body.String())

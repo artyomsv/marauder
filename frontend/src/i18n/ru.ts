@@ -221,6 +221,9 @@ const ru: Record<string, string> = {
   "settings.topicDefaults.help":
     "Новые темы по умолчанию следуют за заголовком на трекере. Переключатель в каждой теме может переопределить это.",
   "settings.topicDefaults.saveFailed": "Не удалось сохранить",
+  "settings.topicDefaults.loadFailed":
+    "Не удалось прочитать сохранённое значение, поэтому показать или изменить его пока нельзя.",
+  "settings.topicDefaults.retry": "Повторить",
   "settings.domains.title": "Домены трекеров",
   "settings.domains.blurb":
     "Переопределите домен, который использует каждый трекер, и добавьте дополнительные зеркала на случай, если основной домен заблокирован.",

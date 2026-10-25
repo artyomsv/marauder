@@ -25,18 +25,18 @@ func TestTopicsFollowTrackerTitle(t *testing.T) {
 
 	update := func(name string, flags TopicFlags) *domain.Topic {
 		t.Helper()
-		if _, err := topicsRepo.Update(ctx, topic.ID, userID, name, nil, nil, "", "", nil, flags, nil, map[string]any{}); err != nil {
+		if _, err := topicsRepo.Update(ctx, topic.ID, userID, namePtr(name), nil, nil, "", "", nil, flags, nil, map[string]any{}); err != nil {
 			t.Fatalf("Update(%q, %+v): %v", name, flags, err)
 		}
 		return reload(t, pool, topic.ID)
 	}
 
 	// An unchanged name writes the requested flag.
-	got := update(topic.DisplayName, TopicFlags{FollowTrackerTitle: true})
+	got := update(topic.DisplayName, TopicFlags{FollowTrackerTitle: boolPtr(true)})
 	if !got.FollowTrackerTitle {
 		t.Error("same-name update with the flag on left it off")
 	}
-	got = update(topic.DisplayName, TopicFlags{FollowTrackerTitle: false})
+	got = update(topic.DisplayName, TopicFlags{FollowTrackerTitle: boolPtr(false)})
 	if got.FollowTrackerTitle {
 		t.Error("same-name update with the flag off left it on")
 	}
@@ -44,7 +44,7 @@ func TestTopicsFollowTrackerTitle(t *testing.T) {
 	// The rule this feature turns on: a submitted name change takes
 	// ownership of the name and turns the flag off, whatever the caller
 	// asked for. Mirrors display_name_is_placeholder's clear-on-rename.
-	got = update("Renamed By Hand", TopicFlags{FollowTrackerTitle: true})
+	got = update("Renamed By Hand", TopicFlags{FollowTrackerTitle: boolPtr(true)})
 	if got.FollowTrackerTitle {
 		t.Error("a rename left FollowTrackerTitle on; typing a name must clear it")
 	}
@@ -54,7 +54,7 @@ func TestTopicsFollowTrackerTitle(t *testing.T) {
 
 	// The scheduler's own title write (UpdateDisplayName) is NOT a user
 	// rename: following must survive the updates it triggers.
-	got = update("Renamed By Hand", TopicFlags{FollowTrackerTitle: true})
+	got = update("Renamed By Hand", TopicFlags{FollowTrackerTitle: boolPtr(true)})
 	if !got.FollowTrackerTitle {
 		t.Fatal("same-name update with the flag on left it off")
 	}
@@ -78,7 +78,7 @@ func TestTopicsFollowTrackerTitle(t *testing.T) {
 	// may follow, but the rename has already locked the name — the in-flight
 	// tracker title must not overwrite it (issue #90 holds inside a running
 	// check too).
-	got = update("Typed Mid Check", TopicFlags{FollowTrackerTitle: true})
+	got = update("Typed Mid Check", TopicFlags{FollowTrackerTitle: boolPtr(true)})
 	if got.FollowTrackerTitle {
 		t.Fatal("a rename must clear FollowTrackerTitle")
 	}
@@ -92,6 +92,35 @@ func TestTopicsFollowTrackerTitle(t *testing.T) {
 	got = reload(t, pool, topic.ID)
 	if got.DisplayName != "Typed Mid Check" {
 		t.Errorf("DisplayName = %q, want Typed Mid Check — an in-flight check overwrote a user rename", got.DisplayName)
+	}
+
+	// M-1 regression: a save of an unrelated field after a tracker rename must
+	// not read as a rename. The caller omits both the name and the flag — the
+	// tracker's title and the follow choice both have to survive it.
+	got = update("Typed Mid Check", TopicFlags{FollowTrackerTitle: boolPtr(true)})
+	if !got.FollowTrackerTitle {
+		t.Fatal("same-name update with the flag on left it off")
+	}
+	written, err = topicsRepo.UpdateDisplayName(ctx, topic.ID, "Tracker Title v4")
+	if err != nil {
+		t.Fatalf("UpdateDisplayName: %v", err)
+	}
+	if !written {
+		t.Fatal("UpdateDisplayName reported no write while the topic follows")
+	}
+	if _, err := topicsRepo.Update(ctx, topic.ID, userID, nil, nil, nil, "", "movies", nil,
+		TopicFlags{}, nil, map[string]any{"quality": "1080p"}); err != nil {
+		t.Fatalf("Update with omitted name/flag: %v", err)
+	}
+	got = reload(t, pool, topic.ID)
+	if got.DisplayName != "Tracker Title v4" {
+		t.Errorf("DisplayName = %q, want Tracker Title v4 — a stale name was written back as a rename", got.DisplayName)
+	}
+	if !got.FollowTrackerTitle {
+		t.Error("FollowTrackerTitle was cleared by a save that renamed nothing")
+	}
+	if got.Category != "movies" {
+		t.Errorf("Category = %q, want movies — the unrelated edit should still land", got.Category)
 	}
 }
 

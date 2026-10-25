@@ -294,12 +294,11 @@ export function TopicForm({
     }
   }, [initial.followTrackerTitle]);
 
-  // A typed name is the user's: the store clears follow_tracker_title whenever
-  // a save changes the name (typing a name is taking ownership of it), so while
-  // the name differs from the one the form was opened with, the checkbox is
-  // forced off and disabled — a re-tick would be silently discarded on save.
-  // Derived rather than stored, so reverting the name restores the stored
-  // choice instead of losing it.
+  // While the name differs from the one the form was opened with, the checkbox
+  // is forced off and disabled: the store clears follow_tracker_title on a
+  // rename (see repo.Topics.Update), so a re-tick would be silently discarded
+  // on save. Derived rather than stored, so reverting the name restores the
+  // stored choice instead of losing it.
   const nameEdited = isEdit && displayName !== initial.displayName;
   const followTrackerTitle = nameEdited ? false : delivery.followTrackerTitle;
 
@@ -407,11 +406,9 @@ export function TopicForm({
           onChange={(e) => {
             setDisplayName(e.target.value);
             nameAutoFilled.current = false;
-            // In add mode a typed name turns the toggle off once — a typed
-            // name is the user's. In edit mode the same rule is derived (the
-            // checkbox is forced off and disabled while the name differs from
-            // the saved one), so a reverted edit restores the stored choice
-            // instead of losing it.
+            // In add mode a typed name turns the toggle off once. In edit mode
+            // the same rule is derived above, so a reverted edit restores the
+            // stored choice instead of losing it.
             if (!isEdit && e.target.value !== initial.displayName) {
               followOwned.current = true;
               setDelivery((d) => ({ ...d, followTrackerTitle: false }));

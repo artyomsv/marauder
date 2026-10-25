@@ -109,6 +109,12 @@ type fakeTopics struct {
 	byURL   map[string]*domain.Topic
 	created []*domain.Topic
 	updated []*domain.Topic
+	// names records the display-name argument of each Update call (nil = the
+	// caller is not renaming).
+	names []*string
+	// follows records the follow-flag argument of each Update call (nil = the
+	// caller is leaving it alone).
+	follows []*bool
 	// intervals records the check-interval argument of each Update call.
 	intervals []*int
 	// folders records the folder name argument of each Update call.
@@ -130,13 +136,17 @@ func (f *fakeTopics) GetByURL(_ context.Context, _ uuid.UUID, url string) (*doma
 	}
 	return nil, repo.ErrNotFound
 }
-func (f *fakeTopics) Update(_ context.Context, id, _ uuid.UUID, displayName string,
+func (f *fakeTopics) Update(_ context.Context, id, _ uuid.UUID, displayName *string,
 	clientID, notifierID *uuid.UUID, downloadDir, category string,
 	checkIntervalSec *int, flags repo.TopicFlags, folder *repo.FolderNamePolicy, extra map[string]any,
 ) (*domain.Topic, error) {
+	name := ""
+	if displayName != nil {
+		name = *displayName
+	}
 	updated := &domain.Topic{
 		ID:                        id,
-		DisplayName:               displayName,
+		DisplayName:               name,
 		ClientID:                  clientID,
 		NotifierID:                notifierID,
 		DownloadDir:               downloadDir,
@@ -150,6 +160,8 @@ func (f *fakeTopics) Update(_ context.Context, id, _ uuid.UUID, displayName stri
 		Extra:                     extra,
 	}
 	f.updated = append(f.updated, updated)
+	f.names = append(f.names, displayName)
+	f.follows = append(f.follows, flags.FollowTrackerTitle)
 	f.intervals = append(f.intervals, checkIntervalSec)
 	f.folders = append(f.folders, folder)
 	return updated, nil
@@ -320,6 +332,12 @@ func TestPoller_ExistingTopicRefreshesVariantMetadata(t *testing.T) {
 		t.Fatalf("want 1 metadata update, got %d", len(ts.updated))
 	}
 	updated := ts.updated[0]
+	// The poller never renames and never edits the follow choice: both go as
+	// nil so a user edit saved since the read cannot be undone by this write
+	// (a stale name would read as a rename and disable following).
+	if ts.names[0] != nil || ts.follows[0] != nil {
+		t.Errorf("Update carried name=%v follow=%v, want both nil", ts.names[0], ts.follows[0])
+	}
 	if updated.Extra[domain.TopicExtraSonarrInfoHash] != "new-hash" ||
 		updated.Extra[domain.TopicExtraSonarrSourceTitle] != "new AVC grab" {
 		t.Errorf("variant metadata not refreshed: %#v", updated.Extra)

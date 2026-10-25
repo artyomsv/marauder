@@ -300,6 +300,14 @@ func TestTopics_MarkEpisodesDownloaded_DBError(t *testing.T) {
 
 // ---------- scanTopic malformed extra ----------
 
+// namePtr marks an intentional rename in an Update call. nil means the caller
+// is not renaming, which leaves the stored name — and the name-ownership
+// flags — alone.
+func namePtr(s string) *string { return &s }
+
+// boolPtr is the same for the follow flag: nil leaves the stored value alone.
+func boolPtr(b bool) *bool { return &b }
+
 // topicRow returns a pgxmock row slice that matches topicColumns exactly
 // (33 columns as of migration 0019, which added follow-the-tracker-title).
 // Callers override individual fields as needed. The helper centralises
@@ -522,30 +530,30 @@ func TestTopics_Update_HappyPath(t *testing.T) {
 	// clear-on-rename clause: a submitted name change turns the flag off
 	// whatever the caller asked for.
 	interval := 3600
-	mock.ExpectQuery(`UPDATE topics SET[\s\S]*notify_only = \$11, notify_only_announce_current = \$12,\s+check_interval_sec = COALESCE\(\$13::int, check_interval_sec\),\s+next_check_at = CASE WHEN \$13::int < check_interval_sec\s+THEN LEAST\(GREATEST\(next_check_at, now\(\)\), now\(\) \+ \$13::int \* interval '1 second'\)\s+ELSE next_check_at END,\s+display_name_is_placeholder = CASE WHEN display_name <> \$3[\s\S]*follow_tracker_title = CASE WHEN display_name <> \$3 THEN false ELSE \$18 END`).
+	mock.ExpectQuery(`UPDATE topics SET[\s\S]*notify_only = \$11, notify_only_announce_current = \$12,\s+check_interval_sec = COALESCE\(\$13::int, check_interval_sec\),\s+next_check_at = CASE WHEN \$13::int < check_interval_sec\s+THEN LEAST\(GREATEST\(next_check_at, now\(\)\), now\(\) \+ \$13::int \* interval '1 second'\)\s+ELSE next_check_at END,\s+display_name_is_placeholder = CASE WHEN \$3::text IS NOT NULL AND display_name <> \$3[\s\S]*follow_tracker_title = CASE WHEN \$3::text IS NOT NULL AND display_name <> \$3 THEN false ELSE COALESCE\(\$18::bool, follow_tracker_title\) END`).
 		WithArgs(
 			id, userID,
-			"Updated Name",    // $3 display_name
-			(*uuid.UUID)(nil), // $4 client_id
-			(*uuid.UUID)(nil), // $5 notifier_id
-			"",                // $6 download_dir
-			"series",          // $7 category
-			pgxmock.AnyArg(),  // $8 extra (JSON)
-			true,              // $9 replace_on_update
-			false,             // $10 replace_delete_data
-			false,             // $11 notify_only
-			false,             // $12 notify_only_announce_current
-			&interval,         // $13 check_interval_sec
-			false,             // $14 add_paused_on_update
-			false,             // $15 only_new_files
-			(*string)(nil),    // $16 folder_name_mode (nil policy: keep)
-			(*string)(nil),    // $17 folder_name
-			true,              // $18 follow_tracker_title
+			namePtr("Updated Name"), // $3 display_name (a rename)
+			(*uuid.UUID)(nil),       // $4 client_id
+			(*uuid.UUID)(nil),       // $5 notifier_id
+			"",                      // $6 download_dir
+			"series",                // $7 category
+			pgxmock.AnyArg(),        // $8 extra (JSON)
+			true,                    // $9 replace_on_update
+			false,                   // $10 replace_delete_data
+			false,                   // $11 notify_only
+			false,                   // $12 notify_only_announce_current
+			&interval,               // $13 check_interval_sec
+			false,                   // $14 add_paused_on_update
+			false,                   // $15 only_new_files
+			(*string)(nil),          // $16 folder_name_mode (nil policy: keep)
+			(*string)(nil),          // $17 folder_name
+			boolPtr(true),           // $18 follow_tracker_title
 		).
 		WillReturnRows(rows)
 
 	extra := map[string]any{"quality": "720p", "start_season": 2}
-	got, err := r.Update(context.Background(), id, userID, "Updated Name", nil, nil, "", "series", &interval, TopicFlags{ReplaceOnUpdate: true, ReplaceDeleteData: false, FollowTrackerTitle: true}, nil, extra)
+	got, err := r.Update(context.Background(), id, userID, namePtr("Updated Name"), nil, nil, "", "series", &interval, TopicFlags{ReplaceOnUpdate: true, ReplaceDeleteData: false, FollowTrackerTitle: boolPtr(true)}, nil, extra)
 	if err != nil {
 		t.Fatalf("Update: unexpected error: %v", err)
 	}
@@ -606,13 +614,13 @@ func TestTopics_Update_FollowTrackerTitle_Passthrough(t *testing.T) {
 	row := topicRow(id, userID, time.Now().UTC())
 	row[32] = true // follow_tracker_title
 
-	mock.ExpectQuery(`UPDATE topics SET[\s\S]*follow_tracker_title = CASE WHEN display_name <> \$3 THEN false ELSE \$18 END`).
+	mock.ExpectQuery(`UPDATE topics SET[\s\S]*follow_tracker_title = CASE WHEN \$3::text IS NOT NULL AND display_name <> \$3 THEN false ELSE COALESCE\(\$18::bool, follow_tracker_title\) END`).
 		WithArgs(id, userID, pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
-			false, false, false, false, (*int)(nil), false, false, (*string)(nil), (*string)(nil), true).
+			false, false, false, false, (*int)(nil), false, false, (*string)(nil), (*string)(nil), boolPtr(true)).
 		WillReturnRows(pgxmock.NewRows(topicColumnsAll).AddRow(row...))
 
-	got, err := r.Update(context.Background(), id, userID, "Same Name", nil, nil, "", "", nil,
-		TopicFlags{FollowTrackerTitle: true}, nil, map[string]any{})
+	got, err := r.Update(context.Background(), id, userID, namePtr("Same Name"), nil, nil, "", "", nil,
+		TopicFlags{FollowTrackerTitle: boolPtr(true)}, nil, map[string]any{})
 	if err != nil {
 		t.Fatalf("Update: unexpected error: %v", err)
 	}
@@ -631,10 +639,10 @@ func TestTopics_Update_NotFound(t *testing.T) {
 	userID := uuid.New()
 
 	mock.ExpectQuery(`UPDATE topics SET`).
-		WithArgs(id, userID, pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), false, false, (*int)(nil), false, false, (*string)(nil), (*string)(nil), false).
+		WithArgs(id, userID, pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), false, false, (*int)(nil), false, false, (*string)(nil), (*string)(nil), (*bool)(nil)).
 		WillReturnError(pgx.ErrNoRows)
 
-	_, err := r.Update(context.Background(), id, userID, "X", nil, nil, "", "", nil, TopicFlags{ReplaceOnUpdate: false, ReplaceDeleteData: true}, nil, map[string]any{})
+	_, err := r.Update(context.Background(), id, userID, namePtr("X"), nil, nil, "", "", nil, TopicFlags{ReplaceOnUpdate: false, ReplaceDeleteData: true}, nil, map[string]any{})
 	if !errors.Is(err, ErrNotFound) {
 		t.Fatalf("Update: want ErrNotFound, got %v", err)
 	}
@@ -651,10 +659,10 @@ func TestTopics_Update_DBError(t *testing.T) {
 	dbErr := errors.New("connection reset")
 
 	mock.ExpectQuery(`UPDATE topics SET`).
-		WithArgs(id, userID, pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), false, false, (*int)(nil), false, false, (*string)(nil), (*string)(nil), false).
+		WithArgs(id, userID, pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), false, false, (*int)(nil), false, false, (*string)(nil), (*string)(nil), (*bool)(nil)).
 		WillReturnError(dbErr)
 
-	_, err := r.Update(context.Background(), id, userID, "X", nil, nil, "", "", nil, TopicFlags{ReplaceOnUpdate: false, ReplaceDeleteData: true}, nil, map[string]any{})
+	_, err := r.Update(context.Background(), id, userID, namePtr("X"), nil, nil, "", "", nil, TopicFlags{ReplaceOnUpdate: false, ReplaceDeleteData: true}, nil, map[string]any{})
 	if err == nil {
 		t.Fatal("Update: want error, got nil")
 	}

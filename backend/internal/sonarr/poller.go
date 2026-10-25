@@ -48,7 +48,7 @@ type adminResolver interface {
 type topicsStore interface {
 	topics.Store
 	GetByURL(ctx context.Context, userID uuid.UUID, url string) (*domain.Topic, error)
-	Update(ctx context.Context, id, userID uuid.UUID, displayName string, clientID, notifierID *uuid.UUID, downloadDir, category string, checkIntervalSec *int, flags repo.TopicFlags, folder *repo.FolderNamePolicy, extra map[string]any) (*domain.Topic, error)
+	Update(ctx context.Context, id, userID uuid.UUID, displayName *string, clientID, notifierID *uuid.UUID, downloadDir, category string, checkIntervalSec *int, flags repo.TopicFlags, folder *repo.FolderNamePolicy, extra map[string]any) (*domain.Topic, error)
 }
 
 // Poller periodically reads each enabled Sonarr instance's grab history and
@@ -353,9 +353,10 @@ func (p *Poller) handleExisting(ctx context.Context, inst domain.SonarrInstance,
 		downloadDir = inst.DefaultDownloadDir
 		category = inst.DefaultCategory
 	}
-	if _, err := p.topics.Update(ctx, existing.ID, ownerID, existing.DisplayName,
-		// nil interval: the poller never edits it, and writing back the one it read
-		// could undo an edit the user saved since.
+	// nil name and nil follow flag: the poller never renames and never edits
+	// the follow choice, and writing back what it read could undo an edit the
+	// user saved since. Same reasoning as the nil interval.
+	if _, err := p.topics.Update(ctx, existing.ID, ownerID, nil,
 		clientID, existing.NotifierID, downloadDir, category, nil,
 		repo.TopicFlags{
 			ReplaceOnUpdate:           existing.ReplaceOnUpdate,
@@ -364,7 +365,6 @@ func (p *Poller) handleExisting(ctx context.Context, inst domain.SonarrInstance,
 			NotifyOnlyAnnounceCurrent: existing.NotifyOnlyAnnounceCurrent,
 			AddPausedOnUpdate:         existing.AddPausedOnUpdate,
 			OnlyNewFiles:              existing.OnlyNewFiles,
-			FollowTrackerTitle:        existing.FollowTrackerTitle,
 		}, nil, mergedExtra); err != nil {
 		p.log.Warn().Err(err).Str("url", existing.URL).Msg("update existing topic from sonarr grab failed")
 		metrics.SonarrRecordsProcessedTotal.WithLabelValues("error").Inc()

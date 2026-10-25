@@ -35,7 +35,7 @@ type topicStore interface {
 	ListForUser(ctx context.Context, userID uuid.UUID) ([]*domain.Topic, error)
 	Delete(ctx context.Context, id, userID uuid.UUID) error
 	UpdateStatus(ctx context.Context, id, userID uuid.UUID, status domain.TopicStatus) error
-	Update(ctx context.Context, id, userID uuid.UUID, displayName string, clientID, notifierID *uuid.UUID, downloadDir, category string, checkIntervalSec *int, flags repo.TopicFlags, folder *repo.FolderNamePolicy, extra map[string]any) (*domain.Topic, error)
+	Update(ctx context.Context, id, userID uuid.UUID, displayName *string, clientID, notifierID *uuid.UUID, downloadDir, category string, checkIntervalSec *int, flags repo.TopicFlags, folder *repo.FolderNamePolicy, extra map[string]any) (*domain.Topic, error)
 	ResetCheckState(ctx context.Context, id, userID uuid.UUID) error
 	QueueRecheck(ctx context.Context, id, userID uuid.UUID) (repo.RecheckOutcome, error)
 }
@@ -219,7 +219,7 @@ func (h *Topics) Create(w http.ResponseWriter, r *http.Request) {
 		NotifyOnlyAnnounceCurrent: req.NotifyOnlyAnnounceCurrent,
 		AddPausedOnUpdate:         req.AddPausedOnUpdate,
 		OnlyNewFiles:              req.OnlyNewFiles,
-		FollowTrackerTitle:        h.followTrackerTitle(r.Context(), req.FollowTrackerTitle),
+		FollowTrackerTitle:        h.followTrackerTitle(r.Context(), req.FollowTrackerTitle, req.DisplayName != ""),
 		FolderNameMode:            domain.FolderNameMode(req.FolderNameMode),
 		FolderName:                req.FolderName,
 		Quality:                   req.Quality,
@@ -279,7 +279,11 @@ func topicCreateProblem(err error, url string) error {
 }
 
 type updateTopicReq struct {
-	DisplayName string     `json:"display_name"`
+	// DisplayName is a pointer so an omitted field is not a rename: the store
+	// leaves the name alone rather than writing back a value this caller read
+	// before someone else's edit. Sending a name that differs from the stored
+	// one is a rename.
+	DisplayName *string    `json:"display_name,omitempty"`
 	ClientID    *uuid.UUID `json:"client_id"`
 	NotifierID  *uuid.UUID `json:"notifier_id"`
 	DownloadDir string     `json:"download_dir"`
@@ -300,9 +304,7 @@ type updateTopicReq struct {
 	AddPausedOnUpdate *bool `json:"add_paused_on_update,omitempty"`
 	OnlyNewFiles      *bool `json:"only_new_files,omitempty"`
 	// FollowTrackerTitle is a pointer so an omitted field preserves the stored
-	// flag. Note the store clears it whenever the submitted display name
-	// differs from the stored one, whatever this field says: typing a name is
-	// taking ownership of it.
+	// flag; the store still clears it on a rename (see repo.Topics.Update).
 	FollowTrackerTitle *bool `json:"follow_tracker_title,omitempty"`
 	// Pointers so an omitted field preserves the stored folder name setting
 	// (issue #225); sending either one rewrites the whole setting.
@@ -423,10 +425,6 @@ func (h *Topics) Update(w http.ResponseWriter, r *http.Request) {
 	if req.OnlyNewFiles != nil {
 		onlyNewFiles = *req.OnlyNewFiles
 	}
-	followTrackerTitle := existing.FollowTrackerTitle
-	if req.FollowTrackerTitle != nil {
-		followTrackerTitle = *req.FollowTrackerTitle
-	}
 	folder, ferr := folderPolicyFromRequest(existing, req.FolderNameMode, req.FolderName)
 	if ferr != nil {
 		problem.Write(w, r, h.BaseURL, problem.ErrUnprocessable(ferr.Error()))
@@ -451,7 +449,7 @@ func (h *Topics) Update(w http.ResponseWriter, r *http.Request) {
 		NotifyOnlyAnnounceCurrent: notifyOnlyAnnounceCurrent,
 		AddPausedOnUpdate:         addPausedOnUpdate,
 		OnlyNewFiles:              onlyNewFiles,
-		FollowTrackerTitle:        followTrackerTitle,
+		FollowTrackerTitle:        req.FollowTrackerTitle,
 	}, folder, extra)
 	if uerr != nil {
 		if errors.Is(uerr, repo.ErrNotFound) {
@@ -492,13 +490,18 @@ func folderPolicyFromRequest(existing *domain.Topic, mode, name *string) (*repo.
 }
 
 // followTrackerTitle resolves the flag a new topic starts with. An explicit
-// request value is an explicit choice (a non-nil false included); an omitted
-// field falls back to the instance-wide default. A settings read failure
-// fails open to false — the same "a resolved title stays locked" behaviour
-// as before the default existed, never the other way round.
-func (h *Topics) followTrackerTitle(ctx context.Context, explicit *bool) bool {
+// request value is an explicit choice (a non-nil false included) and wins.
+// Without one, a caller that supplied its own display name keeps ownership of
+// it — the name is theirs, and an inherited default must not hand it to the
+// tracker — while a nameless create inherits the instance-wide default. A
+// settings read failure fails open to false: the "a resolved title stays
+// locked" behaviour as before the default existed, never the other way round.
+func (h *Topics) followTrackerTitle(ctx context.Context, explicit *bool, named bool) bool {
 	if explicit != nil {
 		return *explicit
+	}
+	if named {
+		return false
 	}
 	if h.Settings == nil {
 		return false

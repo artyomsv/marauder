@@ -94,8 +94,8 @@ type Topic struct {
 	// scheduler keeps DisplayName in sync with the title the tracker reports
 	// on each check, exactly like the placeholder self-heal but for a resolved
 	// name too. Off by default so a good title is never downgraded by a noisier
-	// Check title; a user rename clears it (typing a name is taking ownership
-	// of it). The instance-wide default for new topics lives in settings
+	// Check title; a user rename clears it (see repo.Topics.Update). The
+	// instance-wide default for new topics lives in settings
 	// (follow_tracker_title_default) and is materialised here at create time,
 	// so changing the default never touches existing topics.
 	FollowTrackerTitle bool

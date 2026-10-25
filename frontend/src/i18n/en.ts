@@ -224,6 +224,9 @@ const en: Record<string, string> = {
   "settings.topicDefaults.help":
     "New topics follow the tracker's title by default. Each topic's own toggle can still override this.",
   "settings.topicDefaults.saveFailed": "Save failed",
+  "settings.topicDefaults.loadFailed":
+    "The saved default could not be read, so it cannot be shown or changed here yet.",
+  "settings.topicDefaults.retry": "Try again",
   "settings.domains.title": "Tracker domains",
   "settings.domains.blurb":
     "Override which domain each tracker plugin uses, and register extra mirrors it can fall back to.",

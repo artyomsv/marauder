@@ -388,7 +388,9 @@ export interface TrackerPreview {
 
 // Body of PUT /topics/{id}. Mirrors the backend updateTopicReq.
 export interface UpdateTopicBody {
-  display_name: string;
+  // Omitted when unchanged: a stale name is not a rename, and the store reads
+  // a differing one as one (which disables follow-the-tracker-title).
+  display_name?: string;
   client_id?: string | null;
   notifier_id?: string | null;
   download_dir?: string;
