@@ -243,6 +243,44 @@ func TestPoller_CreatesTopic(t *testing.T) {
 	}
 }
 
+// fakeSettings supplies the instance defaults a new topic starts with.
+type fakeSettings struct{ defaultOn bool }
+
+func (f *fakeSettings) Get(context.Context) (*repo.InstanceSettings, error) {
+	return &repo.InstanceSettings{DefaultFollowTrackerTitle: f.defaultOn}, nil
+}
+
+// TestPoller_Create_InheritsTheInstanceDefault covers the path the tests
+// above never exercise: every one of them passes a nil settings store, but a
+// Sonarr-created topic is an ordinary topic and starts from the instance
+// default when the operator turned it on.
+func TestPoller_Create_InheritsTheInstanceDefault(t *testing.T) {
+	srv := historyServer([]HistoryRecord{
+		{
+			ID: 1, Date: time.Now().UTC(), SourceTitle: "Example S01E01 / Example [AVC][1]",
+			Data: HistoryData{NzbInfoURL: fakeURL, TorrentInfoHash: "initial-hash"},
+		},
+	})
+	defer srv.Close()
+
+	owner := uuid.New()
+	past := time.Now().Add(-time.Hour).UTC()
+	inst := baseInstance(srv.URL, owner)
+	inst.LastSeenAt = &past
+	ts := &fakeTopics{}
+
+	p := New(zerolog.Nop(), nil, &fakeInstances{}, fakeAdmin{}, ts, &fakeCredStore{},
+		&fakeSettings{defaultOn: true}, 5*time.Second)
+	p.pollOnce(context.Background(), inst)
+
+	if len(ts.created) != 1 {
+		t.Fatalf("want 1 created, got %d", len(ts.created))
+	}
+	if !ts.created[0].FollowTrackerTitle {
+		t.Error("created.FollowTrackerTitle = false, want the instance default applied")
+	}
+}
+
 func TestPoller_SeasonPackDedup(t *testing.T) {
 	now := time.Now().UTC()
 	srv := historyServer([]HistoryRecord{

@@ -1,14 +1,19 @@
 package handlers
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
+	pgxmock "github.com/pashagolub/pgxmock/v5"
+	"github.com/rs/zerolog"
 
+	"github.com/artyomsv/marauder/backend/internal/audit"
 	"github.com/artyomsv/marauder/backend/internal/db/repo"
 )
 
@@ -60,6 +65,44 @@ func TestSettingsUpdate_WritesAndAudits(t *testing.T) {
 	if !strings.Contains(w.Body.String(), `"default_follow_tracker_title":true`) {
 		t.Errorf("body = %s, want the written value", w.Body.String())
 	}
+}
+
+func TestSettingsUpdate_WritesTheAuditRow(t *testing.T) {
+	// The audit logger drains its buffer asynchronously, so the insert is
+	// awaited rather than asserted synchronously.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("pgxmock.NewPool: %v", err)
+	}
+	defer mock.Close()
+
+	mock.ExpectExec(`INSERT INTO audit_log`).
+		WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg(), "settings_update", "settings",
+			"default_follow_tracker_title", "success", pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+
+	h := &Settings{
+		Store:   &fakeSettingsStore{},
+		BaseURL: "http://x",
+		Audit:   audit.NewLogger(ctx, repo.NewAudit(mock), zerolog.Nop()),
+	}
+
+	w := httptest.NewRecorder()
+	h.Update(w, authedReq(t, uuid.New(), updateSettingsReq{DefaultFollowTrackerTitle: boolPtr(true)}))
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if err := mock.ExpectationsWereMet(); err == nil {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Error("the audit row was never written")
 }
 
 func TestSettingsUpdate_EmptyBodyIsRejected(t *testing.T) {

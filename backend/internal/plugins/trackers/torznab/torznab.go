@@ -81,6 +81,10 @@ func init() {
 func (p *Plugin) Name() string        { return pluginName }
 func (p *Plugin) DisplayName() string { return displayName }
 
+// ReportsFeedTitles: Check answers with the newest feed item's title, which
+// is not the topic's name — the scheduler must never take a title from it.
+func (p *Plugin) ReportsFeedTitles() bool { return true }
+
 // CanParse accepts only URLs that begin with "torznab+http://" or
 // "torznab+https://". The strict prefix prevents accidental matches
 // against forum URLs that another plugin would handle.

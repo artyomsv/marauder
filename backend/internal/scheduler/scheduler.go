@@ -486,7 +486,12 @@ func (s *Scheduler) runCheck(ctx context.Context, log zerolog.Logger, t *domain.
 	// placeholder heal already trusts. The write re-checks that permission in
 	// its WHERE clause: a user rename landing mid-check has already cleared
 	// both flags, and the stale snapshot read here must not win over it.
-	if check.DisplayName != "" && check.DisplayName != t.DisplayName && (t.DisplayNameIsPlaceholder || t.FollowTrackerTitle) {
+	//
+	// Feed trackers are excluded outright: their Check title is the newest
+	// feed item (registry.WithFeedTitles), so accepting it would rename the
+	// topic to whatever just appeared — on every check, and especially with
+	// the instance default on. Their Parse label is the topic's name.
+	if !reportsFeedTitles(tr) && check.DisplayName != "" && check.DisplayName != t.DisplayName && (t.DisplayNameIsPlaceholder || t.FollowTrackerTitle) {
 		if p, ok := s.topics.(displayNamePersister); ok {
 			// The write reports whether it happened: a user rename landing
 			// mid-check has locked the name and the row rejected this title, so
@@ -1199,6 +1204,14 @@ func (s *Scheduler) recordDelivery(ctx context.Context, log zerolog.Logger, t *d
 func isEpisodic(tr registry.Tracker) bool {
 	wef, ok := tr.(registry.WithEpisodeFilter)
 	return ok && wef.SupportsEpisodeFilter()
+}
+
+// reportsFeedTitles marks trackers whose Check title is the newest feed item
+// (Torznab/Newznab) rather than anything about the topic — see
+// registry.WithFeedTitles for why no title may be taken from it.
+func reportsFeedTitles(tr registry.Tracker) bool {
+	f, ok := tr.(registry.WithFeedTitles)
+	return ok && f.ReportsFeedTitles()
 }
 
 // listPriorDeliveries returns the topic's current deliveries (best-effort).

@@ -20,7 +20,9 @@ import { TitleSyncToggle } from "./TitleSyncToggle";
 import { useUnsupportedClient } from "./useUnsupportedClient";
 
 // Shape of GET /trackers/match. Drives which optional sections the form
-// renders (quality, season/episode filter, credentials hint).
+// renders (quality, season/episode filter, credentials hint). Title-follow
+// support is false for feed trackers, whose "titles" are the newest feed
+// item — the form hides the follow-the-tracker-title toggle for them.
 export interface TrackerMatch {
   tracker_name: string;
   display_name: string;
@@ -31,6 +33,7 @@ export interface TrackerMatch {
   requires_credentials: boolean;
   credentials_optional: boolean;
   uses_cloudflare: boolean;
+  supports_title_follow: boolean;
 }
 
 // Minimal shape of a torrent client for the picker. The full ClientView
@@ -301,6 +304,10 @@ export function TopicForm({
   // stored choice instead of losing it.
   const nameEdited = isEdit && displayName !== initial.displayName;
   const followTrackerTitle = nameEdited ? false : delivery.followTrackerTitle;
+  // A feed tracker's "title" is the newest feed item, so following it would
+  // rename the topic on every check (registry.WithFeedTitles). The toggle is
+  // hidden for those and the flag is never sent as on.
+  const titleFollowSupported = match?.supports_title_follow !== false;
 
   // A notify-only topic whose events reach nobody is a topic that silently
   // does nothing. An explicitly picked notifier replaces the defaults, so it
@@ -361,7 +368,8 @@ export function TopicForm({
       // Hidden for per-episode trackers and notify-only topics.
       folderNameMode: folderNameHidden ? "default" : delivery.folderNameMode,
       folderName: delivery.folderName,
-      followTrackerTitle,
+      // A feed tracker has no title to follow (the toggle is hidden for one).
+      followTrackerTitle: titleFollowSupported && followTrackerTitle,
     });
   };
 
@@ -416,14 +424,16 @@ export function TopicForm({
           }}
           placeholder="Leave blank to auto-detect"
         />
-        <TitleSyncToggle
-          checked={followTrackerTitle}
-          disabled={nameEdited}
-          onChange={(next) => {
-            followOwned.current = true;
-            setDelivery((d) => ({ ...d, followTrackerTitle: next }));
-          }}
-        />
+        {titleFollowSupported && (
+          <TitleSyncToggle
+            checked={followTrackerTitle}
+            disabled={nameEdited}
+            onChange={(next) => {
+              followOwned.current = true;
+              setDelivery((d) => ({ ...d, followTrackerTitle: next }));
+            }}
+          />
+        )}
       </div>
 
       {match?.qualities && match.qualities.length > 0 && (

@@ -49,6 +49,9 @@ type fakeTracker struct {
 	// scheduler treats it as a per-episode tracker (replace-on-update is then
 	// skipped to protect sibling episodes — issue #101).
 	episodic bool
+	// feedTitles makes the tracker advertise registry.WithFeedTitles: its
+	// Check title is the newest feed item, which no title may be taken from.
+	feedTitles bool
 	// onCheck runs at the top of Check, before the configured result is
 	// returned. It is the seam for simulating something happening to the topic
 	// while the worker is out at the tracker — a reset, say.
@@ -91,6 +94,7 @@ func (f *fakeTracker) Check(_ context.Context, _ *domain.Topic, _ *domain.Tracke
 // SupportsEpisodeFilter makes *fakeTracker satisfy registry.WithEpisodeFilter.
 // It reports true only when the test opted in via the episodic flag.
 func (f *fakeTracker) SupportsEpisodeFilter() bool { return f.episodic }
+func (f *fakeTracker) ReportsFeedTitles() bool     { return f.feedTitles }
 
 func (f *fakeTracker) Download(_ context.Context, _ *domain.Topic, _ *domain.Check, _ *domain.TrackerCredential) (*domain.Payload, error) {
 	idx := f.callsDownload
@@ -2777,6 +2781,35 @@ func TestRunCheck_RejectedTitleWrite_DoesNotAnnounceIt(t *testing.T) {
 	}
 	if f.topic.DisplayName != "Typed Mid Check" {
 		t.Errorf("topic.DisplayName = %q, want Typed Mid Check — a rejected title must not be announced", f.topic.DisplayName)
+	}
+}
+
+func TestRunCheck_FeedTrackerTitleIsNeverAccepted(t *testing.T) {
+	// A feed tracker's Check title is the newest feed item
+	// (registry.WithFeedTitles): accepting it would rename the topic to
+	// whatever just appeared in the feed, on every check. Neither the
+	// placeholder heal nor following may take it — the Parse label is the
+	// topic's name.
+	tr := &fakeTracker{
+		name:       "torznab",
+		feedTitles: true,
+		checks: []checkResult{
+			{check: &domain.Check{Hash: "old-hash", DisplayName: "Some.Show.S01E01.1080p"}, err: nil},
+		},
+	}
+	f := newFixture(t, tr)
+	f.topic.DisplayName = "Indexer: some show"
+	f.topic.DisplayNameIsPlaceholder = true
+	f.topic.FollowTrackerTitle = true
+
+	f.s.runCheck(context.Background(), f.s.log, f.topic)
+
+	if len(f.topics.updateDisplayNameCalls) != 0 {
+		t.Errorf("want 0 UpdateDisplayName calls for a feed tracker, got %d",
+			len(f.topics.updateDisplayNameCalls))
+	}
+	if f.topic.DisplayName != "Indexer: some show" {
+		t.Errorf("topic.DisplayName = %q, want the Parse label kept", f.topic.DisplayName)
 	}
 }
 

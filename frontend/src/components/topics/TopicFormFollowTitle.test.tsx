@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { type ReactElement, type ReactNode } from "react";
@@ -151,6 +151,35 @@ describe("TopicForm follow-the-tracker-title", () => {
     expect(onSubmit).toHaveBeenCalledWith(
       expect.objectContaining({ followTrackerTitle: false, displayName: "Original Namex" }),
     );
+  });
+
+  it("hides the toggle for a feed tracker and never sends the flag on", async () => {
+    // A feed tracker's "title" is the newest feed item: following it would
+    // rename the topic on every check, so there is nothing to offer here.
+    mockApi.get.mockImplementation((path: string) => {
+      if (path.startsWith("/trackers/match"))
+        return Promise.resolve({
+          tracker_name: "torznab",
+          display_name: "Torznab",
+          supports_episode_filter: false,
+          supports_season_catalog: false,
+          requires_credentials: false,
+          credentials_optional: false,
+          uses_cloudflare: false,
+          supports_title_follow: false,
+        });
+      return Promise.resolve({});
+    });
+    const onSubmit = vi.fn();
+    renderForm(onSubmit);
+
+    // The match query resolves after mount; the toggle disappears with it.
+    await waitFor(() =>
+      expect(screen.queryByLabelText(/follow the tracker's title/i)).not.toBeInTheDocument(),
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ followTrackerTitle: false }));
   });
 
   it("applies the instance default when it loads after mount", () => {
