@@ -572,8 +572,10 @@ func TestTopics_UpdateDisplayName_PinsPermissionClause(t *testing.T) {
 		WithArgs(id, "Real Title").
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 
-	if err := r.UpdateDisplayName(context.Background(), id, "Real Title"); err != nil {
+	if written, err := r.UpdateDisplayName(context.Background(), id, "Real Title"); err != nil {
 		t.Fatalf("UpdateDisplayName: unexpected error: %v", err)
+	} else if !written {
+		t.Error("UpdateDisplayName reported no write for a permitted name")
 	}
 }
 
@@ -583,8 +585,10 @@ func TestTopics_UpdateDisplayName_IgnoresBlankName(t *testing.T) {
 	r, mock := newMockTopics(t)
 	t.Cleanup(func() { assertExpectationsMet(t, mock) })
 
-	if err := r.UpdateDisplayName(context.Background(), uuid.New(), ""); err != nil {
+	if written, err := r.UpdateDisplayName(context.Background(), uuid.New(), ""); err != nil {
 		t.Fatalf("UpdateDisplayName: unexpected error: %v", err)
+	} else if written {
+		t.Error("UpdateDisplayName reported a write for a blank name")
 	}
 }
 

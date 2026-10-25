@@ -659,18 +659,24 @@ func (r *Topics) Update(ctx context.Context, id, userID uuid.UUID, displayName s
 // user rename landing mid-check has already cleared both
 // display_name_is_placeholder and follow_tracker_title. Re-checking that here
 // means the in-flight check cannot overwrite the typed name — the lock from
-// issue #90 holds even inside a running check. A blocked write is a no-op,
-// not an error: the name is simply locked now.
-func (r *Topics) UpdateDisplayName(ctx context.Context, id uuid.UUID, displayName string) error {
+// issue #90 holds even inside a running check.
+//
+// Reports whether the write happened, because the caller must not announce a
+// title the row rejected: a blocked write is a no-op, not an error, and the
+// name is simply locked now.
+func (r *Topics) UpdateDisplayName(ctx context.Context, id uuid.UUID, displayName string) (bool, error) {
 	if displayName == "" {
-		return nil
+		return false, nil
 	}
-	_, err := r.pool.Exec(ctx,
+	tag, err := r.pool.Exec(ctx,
 		`UPDATE topics SET display_name = $2, display_name_is_placeholder = false, updated_at = now()
 WHERE id = $1 AND (display_name_is_placeholder OR follow_tracker_title)`,
 		id, displayName,
 	)
-	return err
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
 }
 
 // SetFolderNameSeen stores keep mode's memory of the topic's folder name

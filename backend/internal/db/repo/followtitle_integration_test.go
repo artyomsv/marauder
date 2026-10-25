@@ -58,8 +58,12 @@ func TestTopicsFollowTrackerTitle(t *testing.T) {
 	if !got.FollowTrackerTitle {
 		t.Fatal("same-name update with the flag on left it off")
 	}
-	if err := topicsRepo.UpdateDisplayName(ctx, topic.ID, "Tracker Title v2"); err != nil {
+	written, err := topicsRepo.UpdateDisplayName(ctx, topic.ID, "Tracker Title v2")
+	if err != nil {
 		t.Fatalf("UpdateDisplayName: %v", err)
+	}
+	if !written {
+		t.Error("UpdateDisplayName reported no write while the topic follows")
 	}
 	got = reload(t, pool, topic.ID)
 	if !got.FollowTrackerTitle {
@@ -78,8 +82,12 @@ func TestTopicsFollowTrackerTitle(t *testing.T) {
 	if got.FollowTrackerTitle {
 		t.Fatal("a rename must clear FollowTrackerTitle")
 	}
-	if err := topicsRepo.UpdateDisplayName(ctx, topic.ID, "Tracker Title v3"); err != nil {
+	written, err = topicsRepo.UpdateDisplayName(ctx, topic.ID, "Tracker Title v3")
+	if err != nil {
 		t.Fatalf("UpdateDisplayName: %v", err)
+	}
+	if written {
+		t.Error("UpdateDisplayName reported a write to a locked name")
 	}
 	got = reload(t, pool, topic.ID)
 	if got.DisplayName != "Typed Mid Check" {

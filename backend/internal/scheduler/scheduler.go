@@ -77,7 +77,7 @@ type topicsRepo interface {
 // during Check (self-healing placeholder names). Best-effort — a failure here
 // never affects the check result.
 type displayNamePersister interface {
-	UpdateDisplayName(ctx context.Context, id uuid.UUID, displayName string) error
+	UpdateDisplayName(ctx context.Context, id uuid.UUID, displayName string) (bool, error)
 }
 
 // clientsRepo is the subset of *repo.Clients that the scheduler uses.
@@ -488,9 +488,13 @@ func (s *Scheduler) runCheck(ctx context.Context, log zerolog.Logger, t *domain.
 	// both flags, and the stale snapshot read here must not win over it.
 	if check.DisplayName != "" && check.DisplayName != t.DisplayName && (t.DisplayNameIsPlaceholder || t.FollowTrackerTitle) {
 		if p, ok := s.topics.(displayNamePersister); ok {
-			if err := p.UpdateDisplayName(ctx, t.ID, check.DisplayName); err != nil {
+			// The write reports whether it happened: a user rename landing
+			// mid-check has locked the name and the row rejected this title, so
+			// announcing it would publish a name the topic does not have. The
+			// snapshot name the tick is working with stands instead.
+			if updated, err := p.UpdateDisplayName(ctx, t.ID, check.DisplayName); err != nil {
 				log.Warn().Err(err).Msg("UpdateDisplayName failed")
-			} else {
+			} else if updated {
 				log.Debug().Str("display_name", check.DisplayName).Msg("display name updated from the tracker")
 				t.DisplayName = check.DisplayName
 				t.DisplayNameIsPlaceholder = false
