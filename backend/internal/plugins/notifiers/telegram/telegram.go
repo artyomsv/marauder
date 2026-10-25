@@ -54,8 +54,10 @@ func (p *plugin) ConfigSchema() map[string]any {
 
 func (p *plugin) Test(ctx context.Context, rawConfig []byte) error {
 	return p.Send(ctx, rawConfig, domain.Message{
-		Title: "Marauder",
-		Body:  "Test notification - your Telegram integration is working.",
+		Title:    "Marauder",
+		Body:     "Test notification - your Telegram integration is working.",
+		Event:    "test",
+		Severity: "info",
 	})
 }
 
@@ -91,6 +93,28 @@ func (p *plugin) Send(ctx context.Context, rawConfig []byte, msg domain.Message)
 	return nil
 }
 
+// eventIcons marks what happened in the message head. Telegram's HTML parse
+// mode has no text colour, so the icon carries both roles: the event marker
+// and the colour cue (blue-ish actions, green done, red failure, amber
+// warning). Keyed on the canonical event type from events.Type; a message
+// with an unknown or empty Event renders without an icon.
+var eventIcons = map[string]string{
+	"release.found":      "🆕",
+	"download.submitted": "📤",
+	"download.completed": "✅",
+	"check.failed":       "⚠️",
+	"session.expired":    "🔑",
+	"test":               "🧪",
+}
+
+// severityIcons prefix the head only for non-info severities, so a problem
+// stands out in a chat list without reading the title while ordinary
+// updates stay compact.
+var severityIcons = map[string]string{
+	"warn":  "🟡",
+	"error": "🔴",
+}
+
 // formatMessage renders for Telegram's HTML parse mode. HTML is used instead
 // of (legacy) Markdown because tracker URLs and release titles routinely
 // contain _/*/[ — in Markdown mode an unbalanced metacharacter makes the Bot
@@ -98,13 +122,13 @@ func (p *plugin) Send(ctx context.Context, rawConfig []byte, msg domain.Message)
 // dropping the notification. html.EscapeString is a complete escape for the
 // HTML entity set, so any title/body/URL renders verbatim.
 //
-// Layout: blank lines separate the title, body, author-update block, and a
-// single footer line of links, so long release titles don't read as one
-// wall of text.
+// Layout: one head line (severity dot + event icon + bold title), blank
+// lines separating body, the author-update block, and a single footer line
+// of links, so long release titles don't read as one wall of text.
 func formatMessage(m domain.Message) string {
-	s := "<b>" + html.EscapeString(m.Title) + "</b>\n\n" + html.EscapeString(m.Body)
+	s := headLine(m) + "\n\n" + html.EscapeString(m.Body)
 	if m.AuthorComment != "" {
-		s += "\n\nAuthor update:\n<i>" + html.EscapeString(m.AuthorComment) + "</i>"
+		s += "\n\n💬 <i>" + html.EscapeString(m.AuthorComment) + "</i>"
 	}
 	var links []string
 	if m.SourceURL != "" {
@@ -117,6 +141,20 @@ func formatMessage(m domain.Message) string {
 		s += "\n\n" + strings.Join(links, " · ")
 	}
 	return s
+}
+
+// headLine is the message head: a severity dot for warn/error, the event
+// icon, then the bold title. The markers sit outside the bold run so
+// copying the title out of the chat yields clean text.
+func headLine(m domain.Message) string {
+	var prefix string
+	if dot, ok := severityIcons[m.Severity]; ok {
+		prefix += dot + " "
+	}
+	if icon, ok := eventIcons[m.Event]; ok {
+		prefix += icon + " "
+	}
+	return prefix + "<b>" + html.EscapeString(m.Title) + "</b>"
 }
 
 // linkOrLabel renders a URL as a short <a> anchor when Telegram will accept

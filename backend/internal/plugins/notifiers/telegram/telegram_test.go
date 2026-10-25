@@ -144,10 +144,10 @@ func TestFormatMessage_AuthorComment(t *testing.T) {
 				SourceURL:     "https://tracker.example/viewtopic.php?t=1",
 				Link:          "http://marauder/topics",
 			},
-			want: "<b>T</b>\n\nB\n\nAuthor update:\n<i>Added episode 8.</i>\n\n<a href=\"https://tracker.example/viewtopic.php?t=1\">Source</a> · Marauder: http://marauder/topics",
+			want: "<b>T</b>\n\nB\n\n💬 <i>Added episode 8.</i>\n\n<a href=\"https://tracker.example/viewtopic.php?t=1\">Source</a> · Marauder: http://marauder/topics",
 		},
 		{
-			name: "no comment renders no Author update block",
+			name: "no comment renders no author-comment block",
 			msg: domain.Message{
 				Title: "T", Body: "B",
 				SourceURL: "https://tracker.example/viewtopic.php?t=1",
@@ -160,7 +160,73 @@ func TestFormatMessage_AuthorComment(t *testing.T) {
 				Title: "T", Body: "B",
 				AuthorComment: "5 > 4 & <b>done</b>",
 			},
-			want: "<b>T</b>\n\nB\n\nAuthor update:\n<i>5 &gt; 4 &amp; &lt;b&gt;done&lt;/b&gt;</i>",
+			want: "<b>T</b>\n\nB\n\n💬 <i>5 &gt; 4 &amp; &lt;b&gt;done&lt;/b&gt;</i>",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := formatMessage(tt.msg); got != tt.want {
+				t.Errorf("formatMessage() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestFormatMessage_EventIconAndSeverity(t *testing.T) {
+	tests := []struct {
+		name string
+		msg  domain.Message
+		want string
+	}{
+		{
+			name: "new release is marked with the new-release icon",
+			msg:  domain.Message{Title: "T", Body: "B", Event: "release.found", Severity: "info"},
+			want: "🆕 <b>T</b>\n\nB",
+		},
+		{
+			name: "submitted delivery is marked with the outgoing icon",
+			msg:  domain.Message{Title: "T", Body: "B", Event: "download.submitted", Severity: "info"},
+			want: "📤 <b>T</b>\n\nB",
+		},
+		{
+			name: "finished download is marked with the done icon",
+			msg:  domain.Message{Title: "T", Body: "B", Event: "download.completed", Severity: "info"},
+			want: "✅ <b>T</b>\n\nB",
+		},
+		{
+			name: "a failed check gets the error dot before the warning icon",
+			msg:  domain.Message{Title: "T", Body: "B", Event: "check.failed", Severity: "error"},
+			want: "🔴 ⚠️ <b>T</b>\n\nB",
+		},
+		{
+			name: "an expired session gets the error dot and the key icon",
+			msg:  domain.Message{Title: "T", Body: "B", Event: "session.expired", Severity: "error"},
+			want: "🔴 🔑 <b>T</b>\n\nB",
+		},
+		{
+			name: "a warn-severity event gets the warn dot only",
+			msg:  domain.Message{Title: "T", Body: "B", Event: "check.failed", Severity: "warn"},
+			want: "🟡 ⚠️ <b>T</b>\n\nB",
+		},
+		{
+			name: "the notifier's own test message is marked as a test",
+			msg:  domain.Message{Title: "T", Body: "B", Event: "test", Severity: "info"},
+			want: "🧪 <b>T</b>\n\nB",
+		},
+		{
+			name: "an unknown event renders no icon",
+			msg:  domain.Message{Title: "T", Body: "B", Event: "topic.added", Severity: "info"},
+			want: "<b>T</b>\n\nB",
+		},
+		{
+			name: "an unknown severity renders no dot",
+			msg:  domain.Message{Title: "T", Body: "B", Event: "release.found", Severity: "critical"},
+			want: "🆕 <b>T</b>\n\nB",
+		},
+		{
+			name: "markers sit outside the bold run and the title stays escaped",
+			msg:  domain.Message{Title: "T <x>", Body: "B", Event: "release.found", Severity: "info"},
+			want: "🆕 <b>T &lt;x&gt;</b>\n\nB",
 		},
 	}
 	for _, tt := range tests {

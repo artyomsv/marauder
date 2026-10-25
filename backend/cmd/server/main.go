@@ -245,8 +245,10 @@ func run() error {
 				return
 			}
 			disp.Send(ctx, admin.ID, string(events.CheckFailed), domain.Message{
-				Title: fmt.Sprintf("Tracker %s switched to mirror %s", tracker, to),
-				Body:  fmt.Sprintf("Checks against %s were failing; Marauder now uses %s. Revert or adjust under Settings → Tracker domains.", from, to),
+				Title:    fmt.Sprintf("Tracker %s switched to mirror %s", tracker, to),
+				Body:     fmt.Sprintf("Checks against %s were failing; Marauder now uses %s. Revert or adjust under Settings → Tracker domains.", from, to),
+				Event:    string(events.CheckFailed),
+				Severity: "warn",
 			})
 		}()
 	})

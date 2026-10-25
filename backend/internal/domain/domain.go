@@ -307,13 +307,19 @@ type ClientFile struct {
 // has no topic source, e.g. a credential session expiry). AuthorComment is
 // the release author's latest tracker comment (issue #110), already
 // plain-text and length-capped by the scheduler; empty when the tracker
-// can't provide one.
+// can't provide one. Event names the canonical event type and Severity its
+// level ("info" / "warn" / "error"): a notifier with a rich layout uses
+// them to mark what happened, which a plain title/body cannot express —
+// Telegram turns them into an event icon and a severity dot. Empty Event
+// (e.g. a notifier's own test message) renders without the marker.
 type Message struct {
 	Title         string
 	Body          string
 	Link          string
 	SourceURL     string
 	AuthorComment string
+	Event         string
+	Severity      string
 }
 
 // SonarrInstance is the runtime configuration for one Sonarr instance,
