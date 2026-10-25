@@ -68,6 +68,23 @@ func TestTopicsFollowTrackerTitle(t *testing.T) {
 	if got.DisplayName != "Tracker Title v2" {
 		t.Errorf("DisplayName = %q, want Tracker Title v2", got.DisplayName)
 	}
+
+	// The race the WHERE clause of UpdateDisplayName exists for: a user rename
+	// lands while a check is running. The check's snapshot still says the topic
+	// may follow, but the rename has already locked the name — the in-flight
+	// tracker title must not overwrite it (issue #90 holds inside a running
+	// check too).
+	got = update("Typed Mid Check", TopicFlags{FollowTrackerTitle: true})
+	if got.FollowTrackerTitle {
+		t.Fatal("a rename must clear FollowTrackerTitle")
+	}
+	if err := topicsRepo.UpdateDisplayName(ctx, topic.ID, "Tracker Title v3"); err != nil {
+		t.Fatalf("UpdateDisplayName: %v", err)
+	}
+	got = reload(t, pool, topic.ID)
+	if got.DisplayName != "Typed Mid Check" {
+		t.Errorf("DisplayName = %q, want Typed Mid Check — an in-flight check overwrote a user rename", got.DisplayName)
+	}
 }
 
 // The instance-wide default new topics are seeded with when their creator

@@ -2687,6 +2687,11 @@ func TestRunCheck_SelfHeal_PlaceholderName_Persists(t *testing.T) {
 	if got := f.topics.updateDisplayNameCalls[0].name; got != "Real Title" {
 		t.Errorf("healed name = %q, want Real Title", got)
 	}
+	// The healed name is what the rest of the tick must announce: the delivery
+	// label and every notification carry the topic's display name.
+	if f.topic.DisplayName != "Real Title" {
+		t.Errorf("topic.DisplayName = %q, want Real Title after the heal", f.topic.DisplayName)
+	}
 }
 
 func TestRunCheck_SelfHeal_ResolvedName_DoesNotDowngrade(t *testing.T) {
@@ -2733,6 +2738,10 @@ func TestRunCheck_FollowTrackerTitle_UpdatesResolvedName(t *testing.T) {
 	}
 	if got := f.topics.updateDisplayNameCalls[0].name; got != "Show.S01.2160p.WEB-DL.REPACK" {
 		t.Errorf("followed name = %q, want Show.S01.2160p.WEB-DL.REPACK", got)
+	}
+	// The accepted name is announced, not the stale one.
+	if f.topic.DisplayName != "Show.S01.2160p.WEB-DL.REPACK" {
+		t.Errorf("topic.DisplayName = %q, want the followed name", f.topic.DisplayName)
 	}
 	// Following outlives the update it triggered — the scheduler never
 	// touches the flag; only a user rename clears it.

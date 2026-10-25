@@ -557,6 +557,37 @@ func TestTopics_Update_HappyPath(t *testing.T) {
 	}
 }
 
+// TestTopics_UpdateDisplayName_PinsPermissionClause guards the WHERE clause
+// that makes the write conditional on the name still being allowed to change.
+// The scheduler decides from a snapshot taken at check start; dropping the
+// clause would let an in-flight check overwrite a user rename that landed
+// mid-check (issue #90 must hold inside a running check too). The integration
+// tests execute it; this guards the text.
+func TestTopics_UpdateDisplayName_PinsPermissionClause(t *testing.T) {
+	r, mock := newMockTopics(t)
+	t.Cleanup(func() { assertExpectationsMet(t, mock) })
+
+	id := uuid.New()
+	mock.ExpectExec(`UPDATE topics SET display_name = \$2, display_name_is_placeholder = false, updated_at = now\(\)\s+WHERE id = \$1 AND \(display_name_is_placeholder OR follow_tracker_title\)`).
+		WithArgs(id, "Real Title").
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+
+	if err := r.UpdateDisplayName(context.Background(), id, "Real Title"); err != nil {
+		t.Fatalf("UpdateDisplayName: unexpected error: %v", err)
+	}
+}
+
+// TestTopics_UpdateDisplayName_IgnoresBlankName: a tracker that resolved no
+// title must not wipe a good one.
+func TestTopics_UpdateDisplayName_IgnoresBlankName(t *testing.T) {
+	r, mock := newMockTopics(t)
+	t.Cleanup(func() { assertExpectationsMet(t, mock) })
+
+	if err := r.UpdateDisplayName(context.Background(), uuid.New(), ""); err != nil {
+		t.Fatalf("UpdateDisplayName: unexpected error: %v", err)
+	}
+}
+
 // TestTopics_Update_FollowTrackerTitle_Passthrough pins the flag's UPDATE
 // clause — including the clear-on-rename CASE, which is the backend half of
 // "a user rename takes ownership of the name" (the frontend mirrors it by

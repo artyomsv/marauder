@@ -330,6 +330,8 @@ const en: Record<string, string> = {
   "topics.followTitle.label": "Follow the tracker's title",
   "topics.followTitle.help":
     "When the tracker renames the topic, update this name too. Turned off automatically if you type a name yourself. Quality depends on the tracker — some report a page title instead of the release name.",
+  "topics.followTitle.lockedHint":
+    "Turned off while the name is edited: save the new name first, then enable it again.",
 
   // Per-topic check interval (issue #204)
   "topics.interval.label": "Check interval",

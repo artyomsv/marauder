@@ -650,15 +650,24 @@ func (r *Topics) Update(ctx context.Context, id, userID uuid.UUID, displayName s
 // UpdateDisplayName persists a freshly-resolved title for a topic. The
 // scheduler calls this when a tracker's Check reports a DisplayName that
 // differs from what's stored — upgrading placeholder names (e.g. "RuTracker
-// topic 123") to the real title without the user editing anything. A blank
-// name is ignored so a tracker that didn't resolve a title can't wipe a good
-// one.
+// topic 123") to the real title, or following a tracker-side rename when the
+// topic opted into follow_tracker_title (migration 0019). A blank name is
+// ignored so a tracker that didn't resolve a title can't wipe a good one.
+//
+// The write is conditional on the name still being allowed to change: the
+// scheduler decides from a snapshot of the topic taken at check start, so a
+// user rename landing mid-check has already cleared both
+// display_name_is_placeholder and follow_tracker_title. Re-checking that here
+// means the in-flight check cannot overwrite the typed name — the lock from
+// issue #90 holds even inside a running check. A blocked write is a no-op,
+// not an error: the name is simply locked now.
 func (r *Topics) UpdateDisplayName(ctx context.Context, id uuid.UUID, displayName string) error {
 	if displayName == "" {
 		return nil
 	}
 	_, err := r.pool.Exec(ctx,
-		`UPDATE topics SET display_name = $2, display_name_is_placeholder = false, updated_at = now() WHERE id = $1`,
+		`UPDATE topics SET display_name = $2, display_name_is_placeholder = false, updated_at = now()
+WHERE id = $1 AND (display_name_is_placeholder OR follow_tracker_title)`,
 		id, displayName,
 	)
 	return err

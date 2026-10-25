@@ -475,6 +475,29 @@ func (s *Scheduler) runCheck(ctx context.Context, log zerolog.Logger, t *domain.
 		return
 	}
 
+	// Accept the tracker's title before any side effect of this tick: the
+	// delivery label, the release announcement and every notification below
+	// must carry the accepted name, and a later download failure must not skip
+	// the upgrade. Heal it while it is still a generated placeholder, or when
+	// the topic opted into following the tracker's title. Once a real title is
+	// resolved and the topic does not follow (issue #90) the name is locked,
+	// so a noisier Check title can't downgrade it. Following is opt-in because
+	// Check.DisplayName quality varies per tracker — it is the same source the
+	// placeholder heal already trusts. The write re-checks that permission in
+	// its WHERE clause: a user rename landing mid-check has already cleared
+	// both flags, and the stale snapshot read here must not win over it.
+	if check.DisplayName != "" && check.DisplayName != t.DisplayName && (t.DisplayNameIsPlaceholder || t.FollowTrackerTitle) {
+		if p, ok := s.topics.(displayNamePersister); ok {
+			if err := p.UpdateDisplayName(ctx, t.ID, check.DisplayName); err != nil {
+				log.Warn().Err(err).Msg("UpdateDisplayName failed")
+			} else {
+				log.Debug().Str("display_name", check.DisplayName).Msg("display name updated from the tracker")
+				t.DisplayName = check.DisplayName
+				t.DisplayNameIsPlaceholder = false
+			}
+		}
+	}
+
 	updated := check.Hash != "" && check.Hash != t.LastHash
 	var anySubmitted bool
 	var delivered []string
@@ -585,20 +608,6 @@ func (s *Scheduler) runCheck(ctx context.Context, log zerolog.Logger, t *domain.
 			// (deleting data per the topic's flag) so updates don't accumulate.
 			if anySubmitted && len(priorDeliveries) > 0 {
 				s.replacePrevious(ctx, log, t, priorDeliveries, deliveredHashes)
-			}
-		}
-	}
-
-	// Self-heal the display name when it is still a generated placeholder, or
-	// when the topic opted into following the tracker's title. Once a real
-	// title is resolved and the topic does not follow (issue #90) the name is
-	// locked, so a noisier Check title can't downgrade it. Following is
-	// opt-in because Check.DisplayName quality varies per tracker — it is the
-	// same source the placeholder heal already trusts.
-	if check.DisplayName != "" && check.DisplayName != t.DisplayName && (t.DisplayNameIsPlaceholder || t.FollowTrackerTitle) {
-		if p, ok := s.topics.(displayNamePersister); ok {
-			if err := p.UpdateDisplayName(ctx, t.ID, check.DisplayName); err != nil {
-				log.Warn().Err(err).Msg("UpdateDisplayName failed")
 			}
 		}
 	}

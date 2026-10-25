@@ -282,6 +282,27 @@ export function TopicForm({
     followTrackerTitle: initial.followTrackerTitle,
   });
 
+  // The instance default seeds the follow-the-tracker-title toggle, but the
+  // add card's settings query can settle after this form mounts. Keep applying
+  // the loaded default until the user makes their own choice, so a late answer
+  // is neither ignored (the toggle would silently save `false` over an enabled
+  // default) nor able to overwrite one.
+  const followOwned = useRef(false);
+  useEffect(() => {
+    if (!followOwned.current) {
+      setDelivery((d) => ({ ...d, followTrackerTitle: initial.followTrackerTitle }));
+    }
+  }, [initial.followTrackerTitle]);
+
+  // A typed name is the user's: the store clears follow_tracker_title whenever
+  // a save changes the name (typing a name is taking ownership of it), so while
+  // the name differs from the one the form was opened with, the checkbox is
+  // forced off and disabled — a re-tick would be silently discarded on save.
+  // Derived rather than stored, so reverting the name restores the stored
+  // choice instead of losing it.
+  const nameEdited = isEdit && displayName !== initial.displayName;
+  const followTrackerTitle = nameEdited ? false : delivery.followTrackerTitle;
+
   // A notify-only topic whose events reach nobody is a topic that silently
   // does nothing. An explicitly picked notifier replaces the defaults, so it
   // is the only one to inspect; otherwise the topic reaches the defaults.
@@ -341,7 +362,7 @@ export function TopicForm({
       // Hidden for per-episode trackers and notify-only topics.
       folderNameMode: folderNameHidden ? "default" : delivery.folderNameMode,
       folderName: delivery.folderName,
-      followTrackerTitle: delivery.followTrackerTitle,
+      followTrackerTitle,
     });
   };
 
@@ -386,18 +407,25 @@ export function TopicForm({
           onChange={(e) => {
             setDisplayName(e.target.value);
             nameAutoFilled.current = false;
-            // Typing a name takes ownership of it, so the topic can no longer
-            // follow the tracker's title. Mirrors the store, which clears the
-            // flag whenever the submitted name changes.
-            if (e.target.value !== initial.displayName) {
+            // In add mode a typed name turns the toggle off once — a typed
+            // name is the user's. In edit mode the same rule is derived (the
+            // checkbox is forced off and disabled while the name differs from
+            // the saved one), so a reverted edit restores the stored choice
+            // instead of losing it.
+            if (!isEdit && e.target.value !== initial.displayName) {
+              followOwned.current = true;
               setDelivery((d) => ({ ...d, followTrackerTitle: false }));
             }
           }}
           placeholder="Leave blank to auto-detect"
         />
         <TitleSyncToggle
-          checked={delivery.followTrackerTitle}
-          onChange={(next) => setDelivery((d) => ({ ...d, followTrackerTitle: next }))}
+          checked={followTrackerTitle}
+          disabled={nameEdited}
+          onChange={(next) => {
+            followOwned.current = true;
+            setDelivery((d) => ({ ...d, followTrackerTitle: next }));
+          }}
         />
       </div>
 

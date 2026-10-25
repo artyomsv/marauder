@@ -2,6 +2,8 @@ import { useT } from "@/i18n";
 
 interface TitleSyncToggleProps {
   checked: boolean;
+  /** Disable and explain while the save would discard the choice. */
+  disabled?: boolean;
   onChange: (next: boolean) => void;
 }
 
@@ -10,25 +12,32 @@ interface TitleSyncToggleProps {
  *
  * While on, the scheduler keeps the topic's display name in sync with the
  * title the tracker reports on each check — the opt-in that undoes the
- * resolved-title lock (issue #90) for a topic that wants it. The form unticks
- * it the moment the user types a name, because typing a name is taking
- * ownership of it: the backend clears the flag on a rename, so showing it
- * still on would be a lie.
+ * resolved-title lock (issue #90) for a topic that wants it. The form forces
+ * it off while the name is being edited, because typing a name is taking
+ * ownership of it and the store clears the flag on a rename: showing it still
+ * on would be a lie, and letting it be ticked would be a choice the save
+ * silently discards.
  */
-export function TitleSyncToggle({ checked, onChange }: TitleSyncToggleProps) {
+export function TitleSyncToggle({ checked, disabled, onChange }: TitleSyncToggleProps) {
   const t = useT();
   return (
-    <label className="flex items-start gap-2 pt-1 text-sm">
-      <input
-        type="checkbox"
-        checked={checked}
-        onChange={(e) => onChange(e.target.checked)}
-        className="mt-0.5"
-      />
-      <span>
-        <span className="font-medium text-foreground">{t("topics.followTitle.label")}</span>
-        <span className="block text-xs text-muted-foreground">{t("topics.followTitle.help")}</span>
-      </span>
-    </label>
+    <div className="pt-1">
+      <label className="flex items-start gap-2 text-sm">
+        <input
+          type="checkbox"
+          checked={checked}
+          disabled={disabled}
+          onChange={(e) => onChange(e.target.checked)}
+          className="mt-0.5"
+        />
+        <span>
+          <span className="font-medium text-foreground">{t("topics.followTitle.label")}</span>
+          <span className="block text-xs text-muted-foreground">{t("topics.followTitle.help")}</span>
+        </span>
+      </label>
+      {disabled && (
+        <p className="mt-1 pl-6 text-xs text-muted-foreground">{t("topics.followTitle.lockedHint")}</p>
+      )}
+    </div>
   );
 }

@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { type ReactNode } from "react";
+import { type ReactElement, type ReactNode } from "react";
 
 vi.mock("@/lib/api", async () => {
   const actual = await vi.importActual<typeof import("@/lib/api")>("@/lib/api");
@@ -54,11 +54,11 @@ const INITIAL: TopicFormValues = {
   followTrackerTitle: true,
 };
 
-function renderForm(onSubmit: (v: TopicFormValues) => void) {
-  render(
+function renderForm(onSubmit: (v: TopicFormValues) => void, initial: TopicFormValues = INITIAL) {
+  return render(
     <TopicForm
       mode="edit"
-      initial={INITIAL}
+      initial={initial}
       submitLabel="Save"
       heading="Edit topic"
       isPending={false}
@@ -67,6 +67,26 @@ function renderForm(onSubmit: (v: TopicFormValues) => void) {
       onSubmit={onSubmit}
     />,
     { wrapper: wrap() },
+  );
+}
+
+// Re-render the same form with a different seeded flag, standing in for the
+// add card's settings query settling after mount.
+function rerenderFormWith(
+  rerender: (ui: ReactElement) => void,
+  followTrackerTitle: boolean,
+) {
+  rerender(
+    <TopicForm
+      mode="edit"
+      initial={{ ...INITIAL, followTrackerTitle }}
+      submitLabel="Save"
+      heading="Edit topic"
+      isPending={false}
+      error={null}
+      onClose={() => {}}
+      onSubmit={() => {}}
+    />,
   );
 }
 
@@ -98,18 +118,21 @@ describe("TopicForm follow-the-tracker-title", () => {
     expect(box.checked).toBe(true);
   });
 
-  it("turns the toggle off when the user types a name", async () => {
+  it("turns the toggle off while the name is edited", async () => {
     renderForm(() => {});
     const box = screen.getByLabelText(/follow the tracker's title/i) as HTMLInputElement;
     await userEvent.type(screen.getByLabelText(/display name/i), "x");
     expect(box.checked).toBe(false);
+    expect(box.disabled).toBe(true);
+    expect(screen.getByText(/save the new name first/i)).toBeInTheDocument();
   });
 
-  it("lets the user turn it back on after editing the name", async () => {
+  it("restores the stored choice when the name edit is reverted", async () => {
     renderForm(() => {});
     const box = screen.getByLabelText(/follow the tracker's title/i) as HTMLInputElement;
     await userEvent.type(screen.getByLabelText(/display name/i), "x");
-    await userEvent.click(box);
+    await userEvent.type(screen.getByLabelText(/display name/i), "{Backspace}");
+    expect(box.disabled).toBe(false);
     expect(box.checked).toBe(true);
   });
 
@@ -128,5 +151,25 @@ describe("TopicForm follow-the-tracker-title", () => {
     expect(onSubmit).toHaveBeenCalledWith(
       expect.objectContaining({ followTrackerTitle: false, displayName: "Original Namex" }),
     );
+  });
+
+  it("applies the instance default when it loads after mount", () => {
+    // The add card's settings query settles after the form mounts; the
+    // toggle must pick the default up rather than save an explicit false
+    // over an enabled default.
+    const { rerender } = renderForm(() => {}, { ...INITIAL, followTrackerTitle: false });
+    const box = screen.getByLabelText(/follow the tracker's title/i) as HTMLInputElement;
+    expect(box.checked).toBe(false);
+    rerenderFormWith(rerender, true);
+    expect(box.checked).toBe(true);
+  });
+
+  it("does not let a late default overwrite the user's choice", async () => {
+    const { rerender } = renderForm(() => {}, { ...INITIAL, followTrackerTitle: false });
+    const box = screen.getByLabelText(/follow the tracker's title/i) as HTMLInputElement;
+    await userEvent.click(box); // explicit on
+    await userEvent.click(box); // explicit off — a choice, not "unset"
+    rerenderFormWith(rerender, true);
+    expect(box.checked).toBe(false);
   });
 });
