@@ -78,20 +78,36 @@ func TestTestMessage_IsMarkedAsTest(t *testing.T) {
 	// wiring a bot up: it must read as a test and carry the test marker.
 	var seenBody map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, _ := io.ReadAll(r.Body)
-		_ = json.Unmarshal(body, &seenBody)
-		w.WriteHeader(200)
-		w.Write([]byte(`{"ok":true}`))
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read request body: %v", err)
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		if err := json.Unmarshal(body, &seenBody); err != nil {
+			t.Errorf("decode request body: %v", err)
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		// Send reads the response body only on a non-200, so an empty 200 is
+		// the whole answer here — nothing to write and no write to check.
+		w.WriteHeader(http.StatusOK)
 	}))
 	defer srv.Close()
 
 	p := &plugin{http: &http.Client{Timeout: 5 * time.Second, Transport: &rewriteRT{target: srv.URL}}}
-	cfg, _ := json.Marshal(Config{BotToken: "12345:abc", ChatID: "777"})
+	cfg, err := json.Marshal(Config{BotToken: "12345:abc", ChatID: "777"})
+	if err != nil {
+		t.Fatalf("marshal config: %v", err)
+	}
 
 	if err := p.Test(context.Background(), cfg); err != nil {
 		t.Fatalf("Test: %v", err)
 	}
-	text, _ := seenBody["text"].(string)
+	text, ok := seenBody["text"].(string)
+	if !ok {
+		t.Fatalf("request body carried no text field: %#v", seenBody)
+	}
 	if !strings.HasPrefix(text, "🧪 ") {
 		t.Errorf("test message head = %q, want the 🧪 marker", text)
 	}
