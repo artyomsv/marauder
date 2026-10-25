@@ -69,13 +69,22 @@ type Poller struct {
 	// topic resolved anonymously stores a placeholder name and no image, and
 	// nothing ever backfills the image.
 	creds trackercreds.Store
+	// settings supplies the instance-wide defaults a new topic starts with.
+	// Nil-safe: without it topics are created with the built-in defaults.
+	settings settingsReader
 
 	// newClient is injectable so tests can point at an httptest server.
 	newClient func(baseURL, apiKey string) *Client
 }
 
+// settingsReader is the instance-defaults seam the poller seeds new topics
+// from.
+type settingsReader interface {
+	Get(ctx context.Context) (*repo.InstanceSettings, error)
+}
+
 // New constructs a Poller.
-func New(log zerolog.Logger, master *crypto.MasterKey, instances instancesStore, admin adminResolver, topicsStore topicsStore, creds trackercreds.Store, httpTimeout time.Duration) *Poller {
+func New(log zerolog.Logger, master *crypto.MasterKey, instances instancesStore, admin adminResolver, topicsStore topicsStore, creds trackercreds.Store, settings settingsReader, httpTimeout time.Duration) *Poller {
 	return &Poller{
 		log:       log.With().Str("component", "sonarr-poller").Logger(),
 		master:    master,
@@ -83,6 +92,7 @@ func New(log zerolog.Logger, master *crypto.MasterKey, instances instancesStore,
 		admin:     admin,
 		topics:    topicsStore,
 		creds:     creds,
+		settings:  settings,
 		newClient: func(baseURL, apiKey string) *Client {
 			return NewClient(baseURL, apiKey, httpTimeout)
 		},
@@ -257,13 +267,14 @@ func (p *Poller) processURL(ctx context.Context, inst domain.SonarrInstance, own
 	}
 
 	res, err := topics.BuildAndCreate(ctx, p.topics, topics.CreateInput{
-		UserID:      ownerID,
-		URL:         url,
-		ClientID:    inst.DefaultClientID,
-		Category:    inst.DefaultCategory,
-		DownloadDir: inst.DefaultDownloadDir,
-		Source:      topicSourceSonarr,
-		Extra:       sonarrTopicExtra(rec),
+		UserID:             ownerID,
+		URL:                url,
+		ClientID:           inst.DefaultClientID,
+		Category:           inst.DefaultCategory,
+		DownloadDir:        inst.DefaultDownloadDir,
+		Source:             topicSourceSonarr,
+		Extra:              sonarrTopicExtra(rec),
+		FollowTrackerTitle: p.defaultFollowTrackerTitle(ctx),
 		// Resolve the title and poster as the topic's OWNER. A login-gated
 		// tracker answers a guest with a stub rather than an error, so an
 		// anonymous resolve does not fail — it succeeds at reading nothing,
@@ -290,6 +301,22 @@ func (p *Poller) processURL(ctx context.Context, inst domain.SonarrInstance, own
 		Msg("auto-created topic from sonarr grab")
 	metrics.SonarrTopicsCreatedTotal.Inc()
 	metrics.SonarrRecordsProcessedTotal.WithLabelValues("created").Inc()
+}
+
+// defaultFollowTrackerTitle is the instance-wide default a Sonarr-created
+// topic starts with. Sonarr grabs are ordinary topics and get no per-topic
+// choice, so the instance default is their whole answer. Fails open to
+// false — the pre-existing "a resolved title stays locked" behaviour.
+func (p *Poller) defaultFollowTrackerTitle(ctx context.Context) bool {
+	if p.settings == nil {
+		return false
+	}
+	s, err := p.settings.Get(ctx)
+	if err != nil {
+		p.log.Warn().Err(err).Msg("settings read failed; topic defaults to not following the tracker title")
+		return false
+	}
+	return s.DefaultFollowTrackerTitle
 }
 
 func sonarrTopicExtra(rec HistoryRecord) map[string]any {
@@ -337,6 +364,7 @@ func (p *Poller) handleExisting(ctx context.Context, inst domain.SonarrInstance,
 			NotifyOnlyAnnounceCurrent: existing.NotifyOnlyAnnounceCurrent,
 			AddPausedOnUpdate:         existing.AddPausedOnUpdate,
 			OnlyNewFiles:              existing.OnlyNewFiles,
+			FollowTrackerTitle:        existing.FollowTrackerTitle,
 		}, nil, mergedExtra); err != nil {
 		p.log.Warn().Err(err).Str("url", existing.URL).Msg("update existing topic from sonarr grab failed")
 		metrics.SonarrRecordsProcessedTotal.WithLabelValues("error").Inc()

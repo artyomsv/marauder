@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Follow the tracker's title.** A topic can now keep its display name in
+  sync with the title the tracker reports: when the tracker renames the
+  topic — a repack, a quality bump — Marauder updates the name on the next
+  check. Off by default, so a resolved title stays locked exactly as before
+  (a noisier check title could never downgrade a good name). Renaming a
+  topic by hand turns the option off — a typed name is yours. New topics
+  start from an instance-wide default (Settings → Topic defaults), and each
+  topic's toggle can override it (Ref #228). See `docs/topic-title.md`.
+
 ## [1.25.0] - 2026-10-24
 
 ### Added

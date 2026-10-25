@@ -216,6 +216,14 @@ const en: Record<string, string> = {
   "settings.sonarr.actions.delete": "Delete instance",
   "settings.sonarr.actions.enable": "Enable",
   "settings.sonarr.actions.disable": "Disable",
+  // Topic defaults (instance-wide, admin only): what a new topic starts with
+  // when its creator sends no explicit choice.
+  "settings.topicDefaults.title": "Topic defaults",
+  "settings.topicDefaults.blurb":
+    "What new topics are created with. Existing topics keep their own setting.",
+  "settings.topicDefaults.help":
+    "New topics follow the tracker's title by default. Each topic's own toggle can still override this.",
+  "settings.topicDefaults.saveFailed": "Save failed",
   "settings.domains.title": "Tracker domains",
   "settings.domains.blurb":
     "Override which domain each tracker plugin uses, and register extra mirrors it can fall back to.",
@@ -316,6 +324,12 @@ const en: Record<string, string> = {
     "This topic has no notifier that is subscribed to new releases, so it will be checked silently and you will never hear about it. Pick a notifier below that receives new releases, or mark one as default on the Notifiers page.",
   "topics.notifyOnly.toggleBackNotice":
     "Releases seen while this topic was notify-only will not be downloaded — only the next change will. Use Reset on the topic if you want the current release fetched now.",
+
+  // Follow the tracker's title: the scheduler keeps the topic's display name
+  // in sync with the title the tracker reports on each check.
+  "topics.followTitle.label": "Follow the tracker's title",
+  "topics.followTitle.help":
+    "When the tracker renames the topic, update this name too. Turned off automatically if you type a name yourself. Quality depends on the tracker — some report a page title instead of the release name.",
 
   // Per-topic check interval (issue #204)
   "topics.interval.label": "Check interval",

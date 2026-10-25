@@ -589,11 +589,13 @@ func (s *Scheduler) runCheck(ctx context.Context, log zerolog.Logger, t *domain.
 		}
 	}
 
-	// Self-heal the display name only while it's still a generated placeholder.
-	// Once a real title is resolved (add-time metadata, a prior self-heal, or a
-	// user rename) the topic is locked, so a noisier Check title can't downgrade
-	// it (issue #90).
-	if check.DisplayName != "" && check.DisplayName != t.DisplayName && t.DisplayNameIsPlaceholder {
+	// Self-heal the display name when it is still a generated placeholder, or
+	// when the topic opted into following the tracker's title. Once a real
+	// title is resolved and the topic does not follow (issue #90) the name is
+	// locked, so a noisier Check title can't downgrade it. Following is
+	// opt-in because Check.DisplayName quality varies per tracker — it is the
+	// same source the placeholder heal already trusts.
+	if check.DisplayName != "" && check.DisplayName != t.DisplayName && (t.DisplayNameIsPlaceholder || t.FollowTrackerTitle) {
 		if p, ok := s.topics.(displayNamePersister); ok {
 			if err := p.UpdateDisplayName(ctx, t.ID, check.DisplayName); err != nil {
 				log.Warn().Err(err).Msg("UpdateDisplayName failed")

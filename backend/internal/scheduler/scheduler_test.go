@@ -2710,6 +2710,77 @@ func TestRunCheck_SelfHeal_ResolvedName_DoesNotDowngrade(t *testing.T) {
 	}
 }
 
+func TestRunCheck_FollowTrackerTitle_UpdatesResolvedName(t *testing.T) {
+	// The opt-in that undoes the #90 lock for a topic that wants it: a
+	// resolved name is kept in sync with the tracker's title while the flag
+	// is set.
+	tr := &fakeTracker{
+		name: "faketracker",
+		checks: []checkResult{
+			{check: &domain.Check{Hash: "old-hash", DisplayName: "Show.S01.2160p.WEB-DL.REPACK"}, err: nil},
+		},
+	}
+	f := newFixture(t, tr)
+	f.topic.DisplayName = "Show.S01.2160p.WEB-DL"
+	f.topic.DisplayNameIsPlaceholder = false
+	f.topic.FollowTrackerTitle = true
+
+	f.s.runCheck(context.Background(), f.s.log, f.topic)
+
+	if len(f.topics.updateDisplayNameCalls) != 1 {
+		t.Fatalf("want 1 UpdateDisplayName call while following, got %d",
+			len(f.topics.updateDisplayNameCalls))
+	}
+	if got := f.topics.updateDisplayNameCalls[0].name; got != "Show.S01.2160p.WEB-DL.REPACK" {
+		t.Errorf("followed name = %q, want Show.S01.2160p.WEB-DL.REPACK", got)
+	}
+	// Following outlives the update it triggered — the scheduler never
+	// touches the flag; only a user rename clears it.
+	if !f.topic.FollowTrackerTitle {
+		t.Error("FollowTrackerTitle was cleared by the scheduler; only a user rename may clear it")
+	}
+}
+
+func TestRunCheck_FollowTrackerTitle_EmptyNameStays(t *testing.T) {
+	// A tracker that resolves no title must never wipe a good one, following
+	// or not.
+	tr := &fakeTracker{
+		name: "faketracker",
+		checks: []checkResult{
+			{check: &domain.Check{Hash: "old-hash", DisplayName: ""}, err: nil},
+		},
+	}
+	f := newFixture(t, tr)
+	f.topic.DisplayName = "Real Release Name"
+	f.topic.FollowTrackerTitle = true
+
+	f.s.runCheck(context.Background(), f.s.log, f.topic)
+
+	if len(f.topics.updateDisplayNameCalls) != 0 {
+		t.Errorf("want 0 UpdateDisplayName calls for an empty Check title, got %d",
+			len(f.topics.updateDisplayNameCalls))
+	}
+}
+
+func TestRunCheck_FollowTrackerTitle_UnchangedNameNotRewritten(t *testing.T) {
+	tr := &fakeTracker{
+		name: "faketracker",
+		checks: []checkResult{
+			{check: &domain.Check{Hash: "old-hash", DisplayName: "Same Name"}, err: nil},
+		},
+	}
+	f := newFixture(t, tr)
+	f.topic.DisplayName = "Same Name"
+	f.topic.FollowTrackerTitle = true
+
+	f.s.runCheck(context.Background(), f.s.log, f.topic)
+
+	if len(f.topics.updateDisplayNameCalls) != 0 {
+		t.Errorf("want 0 UpdateDisplayName calls when the title is unchanged, got %d",
+			len(f.topics.updateDisplayNameCalls))
+	}
+}
+
 // --- classifyError ------------------------------------------------------
 
 func TestClassifyError_MapsKnownPatternsToCodes(t *testing.T) {

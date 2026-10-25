@@ -186,8 +186,9 @@ func baseInstance(serverURL string, owner uuid.UUID) domain.SonarrInstance {
 func newTestPoller(s instancesStore, a adminResolver, ts topicsStore) *Poller {
 	// nil creds: these tests exercise the poll loop, not credential warming.
 	// A nil store resolves anonymously, which is what every fake tracker here
-	// does anyway.
-	return New(zerolog.Nop(), nil, s, a, ts, nil, 5*time.Second)
+	// does anyway. nil settings: no instance default, so a created topic
+	// starts with follow-the-tracker-title off.
+	return New(zerolog.Nop(), nil, s, a, ts, nil, nil, 5*time.Second)
 }
 
 // --- single-instance behaviour (via pollOnce) ----------------------------
@@ -759,7 +760,7 @@ func TestPoller_ResolvesMetadataAsTheOwner(t *testing.T) {
 		Username: "user", SecretEnc: enc, SecretNonce: nonce,
 	}
 
-	p := New(zerolog.Nop(), mk, &fakeInstances{}, fakeAdmin{}, ts, &fakeCredStore{cred: cred}, 5*time.Second)
+	p := New(zerolog.Nop(), mk, &fakeInstances{}, fakeAdmin{}, ts, &fakeCredStore{cred: cred}, nil, 5*time.Second)
 	p.pollOnce(context.Background(), inst)
 
 	if got := drainCreds(t); got == nil {
@@ -796,7 +797,7 @@ func TestPoller_NoCredentialStored_StillCreatesTheTopic(t *testing.T) {
 	inst.LastSeenAt = &past
 	ts := &fakeTopics{}
 
-	p := New(zerolog.Nop(), pollerMasterKey(t), &fakeInstances{}, fakeAdmin{}, ts, &fakeCredStore{}, 5*time.Second)
+	p := New(zerolog.Nop(), pollerMasterKey(t), &fakeInstances{}, fakeAdmin{}, ts, &fakeCredStore{}, nil, 5*time.Second)
 	p.pollOnce(context.Background(), inst)
 
 	if got := drainCreds(t); got != nil {

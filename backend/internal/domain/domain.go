@@ -90,10 +90,19 @@ type Topic struct {
 	// Set false once a real title is resolved (metadata, first self-heal, or a
 	// user rename) so self-heal can never downgrade a good title. See issue #90.
 	DisplayNameIsPlaceholder bool
-	ClientID                 *uuid.UUID
-	NotifierID               *uuid.UUID
-	DownloadDir              string
-	Category                 string
+	// FollowTrackerTitle opts the topic out of the #90 lock: while set, the
+	// scheduler keeps DisplayName in sync with the title the tracker reports
+	// on each check, exactly like the placeholder self-heal but for a resolved
+	// name too. Off by default so a good title is never downgraded by a noisier
+	// Check title; a user rename clears it (typing a name is taking ownership
+	// of it). The instance-wide default for new topics lives in settings
+	// (follow_tracker_title_default) and is materialised here at create time,
+	// so changing the default never touches existing topics.
+	FollowTrackerTitle bool
+	ClientID           *uuid.UUID
+	NotifierID         *uuid.UUID
+	DownloadDir        string
+	Category           string
 	// ReplaceOnUpdate enables the "replace previous version" delivery policy
 	// (issue #101): when a single-release topic gets a new infohash, the
 	// scheduler removes the previously delivered torrent from its client

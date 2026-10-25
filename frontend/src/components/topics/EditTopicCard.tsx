@@ -39,6 +39,7 @@ function initialFrom(topic: Topic): TopicFormValues {
     checkIntervalSec: topic.CheckIntervalSec || DEFAULT_CHECK_INTERVAL_SEC,
     folderNameMode: topic.FolderNameMode || "default",
     folderName: topic.FolderName ?? "",
+    followTrackerTitle: topic.FollowTrackerTitle ?? false,
   };
 }
 
@@ -68,6 +69,7 @@ export function EditTopicCard({ topic, onClose, onSaved }: EditTopicCardProps) {
         check_interval_sec: v.checkIntervalSec,
         folder_name_mode: v.folderNameMode,
         folder_name: v.folderName,
+        follow_tracker_title: v.followTrackerTitle,
         quality: v.quality || undefined,
         start_season: v.startSeason ? parseInt(v.startSeason, 10) : undefined,
         start_episode: v.startEpisode ? parseInt(v.startEpisode, 10) : undefined,

@@ -11,6 +11,7 @@ import { api, ApiError } from "@/lib/api";
 import { useSystemInfo } from "@/lib/hooks/useSystemInfo";
 import { useLogout } from "@/lib/hooks/useLogout";
 import { TrackerDomainsCard } from "@/components/settings/TrackerDomainsCard";
+import { TopicDefaultsCard } from "@/components/settings/TopicDefaultsCard";
 import { useT, useI18n, LOCALES, type Locale } from "@/i18n";
 import { usePrefs, type Density, type Theme } from "@/lib/prefs";
 import { cn } from "@/lib/utils";
@@ -49,6 +50,7 @@ export function SettingsPage() {
 
       <AppearanceCard />
       <AccountCard username={user?.username ?? ""} email={user?.email ?? ""} />
+      {user?.role === "admin" && <TopicDefaultsCard />}
       {user?.role === "admin" && <TrackerDomainsCard />}
       <AboutCard />
     </div>

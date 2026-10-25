@@ -160,6 +160,13 @@ export const api = {
   updateTopic: (id: string, body: UpdateTopicBody) =>
     request<Topic>("PUT", `/topics/${id}`, body),
 
+  // Instance-wide defaults new topics are created with (GET/PUT
+  // /system/settings). Readable by any signed-in user — the add-topic form
+  // seeds its toggle from it; the write is admin-only.
+  getSettings: () => request<InstanceSettings>("GET", "/system/settings"),
+  updateSettings: (body: UpdateSettingsBody) =>
+    request<InstanceSettings>("PUT", "/system/settings", body),
+
   // Resolve a real title + poster image from a tracker URL for the AddTopic
   // form preview. Returns empty fields (never an error) when the tracker
   // can't resolve metadata, so callers can render unconditionally.
@@ -402,9 +409,23 @@ export interface UpdateTopicBody {
   // Folder name in the client (issue #225). Omitted keeps the stored setting.
   folder_name_mode?: "default" | "keep" | "custom";
   folder_name?: string;
+  // Keep the display name in sync with the tracker's title. Omitted keeps the
+  // stored flag; the backend clears it whenever display_name changes.
+  follow_tracker_title?: boolean;
   quality?: string;
   start_season?: number;
   start_episode?: number;
+}
+
+// GET /system/settings — the instance-wide defaults new topics start with.
+export interface InstanceSettings {
+  default_follow_tracker_title: boolean;
+}
+
+// PUT /system/settings body. Pointer semantics server-side: an omitted field
+// keeps its stored value.
+export interface UpdateSettingsBody {
+  default_follow_tracker_title?: boolean;
 }
 
 // GET /notifiers/{id} — includes decrypted config for the edit form.
@@ -520,6 +541,9 @@ export type Topic = {
   FolderNameMode: "default" | "keep" | "custom";
   FolderName: string;
   FolderNameSeen: string;
+  // While true the scheduler keeps DisplayName in sync with the title the
+  // tracker reports on each check. Cleared by a manual rename.
+  FollowTrackerTitle: boolean;
   Extra: TopicExtra | null;
   LastHash: string;
   LastCheckedAt: string | null;

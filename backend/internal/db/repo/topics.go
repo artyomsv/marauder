@@ -42,7 +42,7 @@ const topicColumns = `id, user_id, tracker_name, url, display_name,
 		check_interval_sec, consecutive_errors, status,
 		COALESCE(last_error,''), COALESCE(last_error_code,''), created_at, updated_at, display_name_is_placeholder,
 		replace_on_update, replace_delete_data, notify_only, notify_only_announce_current, add_paused_on_update, only_new_files,
-		folder_name_mode, COALESCE(folder_name,''), COALESCE(folder_name_seen,'')`
+		folder_name_mode, COALESCE(folder_name,''), COALESCE(folder_name_seen,''), follow_tracker_title`
 
 func scanTopic(row pgx.Row) (*domain.Topic, error) {
 	var t domain.Topic
@@ -57,7 +57,7 @@ func scanTopic(row pgx.Row) (*domain.Topic, error) {
 		&t.CheckIntervalSec, &t.ConsecutiveErrors, &status,
 		&t.LastError, &t.LastErrorCode, &t.CreatedAt, &t.UpdatedAt, &t.DisplayNameIsPlaceholder,
 		&t.ReplaceOnUpdate, &t.ReplaceDeleteData, &t.NotifyOnly, &t.NotifyOnlyAnnounceCurrent, &t.AddPausedOnUpdate, &t.OnlyNewFiles,
-		&folderMode, &t.FolderName, &t.FolderNameSeen,
+		&folderMode, &t.FolderName, &t.FolderNameSeen, &t.FollowTrackerTitle,
 	)
 	if err != nil {
 		return nil, err
@@ -91,8 +91,8 @@ INSERT INTO topics (user_id, tracker_name, url, display_name, image_url, client_
                     download_dir, category, extra, check_interval_sec, next_check_at, status,
                     display_name_is_placeholder, replace_on_update, replace_delete_data,
                     notify_only, notify_only_announce_current, add_paused_on_update, only_new_files,
-                    folder_name_mode, folder_name)
-VALUES ($1,$2,$3,$4,NULLIF($5,''),$6,$7,NULLIF($8,''),NULLIF($9,''),$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,NULLIF($22,''))
+                    folder_name_mode, folder_name, follow_tracker_title)
+VALUES ($1,$2,$3,$4,NULLIF($5,''),$6,$7,NULLIF($8,''),NULLIF($9,''),$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,NULLIF($22,''),$23)
 RETURNING ` + topicColumns
 	row := r.pool.QueryRow(ctx, q,
 		t.UserID, t.TrackerName, t.URL, t.DisplayName, t.ImageURL, t.ClientID, t.NotifierID,
@@ -101,6 +101,7 @@ RETURNING ` + topicColumns
 		t.NotifyOnly, t.NotifyOnlyAnnounceCurrent,
 		t.AddPausedOnUpdate, t.OnlyNewFiles,
 		string(folderNameModeOrDefault(t.FolderNameMode)), t.FolderName,
+		t.FollowTrackerTitle,
 	)
 	return scanTopic(row)
 }
@@ -560,6 +561,11 @@ type TopicFlags struct {
 	// See domain.Topic for the full semantics.
 	AddPausedOnUpdate bool
 	OnlyNewFiles      bool
+	// FollowTrackerTitle keeps the display name in sync with the tracker's
+	// title. Update writes it only while the name is unchanged: a submitted
+	// name change clears it regardless, because typing a name is taking
+	// ownership of it.
+	FollowTrackerTitle bool
 }
 
 // FolderNamePolicy is a topic's folder name setting (issue #225) as Update
@@ -630,9 +636,10 @@ func (r *Topics) Update(ctx context.Context, id, userID uuid.UUID, displayName s
 		folder_name_mode = COALESCE($16::text, folder_name_mode),
 		folder_name = CASE WHEN $16::text IS NULL THEN folder_name WHEN $16::text = 'custom' THEN NULLIF($17::text, '') ELSE NULL END,
 		folder_name_seen = CASE WHEN $16::text IS NOT NULL AND $16::text <> folder_name_mode THEN NULL ELSE folder_name_seen END,
+		follow_tracker_title = CASE WHEN display_name <> $3 THEN false ELSE $18 END,
 		updated_at = now()
 	WHERE id = $1 AND user_id = $2
-	RETURNING `+topicColumns, id, userID, displayName, clientID, notifierID, downloadDir, category, raw, flags.ReplaceOnUpdate, flags.ReplaceDeleteData, flags.NotifyOnly, flags.NotifyOnlyAnnounceCurrent, checkIntervalSec, flags.AddPausedOnUpdate, flags.OnlyNewFiles, folderMode, folderName)
+	RETURNING `+topicColumns, id, userID, displayName, clientID, notifierID, downloadDir, category, raw, flags.ReplaceOnUpdate, flags.ReplaceDeleteData, flags.NotifyOnly, flags.NotifyOnlyAnnounceCurrent, checkIntervalSec, flags.AddPausedOnUpdate, flags.OnlyNewFiles, folderMode, folderName, flags.FollowTrackerTitle)
 	t, err := scanTopic(row)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound

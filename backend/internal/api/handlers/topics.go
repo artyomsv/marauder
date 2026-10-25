@@ -94,6 +94,10 @@ type Topics struct {
 	// Remover removes already-delivered torrents from their client on reset.
 	// Nil-safe (see torrentRemover).
 	Remover torrentRemover
+	// Settings supplies the instance-wide defaults a topic is created with
+	// when its creator sends no explicit choice. Nil-safe: without it a
+	// create falls back to the built-in defaults.
+	Settings settingsStore
 
 	// resetInFlight gates POST /topics/{id}/reset to one running reset per
 	// topic (topicID -> struct{}). Deliberately keyed by topic, not by user:
@@ -131,6 +135,12 @@ type createTopicReq struct {
 	// Update policy (issue #205). Plain bools: false is the right default.
 	AddPausedOnUpdate bool `json:"add_paused_on_update,omitempty"`
 	OnlyNewFiles      bool `json:"only_new_files,omitempty"`
+	// FollowTrackerTitle seeds the topic's follow-the-tracker-title flag.
+	// Pointer: omitted means "no explicit choice" and the instance-wide
+	// default (GET /system/settings) applies, so API clients and the Sonarr
+	// poller honour it too. A non-nil false is kept as-is — that is an
+	// explicit choice, not "unspecified".
+	FollowTrackerTitle *bool `json:"follow_tracker_title,omitempty"`
 	// Folder name (issue #225): default, custom or keep; empty is default.
 	// FolderName is used only in custom mode.
 	FolderNameMode string `json:"folder_name_mode,omitempty"`
@@ -209,6 +219,7 @@ func (h *Topics) Create(w http.ResponseWriter, r *http.Request) {
 		NotifyOnlyAnnounceCurrent: req.NotifyOnlyAnnounceCurrent,
 		AddPausedOnUpdate:         req.AddPausedOnUpdate,
 		OnlyNewFiles:              req.OnlyNewFiles,
+		FollowTrackerTitle:        h.followTrackerTitle(r.Context(), req.FollowTrackerTitle),
 		FolderNameMode:            domain.FolderNameMode(req.FolderNameMode),
 		FolderName:                req.FolderName,
 		Quality:                   req.Quality,
@@ -288,6 +299,11 @@ type updateTopicReq struct {
 	// (issue #205), matching the other flags.
 	AddPausedOnUpdate *bool `json:"add_paused_on_update,omitempty"`
 	OnlyNewFiles      *bool `json:"only_new_files,omitempty"`
+	// FollowTrackerTitle is a pointer so an omitted field preserves the stored
+	// flag. Note the store clears it whenever the submitted display name
+	// differs from the stored one, whatever this field says: typing a name is
+	// taking ownership of it.
+	FollowTrackerTitle *bool `json:"follow_tracker_title,omitempty"`
 	// Pointers so an omitted field preserves the stored folder name setting
 	// (issue #225); sending either one rewrites the whole setting.
 	FolderNameMode *string `json:"folder_name_mode,omitempty"`
@@ -407,6 +423,10 @@ func (h *Topics) Update(w http.ResponseWriter, r *http.Request) {
 	if req.OnlyNewFiles != nil {
 		onlyNewFiles = *req.OnlyNewFiles
 	}
+	followTrackerTitle := existing.FollowTrackerTitle
+	if req.FollowTrackerTitle != nil {
+		followTrackerTitle = *req.FollowTrackerTitle
+	}
 	folder, ferr := folderPolicyFromRequest(existing, req.FolderNameMode, req.FolderName)
 	if ferr != nil {
 		problem.Write(w, r, h.BaseURL, problem.ErrUnprocessable(ferr.Error()))
@@ -431,6 +451,7 @@ func (h *Topics) Update(w http.ResponseWriter, r *http.Request) {
 		NotifyOnlyAnnounceCurrent: notifyOnlyAnnounceCurrent,
 		AddPausedOnUpdate:         addPausedOnUpdate,
 		OnlyNewFiles:              onlyNewFiles,
+		FollowTrackerTitle:        followTrackerTitle,
 	}, folder, extra)
 	if uerr != nil {
 		if errors.Is(uerr, repo.ErrNotFound) {
@@ -468,6 +489,25 @@ func folderPolicyFromRequest(existing *domain.Topic, mode, name *string) (*repo.
 		return nil, err
 	}
 	return &repo.FolderNamePolicy{Mode: m, Name: normalized}, nil
+}
+
+// followTrackerTitle resolves the flag a new topic starts with. An explicit
+// request value is an explicit choice (a non-nil false included); an omitted
+// field falls back to the instance-wide default. A settings read failure
+// fails open to false — the same "a resolved title stays locked" behaviour
+// as before the default existed, never the other way round.
+func (h *Topics) followTrackerTitle(ctx context.Context, explicit *bool) bool {
+	if explicit != nil {
+		return *explicit
+	}
+	if h.Settings == nil {
+		return false
+	}
+	s, err := h.Settings.Get(ctx)
+	if err != nil {
+		return false
+	}
+	return s.DefaultFollowTrackerTitle
 }
 
 // Get handles GET /topics/{id}.

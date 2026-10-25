@@ -101,9 +101,16 @@ type CreateInput struct {
 	// (issue #225). An empty mode is the default mode.
 	FolderNameMode domain.FolderNameMode
 	FolderName     string
-	Quality        string
-	StartSeason    *int
-	StartEpisode   *int
+	// FollowTrackerTitle seeds the topic's follow-the-tracker-title flag: the
+	// scheduler keeps the display name in sync with the tracker's title while
+	// it is set. Callers resolve the instance-wide default themselves (the
+	// HTTP handler and the Sonarr poller both read settings and fold it in
+	// when the creator sent no explicit choice), so this value is always the
+	// concrete one to store.
+	FollowTrackerTitle bool
+	Quality            string
+	StartSeason        *int
+	StartEpisode       *int
 	// Source tags how the topic was created (e.g. "sonarr"). Stored in
 	// extra["source"] so the UI can badge auto-imported topics. Empty for
 	// manually-added topics.
@@ -231,6 +238,7 @@ func BuildAndCreate(ctx context.Context, store Store, in CreateInput) (*Result, 
 		OnlyNewFiles:              in.OnlyNewFiles,
 		FolderNameMode:            folderMode,
 		FolderName:                folderName,
+		FollowTrackerTitle:        in.FollowTrackerTitle,
 		Extra:                     extra,
 		CheckIntervalSec:          interval,
 		NextCheckAt:               time.Now().UTC(),

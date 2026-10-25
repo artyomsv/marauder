@@ -30,7 +30,7 @@ func TestTopics_Update_FolderPolicy_WritesAllThreeColumns(t *testing.T) {
 		`folder_name = CASE WHEN \$16::text IS NULL THEN folder_name WHEN \$16::text = 'custom' THEN NULLIF\(\$17::text, ''\) ELSE NULL END,\s+`+
 		`folder_name_seen = CASE WHEN \$16::text IS NOT NULL AND \$16::text <> folder_name_mode THEN NULL ELSE folder_name_seen END`).
 		WithArgs(id, userID, pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
-			false, false, false, false, (*int)(nil), false, false, &mode, &name).
+			false, false, false, false, (*int)(nil), false, false, &mode, &name, false).
 		WillReturnRows(pgxmock.NewRows(topicColumnsAll).AddRow(row...))
 
 	got, err := r.Update(context.Background(), id, userID, "X", nil, nil, "", "", nil, TopicFlags{},

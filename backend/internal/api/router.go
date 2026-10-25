@@ -43,6 +43,7 @@ type Deps struct {
 	TopicEvents     *repo.TopicEvents
 	SonarrInstances *repo.SonarrInstances
 	TrackerSettings *domains.Store
+	Settings        *repo.Settings
 	Audit           *repo.Audit
 	AuditLog        *audit.Logger
 	OIDC            *auth.OIDCProvider
@@ -104,6 +105,7 @@ func NewRouter(d Deps) http.Handler {
 		Master:     d.Master,
 		Audit:      d.AuditLog,
 		Remover:    clientremove.New(d.Clients, d.Master, d.Cfg.TrackerHTTPTimeout),
+		Settings:   d.Settings,
 		BaseURL:    d.Cfg.PublicBaseURL,
 		Emit:       d.Emit,
 	}
@@ -140,6 +142,11 @@ func NewRouter(d Deps) http.Handler {
 		BaseURL: d.Cfg.PublicBaseURL,
 		Audit:   d.AuditLog,
 	}
+	settingsH := &handlers.Settings{
+		Store:   d.Settings,
+		BaseURL: d.Cfg.PublicBaseURL,
+		Audit:   d.AuditLog,
+	}
 	credsH := handlers.NewCredentials(d.Creds, d.Master, d.AuditLog, d.Cfg.PublicBaseURL)
 	sseH := &handlers.SSE{
 		Hub:               d.Hub,
@@ -171,6 +178,7 @@ func NewRouter(d Deps) http.Handler {
 			r.Post("/events/ticket", sseH.Ticket)
 			r.Post("/auth/me/password", authH.ChangePassword)
 			r.Get("/system/status", sysH.Status)
+			r.Get("/system/settings", settingsH.Get)
 			r.Get("/trackers/match", trackersH.Match)
 			r.Get("/trackers/seasons", trackersH.Seasons)
 			r.Get("/trackers/preview", trackersH.Preview)
@@ -230,6 +238,8 @@ func NewRouter(d Deps) http.Handler {
 				r.Get("/system/trackers/domains", trackerDomainsH.List)
 				r.Put("/system/trackers/{name}/domains", trackerDomainsH.Update)
 				r.Post("/system/trackers/{name}/domains/test", trackerDomainsH.Test)
+
+				r.Put("/system/settings", settingsH.Update)
 			})
 		})
 	})

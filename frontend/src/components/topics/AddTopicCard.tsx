@@ -1,8 +1,9 @@
 import { useState } from "react";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { motion } from "framer-motion";
 
 import { api, type Topic } from "@/lib/api";
+import { QK } from "@/lib/queryKeys";
 import { useT } from "@/i18n";
 import { cn } from "@/lib/utils";
 import { Card } from "@/components/ui/card";
@@ -38,6 +39,10 @@ const EMPTY: TopicFormValues = {
   checkIntervalSec: DEFAULT_CHECK_INTERVAL_SEC,
   folderNameMode: "default",
   folderName: "",
+  // Seeded from the instance default by the query below; false until (and
+  // unless) that answers, so a create fired before it lands stores the
+  // built-in default rather than opting the topic in by accident.
+  followTrackerTitle: false,
 };
 
 type AddMode = "url" | "search";
@@ -76,6 +81,16 @@ export function AddTopicCard({ onClose, onCreated }: AddTopicCardProps) {
   const [mode, setMode] = useState<AddMode>("url");
   const [prefillUrl, setPrefillUrl] = useState("");
 
+  // The instance default seeds the follow-the-tracker-title toggle, so a
+  // fresh topic starts where the admin configured it unless the user says
+  // otherwise. Fail-open: an unreadable setting leaves the toggle off.
+  const settings = useQuery({
+    queryKey: QK.settings,
+    queryFn: () => api.getSettings(),
+    staleTime: 60_000,
+    retry: false,
+  });
+
   const create = useMutation({
     mutationFn: (v: TopicFormValues) =>
       api.post<Topic>("/topics", {
@@ -97,6 +112,7 @@ export function AddTopicCard({ onClose, onCreated }: AddTopicCardProps) {
         check_interval_sec: v.checkIntervalSec,
         folder_name_mode: v.folderNameMode,
         folder_name: v.folderNameMode === "custom" ? v.folderName : undefined,
+        follow_tracker_title: v.followTrackerTitle,
       }),
     onSuccess: () => onCreated(),
     onError: (err) => setError(err instanceof Error ? err.message : "Failed"),
@@ -137,7 +153,11 @@ export function AddTopicCard({ onClose, onCreated }: AddTopicCardProps) {
             mode="add"
             heading="Add a new topic"
             submitLabel="Add topic"
-            initial={{ ...EMPTY, url: prefillUrl }}
+            initial={{
+              ...EMPTY,
+              url: prefillUrl,
+              followTrackerTitle: settings.data?.default_follow_tracker_title ?? false,
+            }}
             isPending={create.isPending}
             error={error}
             onClose={onClose}

@@ -16,6 +16,7 @@ import { CategoryField } from "./CategoryField";
 import { CheckIntervalSelect } from "./CheckIntervalSelect";
 import { UpdatePolicyFields } from "./UpdatePolicyFields";
 import { FolderNameFields, type FolderNameMode, type FolderNameValue } from "./FolderNameFields";
+import { TitleSyncToggle } from "./TitleSyncToggle";
 import { useUnsupportedClient } from "./useUnsupportedClient";
 
 // Shape of GET /trackers/match. Drives which optional sections the form
@@ -92,6 +93,10 @@ export interface TopicFormValues {
   // Folder name in the client (issue #225).
   folderNameMode: FolderNameMode;
   folderName: string;
+  // Follow the tracker's title: the scheduler keeps displayName in sync with
+  // the title the tracker reports. Unticked by the form when the user types a
+  // name — a rename takes ownership of it.
+  followTrackerTitle: boolean;
 }
 
 interface TopicFormProps {
@@ -274,6 +279,7 @@ export function TopicForm({
     checkIntervalSec: initial.checkIntervalSec,
     folderNameMode: initial.folderNameMode,
     folderName: initial.folderName,
+    followTrackerTitle: initial.followTrackerTitle,
   });
 
   // A notify-only topic whose events reach nobody is a topic that silently
@@ -335,6 +341,7 @@ export function TopicForm({
       // Hidden for per-episode trackers and notify-only topics.
       folderNameMode: folderNameHidden ? "default" : delivery.folderNameMode,
       folderName: delivery.folderName,
+      followTrackerTitle: delivery.followTrackerTitle,
     });
   };
 
@@ -379,8 +386,18 @@ export function TopicForm({
           onChange={(e) => {
             setDisplayName(e.target.value);
             nameAutoFilled.current = false;
+            // Typing a name takes ownership of it, so the topic can no longer
+            // follow the tracker's title. Mirrors the store, which clears the
+            // flag whenever the submitted name changes.
+            if (e.target.value !== initial.displayName) {
+              setDelivery((d) => ({ ...d, followTrackerTitle: false }));
+            }
           }}
           placeholder="Leave blank to auto-detect"
+        />
+        <TitleSyncToggle
+          checked={delivery.followTrackerTitle}
+          onChange={(next) => setDelivery((d) => ({ ...d, followTrackerTitle: next }))}
         />
       </div>
 

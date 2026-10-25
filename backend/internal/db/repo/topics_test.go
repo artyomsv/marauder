@@ -301,7 +301,7 @@ func TestTopics_MarkEpisodesDownloaded_DBError(t *testing.T) {
 // ---------- scanTopic malformed extra ----------
 
 // topicRow returns a pgxmock row slice that matches topicColumns exactly
-// (32 columns as of migration 0018, which added the folder name settings).
+// (33 columns as of migration 0019, which added follow-the-tracker-title).
 // Callers override individual fields as needed. The helper centralises
 // column-order so tests don't drift.
 func topicRow(id, userID uuid.UUID, now time.Time) []any {
@@ -322,10 +322,11 @@ func topicRow(id, userID uuid.UUID, now time.Time) []any {
 		false, false, // notify_only, notify_only_announce_current
 		false, false, // add_paused_on_update, only_new_files
 		"default", "", "", // folder_name_mode, folder_name, folder_name_seen
+		false, // follow_tracker_title
 	}
 }
 
-// topicColumnsAll mirrors the header slice for pgxmock.NewRows (32 cols).
+// topicColumnsAll mirrors the header slice for pgxmock.NewRows (33 cols).
 var topicColumnsAll = []string{
 	"id", "user_id", "tracker_name", "url", "display_name", "image_url", "client_id", "notifier_id",
 	"download_dir", "category", "extra", "last_hash",
@@ -336,6 +337,7 @@ var topicColumnsAll = []string{
 	"notify_only", "notify_only_announce_current",
 	"add_paused_on_update", "only_new_files",
 	"folder_name_mode", "folder_name", "folder_name_seen",
+	"follow_tracker_title",
 }
 
 // TestTopics_ScanTopic_MalformedExtra drives GetByID through a mocked
@@ -447,8 +449,8 @@ func TestTopics_Create_RoundTripsCategory(t *testing.T) {
 	rows := pgxmock.NewRows(topicColumnsAll).AddRow(row...)
 
 	// Match INSERT containing the category column.
-	mock.ExpectQuery(`INSERT INTO topics.*category.*notify_only, notify_only_announce_current, add_paused_on_update, only_new_files,\s+folder_name_mode, folder_name\) `+
-		`VALUES \(\$1,\$2,\$3,\$4,NULLIF\(\$5,''\),\$6,\$7,NULLIF\(\$8,''\),NULLIF\(\$9,''\),\$10,\$11,\$12,\$13,\$14,\$15,\$16,\$17,\$18,\$19,\$20,\$21,NULLIF\(\$22,''\)\) RETURNING`).
+	mock.ExpectQuery(`INSERT INTO topics.*category.*notify_only, notify_only_announce_current, add_paused_on_update, only_new_files,\s+folder_name_mode, folder_name, follow_tracker_title\) `+
+		`VALUES \(\$1,\$2,\$3,\$4,NULLIF\(\$5,''\),\$6,\$7,NULLIF\(\$8,''\),NULLIF\(\$9,''\),\$10,\$11,\$12,\$13,\$14,\$15,\$16,\$17,\$18,\$19,\$20,\$21,NULLIF\(\$22,''\),\$23\) RETURNING`).
 		WithArgs(
 			userID, "faketracker", "https://example.invalid/t/1",
 			"My Topic", "", // display_name, image_url
@@ -463,6 +465,7 @@ func TestTopics_Create_RoundTripsCategory(t *testing.T) {
 			false, false, // notify_only, notify_only_announce_current
 			false, false, // add_paused_on_update, only_new_files
 			"default", "", // folder_name_mode (empty means default), folder_name
+			false, // follow_tracker_title
 		).
 		WillReturnRows(rows)
 
@@ -515,9 +518,11 @@ func TestTopics_Update_HappyPath(t *testing.T) {
 	// It also pins the check-interval write (issue #204): NULL keeps the
 	// column, a shorter interval pulls the next check in — to now() when it is
 	// already due — and a longer one leaves it alone. The integration tests
-	// execute it; this only guards the text.
+	// execute it; this only guards the text. And the follow-tracker-title
+	// clear-on-rename clause: a submitted name change turns the flag off
+	// whatever the caller asked for.
 	interval := 3600
-	mock.ExpectQuery(`UPDATE topics SET[\s\S]*notify_only = \$11, notify_only_announce_current = \$12,\s+check_interval_sec = COALESCE\(\$13::int, check_interval_sec\),\s+next_check_at = CASE WHEN \$13::int < check_interval_sec\s+THEN LEAST\(GREATEST\(next_check_at, now\(\)\), now\(\) \+ \$13::int \* interval '1 second'\)\s+ELSE next_check_at END,\s+display_name_is_placeholder = CASE WHEN display_name <> \$3`).
+	mock.ExpectQuery(`UPDATE topics SET[\s\S]*notify_only = \$11, notify_only_announce_current = \$12,\s+check_interval_sec = COALESCE\(\$13::int, check_interval_sec\),\s+next_check_at = CASE WHEN \$13::int < check_interval_sec\s+THEN LEAST\(GREATEST\(next_check_at, now\(\)\), now\(\) \+ \$13::int \* interval '1 second'\)\s+ELSE next_check_at END,\s+display_name_is_placeholder = CASE WHEN display_name <> \$3[\s\S]*follow_tracker_title = CASE WHEN display_name <> \$3 THEN false ELSE \$18 END`).
 		WithArgs(
 			id, userID,
 			"Updated Name",    // $3 display_name
@@ -535,11 +540,12 @@ func TestTopics_Update_HappyPath(t *testing.T) {
 			false,             // $15 only_new_files
 			(*string)(nil),    // $16 folder_name_mode (nil policy: keep)
 			(*string)(nil),    // $17 folder_name
+			true,              // $18 follow_tracker_title
 		).
 		WillReturnRows(rows)
 
 	extra := map[string]any{"quality": "720p", "start_season": 2}
-	got, err := r.Update(context.Background(), id, userID, "Updated Name", nil, nil, "", "series", &interval, TopicFlags{ReplaceOnUpdate: true, ReplaceDeleteData: false}, nil, extra)
+	got, err := r.Update(context.Background(), id, userID, "Updated Name", nil, nil, "", "series", &interval, TopicFlags{ReplaceOnUpdate: true, ReplaceDeleteData: false, FollowTrackerTitle: true}, nil, extra)
 	if err != nil {
 		t.Fatalf("Update: unexpected error: %v", err)
 	}
@@ -548,6 +554,35 @@ func TestTopics_Update_HappyPath(t *testing.T) {
 	}
 	if got.Category != "series" {
 		t.Errorf("Update: want Category=%q, got %q", "series", got.Category)
+	}
+}
+
+// TestTopics_Update_FollowTrackerTitle_Passthrough pins the flag's UPDATE
+// clause — including the clear-on-rename CASE, which is the backend half of
+// "a user rename takes ownership of the name" (the frontend mirrors it by
+// unticking the toggle on a manual edit). The integration tests execute the
+// CASE; this guards the text and the argument position.
+func TestTopics_Update_FollowTrackerTitle_Passthrough(t *testing.T) {
+	r, mock := newMockTopics(t)
+	t.Cleanup(func() { assertExpectationsMet(t, mock) })
+
+	id := uuid.New()
+	userID := uuid.New()
+	row := topicRow(id, userID, time.Now().UTC())
+	row[32] = true // follow_tracker_title
+
+	mock.ExpectQuery(`UPDATE topics SET[\s\S]*follow_tracker_title = CASE WHEN display_name <> \$3 THEN false ELSE \$18 END`).
+		WithArgs(id, userID, pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
+			false, false, false, false, (*int)(nil), false, false, (*string)(nil), (*string)(nil), true).
+		WillReturnRows(pgxmock.NewRows(topicColumnsAll).AddRow(row...))
+
+	got, err := r.Update(context.Background(), id, userID, "Same Name", nil, nil, "", "", nil,
+		TopicFlags{FollowTrackerTitle: true}, nil, map[string]any{})
+	if err != nil {
+		t.Fatalf("Update: unexpected error: %v", err)
+	}
+	if !got.FollowTrackerTitle {
+		t.Error("Update: want FollowTrackerTitle=true scanned back, got false")
 	}
 }
 
@@ -561,7 +596,7 @@ func TestTopics_Update_NotFound(t *testing.T) {
 	userID := uuid.New()
 
 	mock.ExpectQuery(`UPDATE topics SET`).
-		WithArgs(id, userID, pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), false, false, (*int)(nil), false, false, (*string)(nil), (*string)(nil)).
+		WithArgs(id, userID, pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), false, false, (*int)(nil), false, false, (*string)(nil), (*string)(nil), false).
 		WillReturnError(pgx.ErrNoRows)
 
 	_, err := r.Update(context.Background(), id, userID, "X", nil, nil, "", "", nil, TopicFlags{ReplaceOnUpdate: false, ReplaceDeleteData: true}, nil, map[string]any{})
@@ -581,7 +616,7 @@ func TestTopics_Update_DBError(t *testing.T) {
 	dbErr := errors.New("connection reset")
 
 	mock.ExpectQuery(`UPDATE topics SET`).
-		WithArgs(id, userID, pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), false, false, (*int)(nil), false, false, (*string)(nil), (*string)(nil)).
+		WithArgs(id, userID, pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), false, false, (*int)(nil), false, false, (*string)(nil), (*string)(nil), false).
 		WillReturnError(dbErr)
 
 	_, err := r.Update(context.Background(), id, userID, "X", nil, nil, "", "", nil, TopicFlags{ReplaceOnUpdate: false, ReplaceDeleteData: true}, nil, map[string]any{})
@@ -609,8 +644,8 @@ func TestTopics_Create_RoundTripsNotifierID(t *testing.T) {
 
 	rows := pgxmock.NewRows(topicColumnsAll).AddRow(row...)
 
-	mock.ExpectQuery(`INSERT INTO topics.*notifier_id.*notify_only, notify_only_announce_current, add_paused_on_update, only_new_files,\s+folder_name_mode, folder_name\) `+
-		`VALUES \(\$1,\$2,\$3,\$4,NULLIF\(\$5,''\),\$6,\$7,NULLIF\(\$8,''\),NULLIF\(\$9,''\),\$10,\$11,\$12,\$13,\$14,\$15,\$16,\$17,\$18,\$19,\$20,\$21,NULLIF\(\$22,''\)\) RETURNING`).
+	mock.ExpectQuery(`INSERT INTO topics.*notifier_id.*notify_only, notify_only_announce_current, add_paused_on_update, only_new_files,\s+folder_name_mode, folder_name, follow_tracker_title\) `+
+		`VALUES \(\$1,\$2,\$3,\$4,NULLIF\(\$5,''\),\$6,\$7,NULLIF\(\$8,''\),NULLIF\(\$9,''\),\$10,\$11,\$12,\$13,\$14,\$15,\$16,\$17,\$18,\$19,\$20,\$21,NULLIF\(\$22,''\),\$23\) RETURNING`).
 		WithArgs(
 			userID, "faketracker", "https://example.invalid/t/1",
 			"My Topic", "",
@@ -624,6 +659,7 @@ func TestTopics_Create_RoundTripsNotifierID(t *testing.T) {
 			false, false, // notify_only, notify_only_announce_current
 			false, false, // add_paused_on_update, only_new_files
 			"default", "", // folder_name_mode (empty means default), folder_name
+			false, // follow_tracker_title
 		).
 		WillReturnRows(rows)
 
