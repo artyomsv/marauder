@@ -316,13 +316,21 @@ type ClientFile struct {
 // has no topic source, e.g. a credential session expiry). AuthorComment is
 // the release author's latest tracker comment (issue #110), already
 // plain-text and length-capped by the scheduler; empty when the tracker
-// can't provide one.
+// can't provide one. Event names what happened and Severity its level
+// ("info" / "warn" / "error"): a notifier with a rich layout uses them to
+// mark the message, which a plain title/body cannot express — Telegram
+// turns them into an event icon and a severity dot. Event is normally the
+// canonical events.Type, but not strictly: a notifier's own test message is
+// stamped with the plugin-local "test" key (not an events.Type) and renders
+// as its own marker (🧪). An unknown or empty Event renders without one.
 type Message struct {
 	Title         string
 	Body          string
 	Link          string
 	SourceURL     string
 	AuthorComment string
+	Event         string
+	Severity      string
 }
 
 // SonarrInstance is the runtime configuration for one Sonarr instance,

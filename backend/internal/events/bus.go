@@ -89,6 +89,7 @@ func (b *Bus) Emit(ctx context.Context, ev Event) {
 		b.notif.SendVia(ctx, ev.UserID, ev.NotifierID, string(ev.Type), domain.Message{
 			Title: ev.Title, Body: ev.Body, Link: ev.Link, SourceURL: ev.SourceURL,
 			AuthorComment: ev.AuthorComment,
+			Event:         string(ev.Type), Severity: ev.Severity,
 		})
 	}
 

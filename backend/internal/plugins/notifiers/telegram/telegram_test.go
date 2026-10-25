@@ -73,6 +73,54 @@ func TestSendHappyPath(t *testing.T) {
 	}
 }
 
+func TestTestMessage_IsMarkedAsTest(t *testing.T) {
+	// The notifier's own Test() message is the first thing a user sees when
+	// wiring a bot up: it must read as a test and carry the test marker.
+	var seenBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read request body: %v", err)
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		if err := json.Unmarshal(body, &seenBody); err != nil {
+			t.Errorf("decode request body: %v", err)
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		// Send reads the response body only on a non-200, so an empty 200 is
+		// the whole answer here — nothing to write and no write to check.
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	p := &plugin{http: &http.Client{Timeout: 5 * time.Second, Transport: &rewriteRT{target: srv.URL}}}
+	cfg, err := json.Marshal(Config{BotToken: "12345:abc", ChatID: "777"})
+	if err != nil {
+		t.Fatalf("marshal config: %v", err)
+	}
+
+	if err := p.Test(context.Background(), cfg); err != nil {
+		t.Fatalf("Test: %v", err)
+	}
+	text, ok := seenBody["text"].(string)
+	if !ok {
+		t.Fatalf("request body carried no text field: %#v", seenBody)
+	}
+	if !strings.HasPrefix(text, "🧪 ") {
+		t.Errorf("test message head = %q, want the 🧪 marker", text)
+	}
+	if !strings.Contains(text, "Test notification") {
+		t.Errorf("missing test body in text: %q", text)
+	}
+	// The map and Test() share one key, so the marker can't silently drift
+	// away from the Event value the message carries.
+	if icon := eventIcons[testEventKey]; icon != "🧪" {
+		t.Errorf("eventIcons[testEventKey] = %q, want 🧪", icon)
+	}
+}
+
 func TestFormatMessage_SourceURL(t *testing.T) {
 	tests := []struct {
 		name string
@@ -144,10 +192,10 @@ func TestFormatMessage_AuthorComment(t *testing.T) {
 				SourceURL:     "https://tracker.example/viewtopic.php?t=1",
 				Link:          "http://marauder/topics",
 			},
-			want: "<b>T</b>\n\nB\n\nAuthor update:\n<i>Added episode 8.</i>\n\n<a href=\"https://tracker.example/viewtopic.php?t=1\">Source</a> · Marauder: http://marauder/topics",
+			want: "<b>T</b>\n\nB\n\n💬 <i>Added episode 8.</i>\n\n<a href=\"https://tracker.example/viewtopic.php?t=1\">Source</a> · Marauder: http://marauder/topics",
 		},
 		{
-			name: "no comment renders no Author update block",
+			name: "no comment renders no author-comment block",
 			msg: domain.Message{
 				Title: "T", Body: "B",
 				SourceURL: "https://tracker.example/viewtopic.php?t=1",
@@ -160,7 +208,73 @@ func TestFormatMessage_AuthorComment(t *testing.T) {
 				Title: "T", Body: "B",
 				AuthorComment: "5 > 4 & <b>done</b>",
 			},
-			want: "<b>T</b>\n\nB\n\nAuthor update:\n<i>5 &gt; 4 &amp; &lt;b&gt;done&lt;/b&gt;</i>",
+			want: "<b>T</b>\n\nB\n\n💬 <i>5 &gt; 4 &amp; &lt;b&gt;done&lt;/b&gt;</i>",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := formatMessage(tt.msg); got != tt.want {
+				t.Errorf("formatMessage() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestFormatMessage_EventIconAndSeverity(t *testing.T) {
+	tests := []struct {
+		name string
+		msg  domain.Message
+		want string
+	}{
+		{
+			name: "new release is marked with the new-release icon",
+			msg:  domain.Message{Title: "T", Body: "B", Event: "release.found", Severity: "info"},
+			want: "🆕 <b>T</b>\n\nB",
+		},
+		{
+			name: "submitted delivery is marked with the outgoing icon",
+			msg:  domain.Message{Title: "T", Body: "B", Event: "download.submitted", Severity: "info"},
+			want: "📤 <b>T</b>\n\nB",
+		},
+		{
+			name: "finished download is marked with the done icon",
+			msg:  domain.Message{Title: "T", Body: "B", Event: "download.completed", Severity: "info"},
+			want: "✅ <b>T</b>\n\nB",
+		},
+		{
+			name: "a failed check gets the error dot before the warning icon",
+			msg:  domain.Message{Title: "T", Body: "B", Event: "check.failed", Severity: "error"},
+			want: "🔴 ⚠️ <b>T</b>\n\nB",
+		},
+		{
+			name: "an expired session gets the error dot and the key icon",
+			msg:  domain.Message{Title: "T", Body: "B", Event: "session.expired", Severity: "error"},
+			want: "🔴 🔑 <b>T</b>\n\nB",
+		},
+		{
+			name: "a warn-severity event gets the warn dot only",
+			msg:  domain.Message{Title: "T", Body: "B", Event: "check.failed", Severity: "warn"},
+			want: "🟡 ⚠️ <b>T</b>\n\nB",
+		},
+		{
+			name: "the notifier's own test message is marked as a test",
+			msg:  domain.Message{Title: "T", Body: "B", Event: "test", Severity: "info"},
+			want: "🧪 <b>T</b>\n\nB",
+		},
+		{
+			name: "an unknown event renders no icon",
+			msg:  domain.Message{Title: "T", Body: "B", Event: "topic.added", Severity: "info"},
+			want: "<b>T</b>\n\nB",
+		},
+		{
+			name: "an unknown severity renders no dot",
+			msg:  domain.Message{Title: "T", Body: "B", Event: "release.found", Severity: "critical"},
+			want: "🆕 <b>T</b>\n\nB",
+		},
+		{
+			name: "markers sit outside the bold run and the title stays escaped",
+			msg:  domain.Message{Title: "T <x>", Body: "B", Event: "release.found", Severity: "info"},
+			want: "🆕 <b>T &lt;x&gt;</b>\n\nB",
 		},
 	}
 	for _, tt := range tests {

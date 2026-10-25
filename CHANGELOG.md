@@ -18,6 +18,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   start from an instance-wide default (Settings → Topic defaults), and each
   topic's toggle can override it (Ref #228). See `docs/topic-title.md`.
 
+## [1.26.0] - 2026-10-25
+
+### Added
+
+- **Readable Telegram notifications.** Every message now opens with a
+  marker of what happened: an event icon (new release, sent to client,
+  finished downloading, check failed, session expired, test) and a
+  severity dot for warnings and errors, so a problem stands out in a chat
+  list without reading the title. Telegram's HTML mode has no text
+  colour, so the icon carries the colour cue. The author-comment block is
+  now an italic `💬` line instead of the "Author update:" label (Ref #227).
+
 ## [1.25.0] - 2026-10-24
 
 ### Added
