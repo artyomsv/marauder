@@ -120,9 +120,13 @@ func TestSettingsUpdate_EmptyBodyIsRejected(t *testing.T) {
 	}
 }
 
-func TestSettingsUpdate_OmittedFieldPreservesTheStoredValue(t *testing.T) {
-	// Pointer semantics, matching every other settings-bearing endpoint: an
-	// omitted field is "change nothing", not "write false".
+// TestSettingsUpdate_ExplicitFalseOverwritesTrue: a non-nil false is an
+// explicit choice and must be written even over a stored true — the bug this
+// guards is the control inventing a value and the save quietly turning a
+// default off. (The "omitted field is change nothing" half of the pointer
+// semantics cannot reach a successful write while this endpoint has a single
+// field: omitting it is the empty body rejected above.)
+func TestSettingsUpdate_ExplicitFalseOverwritesTrue(t *testing.T) {
 	store := &fakeSettingsStore{value: repo.InstanceSettings{DefaultFollowTrackerTitle: true}}
 	h := &Settings{Store: store, BaseURL: "http://x"}
 
