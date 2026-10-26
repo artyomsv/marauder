@@ -77,7 +77,7 @@ type topicsRepo interface {
 // during Check (self-healing placeholder names). Best-effort — a failure here
 // never affects the check result.
 type displayNamePersister interface {
-	UpdateDisplayName(ctx context.Context, id uuid.UUID, displayName string) error
+	UpdateDisplayName(ctx context.Context, id uuid.UUID, displayName string) (bool, error)
 }
 
 // clientsRepo is the subset of *repo.Clients that the scheduler uses.
@@ -475,6 +475,38 @@ func (s *Scheduler) runCheck(ctx context.Context, log zerolog.Logger, t *domain.
 		return
 	}
 
+	// Accept the tracker's title before any side effect of this tick: the
+	// delivery label, the release announcement and every notification below
+	// must carry the accepted name, and a later download failure must not skip
+	// the upgrade. Heal it while it is still a generated placeholder, or when
+	// the topic opted into following the tracker's title. Once a real title is
+	// resolved and the topic does not follow (issue #90) the name is locked,
+	// so a noisier Check title can't downgrade it. Following is opt-in because
+	// Check.DisplayName quality varies per tracker — it is the same source the
+	// placeholder heal already trusts. The write re-checks that permission in
+	// its WHERE clause: a user rename landing mid-check has already cleared
+	// both flags, and the stale snapshot read here must not win over it.
+	//
+	// Feed trackers are excluded outright: their Check title is the newest
+	// feed item (registry.WithFeedTitles), so accepting it would rename the
+	// topic to whatever just appeared — on every check, and especially with
+	// the instance default on. Their Parse label is the topic's name.
+	if !reportsFeedTitles(tr) && check.DisplayName != "" && check.DisplayName != t.DisplayName && (t.DisplayNameIsPlaceholder || t.FollowTrackerTitle) {
+		if p, ok := s.topics.(displayNamePersister); ok {
+			// The write reports whether it happened: a user rename landing
+			// mid-check has locked the name and the row rejected this title, so
+			// announcing it would publish a name the topic does not have. The
+			// snapshot name the tick is working with stands instead.
+			if updated, err := p.UpdateDisplayName(ctx, t.ID, check.DisplayName); err != nil {
+				log.Warn().Err(err).Msg("UpdateDisplayName failed")
+			} else if updated {
+				log.Debug().Str("display_name", check.DisplayName).Msg("display name updated from the tracker")
+				t.DisplayName = check.DisplayName
+				t.DisplayNameIsPlaceholder = false
+			}
+		}
+	}
+
 	updated := check.Hash != "" && check.Hash != t.LastHash
 	var anySubmitted bool
 	var delivered []string
@@ -585,18 +617,6 @@ func (s *Scheduler) runCheck(ctx context.Context, log zerolog.Logger, t *domain.
 			// (deleting data per the topic's flag) so updates don't accumulate.
 			if anySubmitted && len(priorDeliveries) > 0 {
 				s.replacePrevious(ctx, log, t, priorDeliveries, deliveredHashes)
-			}
-		}
-	}
-
-	// Self-heal the display name only while it's still a generated placeholder.
-	// Once a real title is resolved (add-time metadata, a prior self-heal, or a
-	// user rename) the topic is locked, so a noisier Check title can't downgrade
-	// it (issue #90).
-	if check.DisplayName != "" && check.DisplayName != t.DisplayName && t.DisplayNameIsPlaceholder {
-		if p, ok := s.topics.(displayNamePersister); ok {
-			if err := p.UpdateDisplayName(ctx, t.ID, check.DisplayName); err != nil {
-				log.Warn().Err(err).Msg("UpdateDisplayName failed")
 			}
 		}
 	}
@@ -1184,6 +1204,14 @@ func (s *Scheduler) recordDelivery(ctx context.Context, log zerolog.Logger, t *d
 func isEpisodic(tr registry.Tracker) bool {
 	wef, ok := tr.(registry.WithEpisodeFilter)
 	return ok && wef.SupportsEpisodeFilter()
+}
+
+// reportsFeedTitles marks trackers whose Check title is the newest feed item
+// (Torznab/Newznab) rather than anything about the topic — see
+// registry.WithFeedTitles for why no title may be taken from it.
+func reportsFeedTitles(tr registry.Tracker) bool {
+	f, ok := tr.(registry.WithFeedTitles)
+	return ok && f.ReportsFeedTitles()
 }
 
 // listPriorDeliveries returns the topic's current deliveries (best-effort).

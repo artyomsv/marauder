@@ -69,4 +69,9 @@ export const QK = {
   // /system/trackers/domains — per-tracker mirror/domain configuration
   // (admin only, issue #126).
   trackerDomains: ["tracker-domains"] as const,
+
+  // /system/settings — instance-wide defaults new topics are created with.
+  // Read by the add-topic form (seeds the follow-the-tracker-title toggle)
+  // and written by the Settings page's defaults card (admin only).
+  settings: ["settings"] as const,
 } as const;

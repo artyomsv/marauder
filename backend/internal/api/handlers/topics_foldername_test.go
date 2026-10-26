@@ -73,7 +73,7 @@ func TestTopicsUpdate_OmittedFolderFields_PassesNilPolicy(t *testing.T) {
 	h := &Topics{Topics: store, BaseURL: "http://test"}
 
 	w := httptest.NewRecorder()
-	h.Update(w, withURLParam(authedReq(t, uuid.New(), updateTopicReq{DisplayName: "Show"}), "id", uuid.New().String()))
+	h.Update(w, withURLParam(authedReq(t, uuid.New(), updateTopicReq{DisplayName: strPtr("Show")}), "id", uuid.New().String()))
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status %d, want 200; body %s", w.Code, w.Body.String())
@@ -90,7 +90,7 @@ func TestTopicsUpdate_ModeOnly_KeepsStoredName(t *testing.T) {
 	}}
 	h := &Topics{Topics: store, BaseURL: "http://test"}
 
-	body := updateTopicReq{DisplayName: "Show", FolderNameMode: strPtr("custom")}
+	body := updateTopicReq{DisplayName: strPtr("Show"), FolderNameMode: strPtr("custom")}
 	w := httptest.NewRecorder()
 	h.Update(w, withURLParam(authedReq(t, uuid.New(), body), "id", uuid.New().String()))
 
@@ -110,7 +110,7 @@ func TestTopicsUpdate_NameOnly_ValidatedAgainstStoredMode(t *testing.T) {
 	}}
 	h := &Topics{Topics: store, BaseURL: "http://test"}
 
-	body := updateTopicReq{DisplayName: "Show", FolderName: strPtr("CON")}
+	body := updateTopicReq{DisplayName: strPtr("Show"), FolderName: strPtr("CON")}
 	w := httptest.NewRecorder()
 	h.Update(w, withURLParam(authedReq(t, uuid.New(), body), "id", uuid.New().String()))
 
@@ -131,7 +131,7 @@ func TestTopicsUpdate_TurnOnFolderName_WithStoredDeleteData_422(t *testing.T) {
 	}}
 	h := &Topics{Topics: store, BaseURL: "http://test"}
 
-	body := updateTopicReq{DisplayName: "Show", FolderNameMode: strPtr("keep")}
+	body := updateTopicReq{DisplayName: strPtr("Show"), FolderNameMode: strPtr("keep")}
 	w := httptest.NewRecorder()
 	h.Update(w, withURLParam(authedReq(t, uuid.New(), body), "id", uuid.New().String()))
 

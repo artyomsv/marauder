@@ -167,6 +167,18 @@ type WithAuthorComment interface {
 	AuthorComment(ctx context.Context, rawURL string, creds *domain.TrackerCredential) (string, error)
 }
 
+// WithFeedTitles marks a tracker whose Check reports the newest feed item's
+// title instead of the topic's own — Torznab and Newznab answer with whatever
+// just appeared in the indexer feed. That is never the topic's name, so the
+// scheduler takes no title from such a check: not for the placeholder
+// self-heal and not for follow-the-tracker-title, since every check would
+// rename the topic to the latest release. The label Parse derived from the
+// search is the topic's title and stays.
+type WithFeedTitles interface {
+	Tracker
+	ReportsFeedTitles() bool
+}
+
 // SearchResult is one release found by a tracker search (issue #129). URL is
 // the topic page in the tracker's canonical form — exactly what a user would
 // paste into the AddTopic form, so every result feeds the existing

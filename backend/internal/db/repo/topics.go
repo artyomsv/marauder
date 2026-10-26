@@ -15,11 +15,11 @@ import (
 	"github.com/artyomsv/marauder/backend/internal/domain"
 )
 
-// topicsPool is the minimal subset of *pgxpool.Pool used by Topics.
+// dbPool is the minimal subset of *pgxpool.Pool the repositories use.
 // Defined as an unexported interface so tests can substitute a mock
 // (e.g. pgxmock) without changing the public constructor signature.
 // The concrete *pgxpool.Pool type still satisfies this interface.
-type topicsPool interface {
+type dbPool interface {
 	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
@@ -27,7 +27,7 @@ type topicsPool interface {
 
 // Topics repository.
 type Topics struct {
-	pool topicsPool
+	pool dbPool
 }
 
 // NewTopics constructs the repository.
@@ -42,7 +42,7 @@ const topicColumns = `id, user_id, tracker_name, url, display_name,
 		check_interval_sec, consecutive_errors, status,
 		COALESCE(last_error,''), COALESCE(last_error_code,''), created_at, updated_at, display_name_is_placeholder,
 		replace_on_update, replace_delete_data, notify_only, notify_only_announce_current, add_paused_on_update, only_new_files,
-		folder_name_mode, COALESCE(folder_name,''), COALESCE(folder_name_seen,'')`
+		folder_name_mode, COALESCE(folder_name,''), COALESCE(folder_name_seen,''), follow_tracker_title`
 
 func scanTopic(row pgx.Row) (*domain.Topic, error) {
 	var t domain.Topic
@@ -57,7 +57,7 @@ func scanTopic(row pgx.Row) (*domain.Topic, error) {
 		&t.CheckIntervalSec, &t.ConsecutiveErrors, &status,
 		&t.LastError, &t.LastErrorCode, &t.CreatedAt, &t.UpdatedAt, &t.DisplayNameIsPlaceholder,
 		&t.ReplaceOnUpdate, &t.ReplaceDeleteData, &t.NotifyOnly, &t.NotifyOnlyAnnounceCurrent, &t.AddPausedOnUpdate, &t.OnlyNewFiles,
-		&folderMode, &t.FolderName, &t.FolderNameSeen,
+		&folderMode, &t.FolderName, &t.FolderNameSeen, &t.FollowTrackerTitle,
 	)
 	if err != nil {
 		return nil, err
@@ -91,8 +91,8 @@ INSERT INTO topics (user_id, tracker_name, url, display_name, image_url, client_
                     download_dir, category, extra, check_interval_sec, next_check_at, status,
                     display_name_is_placeholder, replace_on_update, replace_delete_data,
                     notify_only, notify_only_announce_current, add_paused_on_update, only_new_files,
-                    folder_name_mode, folder_name)
-VALUES ($1,$2,$3,$4,NULLIF($5,''),$6,$7,NULLIF($8,''),NULLIF($9,''),$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,NULLIF($22,''))
+                    folder_name_mode, folder_name, follow_tracker_title)
+VALUES ($1,$2,$3,$4,NULLIF($5,''),$6,$7,NULLIF($8,''),NULLIF($9,''),$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,NULLIF($22,''),$23)
 RETURNING ` + topicColumns
 	row := r.pool.QueryRow(ctx, q,
 		t.UserID, t.TrackerName, t.URL, t.DisplayName, t.ImageURL, t.ClientID, t.NotifierID,
@@ -101,6 +101,7 @@ RETURNING ` + topicColumns
 		t.NotifyOnly, t.NotifyOnlyAnnounceCurrent,
 		t.AddPausedOnUpdate, t.OnlyNewFiles,
 		string(folderNameModeOrDefault(t.FolderNameMode)), t.FolderName,
+		t.FollowTrackerTitle,
 	)
 	return scanTopic(row)
 }
@@ -560,6 +561,12 @@ type TopicFlags struct {
 	// See domain.Topic for the full semantics.
 	AddPausedOnUpdate bool
 	OnlyNewFiles      bool
+	// FollowTrackerTitle keeps the display name in sync with the tracker's
+	// title. Pointer: nil leaves the stored flag alone, so a caller saving an
+	// unrelated field cannot restore a flag a concurrent rename just cleared.
+	// A submitted name change clears it regardless — typing a name is taking
+	// ownership of it.
+	FollowTrackerTitle *bool
 }
 
 // FolderNamePolicy is a topic's folder name setting (issue #225) as Update
@@ -584,6 +591,13 @@ func folderNameModeOrDefault(m domain.FolderNameMode) domain.FolderNameMode {
 // does NOT touch url/tracker/status/hash. Returns ErrNotFound when the topic
 // doesn't belong to the user.
 //
+// displayName is nil when the caller is not renaming the topic, and so is the
+// follow flag in flags — for the same reason as checkIntervalSec below: a
+// caller must not write back values it read before someone else's edit. A
+// stale name is not a rename. Sending a name that differs from the stored one
+// is, and that takes ownership of it: it turns off both the placeholder
+// self-heal and follow_tracker_title (issue #90).
+//
 // checkIntervalSec is nil when the caller is not changing the interval. That
 // leaves the column alone rather than writing back a value the caller read
 // earlier, which could undo an edit saved in between (PR #209 review, M-2).
@@ -604,7 +618,7 @@ func folderNameModeOrDefault(m domain.FolderNameMode) domain.FolderNameMode {
 // must not write back a setting it read before a user's edit. A mode change
 // also forgets keep mode's remembered name, so switching back to keep later
 // does not reuse a name from before.
-func (r *Topics) Update(ctx context.Context, id, userID uuid.UUID, displayName string, clientID, notifierID *uuid.UUID, downloadDir, category string, checkIntervalSec *int, flags TopicFlags, folder *FolderNamePolicy, extra map[string]any) (*domain.Topic, error) {
+func (r *Topics) Update(ctx context.Context, id, userID uuid.UUID, displayName *string, clientID, notifierID *uuid.UUID, downloadDir, category string, checkIntervalSec *int, flags TopicFlags, folder *FolderNamePolicy, extra map[string]any) (*domain.Topic, error) {
 	raw, err := json.Marshal(extra)
 	if err != nil {
 		return nil, fmt.Errorf("topics: marshal extra: %w", err)
@@ -618,21 +632,22 @@ func (r *Topics) Update(ctx context.Context, id, userID uuid.UUID, displayName s
 		folderMode, folderName = &m, &folder.Name
 	}
 	row := r.pool.QueryRow(ctx, `UPDATE topics SET
-		display_name = $3, client_id = $4, notifier_id = $5, download_dir = $6, category = $7,
+		display_name = COALESCE($3, display_name), client_id = $4, notifier_id = $5, download_dir = $6, category = $7,
 		extra = $8, replace_on_update = $9, replace_delete_data = $10,
 		notify_only = $11, notify_only_announce_current = $12,
 		check_interval_sec = COALESCE($13::int, check_interval_sec),
 		next_check_at = CASE WHEN $13::int < check_interval_sec
 			THEN LEAST(GREATEST(next_check_at, now()), now() + $13::int * interval '1 second')
 			ELSE next_check_at END,
-		display_name_is_placeholder = CASE WHEN display_name <> $3 THEN false ELSE display_name_is_placeholder END,
+		display_name_is_placeholder = CASE WHEN $3::text IS NOT NULL AND display_name <> $3 THEN false ELSE display_name_is_placeholder END,
 		add_paused_on_update = $14, only_new_files = $15,
 		folder_name_mode = COALESCE($16::text, folder_name_mode),
 		folder_name = CASE WHEN $16::text IS NULL THEN folder_name WHEN $16::text = 'custom' THEN NULLIF($17::text, '') ELSE NULL END,
 		folder_name_seen = CASE WHEN $16::text IS NOT NULL AND $16::text <> folder_name_mode THEN NULL ELSE folder_name_seen END,
+		follow_tracker_title = CASE WHEN $3::text IS NOT NULL AND display_name <> $3 THEN false ELSE COALESCE($18::bool, follow_tracker_title) END,
 		updated_at = now()
 	WHERE id = $1 AND user_id = $2
-	RETURNING `+topicColumns, id, userID, displayName, clientID, notifierID, downloadDir, category, raw, flags.ReplaceOnUpdate, flags.ReplaceDeleteData, flags.NotifyOnly, flags.NotifyOnlyAnnounceCurrent, checkIntervalSec, flags.AddPausedOnUpdate, flags.OnlyNewFiles, folderMode, folderName)
+	RETURNING `+topicColumns, id, userID, displayName, clientID, notifierID, downloadDir, category, raw, flags.ReplaceOnUpdate, flags.ReplaceDeleteData, flags.NotifyOnly, flags.NotifyOnlyAnnounceCurrent, checkIntervalSec, flags.AddPausedOnUpdate, flags.OnlyNewFiles, folderMode, folderName, flags.FollowTrackerTitle)
 	t, err := scanTopic(row)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
@@ -643,18 +658,33 @@ func (r *Topics) Update(ctx context.Context, id, userID uuid.UUID, displayName s
 // UpdateDisplayName persists a freshly-resolved title for a topic. The
 // scheduler calls this when a tracker's Check reports a DisplayName that
 // differs from what's stored — upgrading placeholder names (e.g. "RuTracker
-// topic 123") to the real title without the user editing anything. A blank
-// name is ignored so a tracker that didn't resolve a title can't wipe a good
-// one.
-func (r *Topics) UpdateDisplayName(ctx context.Context, id uuid.UUID, displayName string) error {
+// topic 123") to the real title, or following a tracker-side rename when the
+// topic opted into follow_tracker_title (migration 0019). A blank name is
+// ignored so a tracker that didn't resolve a title can't wipe a good one.
+//
+// The write is conditional on the name still being allowed to change: the
+// scheduler decides from a snapshot of the topic taken at check start, so a
+// user rename landing mid-check has already cleared both
+// display_name_is_placeholder and follow_tracker_title. Re-checking that here
+// means the in-flight check cannot overwrite the typed name — the lock from
+// issue #90 holds even inside a running check.
+//
+// Reports whether the write happened, because the caller must not announce a
+// title the row rejected: a blocked write is a no-op, not an error, and the
+// name is simply locked now.
+func (r *Topics) UpdateDisplayName(ctx context.Context, id uuid.UUID, displayName string) (bool, error) {
 	if displayName == "" {
-		return nil
+		return false, nil
 	}
-	_, err := r.pool.Exec(ctx,
-		`UPDATE topics SET display_name = $2, display_name_is_placeholder = false, updated_at = now() WHERE id = $1`,
+	tag, err := r.pool.Exec(ctx,
+		`UPDATE topics SET display_name = $2, display_name_is_placeholder = false, updated_at = now()
+WHERE id = $1 AND (display_name_is_placeholder OR follow_tracker_title)`,
 		id, displayName,
 	)
-	return err
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
 }
 
 // SetFolderNameSeen stores keep mode's memory of the topic's folder name

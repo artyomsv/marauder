@@ -39,6 +39,7 @@ function initialFrom(topic: Topic): TopicFormValues {
     checkIntervalSec: topic.CheckIntervalSec || DEFAULT_CHECK_INTERVAL_SEC,
     folderNameMode: topic.FolderNameMode || "default",
     folderName: topic.FolderName ?? "",
+    followTrackerTitle: topic.FollowTrackerTitle ?? false,
   };
 }
 
@@ -51,7 +52,11 @@ export function EditTopicCard({ topic, onClose, onSaved }: EditTopicCardProps) {
   const update = useMutation({
     mutationFn: (v: TopicFormValues) =>
       api.updateTopic(topic.ID, {
-        display_name: v.displayName,
+        // Sent only when edited: a stale name is not a rename (the store would
+        // read one and disable following, and revert a tracker title update
+        // that landed while the form was open), and a stale flag would restore
+        // one a concurrent rename just cleared.
+        display_name: v.displayName !== topic.DisplayName ? v.displayName : undefined,
         client_id: v.clientId || null,
         notifier_id: v.notifierId || null,
         // Backend Update overwrites DownloadDir/Category as plain strings,
@@ -68,6 +73,8 @@ export function EditTopicCard({ topic, onClose, onSaved }: EditTopicCardProps) {
         check_interval_sec: v.checkIntervalSec,
         folder_name_mode: v.folderNameMode,
         folder_name: v.folderName,
+        follow_tracker_title:
+          v.followTrackerTitle !== topic.FollowTrackerTitle ? v.followTrackerTitle : undefined,
         quality: v.quality || undefined,
         start_season: v.startSeason ? parseInt(v.startSeason, 10) : undefined,
         start_episode: v.startEpisode ? parseInt(v.startEpisode, 10) : undefined,

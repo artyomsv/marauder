@@ -110,6 +110,7 @@ func run() error {
 	credsRepo := repo.NewTrackerCredentials(pool)
 	deliveriesRepo := repo.NewDeliveries(pool)
 	sonarrInstancesRepo := repo.NewSonarrInstances(pool)
+	settingsRepo := repo.NewSettings(pool)
 	auditRepo := repo.NewAudit(pool)
 	auditLogger := audit.NewLogger(rootCtx, auditRepo, logger)
 
@@ -296,7 +297,7 @@ func run() error {
 	// Sonarr integration poller. Self-gates on the DB-stored instances
 	// (sonarr_instances.enabled), so it's always started; it no-ops while no
 	// instance is enabled. See issues #86, #92.
-	sonarrPoller := sonarr.New(logger, master, sonarrInstancesRepo, users, topicsRepo, credsRepo, cfg.TrackerHTTPTimeout)
+	sonarrPoller := sonarr.New(logger, master, sonarrInstancesRepo, users, topicsRepo, credsRepo, settingsRepo, cfg.TrackerHTTPTimeout)
 	go func() {
 		if err := sonarrPoller.Start(rootCtx); err != nil {
 			logger.Error().Err(err).Msg("sonarr poller exited with error")
@@ -319,6 +320,7 @@ func run() error {
 		TopicEvents:     topicEventsRepo,
 		SonarrInstances: sonarrInstancesRepo,
 		TrackerSettings: domainStore,
+		Settings:        settingsRepo,
 		Audit:           auditRepo,
 		AuditLog:        auditLogger,
 		OIDC:            oidcProvider,

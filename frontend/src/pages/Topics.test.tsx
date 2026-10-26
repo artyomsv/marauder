@@ -114,6 +114,7 @@ const EXISTING_TOPIC: Topic = {
   FolderNameMode: "default",
   FolderName: "",
   FolderNameSeen: "",
+  FollowTrackerTitle: false,
   Extra: { quality: "1080p", start_season: 2, start_episode: 3 },
   LastHash: "",
   LastCheckedAt: null,

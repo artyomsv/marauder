@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // AuditEntry is one row in the audit_log table.
@@ -27,11 +26,11 @@ type AuditEntry struct {
 
 // Audit repository.
 type Audit struct {
-	pool *pgxpool.Pool
+	pool dbPool
 }
 
 // NewAudit constructs the repository.
-func NewAudit(pool *pgxpool.Pool) *Audit {
+func NewAudit(pool dbPool) *Audit {
 	return &Audit{pool: pool}
 }
 

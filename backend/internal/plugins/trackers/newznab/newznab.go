@@ -75,6 +75,10 @@ func init() {
 func (p *Plugin) Name() string        { return pluginName }
 func (p *Plugin) DisplayName() string { return displayName }
 
+// ReportsFeedTitles: Check answers with the newest feed item's title, which
+// is not the topic's name — the scheduler must never take a title from it.
+func (p *Plugin) ReportsFeedTitles() bool { return true }
+
 func (p *Plugin) CanParse(rawURL string) bool {
 	s := strings.TrimSpace(rawURL)
 	return strings.HasPrefix(s, urlPrefix+"http://") || strings.HasPrefix(s, urlPrefix+"https://")

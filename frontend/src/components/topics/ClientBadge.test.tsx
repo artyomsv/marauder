@@ -34,6 +34,7 @@ function topicWith(clientID: string | null): Topic {
     FolderNameMode: "default",
     FolderName: "",
     FolderNameSeen: "",
+    FollowTrackerTitle: false,
     Extra: null,
     LastHash: "",
     LastCheckedAt: null,

@@ -49,6 +49,9 @@ type fakeTracker struct {
 	// scheduler treats it as a per-episode tracker (replace-on-update is then
 	// skipped to protect sibling episodes — issue #101).
 	episodic bool
+	// feedTitles makes the tracker advertise registry.WithFeedTitles: its
+	// Check title is the newest feed item, which no title may be taken from.
+	feedTitles bool
 	// onCheck runs at the top of Check, before the configured result is
 	// returned. It is the seam for simulating something happening to the topic
 	// while the worker is out at the tracker — a reset, say.
@@ -91,6 +94,7 @@ func (f *fakeTracker) Check(_ context.Context, _ *domain.Topic, _ *domain.Tracke
 // SupportsEpisodeFilter makes *fakeTracker satisfy registry.WithEpisodeFilter.
 // It reports true only when the test opted in via the episodic flag.
 func (f *fakeTracker) SupportsEpisodeFilter() bool { return f.episodic }
+func (f *fakeTracker) ReportsFeedTitles() bool     { return f.feedTitles }
 
 func (f *fakeTracker) Download(_ context.Context, _ *domain.Topic, _ *domain.Check, _ *domain.TrackerCredential) (*domain.Payload, error) {
 	idx := f.callsDownload
@@ -107,8 +111,11 @@ func (f *fakeTracker) Download(_ context.Context, _ *domain.Topic, _ *domain.Che
 type fakeTopics struct {
 	recordCalls            []recordCall
 	updateDisplayNameCalls []updateDisplayNameCall
-	markCalls              []markCall
-	markErr                error
+	// updateDisplayNameBlocked mirrors the store rejecting the write once the
+	// name is locked (zero value = the write goes through).
+	updateDisplayNameBlocked bool
+	markCalls                []markCall
+	markErr                  error
 	// markBulkCalls records the notify-only path's whole-list marks. Kept
 	// separate from markCalls (and markBulkErr from markErr) so a test can
 	// stage a failure on one path without touching the other.
@@ -167,9 +174,11 @@ func (f *fakeTopics) RecordCheckResult(_ context.Context, t *domain.Topic, hash 
 	return nil
 }
 
-func (f *fakeTopics) UpdateDisplayName(_ context.Context, id uuid.UUID, name string) error {
+func (f *fakeTopics) UpdateDisplayName(_ context.Context, id uuid.UUID, name string) (bool, error) {
 	f.updateDisplayNameCalls = append(f.updateDisplayNameCalls, updateDisplayNameCall{id, name})
-	return nil
+	// Mirrors the store: the write is rejected (and the caller must not
+	// announce the name) once the topic is locked.
+	return !f.updateDisplayNameBlocked, nil
 }
 
 func (f *fakeTopics) SetFolderNameSeen(_ context.Context, _ *domain.Topic, name string) error {
@@ -2687,6 +2696,11 @@ func TestRunCheck_SelfHeal_PlaceholderName_Persists(t *testing.T) {
 	if got := f.topics.updateDisplayNameCalls[0].name; got != "Real Title" {
 		t.Errorf("healed name = %q, want Real Title", got)
 	}
+	// The healed name is what the rest of the tick must announce: the delivery
+	// label and every notification carry the topic's display name.
+	if f.topic.DisplayName != "Real Title" {
+		t.Errorf("topic.DisplayName = %q, want Real Title after the heal", f.topic.DisplayName)
+	}
 }
 
 func TestRunCheck_SelfHeal_ResolvedName_DoesNotDowngrade(t *testing.T) {
@@ -2706,6 +2720,135 @@ func TestRunCheck_SelfHeal_ResolvedName_DoesNotDowngrade(t *testing.T) {
 
 	if len(f.topics.updateDisplayNameCalls) != 0 {
 		t.Errorf("want 0 UpdateDisplayName calls for a resolved title, got %d",
+			len(f.topics.updateDisplayNameCalls))
+	}
+}
+
+func TestRunCheck_FollowTrackerTitle_UpdatesResolvedName(t *testing.T) {
+	// The opt-in that undoes the #90 lock for a topic that wants it: a
+	// resolved name is kept in sync with the tracker's title while the flag
+	// is set.
+	tr := &fakeTracker{
+		name: "faketracker",
+		checks: []checkResult{
+			{check: &domain.Check{Hash: "old-hash", DisplayName: "Show.S01.2160p.WEB-DL.REPACK"}, err: nil},
+		},
+	}
+	f := newFixture(t, tr)
+	f.topic.DisplayName = "Show.S01.2160p.WEB-DL"
+	f.topic.DisplayNameIsPlaceholder = false
+	f.topic.FollowTrackerTitle = true
+
+	f.s.runCheck(context.Background(), f.s.log, f.topic)
+
+	if len(f.topics.updateDisplayNameCalls) != 1 {
+		t.Fatalf("want 1 UpdateDisplayName call while following, got %d",
+			len(f.topics.updateDisplayNameCalls))
+	}
+	if got := f.topics.updateDisplayNameCalls[0].name; got != "Show.S01.2160p.WEB-DL.REPACK" {
+		t.Errorf("followed name = %q, want Show.S01.2160p.WEB-DL.REPACK", got)
+	}
+	// The accepted name is announced, not the stale one.
+	if f.topic.DisplayName != "Show.S01.2160p.WEB-DL.REPACK" {
+		t.Errorf("topic.DisplayName = %q, want the followed name", f.topic.DisplayName)
+	}
+	// Following outlives the update it triggered — the scheduler never
+	// touches the flag; only a user rename clears it.
+	if !f.topic.FollowTrackerTitle {
+		t.Error("FollowTrackerTitle was cleared by the scheduler; only a user rename may clear it")
+	}
+}
+
+func TestRunCheck_RejectedTitleWrite_DoesNotAnnounceIt(t *testing.T) {
+	// The store rejects the write once the name is locked (a user rename
+	// landed mid-check). The rejected title must not become the announced
+	// name — the snapshot the tick is working with stands.
+	tr := &fakeTracker{
+		name: "faketracker",
+		checks: []checkResult{
+			{check: &domain.Check{Hash: "old-hash", DisplayName: "Rejected Tracker Title"}, err: nil},
+		},
+	}
+	f := newFixture(t, tr)
+	f.topic.DisplayName = "Typed Mid Check"
+	f.topic.FollowTrackerTitle = true
+	f.topics.updateDisplayNameBlocked = true
+
+	f.s.runCheck(context.Background(), f.s.log, f.topic)
+
+	if len(f.topics.updateDisplayNameCalls) != 1 {
+		t.Fatalf("want 1 UpdateDisplayName call, got %d", len(f.topics.updateDisplayNameCalls))
+	}
+	if f.topic.DisplayName != "Typed Mid Check" {
+		t.Errorf("topic.DisplayName = %q, want Typed Mid Check — a rejected title must not be announced", f.topic.DisplayName)
+	}
+}
+
+func TestRunCheck_FeedTrackerTitleIsNeverAccepted(t *testing.T) {
+	// A feed tracker's Check title is the newest feed item
+	// (registry.WithFeedTitles): accepting it would rename the topic to
+	// whatever just appeared in the feed, on every check. Neither the
+	// placeholder heal nor following may take it — the Parse label is the
+	// topic's name.
+	tr := &fakeTracker{
+		name:       "torznab",
+		feedTitles: true,
+		checks: []checkResult{
+			{check: &domain.Check{Hash: "old-hash", DisplayName: "Some.Show.S01E01.1080p"}, err: nil},
+		},
+	}
+	f := newFixture(t, tr)
+	f.topic.DisplayName = "Indexer: some show"
+	f.topic.DisplayNameIsPlaceholder = true
+	f.topic.FollowTrackerTitle = true
+
+	f.s.runCheck(context.Background(), f.s.log, f.topic)
+
+	if len(f.topics.updateDisplayNameCalls) != 0 {
+		t.Errorf("want 0 UpdateDisplayName calls for a feed tracker, got %d",
+			len(f.topics.updateDisplayNameCalls))
+	}
+	if f.topic.DisplayName != "Indexer: some show" {
+		t.Errorf("topic.DisplayName = %q, want the Parse label kept", f.topic.DisplayName)
+	}
+}
+
+func TestRunCheck_FollowTrackerTitle_EmptyNameStays(t *testing.T) {
+	// A tracker that resolves no title must never wipe a good one, following
+	// or not.
+	tr := &fakeTracker{
+		name: "faketracker",
+		checks: []checkResult{
+			{check: &domain.Check{Hash: "old-hash", DisplayName: ""}, err: nil},
+		},
+	}
+	f := newFixture(t, tr)
+	f.topic.DisplayName = "Real Release Name"
+	f.topic.FollowTrackerTitle = true
+
+	f.s.runCheck(context.Background(), f.s.log, f.topic)
+
+	if len(f.topics.updateDisplayNameCalls) != 0 {
+		t.Errorf("want 0 UpdateDisplayName calls for an empty Check title, got %d",
+			len(f.topics.updateDisplayNameCalls))
+	}
+}
+
+func TestRunCheck_FollowTrackerTitle_UnchangedNameNotRewritten(t *testing.T) {
+	tr := &fakeTracker{
+		name: "faketracker",
+		checks: []checkResult{
+			{check: &domain.Check{Hash: "old-hash", DisplayName: "Same Name"}, err: nil},
+		},
+	}
+	f := newFixture(t, tr)
+	f.topic.DisplayName = "Same Name"
+	f.topic.FollowTrackerTitle = true
+
+	f.s.runCheck(context.Background(), f.s.log, f.topic)
+
+	if len(f.topics.updateDisplayNameCalls) != 0 {
+		t.Errorf("want 0 UpdateDisplayName calls when the title is unchanged, got %d",
 			len(f.topics.updateDisplayNameCalls))
 	}
 }

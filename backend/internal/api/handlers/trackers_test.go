@@ -126,12 +126,68 @@ func (f *fakeOptionalCredsTracker) Verify(context.Context, *domain.TrackerCreden
 }
 func (f *fakeOptionalCredsTracker) SupportsAnonymousDownload() bool { return true }
 
+// fakeFeedTracker implements registry.Tracker + registry.WithFeedTitles: its
+// Check answers with the newest feed item's title, so nothing it says is a
+// title for the topic.
+type fakeFeedTracker struct{ name string }
+
+func (f *fakeFeedTracker) Name() string        { return f.name }
+func (f *fakeFeedTracker) DisplayName() string { return "Fake Feed Tracker" }
+func (f *fakeFeedTracker) CanParse(rawURL string) bool {
+	return rawURL == "https://fake-feed-tracker.test/search"
+}
+func (f *fakeFeedTracker) Parse(context.Context, string) (*domain.Topic, error) { return nil, nil }
+func (f *fakeFeedTracker) Check(context.Context, *domain.Topic, *domain.TrackerCredential) (*domain.Check, error) {
+	return nil, nil
+}
+func (f *fakeFeedTracker) Download(context.Context, *domain.Topic, *domain.Check, *domain.TrackerCredential) (*domain.Payload, error) {
+	return nil, nil
+}
+func (f *fakeFeedTracker) ReportsFeedTitles() bool { return true }
+
 func init() {
 	registry.RegisterTracker(&fakeSeasonTracker{name: "fake-season-tracker-test"})
 	registry.RegisterTracker(&fakeNoSeasonTracker{name: "fake-no-season-tracker-test"})
 	registry.RegisterTracker(&fakeErrSeasonTracker{name: "fake-err-season-tracker-test"})
 	registry.RegisterTracker(&fakeRequiredCredsTracker{name: "fake-required-creds-test"})
 	registry.RegisterTracker(&fakeOptionalCredsTracker{name: "fake-optional-creds-test"})
+	registry.RegisterTracker(&fakeFeedTracker{name: "fake-feed-tracker-test"})
+}
+
+// TestTrackers_Match_TitleFollowSupport pins the flag the form uses to hide
+// the follow-the-tracker-title toggle: only feed trackers lack followable
+// titles, everyone else's Check title is about the topic itself.
+func TestTrackers_Match_TitleFollowSupport(t *testing.T) {
+	h := &Trackers{BaseURL: "http://test"}
+
+	for _, tt := range []struct {
+		name string
+		url  string
+		want bool
+	}{
+		{name: "an ordinary tracker's titles are followable", url: "https://fake-no-season-tracker.test/series/1", want: true},
+		{name: "a feed tracker's item titles are not", url: "https://fake-feed-tracker.test/search", want: false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/trackers/match?url="+url.QueryEscape(tt.url), nil)
+			w := httptest.NewRecorder()
+
+			h.Match(w, req)
+
+			if w.Code != http.StatusOK {
+				t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
+			}
+			var body struct {
+				SupportsTitleFollow bool `json:"supports_title_follow"`
+			}
+			if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			if body.SupportsTitleFollow != tt.want {
+				t.Errorf("supports_title_follow = %v, want %v", body.SupportsTitleFollow, tt.want)
+			}
+		})
+	}
 }
 
 func TestTrackers_Match_RequiredCredentials(t *testing.T) {

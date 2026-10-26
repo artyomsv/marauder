@@ -35,7 +35,7 @@ type topicStore interface {
 	ListForUser(ctx context.Context, userID uuid.UUID) ([]*domain.Topic, error)
 	Delete(ctx context.Context, id, userID uuid.UUID) error
 	UpdateStatus(ctx context.Context, id, userID uuid.UUID, status domain.TopicStatus) error
-	Update(ctx context.Context, id, userID uuid.UUID, displayName string, clientID, notifierID *uuid.UUID, downloadDir, category string, checkIntervalSec *int, flags repo.TopicFlags, folder *repo.FolderNamePolicy, extra map[string]any) (*domain.Topic, error)
+	Update(ctx context.Context, id, userID uuid.UUID, displayName *string, clientID, notifierID *uuid.UUID, downloadDir, category string, checkIntervalSec *int, flags repo.TopicFlags, folder *repo.FolderNamePolicy, extra map[string]any) (*domain.Topic, error)
 	ResetCheckState(ctx context.Context, id, userID uuid.UUID) error
 	QueueRecheck(ctx context.Context, id, userID uuid.UUID) (repo.RecheckOutcome, error)
 }
@@ -94,6 +94,10 @@ type Topics struct {
 	// Remover removes already-delivered torrents from their client on reset.
 	// Nil-safe (see torrentRemover).
 	Remover torrentRemover
+	// Settings supplies the instance-wide defaults a topic is created with
+	// when its creator sends no explicit choice. Nil-safe: without it a
+	// create falls back to the built-in defaults.
+	Settings settingsStore
 
 	// resetInFlight gates POST /topics/{id}/reset to one running reset per
 	// topic (topicID -> struct{}). Deliberately keyed by topic, not by user:
@@ -131,6 +135,12 @@ type createTopicReq struct {
 	// Update policy (issue #205). Plain bools: false is the right default.
 	AddPausedOnUpdate bool `json:"add_paused_on_update,omitempty"`
 	OnlyNewFiles      bool `json:"only_new_files,omitempty"`
+	// FollowTrackerTitle seeds the topic's follow-the-tracker-title flag.
+	// Pointer: omitted means "no explicit choice" and the instance-wide
+	// default (GET /system/settings) applies, so API clients and the Sonarr
+	// poller honour it too. A non-nil false is kept as-is — that is an
+	// explicit choice, not "unspecified".
+	FollowTrackerTitle *bool `json:"follow_tracker_title,omitempty"`
 	// Folder name (issue #225): default, custom or keep; empty is default.
 	// FolderName is used only in custom mode.
 	FolderNameMode string `json:"folder_name_mode,omitempty"`
@@ -209,6 +219,7 @@ func (h *Topics) Create(w http.ResponseWriter, r *http.Request) {
 		NotifyOnlyAnnounceCurrent: req.NotifyOnlyAnnounceCurrent,
 		AddPausedOnUpdate:         req.AddPausedOnUpdate,
 		OnlyNewFiles:              req.OnlyNewFiles,
+		FollowTrackerTitle:        h.followTrackerTitle(r.Context(), req.FollowTrackerTitle, req.DisplayName != ""),
 		FolderNameMode:            domain.FolderNameMode(req.FolderNameMode),
 		FolderName:                req.FolderName,
 		Quality:                   req.Quality,
@@ -268,7 +279,11 @@ func topicCreateProblem(err error, url string) error {
 }
 
 type updateTopicReq struct {
-	DisplayName string     `json:"display_name"`
+	// DisplayName is a pointer so an omitted field is not a rename: the store
+	// leaves the name alone rather than writing back a value this caller read
+	// before someone else's edit. Sending a name that differs from the stored
+	// one is a rename.
+	DisplayName *string    `json:"display_name,omitempty"`
 	ClientID    *uuid.UUID `json:"client_id"`
 	NotifierID  *uuid.UUID `json:"notifier_id"`
 	DownloadDir string     `json:"download_dir"`
@@ -288,6 +303,9 @@ type updateTopicReq struct {
 	// (issue #205), matching the other flags.
 	AddPausedOnUpdate *bool `json:"add_paused_on_update,omitempty"`
 	OnlyNewFiles      *bool `json:"only_new_files,omitempty"`
+	// FollowTrackerTitle is a pointer so an omitted field preserves the stored
+	// flag; the store still clears it on a rename (see repo.Topics.Update).
+	FollowTrackerTitle *bool `json:"follow_tracker_title,omitempty"`
 	// Pointers so an omitted field preserves the stored folder name setting
 	// (issue #225); sending either one rewrites the whole setting.
 	FolderNameMode *string `json:"folder_name_mode,omitempty"`
@@ -431,6 +449,7 @@ func (h *Topics) Update(w http.ResponseWriter, r *http.Request) {
 		NotifyOnlyAnnounceCurrent: notifyOnlyAnnounceCurrent,
 		AddPausedOnUpdate:         addPausedOnUpdate,
 		OnlyNewFiles:              onlyNewFiles,
+		FollowTrackerTitle:        req.FollowTrackerTitle,
 	}, folder, extra)
 	if uerr != nil {
 		if errors.Is(uerr, repo.ErrNotFound) {
@@ -468,6 +487,30 @@ func folderPolicyFromRequest(existing *domain.Topic, mode, name *string) (*repo.
 		return nil, err
 	}
 	return &repo.FolderNamePolicy{Mode: m, Name: normalized}, nil
+}
+
+// followTrackerTitle resolves the flag a new topic starts with. An explicit
+// request value is an explicit choice (a non-nil false included) and wins.
+// Without one, a caller that supplied its own display name keeps ownership of
+// it — the name is theirs, and an inherited default must not hand it to the
+// tracker — while a nameless create inherits the instance-wide default. A
+// settings read failure fails open to false: the "a resolved title stays
+// locked" behaviour as before the default existed, never the other way round.
+func (h *Topics) followTrackerTitle(ctx context.Context, explicit *bool, named bool) bool {
+	if explicit != nil {
+		return *explicit
+	}
+	if named {
+		return false
+	}
+	if h.Settings == nil {
+		return false
+	}
+	s, err := h.Settings.Get(ctx)
+	if err != nil {
+		return false
+	}
+	return s.DefaultFollowTrackerTitle
 }
 
 // Get handles GET /topics/{id}.

@@ -48,7 +48,7 @@ type adminResolver interface {
 type topicsStore interface {
 	topics.Store
 	GetByURL(ctx context.Context, userID uuid.UUID, url string) (*domain.Topic, error)
-	Update(ctx context.Context, id, userID uuid.UUID, displayName string, clientID, notifierID *uuid.UUID, downloadDir, category string, checkIntervalSec *int, flags repo.TopicFlags, folder *repo.FolderNamePolicy, extra map[string]any) (*domain.Topic, error)
+	Update(ctx context.Context, id, userID uuid.UUID, displayName *string, clientID, notifierID *uuid.UUID, downloadDir, category string, checkIntervalSec *int, flags repo.TopicFlags, folder *repo.FolderNamePolicy, extra map[string]any) (*domain.Topic, error)
 }
 
 // Poller periodically reads each enabled Sonarr instance's grab history and
@@ -69,13 +69,22 @@ type Poller struct {
 	// topic resolved anonymously stores a placeholder name and no image, and
 	// nothing ever backfills the image.
 	creds trackercreds.Store
+	// settings supplies the instance-wide defaults a new topic starts with.
+	// Nil-safe: without it topics are created with the built-in defaults.
+	settings settingsReader
 
 	// newClient is injectable so tests can point at an httptest server.
 	newClient func(baseURL, apiKey string) *Client
 }
 
+// settingsReader is the instance-defaults seam the poller seeds new topics
+// from.
+type settingsReader interface {
+	Get(ctx context.Context) (*repo.InstanceSettings, error)
+}
+
 // New constructs a Poller.
-func New(log zerolog.Logger, master *crypto.MasterKey, instances instancesStore, admin adminResolver, topicsStore topicsStore, creds trackercreds.Store, httpTimeout time.Duration) *Poller {
+func New(log zerolog.Logger, master *crypto.MasterKey, instances instancesStore, admin adminResolver, topicsStore topicsStore, creds trackercreds.Store, settings settingsReader, httpTimeout time.Duration) *Poller {
 	return &Poller{
 		log:       log.With().Str("component", "sonarr-poller").Logger(),
 		master:    master,
@@ -83,6 +92,7 @@ func New(log zerolog.Logger, master *crypto.MasterKey, instances instancesStore,
 		admin:     admin,
 		topics:    topicsStore,
 		creds:     creds,
+		settings:  settings,
 		newClient: func(baseURL, apiKey string) *Client {
 			return NewClient(baseURL, apiKey, httpTimeout)
 		},
@@ -257,13 +267,14 @@ func (p *Poller) processURL(ctx context.Context, inst domain.SonarrInstance, own
 	}
 
 	res, err := topics.BuildAndCreate(ctx, p.topics, topics.CreateInput{
-		UserID:      ownerID,
-		URL:         url,
-		ClientID:    inst.DefaultClientID,
-		Category:    inst.DefaultCategory,
-		DownloadDir: inst.DefaultDownloadDir,
-		Source:      topicSourceSonarr,
-		Extra:       sonarrTopicExtra(rec),
+		UserID:             ownerID,
+		URL:                url,
+		ClientID:           inst.DefaultClientID,
+		Category:           inst.DefaultCategory,
+		DownloadDir:        inst.DefaultDownloadDir,
+		Source:             topicSourceSonarr,
+		Extra:              sonarrTopicExtra(rec),
+		FollowTrackerTitle: p.defaultFollowTrackerTitle(ctx),
 		// Resolve the title and poster as the topic's OWNER. A login-gated
 		// tracker answers a guest with a stub rather than an error, so an
 		// anonymous resolve does not fail — it succeeds at reading nothing,
@@ -290,6 +301,22 @@ func (p *Poller) processURL(ctx context.Context, inst domain.SonarrInstance, own
 		Msg("auto-created topic from sonarr grab")
 	metrics.SonarrTopicsCreatedTotal.Inc()
 	metrics.SonarrRecordsProcessedTotal.WithLabelValues("created").Inc()
+}
+
+// defaultFollowTrackerTitle is the instance-wide default a Sonarr-created
+// topic starts with. Sonarr grabs are ordinary topics and get no per-topic
+// choice, so the instance default is their whole answer. Fails open to
+// false — the pre-existing "a resolved title stays locked" behaviour.
+func (p *Poller) defaultFollowTrackerTitle(ctx context.Context) bool {
+	if p.settings == nil {
+		return false
+	}
+	s, err := p.settings.Get(ctx)
+	if err != nil {
+		p.log.Warn().Err(err).Msg("settings read failed; topic defaults to not following the tracker title")
+		return false
+	}
+	return s.DefaultFollowTrackerTitle
 }
 
 func sonarrTopicExtra(rec HistoryRecord) map[string]any {
@@ -326,9 +353,10 @@ func (p *Poller) handleExisting(ctx context.Context, inst domain.SonarrInstance,
 		downloadDir = inst.DefaultDownloadDir
 		category = inst.DefaultCategory
 	}
-	if _, err := p.topics.Update(ctx, existing.ID, ownerID, existing.DisplayName,
-		// nil interval: the poller never edits it, and writing back the one it read
-		// could undo an edit the user saved since.
+	// nil name and nil follow flag: the poller never renames and never edits
+	// the follow choice, and writing back what it read could undo an edit the
+	// user saved since. Same reasoning as the nil interval.
+	if _, err := p.topics.Update(ctx, existing.ID, ownerID, nil,
 		clientID, existing.NotifierID, downloadDir, category, nil,
 		repo.TopicFlags{
 			ReplaceOnUpdate:           existing.ReplaceOnUpdate,

@@ -23,7 +23,7 @@ func TestTopicsFolderNameRoundTrip(t *testing.T) {
 
 	update := func(p *FolderNamePolicy) *domain.Topic {
 		t.Helper()
-		if _, err := topicsRepo.Update(ctx, topic.ID, userID, topic.DisplayName, nil, nil, "", "", nil, TopicFlags{}, p, map[string]any{}); err != nil {
+		if _, err := topicsRepo.Update(ctx, topic.ID, userID, namePtr(topic.DisplayName), nil, nil, "", "", nil, TopicFlags{}, p, map[string]any{}); err != nil {
 			t.Fatalf("Update(%+v): %v", p, err)
 		}
 		return reload(t, pool, topic.ID)

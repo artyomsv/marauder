@@ -16,10 +16,13 @@ import { CategoryField } from "./CategoryField";
 import { CheckIntervalSelect } from "./CheckIntervalSelect";
 import { UpdatePolicyFields } from "./UpdatePolicyFields";
 import { FolderNameFields, type FolderNameMode, type FolderNameValue } from "./FolderNameFields";
+import { TitleSyncToggle } from "./TitleSyncToggle";
 import { useUnsupportedClient } from "./useUnsupportedClient";
 
 // Shape of GET /trackers/match. Drives which optional sections the form
-// renders (quality, season/episode filter, credentials hint).
+// renders (quality, season/episode filter, credentials hint). Title-follow
+// support is false for feed trackers, whose "titles" are the newest feed
+// item — the form hides the follow-the-tracker-title toggle for them.
 export interface TrackerMatch {
   tracker_name: string;
   display_name: string;
@@ -30,6 +33,7 @@ export interface TrackerMatch {
   requires_credentials: boolean;
   credentials_optional: boolean;
   uses_cloudflare: boolean;
+  supports_title_follow: boolean;
 }
 
 // Minimal shape of a torrent client for the picker. The full ClientView
@@ -92,6 +96,10 @@ export interface TopicFormValues {
   // Folder name in the client (issue #225).
   folderNameMode: FolderNameMode;
   folderName: string;
+  // Follow the tracker's title: the scheduler keeps displayName in sync with
+  // the title the tracker reports. Unticked by the form when the user types a
+  // name — a rename takes ownership of it.
+  followTrackerTitle: boolean;
 }
 
 interface TopicFormProps {
@@ -274,7 +282,32 @@ export function TopicForm({
     checkIntervalSec: initial.checkIntervalSec,
     folderNameMode: initial.folderNameMode,
     folderName: initial.folderName,
+    followTrackerTitle: initial.followTrackerTitle,
   });
+
+  // The instance default seeds the follow-the-tracker-title toggle, but the
+  // add card's settings query can settle after this form mounts. Keep applying
+  // the loaded default until the user makes their own choice, so a late answer
+  // is neither ignored (the toggle would silently save `false` over an enabled
+  // default) nor able to overwrite one.
+  const followOwned = useRef(false);
+  useEffect(() => {
+    if (!followOwned.current) {
+      setDelivery((d) => ({ ...d, followTrackerTitle: initial.followTrackerTitle }));
+    }
+  }, [initial.followTrackerTitle]);
+
+  // While the name differs from the one the form was opened with, the checkbox
+  // is forced off and disabled: the store clears follow_tracker_title on a
+  // rename (see repo.Topics.Update), so a re-tick would be silently discarded
+  // on save. Derived rather than stored, so reverting the name restores the
+  // stored choice instead of losing it.
+  const nameEdited = isEdit && displayName !== initial.displayName;
+  const followTrackerTitle = nameEdited ? false : delivery.followTrackerTitle;
+  // A feed tracker's "title" is the newest feed item, so following it would
+  // rename the topic on every check (registry.WithFeedTitles). The toggle is
+  // hidden for those and the flag is never sent as on.
+  const titleFollowSupported = match?.supports_title_follow !== false;
 
   // A notify-only topic whose events reach nobody is a topic that silently
   // does nothing. An explicitly picked notifier replaces the defaults, so it
@@ -335,6 +368,8 @@ export function TopicForm({
       // Hidden for per-episode trackers and notify-only topics.
       folderNameMode: folderNameHidden ? "default" : delivery.folderNameMode,
       folderName: delivery.folderName,
+      // A feed tracker has no title to follow (the toggle is hidden for one).
+      followTrackerTitle: titleFollowSupported && followTrackerTitle,
     });
   };
 
@@ -379,9 +414,26 @@ export function TopicForm({
           onChange={(e) => {
             setDisplayName(e.target.value);
             nameAutoFilled.current = false;
+            // In add mode a typed name turns the toggle off once. In edit mode
+            // the same rule is derived above, so a reverted edit restores the
+            // stored choice instead of losing it.
+            if (!isEdit && e.target.value !== initial.displayName) {
+              followOwned.current = true;
+              setDelivery((d) => ({ ...d, followTrackerTitle: false }));
+            }
           }}
           placeholder="Leave blank to auto-detect"
         />
+        {titleFollowSupported && (
+          <TitleSyncToggle
+            checked={followTrackerTitle}
+            disabled={nameEdited}
+            onChange={(next) => {
+              followOwned.current = true;
+              setDelivery((d) => ({ ...d, followTrackerTitle: next }));
+            }}
+          />
+        )}
       </div>
 
       {match?.qualities && match.qualities.length > 0 && (

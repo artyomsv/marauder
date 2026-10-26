@@ -109,6 +109,12 @@ type fakeTopics struct {
 	byURL   map[string]*domain.Topic
 	created []*domain.Topic
 	updated []*domain.Topic
+	// names records the display-name argument of each Update call (nil = the
+	// caller is not renaming).
+	names []*string
+	// follows records the follow-flag argument of each Update call (nil = the
+	// caller is leaving it alone).
+	follows []*bool
 	// intervals records the check-interval argument of each Update call.
 	intervals []*int
 	// folders records the folder name argument of each Update call.
@@ -130,13 +136,17 @@ func (f *fakeTopics) GetByURL(_ context.Context, _ uuid.UUID, url string) (*doma
 	}
 	return nil, repo.ErrNotFound
 }
-func (f *fakeTopics) Update(_ context.Context, id, _ uuid.UUID, displayName string,
+func (f *fakeTopics) Update(_ context.Context, id, _ uuid.UUID, displayName *string,
 	clientID, notifierID *uuid.UUID, downloadDir, category string,
 	checkIntervalSec *int, flags repo.TopicFlags, folder *repo.FolderNamePolicy, extra map[string]any,
 ) (*domain.Topic, error) {
+	name := ""
+	if displayName != nil {
+		name = *displayName
+	}
 	updated := &domain.Topic{
 		ID:                        id,
-		DisplayName:               displayName,
+		DisplayName:               name,
 		ClientID:                  clientID,
 		NotifierID:                notifierID,
 		DownloadDir:               downloadDir,
@@ -150,6 +160,8 @@ func (f *fakeTopics) Update(_ context.Context, id, _ uuid.UUID, displayName stri
 		Extra:                     extra,
 	}
 	f.updated = append(f.updated, updated)
+	f.names = append(f.names, displayName)
+	f.follows = append(f.follows, flags.FollowTrackerTitle)
 	f.intervals = append(f.intervals, checkIntervalSec)
 	f.folders = append(f.folders, folder)
 	return updated, nil
@@ -186,8 +198,9 @@ func baseInstance(serverURL string, owner uuid.UUID) domain.SonarrInstance {
 func newTestPoller(s instancesStore, a adminResolver, ts topicsStore) *Poller {
 	// nil creds: these tests exercise the poll loop, not credential warming.
 	// A nil store resolves anonymously, which is what every fake tracker here
-	// does anyway.
-	return New(zerolog.Nop(), nil, s, a, ts, nil, 5*time.Second)
+	// does anyway. nil settings: no instance default, so a created topic
+	// starts with follow-the-tracker-title off.
+	return New(zerolog.Nop(), nil, s, a, ts, nil, nil, 5*time.Second)
 }
 
 // --- single-instance behaviour (via pollOnce) ----------------------------
@@ -227,6 +240,44 @@ func TestPoller_CreatesTopic(t *testing.T) {
 	}
 	if c := fi.cursors[inst.ID]; c == nil || !c.After(past) {
 		t.Errorf("cursor not advanced")
+	}
+}
+
+// fakeSettings supplies the instance defaults a new topic starts with.
+type fakeSettings struct{ defaultOn bool }
+
+func (f *fakeSettings) Get(context.Context) (*repo.InstanceSettings, error) {
+	return &repo.InstanceSettings{DefaultFollowTrackerTitle: f.defaultOn}, nil
+}
+
+// TestPoller_Create_InheritsTheInstanceDefault covers the path the tests
+// above never exercise: every one of them passes a nil settings store, but a
+// Sonarr-created topic is an ordinary topic and starts from the instance
+// default when the operator turned it on.
+func TestPoller_Create_InheritsTheInstanceDefault(t *testing.T) {
+	srv := historyServer([]HistoryRecord{
+		{
+			ID: 1, Date: time.Now().UTC(), SourceTitle: "Example S01E01 / Example [AVC][1]",
+			Data: HistoryData{NzbInfoURL: fakeURL, TorrentInfoHash: "initial-hash"},
+		},
+	})
+	defer srv.Close()
+
+	owner := uuid.New()
+	past := time.Now().Add(-time.Hour).UTC()
+	inst := baseInstance(srv.URL, owner)
+	inst.LastSeenAt = &past
+	ts := &fakeTopics{}
+
+	p := New(zerolog.Nop(), nil, &fakeInstances{}, fakeAdmin{}, ts, &fakeCredStore{},
+		&fakeSettings{defaultOn: true}, 5*time.Second)
+	p.pollOnce(context.Background(), inst)
+
+	if len(ts.created) != 1 {
+		t.Fatalf("want 1 created, got %d", len(ts.created))
+	}
+	if !ts.created[0].FollowTrackerTitle {
+		t.Error("created.FollowTrackerTitle = false, want the instance default applied")
 	}
 }
 
@@ -319,6 +370,12 @@ func TestPoller_ExistingTopicRefreshesVariantMetadata(t *testing.T) {
 		t.Fatalf("want 1 metadata update, got %d", len(ts.updated))
 	}
 	updated := ts.updated[0]
+	// The poller never renames and never edits the follow choice: both go as
+	// nil so a user edit saved since the read cannot be undone by this write
+	// (a stale name would read as a rename and disable following).
+	if ts.names[0] != nil || ts.follows[0] != nil {
+		t.Errorf("Update carried name=%v follow=%v, want both nil", ts.names[0], ts.follows[0])
+	}
 	if updated.Extra[domain.TopicExtraSonarrInfoHash] != "new-hash" ||
 		updated.Extra[domain.TopicExtraSonarrSourceTitle] != "new AVC grab" {
 		t.Errorf("variant metadata not refreshed: %#v", updated.Extra)
@@ -759,7 +816,7 @@ func TestPoller_ResolvesMetadataAsTheOwner(t *testing.T) {
 		Username: "user", SecretEnc: enc, SecretNonce: nonce,
 	}
 
-	p := New(zerolog.Nop(), mk, &fakeInstances{}, fakeAdmin{}, ts, &fakeCredStore{cred: cred}, 5*time.Second)
+	p := New(zerolog.Nop(), mk, &fakeInstances{}, fakeAdmin{}, ts, &fakeCredStore{cred: cred}, nil, 5*time.Second)
 	p.pollOnce(context.Background(), inst)
 
 	if got := drainCreds(t); got == nil {
@@ -796,7 +853,7 @@ func TestPoller_NoCredentialStored_StillCreatesTheTopic(t *testing.T) {
 	inst.LastSeenAt = &past
 	ts := &fakeTopics{}
 
-	p := New(zerolog.Nop(), pollerMasterKey(t), &fakeInstances{}, fakeAdmin{}, ts, &fakeCredStore{}, 5*time.Second)
+	p := New(zerolog.Nop(), pollerMasterKey(t), &fakeInstances{}, fakeAdmin{}, ts, &fakeCredStore{}, nil, 5*time.Second)
 	p.pollOnce(context.Background(), inst)
 
 	if got := drainCreds(t); got != nil {

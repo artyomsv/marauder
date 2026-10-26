@@ -53,6 +53,7 @@ const EMPTY: TopicFormValues = {
   checkIntervalSec: 900,
   folderNameMode: "default",
   folderName: "",
+  followTrackerTitle: false,
 };
 
 function renderForm() {

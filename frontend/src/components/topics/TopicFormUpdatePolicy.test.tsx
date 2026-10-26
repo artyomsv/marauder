@@ -55,6 +55,7 @@ const STORED: TopicFormValues = {
   checkIntervalSec: 900,
   folderNameMode: "default",
   folderName: "",
+  followTrackerTitle: false,
 };
 
 beforeEach(() => {

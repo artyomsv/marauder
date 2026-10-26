@@ -21,7 +21,7 @@ import (
 var ErrNotFound = errors.New("not found")
 
 // usersPool is the minimal subset of *pgxpool.Pool used by Users, defined as
-// an unexported interface so tests can substitute a fake (mirrors topicsPool
+// an unexported interface so tests can substitute a fake (mirrors dbPool
 // / settingsPool). The concrete *pgxpool.Pool satisfies it.
 type usersPool interface {
 	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)

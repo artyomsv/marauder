@@ -50,6 +50,11 @@ type trackerMatch struct {
 	SupportsInteractiveLogin bool     `json:"supports_interactive_login"`
 	UsesCloudflare           bool     `json:"uses_cloudflare"`
 	SupportsSeasonCatalog    bool     `json:"supports_season_catalog"`
+	// SupportsTitleFollow is false for feed trackers, whose Check title is the
+	// newest feed item rather than the topic's name (registry.WithFeedTitles):
+	// following those would rename the topic on every check. The UI hides the
+	// follow-the-tracker-title toggle for them.
+	SupportsTitleFollow bool `json:"supports_title_follow"`
 }
 
 // Match handles GET /api/v1/trackers/match?url=<encoded>.
@@ -73,6 +78,12 @@ func (h *Trackers) Match(w http.ResponseWriter, r *http.Request) {
 	out := trackerMatch{
 		TrackerName: t.Name(),
 		DisplayName: t.DisplayName(),
+		// Everyone's titles are followable except feed trackers', which are
+		// item titles (registry.WithFeedTitles).
+		SupportsTitleFollow: true,
+	}
+	if f, ok := t.(registry.WithFeedTitles); ok && f.ReportsFeedTitles() {
+		out.SupportsTitleFollow = false
 	}
 	if q, ok := t.(registry.WithQuality); ok {
 		out.Qualities = q.Qualities()
