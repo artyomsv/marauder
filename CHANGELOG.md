@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.27.2] - 2026-10-27
+
 ### Fixed
 
 - **Alpine security fixes now reach the container images.** Every image
