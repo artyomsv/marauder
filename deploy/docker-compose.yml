@@ -49,8 +49,8 @@ services:
       context: ../backend
       dockerfile: Dockerfile
       args:
-        VERSION: "1.27.1"
-    image: marauder-backend:1.27.1
+        VERSION: "1.27.2"
+    image: marauder-backend:1.27.2
     restart: unless-stopped
     depends_on:
       db:
@@ -100,7 +100,7 @@ services:
     build:
       context: ../frontend
       dockerfile: Dockerfile
-    image: marauder-frontend:1.27.1
+    image: marauder-frontend:1.27.2
     restart: unless-stopped
     depends_on:
       - backend
