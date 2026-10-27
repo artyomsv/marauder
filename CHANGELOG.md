@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.27.1] - 2026-10-27
+
 ### Fixed
 
 - **FlareSolverr browsers no longer leak at shutdown.** When the solver
