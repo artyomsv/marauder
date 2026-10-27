@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Alpine security fixes now reach the container images.** Every image
+  build runs `apk upgrade`, but CI cached that layer and only rebuilt it
+  when the base image tag moved, so a fix Alpine published in between
+  (curl 8.23.0, 24 CVEs on the frontend image) never landed. The runtime
+  stage is now rebuilt on every build, and the frontend image drops curl,
+  which nothing in it used.
+
 ## [1.27.1] - 2026-10-27
 
 ### Fixed

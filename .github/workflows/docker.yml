@@ -49,6 +49,11 @@ jobs:
           tags: ${{ matrix.image.tag }}
           cache-from: type=gha,scope=${{ matrix.image.name }}
           cache-to: type=gha,scope=${{ matrix.image.name }},mode=max
+          # Rebuild the runtime stage every time so its `apk upgrade` layer
+          # actually runs: a GHA-cached layer keeps the base image's packages
+          # until the base tag moves, so an Alpine security fix published
+          # between tag bumps never reaches the image (curl 8.23.0, 2026-10-27).
+          no-cache-filters: runtime
 
       - name: Trivy scan
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0

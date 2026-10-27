@@ -62,6 +62,9 @@ jobs:
           # verify step runs the binary on real hardware (no QEMU).
           cache-from: type=gha,scope=nightly-${{ matrix.image.name }}-${{ matrix.runner }}
           cache-to: type=gha,scope=nightly-${{ matrix.image.name }}-${{ matrix.runner }},mode=max
+          # Rebuild the runtime stage every time so its `apk upgrade` layer
+          # actually runs (see docker.yml for the cached-layer failure).
+          no-cache-filters: runtime
 
       - name: Verify image runs on this architecture
         id: verify
