@@ -13,7 +13,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   forgets a session, Marauder replaces it and asks the solver to destroy the
   old one in the background. Shutdown did not wait for that request, so a
   restart at the wrong moment could leave a ~300 MB browser running on the
-  solver. Shutdown now waits for it (Ref #234).
+  solver. A session still being created at shutdown leaked the same way.
+  Shutdown now waits for both, and destroys a session that is created
+  after it started (Ref #234).
 
 ### Security
 

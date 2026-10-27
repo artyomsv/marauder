@@ -646,6 +646,55 @@ func TestClose_WaitsForAnAbandonedSessionDestroy(t *testing.T) {
 	}
 }
 
+// A create still in flight when Close runs must not install its session after
+// Close: nothing would ever destroy it, and a later drop of it would start
+// new work while Close is already waiting. Close waits for the create, and
+// the late session is destroyed instead.
+func TestClose_DestroysASessionCreatedDuringClose(t *testing.T) {
+	f := newFakeSolver(t, func(w http.ResponseWriter, _, _ string) {
+		okSolution(w, 200, "<html></html>")
+	})
+	var once sync.Once
+	gate := f.gateCreate()
+	release := func() { once.Do(gate) }
+	t.Cleanup(release) // runs before the server's Close, which waits for handlers
+	rt := New(f.srv.URL, 30*time.Second)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		req, _ := http.NewRequest(http.MethodGet, "https://rutracker.org/forum/index.php", nil)
+		if resp, err := rt.RoundTrip(req); err == nil {
+			resp.Body.Close()
+		}
+	}()
+	// The fake records the create before it blocks on the gate.
+	for deadline := time.Now().Add(5 * time.Second); f.cmdCount("sessions.create") == 0; {
+		if time.Now().After(deadline) {
+			t.Fatal("sessions.create never reached the solver")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	if err := rt.Close(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Close with a create held = %v, want context.DeadlineExceeded", err)
+	}
+
+	release()
+	if err := rt.Close(context.Background()); err != nil {
+		t.Errorf("Close after the create finished = %v, want nil", err)
+	}
+	<-done
+	if got := f.destroyCount("sess-1"); got != 1 {
+		t.Errorf("sessions.destroy for the session created during Close = %d, want 1", got)
+	}
+	if got := f.cmdCount("sessions.create"); got != 1 {
+		t.Errorf("sessions.create calls = %d, want 1 — Close must not be followed by a new session", got)
+	}
+}
+
 // isSessionGone must require wording that means the session is ABSENT. A
 // message that merely mentions a session (capacity limits, "session already
 // exists", a crash naming the session) would otherwise discard a healthy
