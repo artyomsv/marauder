@@ -24,6 +24,37 @@ type fakeSolver struct {
 	destroyShould bool // when true, sessions.destroy answers 200 + status:error
 	createFails   bool // when true, sessions.create answers 200 + status:error
 	createGate    chan struct{}
+	destroyHold   map[string]chan struct{} // session -> gate; see holdDestroy
+}
+
+// holdDestroy makes sessions.destroy for session block until the returned
+// func is called, so a test can keep that destroy in flight. The request is
+// recorded before it blocks.
+func (f *fakeSolver) holdDestroy(session string) (release func()) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.destroyHold == nil {
+		f.destroyHold = map[string]chan struct{}{}
+	}
+	g := make(chan struct{})
+	f.destroyHold[session] = g
+	var once sync.Once
+	return func() { once.Do(func() { close(g) }) }
+}
+
+// destroyCount returns how many sessions.destroy calls named session.
+func (f *fakeSolver) destroyCount(session string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	n := 0
+	for _, b := range f.bodies {
+		c, _ := b["cmd"].(string)
+		s, _ := b["session"].(string)
+		if c == "sessions.destroy" && s == session {
+			n++
+		}
+	}
+	return n
 }
 
 // failCreate makes sessions.create return an envelope-level failure.
@@ -131,9 +162,13 @@ func newFakeSolver(t *testing.T, respond func(w http.ResponseWriter, cmd, url st
 			return
 		}
 		if cmd == "sessions.destroy" {
+			name, _ := body["session"].(string)
 			f.mu.Lock()
-			fail := f.destroyShould
+			fail, hold := f.destroyShould, f.destroyHold[name]
 			f.mu.Unlock()
+			if hold != nil {
+				<-hold // keep this destroy in flight until the test releases it
+			}
 			if fail {
 				// HTTP 200 with an envelope-level failure: FlareSolverr's
 				// actual shape for a command that did not succeed.
@@ -529,14 +564,13 @@ func TestRoundTrip_NegativeCachesCreateFailure(t *testing.T) {
 
 // --- abandoned sessions --------------------------------------------------
 
-// A replaced session must be destroyed, not merely forgotten. FlareSolverr
-// holds one Chrome per session and does not expire them unless
-// SESSION_TTL_MINUTES is set (it is not, in deploy/), so a forgotten session
-// strands roughly 300 MB until the container restarts.
-func TestRoundTrip_DestroysTheSessionItAbandons(t *testing.T) {
+// abandonSessionSolver answers the first request.get with a gone session and
+// every later one with a page, so one RoundTrip abandons "sess-1" and
+// continues on its replacement "sess-2".
+func abandonSessionSolver(t *testing.T) *fakeSolver {
+	t.Helper()
 	var f *fakeSolver
 	f = newFakeSolver(t, func(w http.ResponseWriter, _, _ string) {
-		// The first request.get reports a gone session; the retry succeeds.
 		// Counting via the fake's mutex-guarded request log avoids a second,
 		// unsynchronised counter written from handler goroutines.
 		if f.cmdCount("request.get") == 1 {
@@ -548,6 +582,46 @@ func TestRoundTrip_DestroysTheSessionItAbandons(t *testing.T) {
 		}
 		okSolution(w, 200, "<html>recovered</html>")
 	})
+	return f
+}
+
+// A replaced session must be destroyed, not merely forgotten. FlareSolverr
+// holds one Chrome per session and does not expire them unless
+// SESSION_TTL_MINUTES is set (it is not, in deploy/), so a forgotten session
+// strands roughly 300 MB until the container restarts.
+//
+// The destroy is detached from the request, so the test asserts after Close,
+// which joins it. Counting right after RoundTrip raced that goroutine.
+func TestRoundTrip_DestroysTheSessionItAbandons(t *testing.T) {
+	f := abandonSessionSolver(t)
+	rt := New(f.srv.URL, 30*time.Second)
+
+	req, _ := http.NewRequest(http.MethodGet, "https://rutracker.org/forum/index.php", nil)
+	resp, err := rt.RoundTrip(req)
+	if err != nil {
+		t.Fatalf("RoundTrip: %v", err)
+	}
+	resp.Body.Close()
+	if used := f.sessionsUsed(); len(used) != 2 || used[0] != "sess-1" {
+		t.Fatalf("sessions used = %v, want [sess-1 sess-2]", used)
+	}
+
+	if err := rt.Close(context.Background()); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if got := f.destroyCount("sess-1"); got != 1 {
+		t.Errorf("sessions.destroy for the abandoned session = %d, want 1 — it leaks a browser otherwise", got)
+	}
+}
+
+// Close runs at shutdown, and the process exits right after it. A destroy of
+// an abandoned session still in flight then dies with the process, and its
+// browser leaks. Close must wait for it, and say so when its own deadline
+// ends first.
+func TestClose_WaitsForAnAbandonedSessionDestroy(t *testing.T) {
+	f := abandonSessionSolver(t)
+	release := f.holdDestroy("sess-1")
+	t.Cleanup(release) // runs before the server's Close, which waits for handlers
 	rt := New(f.srv.URL, 30*time.Second)
 
 	req, _ := http.NewRequest(http.MethodGet, "https://rutracker.org/forum/index.php", nil)
@@ -557,8 +631,18 @@ func TestRoundTrip_DestroysTheSessionItAbandons(t *testing.T) {
 	}
 	resp.Body.Close()
 
-	if got := f.cmdCount("sessions.destroy"); got != 1 {
-		t.Errorf("sessions.destroy calls = %d, want 1 — the abandoned session leaks a browser otherwise", got)
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	if err := rt.Close(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Close with the destroy held = %v, want context.DeadlineExceeded", err)
+	}
+
+	release()
+	if err := rt.Close(context.Background()); err != nil {
+		t.Errorf("Close after the destroy finished = %v, want nil", err)
+	}
+	if got := f.destroyCount("sess-1"); got != 1 {
+		t.Errorf("sessions.destroy for the abandoned session = %d, want 1", got)
 	}
 }
 

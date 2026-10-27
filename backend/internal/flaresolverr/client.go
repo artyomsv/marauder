@@ -127,6 +127,12 @@ type Transport struct {
 	// host-bound: a rutracker.org cookie is rejected on rutracker.net.
 	clearances map[string]*clearanceEntry
 
+	// detached counts the best-effort destroys dropSession started, so Close
+	// can wait for them. Without that, shutdown kills an in-flight destroy and
+	// the abandoned browser leaks — the orphan Close exists to prevent. Add is
+	// called under mu, which orders it before Close's Wait.
+	detached sync.WaitGroup
+
 	// sem is a one-slot semaphore serialising session creation.
 	sem chan struct{}
 	// now is a clock seam for the negative-cache cooldown.
@@ -266,12 +272,14 @@ func (t *Transport) dropSession(name string) {
 	stale := t.session == name
 	if stale {
 		t.session = ""
+		t.detached.Add(1)
 	}
 	t.mu.Unlock()
 	if !stale {
 		return
 	}
 	go func() {
+		defer t.detached.Done()
 		ctx, cancel := context.WithTimeout(context.Background(), sessionDestroyTimeout)
 		defer cancel()
 		var sr sessionResponse
@@ -281,7 +289,9 @@ func (t *Transport) dropSession(name string) {
 }
 
 // Close destroys the shared session so a restart does not leave an orphaned
-// browser behind on the solver. Safe to call on an unconfigured transport.
+// browser behind on the solver, and waits (bounded by ctx) for any destroy of
+// an abandoned session that is still in flight. Safe to call on an
+// unconfigured transport.
 func (t *Transport) Close(ctx context.Context) error {
 	if t == nil || t.URL == "" {
 		return nil
@@ -291,11 +301,30 @@ func (t *Transport) Close(ctx context.Context) error {
 	t.session = ""
 	t.closed = true
 	t.mu.Unlock()
-	if name == "" {
-		return nil
+	var err error
+	if name != "" {
+		var sr sessionResponse
+		err = t.command(ctx, sessionRequest{Cmd: "sessions.destroy", Session: name}, &sr)
 	}
-	var sr sessionResponse
-	return t.command(ctx, sessionRequest{Cmd: "sessions.destroy", Session: name}, &sr)
+	return errors.Join(err, t.waitDetached(ctx))
+}
+
+// waitDetached blocks until every destroy started by dropSession has
+// finished, or ctx ends. After Close no new one can start: Close cleared the
+// session and closed forbids minting another, so dropSession finds nothing
+// stale.
+func (t *Transport) waitDetached(ctx context.Context) error {
+	done := make(chan struct{})
+	go func() {
+		t.detached.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("flaresolverr: waiting for abandoned session destroys: %w", ctx.Err())
+	}
 }
 
 // isSessionGone reports whether err says our session is ABSENT — the one state

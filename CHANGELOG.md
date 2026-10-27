@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **FlareSolverr browsers no longer leak at shutdown.** When the solver
+  forgets a session, Marauder replaces it and asks the solver to destroy the
+  old one in the background. Shutdown did not wait for that request, so a
+  restart at the wrong moment could leave a ~300 MB browser running on the
+  solver. Shutdown now waits for it (Ref #234).
+
 ## [1.27.0] - 2026-10-26
 
 ### Added
