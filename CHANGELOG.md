@@ -15,6 +15,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   restart at the wrong moment could leave a ~300 MB browser running on the
   solver. Shutdown now waits for it (Ref #234).
 
+### Security
+
+- **chi router updated to 5.5.0** for CVE-2026-114437 (GHSA-j6qf-3m9c-vwj3,
+  medium). The flaw is in chi's `ClientIPFrom*` middleware, which Marauder
+  does not use, but the vulnerable module was in the image (#231).
+
 ## [1.27.0] - 2026-10-26
 
 ### Added
