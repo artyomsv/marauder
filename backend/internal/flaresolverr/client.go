@@ -127,6 +127,16 @@ type Transport struct {
 	// host-bound: a rutracker.org cookie is rejected on rutracker.net.
 	clearances map[string]*clearanceEntry
 
+	// inflight counts the work that can leave a browser on the solver: a
+	// sessions.create and the detached destroy of an abandoned session. Close
+	// waits for it to drain, because the process exits right after Close and
+	// would otherwise kill that work mid-flight — the orphan Close exists to
+	// prevent. idle is closed when inflight drops to zero. Nothing can start
+	// once closed is set: a create refuses, and dropSession finds no session
+	// to abandon because a create that ends after Close does not install one.
+	inflight int
+	idle     chan struct{}
+
 	// sem is a one-slot semaphore serialising session creation.
 	sem chan struct{}
 	// now is a clock seam for the negative-cache cooldown.
@@ -204,6 +214,14 @@ func (t *Transport) ensureSession(ctx context.Context) (string, error) {
 	if s, err, ready := t.cachedSession(); ready {
 		return s, err
 	}
+	t.mu.Lock()
+	if t.closed {
+		t.mu.Unlock()
+		return "", ErrClosed
+	}
+	t.beginLocked()
+	t.mu.Unlock()
+	defer t.end()
 
 	var sr sessionResponse
 	// FlareSolverr names the session: several Marauder instances may share one
@@ -217,16 +235,55 @@ func (t *Transport) ensureSession(ctx context.Context) (string, error) {
 	}
 
 	t.mu.Lock()
-	defer t.mu.Unlock()
 	if err != nil {
 		t.nextCreateAttempt = t.now().Add(createFailureCooldown)
+		t.mu.Unlock()
 		metrics.FlareSolverrSessionsTotal.WithLabelValues("error").Inc()
 		return "", err
 	}
+	if t.closed {
+		// Close ran while the create was in flight. Installing the session
+		// would leave a browser nothing destroys, so destroy it here; Close
+		// is waiting for this create to finish.
+		t.mu.Unlock()
+		t.destroyDetached(sr.Session)
+		return "", ErrClosed
+	}
 	t.session = sr.Session
 	t.nextCreateAttempt = time.Time{}
+	t.mu.Unlock()
 	metrics.FlareSolverrSessionsTotal.WithLabelValues("created").Inc()
-	return t.session, nil
+	return sr.Session, nil
+}
+
+// beginLocked records one more unit of inflight work. The caller holds mu.
+func (t *Transport) beginLocked() {
+	if t.inflight == 0 {
+		t.idle = make(chan struct{})
+	}
+	t.inflight++
+}
+
+// end records that one unit of inflight work finished.
+func (t *Transport) end() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.inflight--
+	if t.inflight == 0 {
+		close(t.idle)
+		t.idle = nil
+	}
+}
+
+// destroyDetached asks the solver to destroy name on its own deadline. The
+// caller's context may already be cancelled, and the destroy must not depend
+// on it. It is best-effort: it legitimately fails when the session is
+// already gone.
+func (t *Transport) destroyDetached(name string) {
+	ctx, cancel := context.WithTimeout(context.Background(), sessionDestroyTimeout)
+	defer cancel()
+	var sr sessionResponse
+	_ = t.command(ctx, sessionRequest{Cmd: "sessions.destroy", Session: name}, &sr)
 }
 
 // cachedSession reports the session state without any network call. ready is
@@ -266,22 +323,23 @@ func (t *Transport) dropSession(name string) {
 	stale := t.session == name
 	if stale {
 		t.session = ""
+		t.beginLocked()
 	}
 	t.mu.Unlock()
 	if !stale {
 		return
 	}
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), sessionDestroyTimeout)
-		defer cancel()
-		var sr sessionResponse
-		_ = t.command(ctx, sessionRequest{Cmd: "sessions.destroy", Session: name}, &sr)
+		defer t.end()
+		t.destroyDetached(name)
 		metrics.FlareSolverrSessionsTotal.WithLabelValues("replaced").Inc()
 	}()
 }
 
 // Close destroys the shared session so a restart does not leave an orphaned
-// browser behind on the solver. Safe to call on an unconfigured transport.
+// browser behind on the solver, and waits (bounded by ctx) for the inflight
+// work that could still leave one: a create, or the destroy of an abandoned
+// session. Safe to call on an unconfigured transport.
 func (t *Transport) Close(ctx context.Context) error {
 	if t == nil || t.URL == "" {
 		return nil
@@ -290,12 +348,23 @@ func (t *Transport) Close(ctx context.Context) error {
 	name := t.session
 	t.session = ""
 	t.closed = true
+	// No inflight work can start after this point (see inflight), so one
+	// snapshot of idle, taken with closed set, covers everything to wait for.
+	idle := t.idle
 	t.mu.Unlock()
-	if name == "" {
-		return nil
+	var err error
+	if name != "" {
+		var sr sessionResponse
+		err = t.command(ctx, sessionRequest{Cmd: "sessions.destroy", Session: name}, &sr)
 	}
-	var sr sessionResponse
-	return t.command(ctx, sessionRequest{Cmd: "sessions.destroy", Session: name}, &sr)
+	if idle != nil {
+		select {
+		case <-idle:
+		case <-ctx.Done():
+			err = errors.Join(err, fmt.Errorf("flaresolverr: waiting for inflight session work: %w", ctx.Err()))
+		}
+	}
+	return err
 }
 
 // isSessionGone reports whether err says our session is ABSENT — the one state
