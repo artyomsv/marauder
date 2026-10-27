@@ -32,7 +32,7 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH:-amd64} \
     -o /out/marauder ./cmd/server
 
 # --- Runtime stage ------------------------------------------------------
-FROM alpine:3.24
+FROM alpine:3.24 AS runtime
 
 # `apk upgrade` first: the alpine:3.24 tag lags the v3.24 package repo, so the
 # base image can ship a libssl3/libcrypto3 (or anything else) with an open CVE

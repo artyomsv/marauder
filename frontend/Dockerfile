@@ -21,7 +21,10 @@ FROM nginx:1.31-alpine AS runtime
 # libexpat only, so each new base-package CVE (libuuid was next) needed its
 # own edit while the fix already sat in the repo. nginx serving static assets
 # reaches none of these libraries, but Trivy scans the image, not nginx.
-RUN apk upgrade --no-cache
+# curl ships in nginx:alpine but nothing here uses it (the healthcheck is
+# busybox wget), and it is where every one of the 2026-10-27 CVEs lived.
+RUN apk upgrade --no-cache \
+ && apk del curl
 
 # Drop nginx default config and supply our own
 COPY nginx/default.conf /etc/nginx/conf.d/default.conf

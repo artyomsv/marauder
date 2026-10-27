@@ -100,6 +100,9 @@ jobs:
           sbom: true
           cache-from: type=gha,scope=release-${{ matrix.image.name }}
           cache-to: type=gha,scope=release-${{ matrix.image.name }},mode=max
+          # Rebuild the runtime stage every time so its `apk upgrade` layer
+          # actually runs (see docker.yml for the cached-layer failure).
+          no-cache-filters: runtime
 
       # Verify every published platform contains a binary of the matching
       # architecture (issue #74: the arm64 manifest shipped an amd64 binary
