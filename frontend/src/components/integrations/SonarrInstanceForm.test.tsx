@@ -178,4 +178,13 @@ describe("Sonarr replace defaults", () => {
     expect(screen.getAllByRole("option", { name: "Use global default" })).toHaveLength(2);
     expect(screen.queryByRole("option", { name: /currently/ })).not.toBeInTheDocument();
   });
+
+  it("keeps delete-data selectable when the global default cannot be read", async () => {
+    mockApi.getSettings.mockRejectedValue(new Error("settings down"));
+    wrap(<SonarrInstanceForm initial={null} clients={[]} trackers={[]} onDone={() => {}} onCancel={() => {}} />);
+    const deleteData = screen.getByRole("combobox", { name: /delete the old files by default/i });
+    await waitFor(() => expect(mockApi.getSettings).toHaveBeenCalled());
+    expect(deleteData).toHaveValue("inherit");
+    expect(deleteData).not.toBeDisabled();
+  });
 });

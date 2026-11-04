@@ -1,12 +1,15 @@
 package handlers
 
 import (
+	"bytes"
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/rs/zerolog"
 
 	"github.com/artyomsv/marauder/backend/internal/db/repo"
 )
@@ -16,7 +19,7 @@ func TestTopics_Create_ReplaceDefaults(t *testing.T) {
 		name                        string
 		globalReplace, globalDelete bool
 		replace, deleteData         *bool
-		onlyNew                     bool
+		onlyNew, notifyOnly         bool
 		folder                      string
 		settingsErr, noSettings     bool
 		wantReplace, wantDelete     bool
@@ -31,6 +34,8 @@ func TestTopics_Create_ReplaceDefaults(t *testing.T) {
 		{name: "explicit unsafe true rejected", globalReplace: true, deleteData: boolPtr(true), onlyNew: true, wantStatus: http.StatusUnprocessableEntity},
 		{name: "failed settings", globalReplace: true, settingsErr: true, wantDelete: true},
 		{name: "no settings", noSettings: true, wantDelete: true},
+		{name: "notify-only does not inherit replace", globalReplace: true, globalDelete: true, notifyOnly: true, wantDelete: true},
+		{name: "notify-only keeps explicit replace", globalDelete: true, notifyOnly: true, replace: boolPtr(true), wantReplace: true, wantDelete: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			settings := &fakeSettingsStore{value: repo.InstanceSettings{
@@ -41,15 +46,19 @@ func TestTopics_Create_ReplaceDefaults(t *testing.T) {
 				settings.err = errors.New("db down")
 			}
 			store := &fakeTopicStore{}
-			h := &Topics{Topics: store, Settings: settings, BaseURL: "http://test"}
+			var logs bytes.Buffer
+			h := &Topics{Topics: store, Settings: settings, BaseURL: "http://test", Log: zerolog.New(&logs)}
 			if tc.noSettings {
 				h.Settings = nil
 			}
 			w := httptest.NewRecorder()
 			h.Create(w, authedReq(t, uuid.New(), createTopicReq{
 				URL: "fake-create://topic/defaults", ReplaceOnUpdate: tc.replace, ReplaceDeleteData: tc.deleteData,
-				OnlyNewFiles: tc.onlyNew, FolderNameMode: tc.folder,
+				OnlyNewFiles: tc.onlyNew, NotifyOnly: tc.notifyOnly, FolderNameMode: tc.folder,
 			}))
+			if logged := strings.Contains(logs.String(), "settings read failed"); logged != tc.settingsErr {
+				t.Errorf("settings failure logged = %v, want %v: %s", logged, tc.settingsErr, logs.String())
+			}
 			status := tc.wantStatus
 			if status == 0 {
 				status = http.StatusCreated

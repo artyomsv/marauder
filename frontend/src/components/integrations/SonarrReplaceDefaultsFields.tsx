@@ -24,8 +24,10 @@ export function SonarrReplaceDefaultsFields({
     queryKey: QK.settings,
     queryFn: () => api.getSettings(),
   });
-  const effectiveReplace =
-    replace ?? settings.data?.default_replace_on_update ?? false;
+  // Undefined while the global default is unknown (loading or unreadable).
+  // Only a known "off" disables delete-data: an unreadable setting must not
+  // lock the admin out of choosing an override.
+  const effectiveReplace = replace ?? settings.data?.default_replace_on_update;
   return (
     <>
       <DefaultSelect
@@ -38,7 +40,7 @@ export function SonarrReplaceDefaultsFields({
         label={t("settings.sonarr.defaultReplaceDeleteData")}
         value={deleteData}
         globalValue={settings.data?.default_replace_delete_data}
-        disabled={!effectiveReplace}
+        disabled={effectiveReplace === false}
         onChange={onDeleteDataChange}
       />
     </>

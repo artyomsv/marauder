@@ -48,6 +48,10 @@ kept folder name forces the inherited delete-data value off. An explicit
 delete-data **on** with replace **on** and either of those options is still
 rejected. The form shows the delete checkbox locked off for these combinations.
 
+A new **notify-only** topic never inherits replace **on**: it downloads
+nothing, and the form hides the replace option for it. An explicit
+`replace_on_update` in the API request is still stored as sent.
+
 ## Behaviour
 
 - **Built-in behaviour is unchanged.** Without configured defaults, new topics

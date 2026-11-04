@@ -12,6 +12,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/rs/zerolog"
 
 	"github.com/artyomsv/marauder/backend/internal/api/middleware"
 	"github.com/artyomsv/marauder/backend/internal/audit"
@@ -98,6 +99,9 @@ type Topics struct {
 	// when its creator sends no explicit choice. Nil-safe: without it a
 	// create falls back to the built-in defaults.
 	Settings settingsStore
+	// Log reports a settings read failure during create. The zero value
+	// discards, so tests need not set it.
+	Log zerolog.Logger
 
 	// resetInFlight gates POST /topics/{id}/reset to one running reset per
 	// topic (topicID -> struct{}). Deliberately keyed by topic, not by user:
@@ -213,7 +217,9 @@ func (h *Topics) Create(w http.ResponseWriter, r *http.Request) {
 			c, _, _ := warmCredentials(cctx, h.Creds, h.Master, uid, t)
 			return c
 		},
-		ReplaceOnUpdate:           topics.Resolve(req.ReplaceOnUpdate, defaults.DefaultReplaceOnUpdate),
+		// A notify-only topic delivers nothing and the form hides the replace
+		// block for it, so it never inherits a policy nobody saw.
+		ReplaceOnUpdate:           topics.Resolve(req.ReplaceOnUpdate, defaults.DefaultReplaceOnUpdate && !req.NotifyOnly),
 		ReplaceDeleteData:         req.ReplaceDeleteData,
 		DefaultReplaceDeleteData:  &defaults.DefaultReplaceDeleteData,
 		NotifyOnly:                req.NotifyOnly,
@@ -494,9 +500,11 @@ func folderPolicyFromRequest(existing *domain.Topic, mode, name *string) (*repo.
 // settings are unavailable; a missing default must never prevent an add.
 func (h *Topics) topicDefaults(ctx context.Context) repo.InstanceSettings {
 	if h.Settings != nil {
-		if s, err := h.Settings.Get(ctx); err == nil {
+		s, err := h.Settings.Get(ctx)
+		if err == nil {
 			return *s
 		}
+		h.Log.Warn().Err(err).Msg("settings read failed; using built-in follow-title and replace defaults")
 	}
 	return repo.InstanceSettings{
 		DefaultReplaceOnUpdate:   topics.BuiltinReplaceDefaults.ReplaceOnUpdate,

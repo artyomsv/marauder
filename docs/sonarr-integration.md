@@ -80,7 +80,7 @@ Each instance has these fields:
 | **Allowed trackers** | Optional allow-list of tracker plugins to auto-import. Leave all unchecked to allow every supported tracker. |
 | **Default client / category / download dir** | Applied to every topic this instance auto-creates. Point these at the **same** qBittorrent + category this Sonarr imports from (e.g. `tv-sonarr`) so Sonarr keeps importing Marauder's future downloads. |
 | **Replace previous version by default** | `default_replace_on_update`: **Use global default** (`null`), **On**, or **Off** for newly created topics. |
-| **Delete the old files by default** | `default_replace_delete_data`: independently inherits the global default (`null`) or overrides it with **On** / **Off**. Disabled in the form when the effective replace setting is off. |
+| **Delete the old files by default** | `default_replace_delete_data`: independently inherits the global default (`null`) or overrides it with **On** / **Off**. Disabled in the form when the effective replace setting is known to be off; stays selectable if the global default cannot be read. Both values are shown on the instance card. |
 
 The two replace defaults apply only at topic creation: each instance override
 wins over **Settings → Topic defaults**, with built-in replace **off** / delete

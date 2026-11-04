@@ -216,6 +216,34 @@ describe("seeded replace policy", () => {
     expect(screen.getByLabelText(/also delete the old files/i)).toBeDisabled();
   });
 
+  // Issue #239: the replace block is hidden for notify-only topics, so a new
+  // one must not store the seeded default; an edited one keeps what it had.
+  it.each([
+    ["add", false],
+    ["edit", true],
+  ] as const)("submits a notify-only topic in %s mode with replaceOnUpdate %s", async (mode, want) => {
+    const onSubmit = vi.fn();
+    render(
+      <TopicForm
+        mode={mode}
+        initial={{ ...STORED, onlyNewFiles: false, replaceOnUpdate: true }}
+        submitLabel="Save"
+        heading="Topic"
+        isPending={false}
+        error={null}
+        onClose={() => {}}
+        onSubmit={onSubmit}
+      />,
+      { wrapper: wrap() },
+    );
+
+    await userEvent.click(await screen.findByLabelText(/notify only — do not download/i));
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(onSubmit.mock.calls[0][0]).toMatchObject({ notifyOnly: true, replaceOnUpdate: want });
+  });
+
   it("does not re-seed an existing topic when the initial defaults change", () => {
     const props = { mode: "edit" as const, submitLabel: "Save", heading: "Edit topic", isPending: false,
       error: null, onClose: () => {}, onSubmit: () => {} };

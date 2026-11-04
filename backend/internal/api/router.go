@@ -108,6 +108,7 @@ func NewRouter(d Deps) http.Handler {
 		Settings:   d.Settings,
 		BaseURL:    d.Cfg.PublicBaseURL,
 		Emit:       d.Emit,
+		Log:        d.Log,
 	}
 	topicEventsH := &handlers.TopicEvents{
 		Events:  d.TopicEvents,

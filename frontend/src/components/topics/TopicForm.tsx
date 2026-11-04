@@ -370,7 +370,10 @@ export function TopicForm({
       notifierId: delivery.notifierId,
       downloadDir: delivery.downloadDir,
       category: delivery.category,
-      replaceOnUpdate: !episodic && delivery.replaceOnUpdate,
+      // Hidden for per-episode trackers and notify-only topics. A new
+      // notify-only topic must not store a seeded default nobody saw; an
+      // edited one keeps the stored value the user saw before switching.
+      replaceOnUpdate: !episodic && !(delivery.notifyOnly && !isEdit) && delivery.replaceOnUpdate,
       replaceDeleteData: delivery.replaceDeleteData && !delivery.onlyNewFiles && !folderNameSet,
       notifyOnly: delivery.notifyOnly,
       notifyOnlyAnnounceCurrent: delivery.notifyOnlyAnnounceCurrent,

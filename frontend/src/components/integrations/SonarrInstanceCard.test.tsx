@@ -67,6 +67,21 @@ describe("SonarrInstanceCard", () => {
     expect(body.api_key).toBe(""); // stored key preserved
   });
 
+  it("shows the replace overrides, with null as the global default", () => {
+    wrap(
+      <SonarrInstanceCard
+        instance={{ ...inst, default_replace_delete_data: null }}
+        clients={[]}
+        trackers={[]}
+      />,
+    );
+
+    expect(screen.getByText("Replace previous version by default").nextElementSibling).toHaveTextContent("On");
+    expect(screen.getByText("Delete the old files by default").nextElementSibling).toHaveTextContent(
+      "Use global default",
+    );
+  });
+
   it("deletes after the inline confirm", async () => {
     mockApi.deleteSonarrInstance.mockResolvedValue(undefined);
     wrap(<SonarrInstanceCard instance={inst} clients={[]} trackers={[]} />);
