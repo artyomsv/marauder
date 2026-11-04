@@ -215,6 +215,14 @@ const ru: Record<string, string> = {
   "settings.sonarr.actions.enable": "Включить",
   "settings.sonarr.actions.disable": "Выключить",
   // Значения по умолчанию для новых тем (для всего экземпляра, только админ).
+  "common.on": "Вкл.",
+  "common.off": "Выкл.",
+  "settings.sonarr.defaultReplaceOnUpdate": "Заменять предыдущую версию по умолчанию",
+  "settings.sonarr.defaultReplaceDeleteData": "Удалять старые файлы по умолчанию",
+  "settings.sonarr.useGlobalDefault": "Использовать общую настройку",
+  "settings.sonarr.useGlobalDefaultCurrent": "Использовать общую настройку (сейчас: {value})",
+  "settings.topicDefaults.replaceHelp": "Новые темы заменяют предыдущий торрент при обновлении. В каждой теме это можно переопределить.",
+  "settings.topicDefaults.deleteDataHelp": "Для сезонных сборников Sonarr, использующих ту же папку, отключите удаление, чтобы новый торрент использовал уже скачанные файлы.",
   "settings.topicDefaults.title": "Настройки тем по умолчанию",
   "settings.topicDefaults.blurb":
     "С чем создаются новые темы. Существующие темы сохраняют свои настройки.",

@@ -349,9 +349,12 @@ type SonarrInstance struct {
 	DefaultClientID    *uuid.UUID
 	DefaultCategory    string
 	DefaultDownloadDir string
-	UpdateExisting     bool
-	OwnerUserID        *uuid.UUID
-	LastSeenAt         *time.Time // history-poll cursor
-	CreatedAt          time.Time
-	UpdatedAt          time.Time
+	// Nil replace defaults inherit the instance-wide default, independently.
+	DefaultReplaceOnUpdate   *bool
+	DefaultReplaceDeleteData *bool
+	UpdateExisting           bool
+	OwnerUserID              *uuid.UUID
+	LastSeenAt               *time.Time // history-poll cursor
+	CreatedAt                time.Time
+	UpdatedAt                time.Time
 }

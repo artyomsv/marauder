@@ -701,7 +701,7 @@ func TestTopicsCreate_OnlyNewFiles_DefaultsToKeepData(t *testing.T) {
 	store := &fakeTopicStore{}
 	h := &Topics{Topics: store, BaseURL: "http://test"}
 
-	body := createTopicReq{URL: "fake-create://topic/only-new", ReplaceOnUpdate: true, OnlyNewFiles: true, AddPausedOnUpdate: true}
+	body := createTopicReq{URL: "fake-create://topic/only-new", ReplaceOnUpdate: boolPtr(true), OnlyNewFiles: true, AddPausedOnUpdate: true}
 	w := httptest.NewRecorder()
 	h.Create(w, authedReq(t, uuid.New(), body))
 
@@ -720,7 +720,7 @@ func TestTopicsCreate_OnlyNewFilesWithDeleteData_Rejected(t *testing.T) {
 	store := &fakeTopicStore{}
 	h := &Topics{Topics: store, BaseURL: "http://test"}
 
-	body := createTopicReq{URL: "fake-create://topic/lossy", ReplaceOnUpdate: true, ReplaceDeleteData: boolPtr(true), OnlyNewFiles: true}
+	body := createTopicReq{URL: "fake-create://topic/lossy", ReplaceOnUpdate: boolPtr(true), ReplaceDeleteData: boolPtr(true), OnlyNewFiles: true}
 	w := httptest.NewRecorder()
 	h.Create(w, authedReq(t, uuid.New(), body))
 

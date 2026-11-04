@@ -79,6 +79,19 @@ Each instance has these fields:
 | **Poll interval** | How often to check this Sonarr's grab history (minimum 60s). |
 | **Allowed trackers** | Optional allow-list of tracker plugins to auto-import. Leave all unchecked to allow every supported tracker. |
 | **Default client / category / download dir** | Applied to every topic this instance auto-creates. Point these at the **same** qBittorrent + category this Sonarr imports from (e.g. `tv-sonarr`) so Sonarr keeps importing Marauder's future downloads. |
+| **Replace previous version by default** | `default_replace_on_update`: **Use global default** (`null`), **On**, or **Off** for newly created topics. |
+| **Delete the old files by default** | `default_replace_delete_data`: independently inherits the global default (`null`) or overrides it with **On** / **Off**. Disabled in the form when the effective replace setting is off. |
+
+The two replace defaults apply only at topic creation: each instance override
+wins over **Settings → Topic defaults**, with built-in replace **off** / delete
+data **on** if settings cannot be read. Existing topics retain their policy,
+even with **Realign existing topics to these defaults** enabled; that option
+only realigns the client, category, and directory. Enabling or disabling an
+instance preserves its overrides.
+
+For growing season packs that reuse the same folder, set replace **On** and
+delete files **Off**, so the new torrent can reuse the downloaded episodes.
+See [Replace previous version on update](replace-on-update.md#defaults-for-new-topics).
 
 Each instance lives as its own row in the database (encrypted API key) and is
 editable at runtime — no restart, no env vars. Changes take effect on the next

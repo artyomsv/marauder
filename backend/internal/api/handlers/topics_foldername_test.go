@@ -19,7 +19,7 @@ func TestTopicsCreate_FolderName_Stored(t *testing.T) {
 	store := &fakeTopicStore{}
 	h := &Topics{Topics: store, BaseURL: "http://test"}
 
-	body := createTopicReq{URL: "fake-create://topic/folder", ReplaceOnUpdate: true, FolderNameMode: "custom", FolderName: " My Show "}
+	body := createTopicReq{URL: "fake-create://topic/folder", ReplaceOnUpdate: boolPtr(true), FolderNameMode: "custom", FolderName: " My Show "}
 	w := httptest.NewRecorder()
 	h.Create(w, authedReq(t, uuid.New(), body))
 
@@ -54,7 +54,7 @@ func TestTopicsCreate_FolderNameWithDeleteData_422(t *testing.T) {
 	store := &fakeTopicStore{}
 	h := &Topics{Topics: store, BaseURL: "http://test"}
 
-	body := createTopicReq{URL: "fake-create://topic/folder-delete", ReplaceOnUpdate: true, ReplaceDeleteData: boolPtr(true), FolderNameMode: "keep"}
+	body := createTopicReq{URL: "fake-create://topic/folder-delete", ReplaceOnUpdate: boolPtr(true), ReplaceDeleteData: boolPtr(true), FolderNameMode: "keep"}
 	w := httptest.NewRecorder()
 	h.Create(w, authedReq(t, uuid.New(), body))
 

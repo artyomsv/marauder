@@ -20,6 +20,8 @@ vi.mock("@/lib/api", async () => {
         default_client_id: null,
         default_category: "",
         default_download_dir: "",
+        default_replace_on_update: null,
+        default_replace_delete_data: null,
         update_existing: false,
         last_seen_at: null,
       }),

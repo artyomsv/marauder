@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -25,6 +26,55 @@ type fakeSonarrInstances struct {
 	created *domain.SonarrInstance
 	updated *domain.SonarrInstance
 	deleted *uuid.UUID
+}
+
+func TestSonarr_ReplaceDefaultOverridesRoundTrip(t *testing.T) {
+	on, off := true, false
+	for _, replace := range []*bool{nil, &on, &off} {
+		for _, deleteData := range []*bool{nil, &on, &off} {
+			store := &fakeSonarrInstances{}
+			h := &Sonarr{Instances: store, BaseURL: "http://test"}
+			body := instanceReq{Name: "TEST-instance", DefaultReplaceOnUpdate: replace, DefaultReplaceDeleteData: deleteData}
+			for _, update := range []bool{false, true} {
+				w := httptest.NewRecorder()
+				req := authedReq(t, uuid.New(), body)
+				status := http.StatusCreated
+				if update {
+					h.Update(w, withURLParam(req, "id", uuid.NewString()))
+					status = http.StatusOK
+				} else {
+					h.Create(w, req)
+				}
+				if w.Code != status {
+					t.Fatalf("status = %d: %s", w.Code, w.Body.String())
+				}
+				stored := store.created
+				if update {
+					stored = store.updated
+				}
+				if !reflect.DeepEqual(stored.DefaultReplaceOnUpdate, replace) || !reflect.DeepEqual(stored.DefaultReplaceDeleteData, deleteData) {
+					t.Fatalf("stored overrides = %+v", stored)
+				}
+				var view map[string]json.RawMessage
+				if err := json.Unmarshal(w.Body.Bytes(), &view); err != nil {
+					t.Fatal(err)
+				}
+				for key, want := range map[string]*bool{"default_replace_on_update": replace, "default_replace_delete_data": deleteData} {
+					value, present := view[key]
+					if !present {
+						t.Fatalf("response omitted %s", key)
+					}
+					encoded, err := json.Marshal(want)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if string(value) != string(encoded) {
+						t.Errorf("%s = %s, want %s", key, value, encoded)
+					}
+				}
+			}
+		}
+	}
 }
 
 func (f *fakeSonarrInstances) List(context.Context, *crypto.MasterKey) ([]domain.SonarrInstance, error) {

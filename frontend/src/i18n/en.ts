@@ -218,6 +218,14 @@ const en: Record<string, string> = {
   "settings.sonarr.actions.disable": "Disable",
   // Topic defaults (instance-wide, admin only): what a new topic starts with
   // when its creator sends no explicit choice.
+  "common.on": "On",
+  "common.off": "Off",
+  "settings.sonarr.defaultReplaceOnUpdate": "Replace previous version by default",
+  "settings.sonarr.defaultReplaceDeleteData": "Delete the old files by default",
+  "settings.sonarr.useGlobalDefault": "Use global default",
+  "settings.sonarr.useGlobalDefaultCurrent": "Use global default (currently: {value})",
+  "settings.topicDefaults.replaceHelp": "New topics replace the previous torrent when an update arrives. Each topic can override this.",
+  "settings.topicDefaults.deleteDataHelp": "For Sonarr season packs that reuse the same folder, turn this off to keep the files for the new torrent.",
   "settings.topicDefaults.title": "Topic defaults",
   "settings.topicDefaults.blurb":
     "What new topics are created with. Existing topics keep their own setting.",

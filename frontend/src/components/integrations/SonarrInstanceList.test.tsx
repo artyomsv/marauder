@@ -37,6 +37,8 @@ const inst = {
   default_client_id: null,
   default_category: "tv-sonarr",
   default_download_dir: "",
+  default_replace_on_update: null,
+  default_replace_delete_data: null,
   update_existing: false,
   last_seen_at: null,
   created_at: "2026-06-27T00:00:00Z",

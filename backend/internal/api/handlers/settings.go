@@ -13,7 +13,7 @@ import (
 // settingsStore is the consumer seam over *repo.Settings.
 type settingsStore interface {
 	Get(ctx context.Context) (*repo.InstanceSettings, error)
-	SetDefaultFollowTrackerTitle(ctx context.Context, v bool) error
+	Update(ctx context.Context, patch repo.SettingsPatch) (*repo.InstanceSettings, error)
 }
 
 // Settings is the handler group for the instance-wide defaults at
@@ -30,6 +30,16 @@ type Settings struct {
 
 type settingsView struct {
 	DefaultFollowTrackerTitle bool `json:"default_follow_tracker_title"`
+	DefaultReplaceOnUpdate    bool `json:"default_replace_on_update"`
+	DefaultReplaceDeleteData  bool `json:"default_replace_delete_data"`
+}
+
+func toSettingsView(s *repo.InstanceSettings) settingsView {
+	return settingsView{
+		DefaultFollowTrackerTitle: s.DefaultFollowTrackerTitle,
+		DefaultReplaceOnUpdate:    s.DefaultReplaceOnUpdate,
+		DefaultReplaceDeleteData:  s.DefaultReplaceDeleteData,
+	}
 }
 
 // Get handles GET /system/settings.
@@ -39,13 +49,15 @@ func (h *Settings) Get(w http.ResponseWriter, r *http.Request) {
 		problem.Write(w, r, h.BaseURL, problem.ErrInternal("settings: "+err.Error()))
 		return
 	}
-	writeJSON(w, http.StatusOK, settingsView{DefaultFollowTrackerTitle: s.DefaultFollowTrackerTitle})
+	writeJSON(w, http.StatusOK, toSettingsView(s))
 }
 
 type updateSettingsReq struct {
 	// Pointer so an omitted field preserves the stored value, matching the
 	// other settings-bearing endpoints.
 	DefaultFollowTrackerTitle *bool `json:"default_follow_tracker_title,omitempty"`
+	DefaultReplaceOnUpdate    *bool `json:"default_replace_on_update,omitempty"`
+	DefaultReplaceDeleteData  *bool `json:"default_replace_delete_data,omitempty"`
 }
 
 // Update handles PUT /system/settings (admin only).
@@ -60,17 +72,35 @@ func (h *Settings) Update(w http.ResponseWriter, r *http.Request) {
 		problem.Write(w, r, h.BaseURL, problem.ErrBadRequest("invalid JSON"))
 		return
 	}
-	if req.DefaultFollowTrackerTitle == nil {
+	if req.DefaultFollowTrackerTitle == nil && req.DefaultReplaceOnUpdate == nil && req.DefaultReplaceDeleteData == nil {
 		problem.Write(w, r, h.BaseURL, problem.ErrBadRequest("no settings to update"))
 		return
 	}
-	if err := h.Store.SetDefaultFollowTrackerTitle(r.Context(), *req.DefaultFollowTrackerTitle); err != nil {
+	s, err := h.Store.Update(r.Context(), repo.SettingsPatch{
+		DefaultFollowTrackerTitle: req.DefaultFollowTrackerTitle,
+		DefaultReplaceOnUpdate:    req.DefaultReplaceOnUpdate,
+		DefaultReplaceDeleteData:  req.DefaultReplaceDeleteData,
+	})
+	if err != nil {
 		problem.Write(w, r, h.BaseURL, problem.ErrInternal("settings: "+err.Error()))
 		return
 	}
 	if h.Audit != nil {
-		h.Audit.Generic(&uid, "settings_update", "settings", "default_follow_tracker_title", "success",
-			map[string]any{"default_follow_tracker_title": *req.DefaultFollowTrackerTitle})
+		meta := map[string]any{}
+		for key, value := range map[string]*bool{
+			"default_follow_tracker_title": req.DefaultFollowTrackerTitle,
+			"default_replace_on_update":    req.DefaultReplaceOnUpdate,
+			"default_replace_delete_data":  req.DefaultReplaceDeleteData,
+		} {
+			if value != nil {
+				meta[key] = *value
+			}
+		}
+		resourceID := "topic_defaults"
+		if req.DefaultFollowTrackerTitle != nil && len(meta) == 1 {
+			resourceID = "default_follow_tracker_title"
+		}
+		h.Audit.Generic(&uid, "settings_update", "settings", resourceID, "success", meta)
 	}
-	writeJSON(w, http.StatusOK, settingsView{DefaultFollowTrackerTitle: *req.DefaultFollowTrackerTitle})
+	writeJSON(w, http.StatusOK, toSettingsView(s))
 }

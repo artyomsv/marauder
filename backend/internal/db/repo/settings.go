@@ -25,26 +25,42 @@ type InstanceSettings struct {
 	// DefaultFollowTrackerTitle seeds new topics' follow_tracker_title when
 	// the creator does not send an explicit choice.
 	DefaultFollowTrackerTitle bool
+	DefaultReplaceOnUpdate    bool
+	DefaultReplaceDeleteData  bool
+}
+
+// SettingsPatch carries the fields to change; nil leaves a column alone.
+type SettingsPatch struct {
+	DefaultFollowTrackerTitle *bool
+	DefaultReplaceOnUpdate    *bool
+	DefaultReplaceDeleteData  *bool
 }
 
 // Get reads the singleton settings row.
 func (r *Settings) Get(ctx context.Context) (*InstanceSettings, error) {
 	var s InstanceSettings
 	err := r.pool.QueryRow(ctx,
-		`SELECT follow_tracker_title_default FROM settings WHERE id = 1`).
-		Scan(&s.DefaultFollowTrackerTitle)
+		`SELECT follow_tracker_title_default, replace_on_update_default, replace_delete_data_default FROM settings WHERE id = 1`).
+		Scan(&s.DefaultFollowTrackerTitle, &s.DefaultReplaceOnUpdate, &s.DefaultReplaceDeleteData)
 	if err != nil {
 		return nil, fmt.Errorf("settings: get: %w", err)
 	}
 	return &s, nil
 }
 
-// SetDefaultFollowTrackerTitle stores the default applied to new topics.
-func (r *Settings) SetDefaultFollowTrackerTitle(ctx context.Context, v bool) error {
-	_, err := r.pool.Exec(ctx,
-		`UPDATE settings SET follow_tracker_title_default = $1, updated_at = now() WHERE id = 1`, v)
+// Update applies the non-nil fields of p and returns the row as stored.
+func (r *Settings) Update(ctx context.Context, p SettingsPatch) (*InstanceSettings, error) {
+	var s InstanceSettings
+	err := r.pool.QueryRow(ctx, `UPDATE settings SET
+    follow_tracker_title_default = COALESCE($1, follow_tracker_title_default),
+    replace_on_update_default = COALESCE($2, replace_on_update_default),
+    replace_delete_data_default = COALESCE($3, replace_delete_data_default),
+    updated_at = now()
+WHERE id = 1 RETURNING follow_tracker_title_default, replace_on_update_default, replace_delete_data_default`,
+		p.DefaultFollowTrackerTitle, p.DefaultReplaceOnUpdate, p.DefaultReplaceDeleteData).
+		Scan(&s.DefaultFollowTrackerTitle, &s.DefaultReplaceOnUpdate, &s.DefaultReplaceDeleteData)
 	if err != nil {
-		return fmt.Errorf("settings: set default follow tracker title: %w", err)
+		return nil, fmt.Errorf("settings: update: %w", err)
 	}
-	return nil
+	return &s, nil
 }

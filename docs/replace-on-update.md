@@ -20,14 +20,41 @@ Per topic, in the **Add topic** or **Edit topic** form:
 
 That's it — the change applies from the next detected update onward.
 
+## Defaults for new topics
+
+Admins can set **Settings → Topic defaults → Replace previous version on
+update** and **Also delete the old files from disk**. The Add topic form starts
+with those values, which can still be changed for that topic. API clients that
+omit `replace_on_update` or `replace_delete_data` inherit the corresponding
+global default; an explicit `true` or `false` takes precedence.
+
+Each **Integrations → Sonarr** instance can override either default with **On**
+or **Off**, or select **Use global default** (`null` in the API). Each field
+inherits independently: the instance override wins, then the global default,
+then the built-in value if settings cannot be read. The built-in policy is
+replace **off**, delete data **on**, preserving the behaviour of an unconfigured
+installation.
+
+These values are copied onto a topic only when it is created. Changing global
+or Sonarr defaults never changes existing topics, including when Sonarr
+realigns an existing topic's client, category, or download directory.
+
+For growing **Sonarr season packs** that reuse a folder, choose replace **on**
+and delete data **off**. Marauder removes the old torrent entry while retaining
+the files for the new torrent to recheck and reuse.
+
+When an API create omits delete-data, **Download only new files** or a custom /
+kept folder name forces the inherited delete-data value off. An explicit
+delete-data **on** with replace **on** and either of those options is still
+rejected. The form shows the delete checkbox locked off for these combinations.
+
 ## Behaviour
 
-- **Default is unchanged.** New and existing topics keep every version unless you
-  explicitly enable the option. Upgrading Marauder never deletes anything on its
-  own.
-- **Delete-data default.** Once you enable replacing, deleting the old files is
-  the default (that is the point — reclaiming disk space). Untick the sub-option
-  if you want to keep them.
+- **Built-in behaviour is unchanged.** Without configured defaults, new topics
+  keep every version. Existing topics keep their stored policy on upgrade.
+- **Delete-data default.** The built-in default deletes the old files when
+  replacing. Global or Sonarr defaults can change it for new topics; each topic
+  can also keep its files by unticking the sub-option.
 - **Single-release topics only.** The option is a no-op for per-episode trackers
   (e.g. LostFilm): there, each new infohash is an *additional* episode, not a
   replacement, so Marauder never removes prior episodes.

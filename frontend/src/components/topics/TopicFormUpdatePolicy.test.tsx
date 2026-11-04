@@ -204,3 +204,23 @@ describe("TopicForm update policy submit", () => {
     expect(onSubmit.mock.calls[0][0]).toMatchObject({ folderNameMode: "default" });
   });
 });
+
+describe("seeded replace policy", () => {
+  it.each(["only-new-files", "folder-name"])("shows delete-data locked off when opened with %s", (guard) => {
+    render(<TopicForm mode="add" initial={{ ...STORED, replaceOnUpdate: true,
+      onlyNewFiles: guard === "only-new-files", folderNameMode: guard === "folder-name" ? "keep" : "default" }}
+      submitLabel="Save" heading="Add topic" isPending={false} error={null} onClose={() => {}} onSubmit={() => {}} />,
+      { wrapper: wrap() });
+    expect(screen.getByLabelText(/replace previous version/i)).toBeChecked();
+    expect(screen.getByLabelText(/also delete the old files/i)).not.toBeChecked();
+    expect(screen.getByLabelText(/also delete the old files/i)).toBeDisabled();
+  });
+
+  it("does not re-seed an existing topic when the initial defaults change", () => {
+    const props = { mode: "edit" as const, submitLabel: "Save", heading: "Edit topic", isPending: false,
+      error: null, onClose: () => {}, onSubmit: () => {} };
+    const { rerender } = render(<TopicForm {...props} initial={{ ...STORED, onlyNewFiles: false }} />, { wrapper: wrap() });
+    rerender(<TopicForm {...props} initial={{ ...STORED, onlyNewFiles: false, replaceOnUpdate: true, replaceDeleteData: false }} />);
+    expect(screen.getByLabelText(/replace previous version/i)).not.toBeChecked();
+  });
+});
