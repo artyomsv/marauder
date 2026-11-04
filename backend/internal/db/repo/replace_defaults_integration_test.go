@@ -58,7 +58,7 @@ func TestSonarrReplaceDefaultsMigrationAndNullUpdate(t *testing.T) {
 	master := testMasterKey(t)
 	// Omit the new columns in SQL to verify the migration's NULL defaults.
 	var id uuid.UUID
-	err := pool.QueryRow(ctx, `INSERT INTO sonarr_instances (name, owner_user_id) VALUES ('TEST-defaults', $1) RETURNING id`, owner).Scan(&id)
+	err := pool.QueryRow(ctx, `INSERT INTO sonarr_instances (name, url, owner_user_id) VALUES ('TEST-defaults', 'http://sonarr.invalid:8989', $1) RETURNING id`, owner).Scan(&id)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -682,9 +682,17 @@ describe("EditTopicCard — prefill + update", () => {
   it("pre-fills the replace toggle from the topic and sends it on save", async () => {
     const user = userEvent.setup();
     routeGetWithQuality(() => Promise.resolve({ seasons: [] }));
+    // Replace applies to single-release trackers; a per-episode tracker now
+    // hides this block and submits the flag as false.
+    const get = mockApi.get.getMockImplementation() as (path: string) => unknown;
+    mockApi.get.mockImplementation((path: string) =>
+      path.startsWith("/trackers/match")
+        ? Promise.resolve({ ...catalogMatch, tracker_name: "rutor", display_name: "Rutor", supports_episode_filter: false, supports_season_catalog: false })
+        : get(path),
+    );
     mockApi.updateTopic.mockResolvedValue({});
 
-    renderEdit({ ...EXISTING_TOPIC, ReplaceOnUpdate: true, ReplaceDeleteData: false });
+    renderEdit({ ...EXISTING_TOPIC, TrackerName: "rutor", URL: "https://rutor.info/torrent/239", Extra: {}, ReplaceOnUpdate: true, ReplaceDeleteData: false });
 
     const replaceToggle = (await screen.findByLabelText(
       /replace previous version on update/i,
