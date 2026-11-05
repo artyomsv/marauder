@@ -12,6 +12,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/rs/zerolog"
 
 	"github.com/artyomsv/marauder/backend/internal/api/middleware"
 	"github.com/artyomsv/marauder/backend/internal/audit"
@@ -98,6 +99,9 @@ type Topics struct {
 	// when its creator sends no explicit choice. Nil-safe: without it a
 	// create falls back to the built-in defaults.
 	Settings settingsStore
+	// Log reports a settings read failure during create. The zero value
+	// discards, so tests need not set it.
+	Log zerolog.Logger
 
 	// resetInFlight gates POST /topics/{id}/reset to one running reset per
 	// topic (topicID -> struct{}). Deliberately keyed by topic, not by user:
@@ -120,11 +124,10 @@ type createTopicReq struct {
 	DownloadDir      string     `json:"download_dir"`
 	Category         string     `json:"category"`
 	CheckIntervalSec int        `json:"check_interval_sec"`
-	// ReplaceOnUpdate opts the topic into the "replace previous version" policy
-	// (issue #101); ReplaceDeleteData (default true when omitted) also deletes
-	// the old torrent's data. Pointer so an omitted flag falls back to the
-	// delete-data default rather than false.
-	ReplaceOnUpdate   bool  `json:"replace_on_update,omitempty"`
+	// Omitted replace flags inherit the instance-wide defaults. A non-nil
+	// false is an explicit choice. Defaulted delete-data also keeps files
+	// when only-new-files or a folder name is selected.
+	ReplaceOnUpdate   *bool `json:"replace_on_update,omitempty"`
 	ReplaceDeleteData *bool `json:"replace_delete_data,omitempty"`
 	// NotifyOnly makes the topic watch-only (issue #184). Plain bool, not a
 	// pointer: false is the correct default for a new topic, so there is no
@@ -195,6 +198,7 @@ func (h *Topics) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	defaults := h.topicDefaults(r.Context())
 	res, err := topics.BuildAndCreate(r.Context(), h.Topics, topics.CreateInput{
 		UserID:           uid,
 		URL:              req.URL,
@@ -213,13 +217,16 @@ func (h *Topics) Create(w http.ResponseWriter, r *http.Request) {
 			c, _, _ := warmCredentials(cctx, h.Creds, h.Master, uid, t)
 			return c
 		},
-		ReplaceOnUpdate:           req.ReplaceOnUpdate,
+		// A notify-only topic delivers nothing and the form hides the replace
+		// block for it, so it never inherits a policy nobody saw.
+		ReplaceOnUpdate:           topics.Resolve(req.ReplaceOnUpdate, defaults.DefaultReplaceOnUpdate && !req.NotifyOnly),
 		ReplaceDeleteData:         req.ReplaceDeleteData,
+		DefaultReplaceDeleteData:  &defaults.DefaultReplaceDeleteData,
 		NotifyOnly:                req.NotifyOnly,
 		NotifyOnlyAnnounceCurrent: req.NotifyOnlyAnnounceCurrent,
 		AddPausedOnUpdate:         req.AddPausedOnUpdate,
 		OnlyNewFiles:              req.OnlyNewFiles,
-		FollowTrackerTitle:        h.followTrackerTitle(r.Context(), req.FollowTrackerTitle, req.DisplayName != ""),
+		FollowTrackerTitle:        topics.Resolve(req.FollowTrackerTitle, req.DisplayName == "" && defaults.DefaultFollowTrackerTitle),
 		FolderNameMode:            domain.FolderNameMode(req.FolderNameMode),
 		FolderName:                req.FolderName,
 		Quality:                   req.Quality,
@@ -489,28 +496,20 @@ func folderPolicyFromRequest(existing *domain.Topic, mode, name *string) (*repo.
 	return &repo.FolderNamePolicy{Mode: m, Name: normalized}, nil
 }
 
-// followTrackerTitle resolves the flag a new topic starts with. An explicit
-// request value is an explicit choice (a non-nil false included) and wins.
-// Without one, a caller that supplied its own display name keeps ownership of
-// it — the name is theirs, and an inherited default must not hand it to the
-// tracker — while a nameless create inherits the instance-wide default. A
-// settings read failure fails open to false: the "a resolved title stays
-// locked" behaviour as before the default existed, never the other way round.
-func (h *Topics) followTrackerTitle(ctx context.Context, explicit *bool, named bool) bool {
-	if explicit != nil {
-		return *explicit
+// topicDefaults reads once for a create. Fail open to the built-ins when
+// settings are unavailable; a missing default must never prevent an add.
+func (h *Topics) topicDefaults(ctx context.Context) repo.InstanceSettings {
+	if h.Settings != nil {
+		s, err := h.Settings.Get(ctx)
+		if err == nil {
+			return *s
+		}
+		h.Log.Warn().Err(err).Msg("settings read failed; using built-in follow-title and replace defaults")
 	}
-	if named {
-		return false
+	return repo.InstanceSettings{
+		DefaultReplaceOnUpdate:   topics.BuiltinReplaceDefaults.ReplaceOnUpdate,
+		DefaultReplaceDeleteData: topics.BuiltinReplaceDefaults.ReplaceDeleteData,
 	}
-	if h.Settings == nil {
-		return false
-	}
-	s, err := h.Settings.Get(ctx)
-	if err != nil {
-		return false
-	}
-	return s.DefaultFollowTrackerTitle
 }
 
 // Get handles GET /topics/{id}.

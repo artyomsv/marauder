@@ -138,14 +138,14 @@ func TestSettingsFollowTrackerTitleDefault(t *testing.T) {
 		t.Fatalf("Get: %v", err)
 	}
 	t.Cleanup(func() {
-		if err := settingsRepo.SetDefaultFollowTrackerTitle(ctx, before.DefaultFollowTrackerTitle); err != nil {
+		if _, err := settingsRepo.Update(ctx, SettingsPatch{DefaultFollowTrackerTitle: &before.DefaultFollowTrackerTitle}); err != nil {
 			t.Errorf("restore default: %v", err)
 		}
 	})
 
 	want := !before.DefaultFollowTrackerTitle
-	if err := settingsRepo.SetDefaultFollowTrackerTitle(ctx, want); err != nil {
-		t.Fatalf("SetDefaultFollowTrackerTitle: %v", err)
+	if _, err := settingsRepo.Update(ctx, SettingsPatch{DefaultFollowTrackerTitle: &want}); err != nil {
+		t.Fatalf("Update: %v", err)
 	}
 	got, err := settingsRepo.Get(ctx)
 	if err != nil {

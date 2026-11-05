@@ -266,15 +266,18 @@ func (p *Poller) processURL(ctx context.Context, inst domain.SonarrInstance, own
 		return
 	}
 
+	follow, replace := p.topicDefaults(ctx, inst)
 	res, err := topics.BuildAndCreate(ctx, p.topics, topics.CreateInput{
-		UserID:             ownerID,
-		URL:                url,
-		ClientID:           inst.DefaultClientID,
-		Category:           inst.DefaultCategory,
-		DownloadDir:        inst.DefaultDownloadDir,
-		Source:             topicSourceSonarr,
-		Extra:              sonarrTopicExtra(rec),
-		FollowTrackerTitle: p.defaultFollowTrackerTitle(ctx),
+		UserID:                   ownerID,
+		URL:                      url,
+		ClientID:                 inst.DefaultClientID,
+		Category:                 inst.DefaultCategory,
+		DownloadDir:              inst.DefaultDownloadDir,
+		Source:                   topicSourceSonarr,
+		Extra:                    sonarrTopicExtra(rec),
+		FollowTrackerTitle:       follow,
+		ReplaceOnUpdate:          replace.ReplaceOnUpdate,
+		DefaultReplaceDeleteData: &replace.ReplaceDeleteData,
 		// Resolve the title and poster as the topic's OWNER. A login-gated
 		// tracker answers a guest with a stub rather than an error, so an
 		// anonymous resolve does not fail — it succeeds at reading nothing,
@@ -303,20 +306,23 @@ func (p *Poller) processURL(ctx context.Context, inst domain.SonarrInstance, own
 	metrics.SonarrRecordsProcessedTotal.WithLabelValues("created").Inc()
 }
 
-// defaultFollowTrackerTitle is the instance-wide default a Sonarr-created
-// topic starts with. Sonarr grabs are ordinary topics and get no per-topic
-// choice, so the instance default is their whole answer. Fails open to
-// false — the pre-existing "a resolved title stays locked" behaviour.
-func (p *Poller) defaultFollowTrackerTitle(ctx context.Context) bool {
-	if p.settings == nil {
-		return false
+// topicDefaults applies each instance override over the global default.
+// A failed settings read falls open to the built-ins for inherited fields.
+func (p *Poller) topicDefaults(ctx context.Context, inst domain.SonarrInstance) (follow bool, replace topics.ReplaceDefaults) {
+	replace = topics.BuiltinReplaceDefaults
+	if p.settings != nil {
+		s, err := p.settings.Get(ctx)
+		if err != nil {
+			p.log.Warn().Err(err).Msg("settings read failed; using built-in follow-title and replace defaults")
+		} else {
+			follow = s.DefaultFollowTrackerTitle
+			replace.ReplaceOnUpdate = s.DefaultReplaceOnUpdate
+			replace.ReplaceDeleteData = s.DefaultReplaceDeleteData
+		}
 	}
-	s, err := p.settings.Get(ctx)
-	if err != nil {
-		p.log.Warn().Err(err).Msg("settings read failed; topic defaults to not following the tracker title")
-		return false
-	}
-	return s.DefaultFollowTrackerTitle
+	replace.ReplaceOnUpdate = topics.Resolve(inst.DefaultReplaceOnUpdate, replace.ReplaceOnUpdate)
+	replace.ReplaceDeleteData = topics.Resolve(inst.DefaultReplaceDeleteData, replace.ReplaceDeleteData)
+	return follow, replace
 }
 
 func sonarrTopicExtra(rec HistoryRecord) map[string]any {

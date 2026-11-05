@@ -15,12 +15,14 @@ import (
 
 // fakeSettingsStore is an in-memory settingsStore for handler tests.
 type fakeSettingsStore struct {
-	value repo.InstanceSettings
-	err   error
-	set   []bool
+	value   repo.InstanceSettings
+	err     error
+	patches []repo.SettingsPatch
+	reads   int
 }
 
 func (f *fakeSettingsStore) Get(context.Context) (*repo.InstanceSettings, error) {
+	f.reads++
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -28,13 +30,22 @@ func (f *fakeSettingsStore) Get(context.Context) (*repo.InstanceSettings, error)
 	return &s, nil
 }
 
-func (f *fakeSettingsStore) SetDefaultFollowTrackerTitle(_ context.Context, v bool) error {
+func (f *fakeSettingsStore) Update(_ context.Context, p repo.SettingsPatch) (*repo.InstanceSettings, error) {
 	if f.err != nil {
-		return f.err
+		return nil, f.err
 	}
-	f.value.DefaultFollowTrackerTitle = v
-	f.set = append(f.set, v)
-	return nil
+	if p.DefaultFollowTrackerTitle != nil {
+		f.value.DefaultFollowTrackerTitle = *p.DefaultFollowTrackerTitle
+	}
+	if p.DefaultReplaceOnUpdate != nil {
+		f.value.DefaultReplaceOnUpdate = *p.DefaultReplaceOnUpdate
+	}
+	if p.DefaultReplaceDeleteData != nil {
+		f.value.DefaultReplaceDeleteData = *p.DefaultReplaceDeleteData
+	}
+	f.patches = append(f.patches, p)
+	s := f.value
+	return &s, nil
 }
 
 // TestTopics_Create_FollowTrackerTitle pins the precedence of the three
@@ -86,6 +97,9 @@ func TestTopics_Create_FollowTrackerTitle(t *testing.T) {
 			}
 			if store.created == nil {
 				t.Fatal("topic was not created")
+			}
+			if s, ok := h.Settings.(*fakeSettingsStore); ok && s.reads != 1 {
+				t.Errorf("settings reads = %d, want 1", s.reads)
 			}
 			if store.created.FollowTrackerTitle != tt.want {
 				t.Errorf("created.FollowTrackerTitle = %v, want %v", store.created.FollowTrackerTitle, tt.want)

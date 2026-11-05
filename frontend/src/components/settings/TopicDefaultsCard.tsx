@@ -1,10 +1,17 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Settings2 } from "lucide-react";
 
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { api } from "@/lib/api";
+import { api, type UpdateSettingsBody } from "@/lib/api";
 import { QK } from "@/lib/queryKeys";
+import { cn } from "@/lib/utils";
 import { useT } from "@/i18n";
 
 /**
@@ -17,10 +24,13 @@ import { useT } from "@/i18n";
 export function TopicDefaultsCard() {
   const t = useT();
   const queryClient = useQueryClient();
-  const settings = useQuery({ queryKey: QK.settings, queryFn: () => api.getSettings() });
+  const settings = useQuery({
+    queryKey: QK.settings,
+    queryFn: () => api.getSettings(),
+  });
 
   const save = useMutation({
-    mutationFn: (v: boolean) => api.updateSettings({ default_follow_tracker_title: v }),
+    mutationFn: (patch: UpdateSettingsBody) => api.updateSettings(patch),
     onSuccess: (next) => {
       queryClient.setQueryData(QK.settings, next);
     },
@@ -48,28 +58,47 @@ export function TopicDefaultsCard() {
             <p className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
               {t("settings.topicDefaults.loadFailed")}
             </p>
-            <Button variant="outline" size="sm" onClick={() => settings.refetch()}>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => settings.refetch()}
+            >
               {t("settings.topicDefaults.retry")}
             </Button>
           </div>
         ) : (
-          <label className="flex items-start gap-2 text-sm">
-            <input
-              type="checkbox"
-              checked={known ? settings.data.default_follow_tracker_title : false}
+          <div className="space-y-4">
+            <DefaultToggleRow
+              checked={
+                known ? settings.data.default_follow_tracker_title : false
+              }
               disabled={!known || save.isPending}
-              onChange={(e) => save.mutate(e.target.checked)}
-              className="mt-0.5"
+              label={t("topics.followTitle.label")}
+              help={t("settings.topicDefaults.help")}
+              onChange={(v) => save.mutate({ default_follow_tracker_title: v })}
             />
-            <span>
-              <span className="font-medium text-foreground">
-                {t("topics.followTitle.label")}
-              </span>
-              <span className="block text-xs text-muted-foreground">
-                {t("settings.topicDefaults.help")}
-              </span>
-            </span>
-          </label>
+            <DefaultToggleRow
+              checked={known ? settings.data.default_replace_on_update : false}
+              disabled={!known || save.isPending}
+              label={t("topics.replaceOnUpdate.label")}
+              help={t("settings.topicDefaults.replaceHelp")}
+              onChange={(v) => save.mutate({ default_replace_on_update: v })}
+            />
+            <DefaultToggleRow
+              checked={
+                known ? settings.data.default_replace_delete_data : false
+              }
+              disabled={
+                !known ||
+                save.isPending ||
+                !settings.data.default_replace_on_update
+              }
+              label={t("topics.replaceOnUpdate.deleteData")}
+              help={t("settings.topicDefaults.deleteDataHelp")}
+              onChange={(v) => save.mutate({ default_replace_delete_data: v })}
+              indent
+            />
+          </div>
         )}
         {save.isError && (
           <p className="mt-2 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
@@ -78,5 +107,39 @@ export function TopicDefaultsCard() {
         )}
       </CardContent>
     </Card>
+  );
+}
+
+interface DefaultToggleRowProps {
+  checked: boolean;
+  disabled: boolean;
+  label: string;
+  help: string;
+  onChange: (checked: boolean) => void;
+  indent?: boolean;
+}
+
+function DefaultToggleRow({
+  checked,
+  disabled,
+  label,
+  help,
+  onChange,
+  indent,
+}: DefaultToggleRowProps) {
+  return (
+    <label className={cn("flex items-start gap-2 text-sm", indent && "ml-6")}>
+      <input
+        type="checkbox"
+        checked={checked}
+        disabled={disabled}
+        onChange={(e) => onChange(e.target.checked)}
+        className="mt-0.5"
+      />
+      <span>
+        <span className="font-medium text-foreground">{label}</span>
+        <span className="block text-xs text-muted-foreground">{help}</span>
+      </span>
+    </label>
   );
 }

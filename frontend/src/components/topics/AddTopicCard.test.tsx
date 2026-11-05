@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { type ReactNode } from "react";
@@ -16,6 +16,7 @@ vi.mock("@/lib/api", async () => {
       post: vi.fn(),
       previewTracker: vi.fn(),
       getClientCategories: vi.fn(),
+      getSettings: vi.fn(),
     },
   };
 });
@@ -28,6 +29,7 @@ const mockApi = api as unknown as {
   post: ReturnType<typeof vi.fn>;
   previewTracker: ReturnType<typeof vi.fn>;
   getClientCategories: ReturnType<typeof vi.fn>;
+  getSettings: ReturnType<typeof vi.fn>;
 };
 
 function wrap() {
@@ -54,6 +56,7 @@ const SEARCH_RESULTS = {
 };
 
 beforeEach(() => {
+  mockApi.getSettings.mockResolvedValue({ default_follow_tracker_title: false, default_replace_on_update: false, default_replace_delete_data: true });
   mockApi.get.mockReset();
   mockApi.get.mockImplementation((path: string) => {
     if (path.startsWith("/trackers/search")) return Promise.resolve(SEARCH_RESULTS);
@@ -270,5 +273,55 @@ describe("AddTopicCard", () => {
     // Back in URL mode, form remounted with the picked URL prefilled.
     const urlInput = screen.getByLabelText(/url or magnet link/i);
     expect(urlInput).toHaveValue("https://rutor.org/torrent/975045");
+  });
+});
+
+describe("new topic replace defaults", () => {
+  it("seeds and submits the configured season-pack policy", async () => {
+    mockApi.getSettings.mockResolvedValue({ default_follow_tracker_title: false, default_replace_on_update: true, default_replace_delete_data: false });
+    mockApi.post.mockResolvedValue({});
+    render(<AddTopicCard onClose={() => {}} onCreated={() => {}} />, { wrapper: wrap() });
+    await waitFor(() => expect(screen.getByLabelText(/replace previous version/i)).toBeChecked());
+    expect(screen.getByLabelText(/also delete the old files/i)).not.toBeChecked();
+    await userEvent.type(screen.getByLabelText(/URL or magnet link/i), "https://tracker.test/topic/239");
+    await userEvent.click(screen.getByRole("button", { name: /add topic/i }));
+    expect(mockApi.post).toHaveBeenCalledWith("/topics", expect.objectContaining({ replace_on_update: true, replace_delete_data: false }));
+  });
+
+  it.each([false, true])("applies a late default only while untouched (user changed: %s)", async (changed) => {
+    let finish!: (value: { default_follow_tracker_title: boolean; default_replace_on_update: boolean; default_replace_delete_data: boolean }) => void;
+    mockApi.getSettings.mockReturnValue(new Promise((resolve) => { finish = resolve; }));
+    render(<AddTopicCard onClose={() => {}} onCreated={() => {}} />, { wrapper: wrap() });
+    const replace = screen.getByLabelText(/replace previous version/i);
+    expect(replace).not.toBeChecked();
+    if (changed) {
+      await userEvent.click(replace);
+      await userEvent.click(screen.getByLabelText(/also delete the old files/i));
+      await userEvent.click(replace);
+    }
+    await act(async () => finish({ default_follow_tracker_title: false, default_replace_on_update: true, default_replace_delete_data: changed }));
+    if (changed) {
+      expect(replace).not.toBeChecked();
+      await userEvent.click(replace);
+      expect(screen.getByLabelText(/also delete the old files/i)).not.toBeChecked();
+    } else {
+      await waitFor(() => expect(replace).toBeChecked());
+      expect(screen.getByLabelText(/also delete the old files/i)).not.toBeChecked();
+    }
+  });
+
+  it("masks the inherited replace flag for per-episode trackers", async () => {
+    const routeGet = mockApi.get.getMockImplementation() as (path: string) => unknown;
+    mockApi.get.mockImplementation((path: string) => path.startsWith("/trackers/match")
+      ? Promise.resolve({ tracker_name: "lostfilm", display_name: "LostFilm", supports_episode_filter: true, supports_season_catalog: false })
+      : routeGet(path));
+    mockApi.getSettings.mockResolvedValue({ default_follow_tracker_title: false, default_replace_on_update: true, default_replace_delete_data: true });
+    mockApi.post.mockResolvedValue({});
+    render(<AddTopicCard onClose={() => {}} onCreated={() => {}} />, { wrapper: wrap() });
+    await waitFor(() => expect(screen.getByLabelText(/replace previous version/i)).toBeChecked());
+    await userEvent.type(screen.getByLabelText(/URL or magnet link/i), "https://tracker.test/topic/239");
+    await waitFor(() => expect(screen.queryByLabelText(/replace previous version/i)).not.toBeInTheDocument());
+    await userEvent.click(screen.getByRole("button", { name: /add topic/i }));
+    expect(mockApi.post).toHaveBeenCalledWith("/topics", expect.objectContaining({ replace_on_update: false }));
   });
 });

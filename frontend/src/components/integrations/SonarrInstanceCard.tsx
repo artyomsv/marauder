@@ -49,6 +49,8 @@ export function SonarrInstanceCard({ instance, clients, trackers }: Props) {
   const [testMsg, setTestMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
 
   const status = statusOf(instance);
+  const overrideText = (v: boolean | null) =>
+    v === null ? t("settings.sonarr.useGlobalDefault") : t(v ? "common.on" : "common.off");
 
   const toggleMut = useMutation({
     mutationFn: () =>
@@ -118,6 +120,10 @@ export function SonarrInstanceCard({ instance, clients, trackers }: Props) {
         <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-muted-foreground">
           <dt>{t("settings.sonarr.defaultCategory")}</dt>
           <dd className="text-foreground">{instance.default_category || "—"}</dd>
+          <dt>{t("settings.sonarr.defaultReplaceOnUpdate")}</dt>
+          <dd className="text-foreground">{overrideText(instance.default_replace_on_update)}</dd>
+          <dt>{t("settings.sonarr.defaultReplaceDeleteData")}</dt>
+          <dd className="text-foreground">{overrideText(instance.default_replace_delete_data)}</dd>
           <dt>{t("settings.sonarr.lastSeen")}</dt>
           <dd className="text-foreground">
             {instance.last_seen_at ? new Date(instance.last_seen_at).toLocaleString() : "—"}

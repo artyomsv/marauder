@@ -11,6 +11,8 @@ export interface SonarrForm {
   default_client_id: string;
   default_category: string;
   default_download_dir: string;
+  default_replace_on_update: boolean | null;
+  default_replace_delete_data: boolean | null;
   update_existing: boolean;
 }
 
@@ -24,6 +26,8 @@ export const EMPTY_FORM: SonarrForm = {
   default_client_id: "",
   default_category: "",
   default_download_dir: "",
+  default_replace_on_update: null,
+  default_replace_delete_data: null,
   update_existing: false,
 };
 
@@ -39,6 +43,8 @@ export function fromInstance(c: SonarrInstance): SonarrForm {
     default_client_id: c.default_client_id ?? "",
     default_category: c.default_category,
     default_download_dir: c.default_download_dir,
+    default_replace_on_update: c.default_replace_on_update,
+    default_replace_delete_data: c.default_replace_delete_data,
     update_existing: c.update_existing,
   };
 }
@@ -55,6 +61,8 @@ export function toBody(f: SonarrForm): SonarrInstanceBody {
     default_client_id: f.default_client_id || null,
     default_category: f.default_category.trim(),
     default_download_dir: f.default_download_dir.trim(),
+    default_replace_on_update: f.default_replace_on_update,
+    default_replace_delete_data: f.default_replace_delete_data,
     update_existing: f.update_existing,
   };
 }
@@ -75,6 +83,8 @@ export function instanceToBody(c: SonarrInstance): SonarrInstanceBody {
     default_client_id: c.default_client_id,
     default_category: c.default_category,
     default_download_dir: c.default_download_dir,
+    default_replace_on_update: c.default_replace_on_update,
+    default_replace_delete_data: c.default_replace_delete_data,
     update_existing: c.update_existing,
   };
 }

@@ -36,6 +36,8 @@ const inst = {
   default_client_id: null,
   default_category: "tv-sonarr",
   default_download_dir: "",
+  default_replace_on_update: true,
+  default_replace_delete_data: false,
   update_existing: false,
   last_seen_at: null,
   created_at: "2026-06-27T00:00:00Z",
@@ -60,7 +62,24 @@ describe("SonarrInstanceCard", () => {
     const [id, body] = mockApi.updateSonarrInstance.mock.calls[0];
     expect(id).toBe("i1");
     expect(body.enabled).toBe(false);
+    expect(body.default_replace_on_update).toBe(true);
+    expect(body.default_replace_delete_data).toBe(false);
     expect(body.api_key).toBe(""); // stored key preserved
+  });
+
+  it("shows the replace overrides, with null as the global default", () => {
+    wrap(
+      <SonarrInstanceCard
+        instance={{ ...inst, default_replace_delete_data: null }}
+        clients={[]}
+        trackers={[]}
+      />,
+    );
+
+    expect(screen.getByText("Replace previous version by default").nextElementSibling).toHaveTextContent("On");
+    expect(screen.getByText("Delete the old files by default").nextElementSibling).toHaveTextContent(
+      "Use global default",
+    );
   });
 
   it("deletes after the inline confirm", async () => {

@@ -8,6 +8,7 @@ import { QK } from "@/lib/queryKeys";
 import { useT } from "@/i18n";
 import { cn } from "@/lib/utils";
 import { Field, CheckRow } from "@/components/integrations/SonarrFields";
+import { SonarrReplaceDefaultsFields } from "@/components/integrations/SonarrReplaceDefaultsFields";
 import { CategoryField } from "@/components/topics/CategoryField";
 import { SELECT_CLASS } from "@/components/topics/SeasonEpisodePicker";
 import {
@@ -173,6 +174,12 @@ export function SonarrInstanceForm({ initial, clients, trackers, onDone, onCance
             onChange={(e) => update("default_download_dir", e.target.value)}
           />
         </Field>
+        <SonarrReplaceDefaultsFields
+          replace={form.default_replace_on_update}
+          deleteData={form.default_replace_delete_data}
+          onReplaceChange={(v) => update("default_replace_on_update", v)}
+          onDeleteDataChange={(v) => update("default_replace_delete_data", v)}
+        />
       </div>
 
       <div className="space-y-2">

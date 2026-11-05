@@ -297,6 +297,19 @@ export function TopicForm({
     }
   }, [initial.followTrackerTitle]);
 
+  // Late settings seed the add form until the user owns this block. Stored
+  // topic values in edit mode never inherit a changed global default.
+  const replaceOwned = useRef(false);
+  useEffect(() => {
+    if (!isEdit && !replaceOwned.current) {
+      setDelivery((d) => ({
+        ...d,
+        replaceOnUpdate: initial.replaceOnUpdate,
+        replaceDeleteData: initial.replaceDeleteData,
+      }));
+    }
+  }, [isEdit, initial.replaceOnUpdate, initial.replaceDeleteData]);
+
   // While the name differs from the one the form was opened with, the checkbox
   // is forced off and disabled: the store clears follow_tracker_title on a
   // rename (see repo.Topics.Update), so a re-tick would be silently discarded
@@ -357,7 +370,10 @@ export function TopicForm({
       notifierId: delivery.notifierId,
       downloadDir: delivery.downloadDir,
       category: delivery.category,
-      replaceOnUpdate: delivery.replaceOnUpdate,
+      // Hidden for per-episode trackers and notify-only topics. A new
+      // notify-only topic must not store a seeded default nobody saw; an
+      // edited one keeps the stored value the user saw before switching.
+      replaceOnUpdate: !episodic && !(delivery.notifyOnly && !isEdit) && delivery.replaceOnUpdate,
       replaceDeleteData: delivery.replaceDeleteData && !delivery.onlyNewFiles && !folderNameSet,
       notifyOnly: delivery.notifyOnly,
       notifyOnlyAnnounceCurrent: delivery.notifyOnlyAnnounceCurrent,
@@ -589,18 +605,23 @@ export function TopicForm({
             />
           </div>
 
-          <UpdatePolicyFields
-            value={{
-              replaceOnUpdate: delivery.replaceOnUpdate,
-              replaceDeleteData: delivery.replaceDeleteData,
-              addPausedOnUpdate: delivery.addPausedOnUpdate,
-              onlyNewFiles: delivery.onlyNewFiles,
-            }}
-            onChange={(v) => setDelivery((d) => ({ ...d, ...v }))}
-            episodic={episodic}
-            unsupportedClient={unsupportedClient}
-            folderNameSet={folderNameSet}
-          />
+          {!episodic && (
+            <UpdatePolicyFields
+              value={{
+                replaceOnUpdate: delivery.replaceOnUpdate,
+                replaceDeleteData: delivery.replaceDeleteData,
+                addPausedOnUpdate: delivery.addPausedOnUpdate,
+                onlyNewFiles: delivery.onlyNewFiles,
+              }}
+              onChange={(v) => {
+                replaceOwned.current = true;
+                setDelivery((d) => ({ ...d, ...v }));
+              }}
+              episodic={episodic}
+              unsupportedClient={unsupportedClient}
+              folderNameSet={folderNameSet}
+            />
+          )}
           {!episodic && (
             <FolderNameFields
               value={{ folderNameMode: delivery.folderNameMode, folderName: delivery.folderName }}

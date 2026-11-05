@@ -14,6 +14,8 @@ const instance: SonarrInstance = {
   default_client_id: "c1",
   default_category: "tv-sonarr",
   default_download_dir: "/tv",
+  default_replace_on_update: null,
+  default_replace_delete_data: null,
   update_existing: true,
   last_seen_at: "2026-06-27T00:00:00Z",
   created_at: "2026-06-27T00:00:00Z",
@@ -47,5 +49,17 @@ describe("sonarrForm helpers", () => {
     const apiErr = new ApiError({ title: "Bad", detail: "name is required", status: 422 });
     expect(errText(apiErr)).toBe("name is required");
     expect(errText("boom")).toBe("boom");
+  });
+});
+
+describe("replace default overrides", () => {
+  it.each([null, true, false])("preserves replace=%s independently of delete-data", (replace) => {
+    for (const deleteData of [null, true, false]) {
+      const source = { ...instance, default_replace_on_update: replace, default_replace_delete_data: deleteData };
+      const expected = { default_replace_on_update: replace, default_replace_delete_data: deleteData };
+      expect(fromInstance(source)).toMatchObject(expected);
+      expect(toBody(fromInstance(source))).toMatchObject(expected);
+      expect(instanceToBody(source)).toMatchObject(expected);
+    }
   });
 });

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Replace-on-update defaults for new topics.** Admins can set global replace
+  and delete-data defaults, with independent per-Sonarr-instance overrides.
+  Existing topics keep their own policy. Ref #239.
+
 ## [1.27.2] - 2026-10-27
 
 ### Fixed

@@ -43,33 +43,37 @@ type Sonarr struct {
 }
 
 type instanceView struct {
-	ID                 string   `json:"id"`
-	Name               string   `json:"name"`
-	Enabled            bool     `json:"enabled"`
-	SonarrURL          string   `json:"sonarr_url"`
-	APIKeySet          bool     `json:"api_key_set"`
-	PollIntervalSec    int      `json:"poll_interval_sec"`
-	AllowedTrackers    []string `json:"allowed_trackers"`
-	DefaultClientID    *string  `json:"default_client_id"`
-	DefaultCategory    string   `json:"default_category"`
-	DefaultDownloadDir string   `json:"default_download_dir"`
-	UpdateExisting     bool     `json:"update_existing"`
-	LastSeenAt         *string  `json:"last_seen_at"`
-	CreatedAt          string   `json:"created_at"`
-	UpdatedAt          string   `json:"updated_at"`
+	ID                       string   `json:"id"`
+	Name                     string   `json:"name"`
+	Enabled                  bool     `json:"enabled"`
+	SonarrURL                string   `json:"sonarr_url"`
+	APIKeySet                bool     `json:"api_key_set"`
+	PollIntervalSec          int      `json:"poll_interval_sec"`
+	AllowedTrackers          []string `json:"allowed_trackers"`
+	DefaultClientID          *string  `json:"default_client_id"`
+	DefaultCategory          string   `json:"default_category"`
+	DefaultDownloadDir       string   `json:"default_download_dir"`
+	DefaultReplaceOnUpdate   *bool    `json:"default_replace_on_update"`
+	DefaultReplaceDeleteData *bool    `json:"default_replace_delete_data"`
+	UpdateExisting           bool     `json:"update_existing"`
+	LastSeenAt               *string  `json:"last_seen_at"`
+	CreatedAt                string   `json:"created_at"`
+	UpdatedAt                string   `json:"updated_at"`
 }
 
 type instanceReq struct {
-	Name               string   `json:"name"`
-	Enabled            bool     `json:"enabled"`
-	SonarrURL          string   `json:"sonarr_url"`
-	APIKey             string   `json:"api_key"` // "" = keep existing (on update)
-	PollIntervalSec    int      `json:"poll_interval_sec"`
-	AllowedTrackers    []string `json:"allowed_trackers"`
-	DefaultClientID    *string  `json:"default_client_id"` // null/"" = none
-	DefaultCategory    string   `json:"default_category"`
-	DefaultDownloadDir string   `json:"default_download_dir"`
-	UpdateExisting     bool     `json:"update_existing"`
+	Name                     string   `json:"name"`
+	Enabled                  bool     `json:"enabled"`
+	SonarrURL                string   `json:"sonarr_url"`
+	APIKey                   string   `json:"api_key"` // "" = keep existing (on update)
+	PollIntervalSec          int      `json:"poll_interval_sec"`
+	AllowedTrackers          []string `json:"allowed_trackers"`
+	DefaultClientID          *string  `json:"default_client_id"` // null/"" = none
+	DefaultCategory          string   `json:"default_category"`
+	DefaultDownloadDir       string   `json:"default_download_dir"`
+	DefaultReplaceOnUpdate   *bool    `json:"default_replace_on_update"`
+	DefaultReplaceDeleteData *bool    `json:"default_replace_delete_data"`
+	UpdateExisting           bool     `json:"update_existing"`
 }
 
 type testSonarrReq struct {
@@ -257,16 +261,18 @@ func (h *Sonarr) decodeInstance(r *http.Request) (domain.SonarrInstance, *proble
 		return domain.SonarrInstance{}, problem.ErrUnprocessable("default_client_id must be a UUID")
 	}
 	return domain.SonarrInstance{
-		Name:               req.Name,
-		Enabled:            req.Enabled,
-		URL:                req.SonarrURL,
-		APIKey:             req.APIKey,
-		PollIntervalSec:    req.PollIntervalSec,
-		AllowedTrackers:    req.AllowedTrackers,
-		DefaultClientID:    clientID,
-		DefaultCategory:    strings.TrimSpace(req.DefaultCategory),
-		DefaultDownloadDir: strings.TrimSpace(req.DefaultDownloadDir),
-		UpdateExisting:     req.UpdateExisting,
+		Name:                     req.Name,
+		Enabled:                  req.Enabled,
+		URL:                      req.SonarrURL,
+		APIKey:                   req.APIKey,
+		PollIntervalSec:          req.PollIntervalSec,
+		AllowedTrackers:          req.AllowedTrackers,
+		DefaultClientID:          clientID,
+		DefaultCategory:          strings.TrimSpace(req.DefaultCategory),
+		DefaultDownloadDir:       strings.TrimSpace(req.DefaultDownloadDir),
+		DefaultReplaceOnUpdate:   req.DefaultReplaceOnUpdate,
+		DefaultReplaceDeleteData: req.DefaultReplaceDeleteData,
+		UpdateExisting:           req.UpdateExisting,
 	}, nil
 }
 
@@ -279,18 +285,20 @@ func (h *Sonarr) audit(uid *uuid.UUID, action, resourceID string, meta map[strin
 
 func toInstanceView(c *domain.SonarrInstance) instanceView {
 	v := instanceView{
-		ID:                 c.ID.String(),
-		Name:               c.Name,
-		Enabled:            c.Enabled,
-		SonarrURL:          c.URL,
-		APIKeySet:          c.APIKey != "",
-		PollIntervalSec:    c.PollIntervalSec,
-		AllowedTrackers:    c.AllowedTrackers,
-		DefaultCategory:    c.DefaultCategory,
-		DefaultDownloadDir: c.DefaultDownloadDir,
-		UpdateExisting:     c.UpdateExisting,
-		CreatedAt:          c.CreatedAt.UTC().Format(time.RFC3339),
-		UpdatedAt:          c.UpdatedAt.UTC().Format(time.RFC3339),
+		ID:                       c.ID.String(),
+		Name:                     c.Name,
+		Enabled:                  c.Enabled,
+		SonarrURL:                c.URL,
+		APIKeySet:                c.APIKey != "",
+		PollIntervalSec:          c.PollIntervalSec,
+		AllowedTrackers:          c.AllowedTrackers,
+		DefaultCategory:          c.DefaultCategory,
+		DefaultDownloadDir:       c.DefaultDownloadDir,
+		DefaultReplaceOnUpdate:   c.DefaultReplaceOnUpdate,
+		DefaultReplaceDeleteData: c.DefaultReplaceDeleteData,
+		UpdateExisting:           c.UpdateExisting,
+		CreatedAt:                c.CreatedAt.UTC().Format(time.RFC3339),
+		UpdatedAt:                c.UpdatedAt.UTC().Format(time.RFC3339),
 	}
 	if v.AllowedTrackers == nil {
 		v.AllowedTrackers = []string{}

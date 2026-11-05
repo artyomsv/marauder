@@ -14,6 +14,7 @@ vi.mock("@/lib/api", async () => {
       testSonarr: vi.fn(),
       testSonarrInstance: vi.fn(),
       getClientCategories: vi.fn(),
+      getSettings: vi.fn(),
     },
   };
 });
@@ -27,6 +28,7 @@ const mockApi = api as unknown as {
   testSonarr: ReturnType<typeof vi.fn>;
   testSonarrInstance: ReturnType<typeof vi.fn>;
   getClientCategories: ReturnType<typeof vi.fn>;
+  getSettings: ReturnType<typeof vi.fn>;
 };
 
 const editableInstance = {
@@ -40,6 +42,8 @@ const editableInstance = {
   default_client_id: "c1",
   default_category: "",
   default_download_dir: "",
+  default_replace_on_update: null,
+  default_replace_delete_data: null,
   update_existing: false,
   last_seen_at: null,
   created_at: "2026-06-27T00:00:00Z",
@@ -52,7 +56,10 @@ function wrap(node: ReactNode) {
 }
 
 describe("SonarrInstanceForm", () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockApi.getSettings.mockResolvedValue({ default_follow_tracker_title: false, default_replace_on_update: true, default_replace_delete_data: false });
+  });
 
   it("creates a new instance with the typed name and an empty api_key", async () => {
     mockApi.createSonarrInstance.mockResolvedValue({});
@@ -107,6 +114,8 @@ describe("SonarrInstanceForm", () => {
       default_client_id: null,
       default_category: "tv-sonarr",
       default_download_dir: "",
+      default_replace_on_update: null,
+      default_replace_delete_data: null,
       update_existing: false,
       last_seen_at: null,
       created_at: "2026-06-27T00:00:00Z",
@@ -121,5 +130,61 @@ describe("SonarrInstanceForm", () => {
     await waitFor(() => expect(mockApi.testSonarrInstance).toHaveBeenCalledWith("i1"));
     expect(mockApi.testSonarr).not.toHaveBeenCalled();
     expect(await screen.findByText(/4\.1\.0/)).toBeInTheDocument();
+  });
+});
+
+describe("Sonarr replace defaults", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockApi.getSettings.mockResolvedValue({ default_follow_tracker_title: false, default_replace_on_update: true, default_replace_delete_data: false });
+    mockApi.updateSonarrInstance.mockResolvedValue({});
+  });
+
+  it("shows global values and saves independent overrides or inheritance", async () => {
+    wrap(<SonarrInstanceForm initial={editableInstance} clients={[]} trackers={[]} onDone={() => {}} onCancel={() => {}} />);
+    const replace = screen.getByRole("combobox", { name: /replace previous version by default/i });
+    const deleteData = screen.getByRole("combobox", { name: /delete the old files by default/i });
+    expect(replace).toHaveValue("inherit");
+    expect(deleteData).toHaveValue("inherit");
+    expect(await screen.findByRole("option", { name: "Use global default (currently: On)" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Use global default (currently: Off)" })).toBeInTheDocument();
+    await userEvent.selectOptions(replace, "true");
+    await userEvent.selectOptions(deleteData, "false");
+    await userEvent.click(screen.getByRole("button", { name: /^save$/i }));
+    await waitFor(() => expect(mockApi.updateSonarrInstance).toHaveBeenCalledWith("i1", expect.objectContaining({ default_replace_on_update: true, default_replace_delete_data: false })));
+    await userEvent.selectOptions(replace, "inherit");
+    await userEvent.selectOptions(deleteData, "inherit");
+    await userEvent.click(screen.getByRole("button", { name: /^save$/i }));
+    await waitFor(() => expect(mockApi.updateSonarrInstance).toHaveBeenLastCalledWith("i1", expect.objectContaining({ default_replace_on_update: null, default_replace_delete_data: null })));
+  });
+
+  it.each([false, true])("gates delete-data on the effective replace value (global=%s)", async (globalReplace) => {
+    mockApi.getSettings.mockResolvedValue({ default_follow_tracker_title: false, default_replace_on_update: globalReplace, default_replace_delete_data: true });
+    wrap(<SonarrInstanceForm initial={null} clients={[]} trackers={[]} onDone={() => {}} onCancel={() => {}} />);
+    const replace = screen.getByRole("combobox", { name: /replace previous version by default/i });
+    const deleteData = screen.getByRole("combobox", { name: /delete the old files by default/i });
+    await waitFor(() => expect((deleteData as HTMLSelectElement).disabled).toBe(!globalReplace));
+    await userEvent.selectOptions(replace, "true");
+    expect(deleteData).not.toBeDisabled();
+    await userEvent.selectOptions(replace, "false");
+    expect(deleteData).toBeDisabled();
+    await userEvent.selectOptions(replace, "inherit");
+    expect((deleteData as HTMLSelectElement).disabled).toBe(!globalReplace);
+  });
+
+  it("does not claim to know the global value while settings are unavailable", () => {
+    mockApi.getSettings.mockReturnValue(new Promise(() => {}));
+    wrap(<SonarrInstanceForm initial={null} clients={[]} trackers={[]} onDone={() => {}} onCancel={() => {}} />);
+    expect(screen.getAllByRole("option", { name: "Use global default" })).toHaveLength(2);
+    expect(screen.queryByRole("option", { name: /currently/ })).not.toBeInTheDocument();
+  });
+
+  it("keeps delete-data selectable when the global default cannot be read", async () => {
+    mockApi.getSettings.mockRejectedValue(new Error("settings down"));
+    wrap(<SonarrInstanceForm initial={null} clients={[]} trackers={[]} onDone={() => {}} onCancel={() => {}} />);
+    const deleteData = screen.getByRole("combobox", { name: /delete the old files by default/i });
+    await waitFor(() => expect(mockApi.getSettings).toHaveBeenCalled());
+    expect(deleteData).toHaveValue("inherit");
+    expect(deleteData).not.toBeDisabled();
   });
 });

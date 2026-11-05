@@ -84,11 +84,16 @@ type CreateInput struct {
 	Category         string
 	CheckIntervalSec int
 	// ReplaceOnUpdate opts the topic into the "replace previous version" policy
-	// (issue #101). ReplaceDeleteData controls whether the old torrent's data is
-	// also deleted; nil means the default (true), so callers that don't set it
-	// get the same default as the DB column.
+	// (issue #101). Callers resolve its default before creating the topic.
+	// ReplaceDeleteData is an explicit choice about deleting the old data;
+	// nil uses DefaultReplaceDeleteData and the shared safety guards.
 	ReplaceOnUpdate   bool
 	ReplaceDeleteData *bool
+	// DefaultReplaceDeleteData is the creator's resolved default (global or
+	// Sonarr instance). Nil means the built-in true. Only-new-files or a
+	// folder name overrides it to false, so an inherited default cannot cause
+	// ErrOnlyNewFilesDeletesData / ErrFolderNameDeletesData.
+	DefaultReplaceDeleteData *bool
 	// NotifyOnly makes the topic watch-only (issue #184): monitored and
 	// announced, never submitted to a client. NotifyOnlyAnnounceCurrent
 	// additionally announces the release already present at the first check.
@@ -205,13 +210,11 @@ func BuildAndCreate(ctx context.Context, store Store, in CreateInput) (*Result, 
 		extra["source"] = in.Source
 	}
 
-	// Replace-on-update: keep the DB column's default (delete data = true) when
-	// the caller doesn't specify — except with only-new-files, where deleting
-	// the previous version's files would lose them (issue #205), so an omitted
-	// flag defaults to keeping them. An explicit true is rejected below. The
-	// same holds for a folder name (issue #225): both versions share the
-	// folder, so deleting the old one's files would delete the new one's.
-	replaceDeleteData := !in.OnlyNewFiles && !usesFolderName(folderMode)
+	// Inherit the creator's default, or the historical true when unset. Keep
+	// the files with only-new-files or a shared folder: an inherited default
+	// must never cause a policy rejection. An explicit true is still checked.
+	base := Resolve(in.DefaultReplaceDeleteData, BuiltinReplaceDefaults.ReplaceDeleteData)
+	replaceDeleteData := base && !in.OnlyNewFiles && !usesFolderName(folderMode)
 	if in.ReplaceDeleteData != nil {
 		replaceDeleteData = *in.ReplaceDeleteData
 	}

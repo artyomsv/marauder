@@ -2,13 +2,14 @@ package repo
 
 import (
 	"context"
+	"regexp"
 	"testing"
 
 	pgxmock "github.com/pashagolub/pgxmock/v5"
 )
 
-// The singleton settings row (id = 1) that seeds new topics. Two statements,
-// pinned so a rework cannot silently start writing per-user rows.
+var settingsColumns = []string{"follow_tracker_title_default", "replace_on_update_default", "replace_delete_data_default"}
+
 func TestSettings_Get_ReadsTheSingleton(t *testing.T) {
 	mock, err := pgxmock.NewPool()
 	if err != nil {
@@ -16,35 +17,50 @@ func TestSettings_Get_ReadsTheSingleton(t *testing.T) {
 	}
 	defer mock.Close()
 	r := &Settings{pool: mock}
-
-	mock.ExpectQuery(`SELECT follow_tracker_title_default FROM settings WHERE id = 1`).
-		WillReturnRows(pgxmock.NewRows([]string{"follow_tracker_title_default"}).AddRow(true))
-
+	mock.ExpectQuery("SELECT follow_tracker_title_default, replace_on_update_default, replace_delete_data_default FROM settings WHERE id = 1").
+		WillReturnRows(pgxmock.NewRows(settingsColumns).AddRow(true, true, false))
 	got, err := r.Get(context.Background())
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if !got.DefaultFollowTrackerTitle {
-		t.Error("DefaultFollowTrackerTitle = false, want true")
+	if *got != (InstanceSettings{DefaultFollowTrackerTitle: true, DefaultReplaceOnUpdate: true}) {
+		t.Errorf("Get = %+v", got)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Error(err)
 	}
 }
 
-func TestSettings_SetDefaultFollowTrackerTitle_WritesTheSingleton(t *testing.T) {
-	mock, err := pgxmock.NewPool()
-	if err != nil {
-		t.Fatalf("pgxmock.NewPool: %v", err)
-	}
-	defer mock.Close()
-	r := &Settings{pool: mock}
-
-	mock.ExpectExec(`UPDATE settings SET follow_tracker_title_default = \$1, updated_at = now\(\) WHERE id = 1`).
-		WithArgs(true).
-		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
-
-	if err := r.SetDefaultFollowTrackerTitle(context.Background(), true); err != nil {
-		t.Fatalf("SetDefaultFollowTrackerTitle: %v", err)
-	}
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Errorf("unmet expectations: %v", err)
+func TestSettings_Update_PatchesAndReturnsStoredRow(t *testing.T) {
+	on, off := true, false
+	for _, patch := range []SettingsPatch{
+		{DefaultFollowTrackerTitle: &off},
+		{DefaultReplaceOnUpdate: &on},
+		{DefaultReplaceDeleteData: &off},
+		{DefaultFollowTrackerTitle: &off, DefaultReplaceOnUpdate: &on, DefaultReplaceDeleteData: &off},
+	} {
+		mock, err := pgxmock.NewPool()
+		if err != nil {
+			t.Fatalf("pgxmock.NewPool: %v", err)
+		}
+		t.Cleanup(mock.Close)
+		r := &Settings{pool: mock}
+		mock.ExpectQuery(regexp.QuoteMeta("UPDATE settings SET "+
+			"follow_tracker_title_default = COALESCE($1, follow_tracker_title_default), "+
+			"replace_on_update_default = COALESCE($2, replace_on_update_default), "+
+			"replace_delete_data_default = COALESCE($3, replace_delete_data_default), "+
+			"updated_at = now() WHERE id = 1 RETURNING follow_tracker_title_default, replace_on_update_default, replace_delete_data_default")).
+			WithArgs(patch.DefaultFollowTrackerTitle, patch.DefaultReplaceOnUpdate, patch.DefaultReplaceDeleteData).
+			WillReturnRows(pgxmock.NewRows(settingsColumns).AddRow(false, true, false))
+		got, err := r.Update(context.Background(), patch)
+		if err != nil {
+			t.Fatalf("Update: %v", err)
+		}
+		if *got != (InstanceSettings{DefaultReplaceOnUpdate: true}) {
+			t.Errorf("Update = %+v, want the returned row", got)
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Error(err)
+		}
 	}
 }

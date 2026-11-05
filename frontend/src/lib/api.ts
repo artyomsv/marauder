@@ -263,6 +263,8 @@ export interface SonarrInstance {
   default_client_id: string | null;
   default_category: string;
   default_download_dir: string;
+  default_replace_on_update: boolean | null;
+  default_replace_delete_data: boolean | null;
   update_existing: boolean;
   last_seen_at: string | null;
   created_at: string;
@@ -281,6 +283,8 @@ export interface SonarrInstanceBody {
   default_client_id: string | null;
   default_category: string;
   default_download_dir: string;
+  default_replace_on_update: boolean | null;
+  default_replace_delete_data: boolean | null;
   update_existing: boolean;
 }
 
@@ -422,12 +426,16 @@ export interface UpdateTopicBody {
 // GET /system/settings — the instance-wide defaults new topics start with.
 export interface InstanceSettings {
   default_follow_tracker_title: boolean;
+  default_replace_on_update: boolean;
+  default_replace_delete_data: boolean;
 }
 
 // PUT /system/settings body. Pointer semantics server-side: an omitted field
 // keeps its stored value.
 export interface UpdateSettingsBody {
   default_follow_tracker_title?: boolean;
+  default_replace_on_update?: boolean;
+  default_replace_delete_data?: boolean;
 }
 
 // GET /notifiers/{id} — includes decrypted config for the edit form.
