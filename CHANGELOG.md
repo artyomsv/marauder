@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.28.1] - 2026-11-07
+
 ### Security
 
 - **Go dependency fixes for six image-scan findings.** `go-jose/v4`
