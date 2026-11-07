@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **Go dependency fixes for six image-scan findings.** `go-jose/v4`
+  4.1.4 → 4.1.9 (CVE-2026-116585/116586/116587, used by OIDC login),
+  `golang.org/x/net` 0.61.0 → 0.62.0 (CVE-2026-78661, CVE-2026-97045),
+  and `golang.org/x/crypto` to the upstream fix commit for GO-2026-5932
+  (no tagged release carries it yet).
+
 ## [1.28.0] - 2026-11-05
 
 ### Added
