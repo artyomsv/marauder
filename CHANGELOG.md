@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Gateway no longer loses the backend after it restarts.** The Docker
+  Compose gateway resolved `backend` and `frontend` once at startup, so a
+  container recreated on a new IP (Watchtower, a single-service `up -d`) left
+  every `/api` call answering 502 until the gateway was restarted, while all
+  containers still reported healthy. It now resolves both names per request
+  through Docker's DNS. Kubernetes is unaffected. Ref #244.
+
 ## [1.28.1] - 2026-11-07
 
 ### Security
