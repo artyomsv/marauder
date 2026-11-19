@@ -371,3 +371,31 @@ describe("new topic check interval when settings are unreadable", () => {
     expect(mockApi.post).toHaveBeenCalledWith("/topics", expect.objectContaining({ check_interval_sec: 3600 }));
   });
 });
+
+// Review M-1: an explicit 15-minute choice equals the placeholder and must
+// still be sent, whether the settings read is pending or failed.
+describe("explicit 15-minute choice before settings load", () => {
+  it.each([
+    ["pending", () => mockApi.getSettings.mockReturnValue(new Promise(() => {}))],
+    ["failed", () => mockApi.getSettings.mockRejectedValue(new Error("db down"))],
+  ])("sends 900 when settings are %s", async (_state, arrange) => {
+    arrange();
+    mockApi.post.mockResolvedValue({});
+    render(<AddTopicCard onClose={() => {}} onCreated={() => {}} />, { wrapper: wrap() });
+    const select = screen.getByLabelText(/check interval/i);
+    await userEvent.selectOptions(select, "1800");
+    await userEvent.selectOptions(select, "900");
+    await userEvent.type(screen.getByLabelText(/URL or magnet link/i), "https://tracker.test/topic/250");
+    await userEvent.click(screen.getByRole("button", { name: /add topic/i }));
+    expect(mockApi.post).toHaveBeenCalledWith("/topics", expect.objectContaining({ check_interval_sec: 900 }));
+  });
+
+  it("omits the untouched placeholder while settings are pending", async () => {
+    mockApi.getSettings.mockReturnValue(new Promise(() => {}));
+    mockApi.post.mockResolvedValue({});
+    render(<AddTopicCard onClose={() => {}} onCreated={() => {}} />, { wrapper: wrap() });
+    await userEvent.type(screen.getByLabelText(/URL or magnet link/i), "https://tracker.test/topic/250");
+    await userEvent.click(screen.getByRole("button", { name: /add topic/i }));
+    expect(mockApi.post).toHaveBeenCalledWith("/topics", expect.objectContaining({ check_interval_sec: undefined }));
+  });
+});
