@@ -82,3 +82,48 @@ func TestTopics_Create_ReplaceDefaults(t *testing.T) {
 		})
 	}
 }
+
+// Issue #250: a create without an interval takes the instance default; an
+// explicit interval wins; an out-of-range explicit one is still refused; and
+// a failed settings read falls back to the built-in 900 s.
+func TestTopics_Create_CheckIntervalDefault(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		global      int
+		explicit    int
+		settingsErr bool
+		want        int
+		wantStatus  int
+	}{
+		{name: "inherits global", global: 3600, want: 3600},
+		{name: "explicit wins", global: 3600, explicit: 1800, want: 1800},
+		{name: "explicit out of range refused", global: 3600, explicit: 10, wantStatus: http.StatusUnprocessableEntity},
+		{name: "failed settings uses built-in", global: 3600, settingsErr: true, want: 900},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			settings := &fakeSettingsStore{value: repo.InstanceSettings{DefaultCheckIntervalSec: tc.global}}
+			if tc.settingsErr {
+				settings.err = errors.New("db down")
+			}
+			store := &fakeTopicStore{}
+			h := &Topics{Topics: store, Settings: settings, BaseURL: "http://test", Log: zerolog.Nop()}
+			w := httptest.NewRecorder()
+			h.Create(w, authedReq(t, uuid.New(), createTopicReq{
+				URL: "fake-create://topic/interval", CheckIntervalSec: tc.explicit,
+			}))
+			status := tc.wantStatus
+			if status == 0 {
+				status = http.StatusCreated
+			}
+			if w.Code != status {
+				t.Fatalf("status = %d, want %d: %s", w.Code, status, w.Body.String())
+			}
+			if status != http.StatusCreated {
+				return
+			}
+			if got := store.created.CheckIntervalSec; got != tc.want {
+				t.Errorf("stored interval = %d, want %d", got, tc.want)
+			}
+		})
+	}
+}

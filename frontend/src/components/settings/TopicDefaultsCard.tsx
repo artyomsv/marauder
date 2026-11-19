@@ -9,7 +9,9 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { CheckIntervalSelect } from "@/components/topics/CheckIntervalSelect";
 import { api, type UpdateSettingsBody } from "@/lib/api";
+import { DEFAULT_CHECK_INTERVAL_SEC } from "@/lib/check-interval";
 import { QK } from "@/lib/queryKeys";
 import { cn } from "@/lib/utils";
 import { useT } from "@/i18n";
@@ -68,6 +70,17 @@ export function TopicDefaultsCard() {
           </div>
         ) : (
           <div className="space-y-4">
+            <CheckIntervalSelect
+              id="default-check-interval"
+              value={
+                known
+                  ? settings.data.default_check_interval_sec
+                  : DEFAULT_CHECK_INTERVAL_SEC
+              }
+              disabled={!known || save.isPending}
+              help={t("settings.topicDefaults.intervalHelp")}
+              onChange={(v) => save.mutate({ default_check_interval_sec: v })}
+            />
             <DefaultToggleRow
               checked={
                 known ? settings.data.default_follow_tracker_title : false

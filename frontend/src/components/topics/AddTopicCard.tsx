@@ -109,7 +109,7 @@ export function AddTopicCard({ onClose, onCreated }: AddTopicCardProps) {
         notify_only_announce_current: v.notifyOnlyAnnounceCurrent,
         add_paused_on_update: v.addPausedOnUpdate,
         only_new_files: v.onlyNewFiles,
-        check_interval_sec: v.checkIntervalSec,
+        check_interval_sec: intervalToSend(v, settings.isSuccess),
         folder_name_mode: v.folderNameMode,
         folder_name: v.folderNameMode === "custom" ? v.folderName : undefined,
         follow_tracker_title: v.followTrackerTitle,
@@ -159,6 +159,7 @@ export function AddTopicCard({ onClose, onCreated }: AddTopicCardProps) {
               followTrackerTitle: settings.data?.default_follow_tracker_title ?? false,
               replaceOnUpdate: settings.data?.default_replace_on_update ?? EMPTY.replaceOnUpdate,
               replaceDeleteData: settings.data?.default_replace_delete_data ?? EMPTY.replaceDeleteData,
+              checkIntervalSec: settings.data?.default_check_interval_sec ?? EMPTY.checkIntervalSec,
             }}
             isPending={create.isPending}
             error={error}
@@ -172,4 +173,14 @@ export function AddTopicCard({ onClose, onCreated }: AddTopicCardProps) {
       </Card>
     </motion.div>
   );
+}
+
+// Until the instance settings load, the form shows the built-in 15 min as a
+// placeholder, not the admin's default. An untouched placeholder is omitted so
+// the server applies the real default (issue #250). A value the user picked
+// is sent even when it equals the placeholder: the decision rests on the
+// form's own "chosen" flag, never on the number.
+function intervalToSend(v: TopicFormValues, settingsKnown: boolean): number | undefined {
+  if (settingsKnown || v.checkIntervalChosen) return v.checkIntervalSec;
+  return undefined;
 }

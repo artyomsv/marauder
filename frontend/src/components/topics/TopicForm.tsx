@@ -93,6 +93,10 @@ export interface TopicFormValues {
   onlyNewFiles: boolean;
   // Seconds between checks (issue #204).
   checkIntervalSec: number;
+  // Set on submit: true once the user picked an interval in this form. Lets
+  // the add card tell a real choice from the built-in placeholder shown
+  // before the instance default loads (issue #250). Ignored as an input.
+  checkIntervalChosen?: boolean;
   // Folder name in the client (issue #225).
   folderNameMode: FolderNameMode;
   folderName: string;
@@ -310,6 +314,14 @@ export function TopicForm({
     }
   }, [isEdit, initial.replaceOnUpdate, initial.replaceDeleteData]);
 
+  // Same late-seed rule for the instance default check interval (issue #250).
+  const intervalOwned = useRef(false);
+  useEffect(() => {
+    if (!isEdit && !intervalOwned.current) {
+      setDelivery((d) => ({ ...d, checkIntervalSec: initial.checkIntervalSec }));
+    }
+  }, [isEdit, initial.checkIntervalSec]);
+
   // While the name differs from the one the form was opened with, the checkbox
   // is forced off and disabled: the store clears follow_tracker_title on a
   // rename (see repo.Topics.Update), so a re-tick would be silently discarded
@@ -381,6 +393,7 @@ export function TopicForm({
       addPausedOnUpdate: !episodic && delivery.addPausedOnUpdate,
       onlyNewFiles: !episodic && delivery.onlyNewFiles,
       checkIntervalSec: delivery.checkIntervalSec,
+      checkIntervalChosen: intervalOwned.current,
       // Hidden for per-episode trackers and notify-only topics.
       folderNameMode: folderNameHidden ? "default" : delivery.folderNameMode,
       folderName: delivery.folderName,
@@ -639,7 +652,10 @@ export function TopicForm({
 
       <CheckIntervalSelect
         value={delivery.checkIntervalSec}
-        onChange={(v) => setDelivery((d) => ({ ...d, checkIntervalSec: v }))}
+        onChange={(v) => {
+          intervalOwned.current = true;
+          setDelivery((d) => ({ ...d, checkIntervalSec: v }));
+        }}
       />
 
       {error && (

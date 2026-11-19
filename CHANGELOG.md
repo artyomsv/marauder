@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Default check interval for new topics.** Settings → Topic defaults now
+  has a check interval (15 min to 7 days, default 15 min). New topics start
+  with it, including topics the Sonarr integration creates; the add-topic
+  form preselects it and each topic can still choose its own. Existing
+  topics keep their interval. Ref #250.
+
 ## [1.28.2] - 2026-11-10
 
 ### Fixed

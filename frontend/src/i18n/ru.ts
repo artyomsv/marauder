@@ -223,6 +223,7 @@ const ru: Record<string, string> = {
   "settings.sonarr.useGlobalDefaultCurrent": "Использовать общую настройку (сейчас: {value})",
   "settings.topicDefaults.replaceHelp": "Новые темы заменяют предыдущий торрент при обновлении. В каждой теме это можно переопределить.",
   "settings.topicDefaults.deleteDataHelp": "Для сезонных сборников Sonarr, использующих ту же папку, отключите удаление, чтобы новый торрент использовал уже скачанные файлы.",
+  "settings.topicDefaults.intervalHelp": "Как часто проверяются новые темы. В каждой теме это можно переопределить.",
   "settings.topicDefaults.title": "Настройки тем по умолчанию",
   "settings.topicDefaults.blurb":
     "С чем создаются новые темы. Существующие темы сохраняют свои настройки.",

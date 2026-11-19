@@ -207,7 +207,7 @@ func (h *Topics) Create(w http.ResponseWriter, r *http.Request) {
 		NotifierID:       req.NotifierID,
 		DownloadDir:      req.DownloadDir,
 		Category:         req.Category,
-		CheckIntervalSec: req.CheckIntervalSec,
+		CheckIntervalSec: topics.ResolveCheckInterval(req.CheckIntervalSec, defaults.DefaultCheckIntervalSec),
 		Credentials: func(cctx context.Context, t registry.Tracker) *domain.TrackerCredential {
 			// The two dropped returns say WHY there is no credential — no
 			// account stored, versus one that would not warm. Both mean the
@@ -504,11 +504,12 @@ func (h *Topics) topicDefaults(ctx context.Context) repo.InstanceSettings {
 		if err == nil {
 			return *s
 		}
-		h.Log.Warn().Err(err).Msg("settings read failed; using built-in follow-title and replace defaults")
+		h.Log.Warn().Err(err).Msg("settings read failed; using built-in topic defaults")
 	}
 	return repo.InstanceSettings{
 		DefaultReplaceOnUpdate:   topics.BuiltinReplaceDefaults.ReplaceOnUpdate,
 		DefaultReplaceDeleteData: topics.BuiltinReplaceDefaults.ReplaceDeleteData,
+		DefaultCheckIntervalSec:  topics.DefaultCheckIntervalSec,
 	}
 }
 

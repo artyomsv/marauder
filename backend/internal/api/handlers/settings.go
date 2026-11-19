@@ -8,6 +8,7 @@ import (
 	"github.com/artyomsv/marauder/backend/internal/audit"
 	"github.com/artyomsv/marauder/backend/internal/db/repo"
 	"github.com/artyomsv/marauder/backend/internal/problem"
+	"github.com/artyomsv/marauder/backend/internal/topics"
 )
 
 // settingsStore is the consumer seam over *repo.Settings.
@@ -32,6 +33,7 @@ type settingsView struct {
 	DefaultFollowTrackerTitle bool `json:"default_follow_tracker_title"`
 	DefaultReplaceOnUpdate    bool `json:"default_replace_on_update"`
 	DefaultReplaceDeleteData  bool `json:"default_replace_delete_data"`
+	DefaultCheckIntervalSec   int  `json:"default_check_interval_sec"`
 }
 
 func toSettingsView(s *repo.InstanceSettings) settingsView {
@@ -39,6 +41,7 @@ func toSettingsView(s *repo.InstanceSettings) settingsView {
 		DefaultFollowTrackerTitle: s.DefaultFollowTrackerTitle,
 		DefaultReplaceOnUpdate:    s.DefaultReplaceOnUpdate,
 		DefaultReplaceDeleteData:  s.DefaultReplaceDeleteData,
+		DefaultCheckIntervalSec:   s.DefaultCheckIntervalSec,
 	}
 }
 
@@ -58,6 +61,7 @@ type updateSettingsReq struct {
 	DefaultFollowTrackerTitle *bool `json:"default_follow_tracker_title,omitempty"`
 	DefaultReplaceOnUpdate    *bool `json:"default_replace_on_update,omitempty"`
 	DefaultReplaceDeleteData  *bool `json:"default_replace_delete_data,omitempty"`
+	DefaultCheckIntervalSec   *int  `json:"default_check_interval_sec,omitempty"`
 }
 
 // Update handles PUT /system/settings (admin only).
@@ -72,14 +76,22 @@ func (h *Settings) Update(w http.ResponseWriter, r *http.Request) {
 		problem.Write(w, r, h.BaseURL, problem.ErrBadRequest("invalid JSON"))
 		return
 	}
-	if req.DefaultFollowTrackerTitle == nil && req.DefaultReplaceOnUpdate == nil && req.DefaultReplaceDeleteData == nil {
+	if req.DefaultFollowTrackerTitle == nil && req.DefaultReplaceOnUpdate == nil && req.DefaultReplaceDeleteData == nil &&
+		req.DefaultCheckIntervalSec == nil {
 		problem.Write(w, r, h.BaseURL, problem.ErrBadRequest("no settings to update"))
+		return
+	}
+	// Same range a topic's own interval must satisfy. The column's CHECK
+	// constraint would refuse it too, but as a 500 instead of a 422.
+	if req.DefaultCheckIntervalSec != nil && !topics.ValidCheckInterval(*req.DefaultCheckIntervalSec) {
+		problem.Write(w, r, h.BaseURL, problem.ErrUnprocessable(topics.ErrCheckIntervalOutOfRange.Error()))
 		return
 	}
 	s, err := h.Store.Update(r.Context(), repo.SettingsPatch{
 		DefaultFollowTrackerTitle: req.DefaultFollowTrackerTitle,
 		DefaultReplaceOnUpdate:    req.DefaultReplaceOnUpdate,
 		DefaultReplaceDeleteData:  req.DefaultReplaceDeleteData,
+		DefaultCheckIntervalSec:   req.DefaultCheckIntervalSec,
 	})
 	if err != nil {
 		problem.Write(w, r, h.BaseURL, problem.ErrInternal("settings: "+err.Error()))
@@ -95,6 +107,9 @@ func (h *Settings) Update(w http.ResponseWriter, r *http.Request) {
 			if value != nil {
 				meta[key] = *value
 			}
+		}
+		if req.DefaultCheckIntervalSec != nil {
+			meta["default_check_interval_sec"] = *req.DefaultCheckIntervalSec
 		}
 		resourceID := "topic_defaults"
 		if req.DefaultFollowTrackerTitle != nil && len(meta) == 1 {

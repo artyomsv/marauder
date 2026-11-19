@@ -2159,7 +2159,7 @@ func TestBackoff_TableTest(t *testing.T) {
 		},
 		{
 			// The overflow threshold moves with the interval, and 900s is the
-			// project's default (topics.defaultCheckIntervalSec), so this is
+			// project's default (topics.DefaultCheckIntervalSec), so this is
 			// the boundary real topics actually crossed: 23 errors, not 27.
 			// The rest of this table is pinned to 60s and would not have caught
 			// a regression that only reappears at the default interval.

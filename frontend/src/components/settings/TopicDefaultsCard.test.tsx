@@ -34,7 +34,7 @@ function renderCard() {
   return render(<TopicDefaultsCard />, { wrapper: wrap() });
 }
 
-const DEFAULTS = { default_follow_tracker_title: true, default_replace_on_update: true, default_replace_delete_data: false };
+const DEFAULTS = { default_follow_tracker_title: true, default_replace_on_update: true, default_replace_delete_data: false, default_check_interval_sec: 3600 };
 
 beforeEach(() => {
   mockApi.getSettings.mockReset();
@@ -114,5 +114,26 @@ describe("replace defaults", () => {
     if (key !== "default_follow_tracker_title") {
       expect(screen.getByRole("checkbox", { name: /follow the tracker/i })).toBeChecked();
     }
+  });
+});
+
+// Issue #250: the default check interval for new topics.
+describe("check interval default", () => {
+  it("shows the stored interval and saves only the interval", async () => {
+    mockApi.getSettings.mockResolvedValue(DEFAULTS);
+    mockApi.updateSettings.mockImplementation((patch: UpdateSettingsBody) => Promise.resolve({ ...DEFAULTS, ...patch }));
+    renderCard();
+    const select = screen.getByLabelText(/check interval/i) as HTMLSelectElement;
+    await waitFor(() => expect(select).not.toBeDisabled());
+    expect(select.value).toBe("3600");
+    await userEvent.selectOptions(select, "86400");
+    expect(mockApi.updateSettings).toHaveBeenCalledWith({ default_check_interval_sec: 86400 });
+    await waitFor(() => expect(select.value).toBe("86400"));
+  });
+
+  it("keeps the select disabled until the read settles", () => {
+    mockApi.getSettings.mockReturnValue(new Promise(() => {}));
+    renderCard();
+    expect(screen.getByLabelText(/check interval/i)).toBeDisabled();
   });
 });

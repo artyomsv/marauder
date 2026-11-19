@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -61,7 +62,7 @@ func TestSettingsUpdate_PartialFieldsReturnStoredRowAndAuditOnlySentKeys(t *test
 					resourceID, "success", pgxmock.AnyArg(), pgxmock.AnyArg(), metadata).
 				WillReturnResult(pgxmock.NewResult("INSERT", 1))
 			store := &fakeSettingsStore{value: repo.InstanceSettings{
-				DefaultFollowTrackerTitle: true, DefaultReplaceOnUpdate: true, DefaultReplaceDeleteData: true,
+				DefaultFollowTrackerTitle: true, DefaultReplaceOnUpdate: true, DefaultReplaceDeleteData: true, DefaultCheckIntervalSec: 900,
 			}}
 			h := &Settings{Store: store, BaseURL: "http://test", Audit: audit.NewLogger(ctx, repo.NewAudit(mock), zerolog.Nop())}
 			w := httptest.NewRecorder()
@@ -69,11 +70,11 @@ func TestSettingsUpdate_PartialFieldsReturnStoredRowAndAuditOnlySentKeys(t *test
 			if w.Code != http.StatusOK {
 				t.Fatalf("status = %d: %s", w.Code, w.Body.String())
 			}
-			var got map[string]bool
+			var got map[string]any
 			if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
 				t.Fatal(err)
 			}
-			want := map[string]bool{"default_follow_tracker_title": true, "default_replace_on_update": true, "default_replace_delete_data": true}
+			want := map[string]any{"default_follow_tracker_title": true, "default_replace_on_update": true, "default_replace_delete_data": true, "default_check_interval_sec": float64(900)}
 			want[key] = false
 			if !reflect.DeepEqual(got, want) {
 				t.Errorf("response = %v, want %v", got, want)
@@ -207,5 +208,43 @@ func TestSettingsUpdate_StoreErrorIsInternal(t *testing.T) {
 
 	if w.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want 500; body=%s", w.Code, w.Body.String())
+	}
+}
+
+// Issue #250: the default check interval is written when in range and
+// refused with 422, before any write, when outside the per-topic range.
+func TestSettingsUpdate_CheckIntervalDefault(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		sec        int
+		wantStatus int
+	}{
+		{"minimum", 300, http.StatusOK},
+		{"one hour", 3600, http.StatusOK},
+		{"maximum", 604_800, http.StatusOK},
+		{"below minimum", 299, http.StatusUnprocessableEntity},
+		{"above maximum", 604_801, http.StatusUnprocessableEntity},
+		{"zero", 0, http.StatusUnprocessableEntity},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &fakeSettingsStore{value: repo.InstanceSettings{DefaultCheckIntervalSec: 900}}
+			h := &Settings{Store: store, BaseURL: "http://x"}
+			sec := tc.sec
+			w := httptest.NewRecorder()
+			h.Update(w, authedReq(t, uuid.New(), updateSettingsReq{DefaultCheckIntervalSec: &sec}))
+
+			if w.Code != tc.wantStatus {
+				t.Fatalf("status = %d, want %d; body=%s", w.Code, tc.wantStatus, w.Body.String())
+			}
+			if tc.wantStatus != http.StatusOK {
+				if len(store.patches) != 0 {
+					t.Errorf("patches = %v, want no write", store.patches)
+				}
+				return
+			}
+			if !strings.Contains(w.Body.String(), fmt.Sprintf(`"default_check_interval_sec":%d`, tc.sec)) {
+				t.Errorf("body = %s, want the written interval", w.Body.String())
+			}
+		})
 	}
 }
