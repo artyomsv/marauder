@@ -109,7 +109,7 @@ export function AddTopicCard({ onClose, onCreated }: AddTopicCardProps) {
         notify_only_announce_current: v.notifyOnlyAnnounceCurrent,
         add_paused_on_update: v.addPausedOnUpdate,
         only_new_files: v.onlyNewFiles,
-        check_interval_sec: v.checkIntervalSec,
+        check_interval_sec: intervalToSend(v.checkIntervalSec, settings.isSuccess),
         folder_name_mode: v.folderNameMode,
         folder_name: v.folderNameMode === "custom" ? v.folderName : undefined,
         follow_tracker_title: v.followTrackerTitle,
@@ -173,4 +173,13 @@ export function AddTopicCard({ onClose, onCreated }: AddTopicCardProps) {
       </Card>
     </motion.div>
   );
+}
+
+// Until the instance settings load, the form shows the built-in 15 min as a
+// placeholder, not the admin's default. An untouched placeholder is omitted so
+// the server applies the real default (issue #250); any other value is the
+// user's own pick and is sent as is.
+function intervalToSend(sec: number, settingsKnown: boolean): number | undefined {
+  if (settingsKnown || sec !== DEFAULT_CHECK_INTERVAL_SEC) return sec;
+  return undefined;
 }

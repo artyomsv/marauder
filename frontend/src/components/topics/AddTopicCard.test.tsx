@@ -349,3 +349,25 @@ describe("new topic check interval default", () => {
     expect(select).toHaveValue("1800");
   });
 });
+
+describe("new topic check interval when settings are unreadable", () => {
+  it("omits the untouched placeholder so the server default applies", async () => {
+    mockApi.getSettings.mockRejectedValue(new Error("db down"));
+    mockApi.post.mockResolvedValue({});
+    render(<AddTopicCard onClose={() => {}} onCreated={() => {}} />, { wrapper: wrap() });
+    await waitFor(() => expect(mockApi.getSettings).toHaveBeenCalled());
+    await userEvent.type(screen.getByLabelText(/URL or magnet link/i), "https://tracker.test/topic/250");
+    await userEvent.click(screen.getByRole("button", { name: /add topic/i }));
+    expect(mockApi.post).toHaveBeenCalledWith("/topics", expect.objectContaining({ check_interval_sec: undefined }));
+  });
+
+  it("still sends an interval the user picked", async () => {
+    mockApi.getSettings.mockRejectedValue(new Error("db down"));
+    mockApi.post.mockResolvedValue({});
+    render(<AddTopicCard onClose={() => {}} onCreated={() => {}} />, { wrapper: wrap() });
+    await userEvent.selectOptions(screen.getByLabelText(/check interval/i), "3600");
+    await userEvent.type(screen.getByLabelText(/URL or magnet link/i), "https://tracker.test/topic/250");
+    await userEvent.click(screen.getByRole("button", { name: /add topic/i }));
+    expect(mockApi.post).toHaveBeenCalledWith("/topics", expect.objectContaining({ check_interval_sec: 3600 }));
+  });
+});
