@@ -58,6 +58,9 @@ const SEARCH_RESULTS = {
 beforeEach(() => {
   mockApi.getSettings.mockResolvedValue({ default_follow_tracker_title: false, default_replace_on_update: false, default_replace_delete_data: true, default_check_interval_sec: 900 });
   mockApi.get.mockReset();
+  // Clear call history only (keep each test's own resolved value): a POST
+  // left by an earlier test must never satisfy a later assertion.
+  mockApi.post.mockClear();
   mockApi.get.mockImplementation((path: string) => {
     if (path.startsWith("/trackers/search")) return Promise.resolve(SEARCH_RESULTS);
     if (path.startsWith("/trackers/match"))
@@ -326,76 +329,85 @@ describe("new topic replace defaults", () => {
   });
 });
 
-// Issue #250: the add form starts at the configured default interval.
+// Issue #250: the add form and the instance default check interval. Each test
+// reads only its own POST (beforeEach clears the call history), so a payload
+// sent by an earlier test can never satisfy an assertion here.
+function settingsWith(sec: number) {
+  return { default_follow_tracker_title: false, default_replace_on_update: false, default_replace_delete_data: true, default_check_interval_sec: sec };
+}
+
+async function submitTopic() {
+  await userEvent.type(screen.getByLabelText(/URL or magnet link/i), "https://tracker.test/topic/250");
+  await userEvent.click(screen.getByRole("button", { name: /add topic/i }));
+}
+
+// The body of the one POST this test made.
+function postedBody(): Record<string, unknown> {
+  expect(mockApi.post).toHaveBeenCalledTimes(1);
+  const [path, body] = mockApi.post.mock.calls[0];
+  expect(path).toBe("/topics");
+  return body as Record<string, unknown>;
+}
+
+function renderAddCard() {
+  mockApi.post.mockResolvedValue({});
+  render(<AddTopicCard onClose={() => {}} onCreated={() => {}} />, { wrapper: wrap() });
+}
+
+const pendingSettings = () => mockApi.getSettings.mockReturnValue(new Promise(() => {}));
+const failedSettings = () => mockApi.getSettings.mockRejectedValue(new Error("db down"));
+
 describe("new topic check interval default", () => {
   it("seeds and submits the configured interval", async () => {
-    mockApi.getSettings.mockResolvedValue({ default_follow_tracker_title: false, default_replace_on_update: false, default_replace_delete_data: true, default_check_interval_sec: 21600 });
-    mockApi.post.mockResolvedValue({});
-    render(<AddTopicCard onClose={() => {}} onCreated={() => {}} />, { wrapper: wrap() });
+    mockApi.getSettings.mockResolvedValue(settingsWith(21600));
+    renderAddCard();
     await waitFor(() => expect(screen.getByLabelText(/check interval/i)).toHaveValue("21600"));
-    await userEvent.type(screen.getByLabelText(/URL or magnet link/i), "https://tracker.test/topic/250");
-    await userEvent.click(screen.getByRole("button", { name: /add topic/i }));
-    expect(mockApi.post).toHaveBeenCalledWith("/topics", expect.objectContaining({ check_interval_sec: 21600 }));
+    await submitTopic();
+    expect(postedBody().check_interval_sec).toBe(21600);
   });
 
   it("does not overwrite an interval the user already picked", async () => {
-    let finish!: (value: { default_follow_tracker_title: boolean; default_replace_on_update: boolean; default_replace_delete_data: boolean; default_check_interval_sec: number }) => void;
+    let finish!: (value: ReturnType<typeof settingsWith>) => void;
     mockApi.getSettings.mockReturnValue(new Promise((resolve) => { finish = resolve; }));
-    render(<AddTopicCard onClose={() => {}} onCreated={() => {}} />, { wrapper: wrap() });
+    renderAddCard();
     const select = screen.getByLabelText(/check interval/i);
     expect(select).toHaveValue("900");
     await userEvent.selectOptions(select, "1800");
-    await act(async () => finish({ default_follow_tracker_title: false, default_replace_on_update: false, default_replace_delete_data: true, default_check_interval_sec: 21600 }));
+    await act(async () => finish(settingsWith(21600)));
     expect(select).toHaveValue("1800");
   });
-});
 
-describe("new topic check interval when settings are unreadable", () => {
-  it("omits the untouched placeholder so the server default applies", async () => {
-    mockApi.getSettings.mockRejectedValue(new Error("db down"));
-    mockApi.post.mockResolvedValue({});
-    render(<AddTopicCard onClose={() => {}} onCreated={() => {}} />, { wrapper: wrap() });
-    await waitFor(() => expect(mockApi.getSettings).toHaveBeenCalled());
-    await userEvent.type(screen.getByLabelText(/URL or magnet link/i), "https://tracker.test/topic/250");
-    await userEvent.click(screen.getByRole("button", { name: /add topic/i }));
-    expect(mockApi.post).toHaveBeenCalledWith("/topics", expect.objectContaining({ check_interval_sec: undefined }));
-  });
-
-  it("still sends an interval the user picked", async () => {
-    mockApi.getSettings.mockRejectedValue(new Error("db down"));
-    mockApi.post.mockResolvedValue({});
-    render(<AddTopicCard onClose={() => {}} onCreated={() => {}} />, { wrapper: wrap() });
-    await userEvent.selectOptions(screen.getByLabelText(/check interval/i), "3600");
-    await userEvent.type(screen.getByLabelText(/URL or magnet link/i), "https://tracker.test/topic/250");
-    await userEvent.click(screen.getByRole("button", { name: /add topic/i }));
-    expect(mockApi.post).toHaveBeenCalledWith("/topics", expect.objectContaining({ check_interval_sec: 3600 }));
-  });
-});
-
-// Review M-1: an explicit 15-minute choice equals the placeholder and must
-// still be sent, whether the settings read is pending or failed.
-describe("explicit 15-minute choice before settings load", () => {
   it.each([
-    ["pending", () => mockApi.getSettings.mockReturnValue(new Promise(() => {}))],
-    ["failed", () => mockApi.getSettings.mockRejectedValue(new Error("db down"))],
-  ])("sends 900 when settings are %s", async (_state, arrange) => {
+    ["pending", pendingSettings],
+    ["failed", failedSettings],
+  ])("omits the untouched placeholder when settings are %s", async (_state, arrange) => {
     arrange();
-    mockApi.post.mockResolvedValue({});
-    render(<AddTopicCard onClose={() => {}} onCreated={() => {}} />, { wrapper: wrap() });
+    renderAddCard();
+    await submitTopic();
+    const body = postedBody();
+    expect(body.check_interval_sec).toBeUndefined();
+  });
+
+  // Review M-1: 900 equals the placeholder, so only the form's "chosen" flag
+  // can tell this apart from the untouched case above.
+  it.each([
+    ["pending", pendingSettings],
+    ["failed", failedSettings],
+  ])("sends an explicit 15-minute choice when settings are %s", async (_state, arrange) => {
+    arrange();
+    renderAddCard();
     const select = screen.getByLabelText(/check interval/i);
     await userEvent.selectOptions(select, "1800");
     await userEvent.selectOptions(select, "900");
-    await userEvent.type(screen.getByLabelText(/URL or magnet link/i), "https://tracker.test/topic/250");
-    await userEvent.click(screen.getByRole("button", { name: /add topic/i }));
-    expect(mockApi.post).toHaveBeenCalledWith("/topics", expect.objectContaining({ check_interval_sec: 900 }));
+    await submitTopic();
+    expect(postedBody().check_interval_sec).toBe(900);
   });
 
-  it("omits the untouched placeholder while settings are pending", async () => {
-    mockApi.getSettings.mockReturnValue(new Promise(() => {}));
-    mockApi.post.mockResolvedValue({});
-    render(<AddTopicCard onClose={() => {}} onCreated={() => {}} />, { wrapper: wrap() });
-    await userEvent.type(screen.getByLabelText(/URL or magnet link/i), "https://tracker.test/topic/250");
-    await userEvent.click(screen.getByRole("button", { name: /add topic/i }));
-    expect(mockApi.post).toHaveBeenCalledWith("/topics", expect.objectContaining({ check_interval_sec: undefined }));
+  it("sends another interval the user picked when settings failed", async () => {
+    failedSettings();
+    renderAddCard();
+    await userEvent.selectOptions(screen.getByLabelText(/check interval/i), "3600");
+    await submitTopic();
+    expect(postedBody().check_interval_sec).toBe(3600);
   });
 });
