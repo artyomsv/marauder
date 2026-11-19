@@ -56,7 +56,7 @@ const SEARCH_RESULTS = {
 };
 
 beforeEach(() => {
-  mockApi.getSettings.mockResolvedValue({ default_follow_tracker_title: false, default_replace_on_update: false, default_replace_delete_data: true });
+  mockApi.getSettings.mockResolvedValue({ default_follow_tracker_title: false, default_replace_on_update: false, default_replace_delete_data: true, default_check_interval_sec: 900 });
   mockApi.get.mockReset();
   mockApi.get.mockImplementation((path: string) => {
     if (path.startsWith("/trackers/search")) return Promise.resolve(SEARCH_RESULTS);
@@ -323,5 +323,29 @@ describe("new topic replace defaults", () => {
     await waitFor(() => expect(screen.queryByLabelText(/replace previous version/i)).not.toBeInTheDocument());
     await userEvent.click(screen.getByRole("button", { name: /add topic/i }));
     expect(mockApi.post).toHaveBeenCalledWith("/topics", expect.objectContaining({ replace_on_update: false }));
+  });
+});
+
+// Issue #250: the add form starts at the configured default interval.
+describe("new topic check interval default", () => {
+  it("seeds and submits the configured interval", async () => {
+    mockApi.getSettings.mockResolvedValue({ default_follow_tracker_title: false, default_replace_on_update: false, default_replace_delete_data: true, default_check_interval_sec: 21600 });
+    mockApi.post.mockResolvedValue({});
+    render(<AddTopicCard onClose={() => {}} onCreated={() => {}} />, { wrapper: wrap() });
+    await waitFor(() => expect(screen.getByLabelText(/check interval/i)).toHaveValue("21600"));
+    await userEvent.type(screen.getByLabelText(/URL or magnet link/i), "https://tracker.test/topic/250");
+    await userEvent.click(screen.getByRole("button", { name: /add topic/i }));
+    expect(mockApi.post).toHaveBeenCalledWith("/topics", expect.objectContaining({ check_interval_sec: 21600 }));
+  });
+
+  it("does not overwrite an interval the user already picked", async () => {
+    let finish!: (value: { default_follow_tracker_title: boolean; default_replace_on_update: boolean; default_replace_delete_data: boolean; default_check_interval_sec: number }) => void;
+    mockApi.getSettings.mockReturnValue(new Promise((resolve) => { finish = resolve; }));
+    render(<AddTopicCard onClose={() => {}} onCreated={() => {}} />, { wrapper: wrap() });
+    const select = screen.getByLabelText(/check interval/i);
+    expect(select).toHaveValue("900");
+    await userEvent.selectOptions(select, "1800");
+    await act(async () => finish({ default_follow_tracker_title: false, default_replace_on_update: false, default_replace_delete_data: true, default_check_interval_sec: 21600 }));
+    expect(select).toHaveValue("1800");
   });
 });

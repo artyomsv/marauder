@@ -266,13 +266,14 @@ func (p *Poller) processURL(ctx context.Context, inst domain.SonarrInstance, own
 		return
 	}
 
-	follow, replace := p.topicDefaults(ctx, inst)
+	follow, replace, interval := p.topicDefaults(ctx, inst)
 	res, err := topics.BuildAndCreate(ctx, p.topics, topics.CreateInput{
 		UserID:                   ownerID,
 		URL:                      url,
 		ClientID:                 inst.DefaultClientID,
 		Category:                 inst.DefaultCategory,
 		DownloadDir:              inst.DefaultDownloadDir,
+		CheckIntervalSec:         interval,
 		Source:                   topicSourceSonarr,
 		Extra:                    sonarrTopicExtra(rec),
 		FollowTrackerTitle:       follow,
@@ -308,21 +309,24 @@ func (p *Poller) processURL(ctx context.Context, inst domain.SonarrInstance, own
 
 // topicDefaults applies each instance override over the global default.
 // A failed settings read falls open to the built-ins for inherited fields.
-func (p *Poller) topicDefaults(ctx context.Context, inst domain.SonarrInstance) (follow bool, replace topics.ReplaceDefaults) {
+// The check interval has no per-instance override: the global default applies.
+func (p *Poller) topicDefaults(ctx context.Context, inst domain.SonarrInstance) (follow bool, replace topics.ReplaceDefaults, interval int) {
 	replace = topics.BuiltinReplaceDefaults
+	interval = topics.DefaultCheckIntervalSec
 	if p.settings != nil {
 		s, err := p.settings.Get(ctx)
 		if err != nil {
-			p.log.Warn().Err(err).Msg("settings read failed; using built-in follow-title and replace defaults")
+			p.log.Warn().Err(err).Msg("settings read failed; using built-in topic defaults")
 		} else {
 			follow = s.DefaultFollowTrackerTitle
 			replace.ReplaceOnUpdate = s.DefaultReplaceOnUpdate
 			replace.ReplaceDeleteData = s.DefaultReplaceDeleteData
+			interval = topics.ResolveCheckInterval(0, s.DefaultCheckIntervalSec)
 		}
 	}
 	replace.ReplaceOnUpdate = topics.Resolve(inst.DefaultReplaceOnUpdate, replace.ReplaceOnUpdate)
 	replace.ReplaceDeleteData = topics.Resolve(inst.DefaultReplaceDeleteData, replace.ReplaceDeleteData)
-	return follow, replace
+	return follow, replace, interval
 }
 
 func sonarrTopicExtra(rec HistoryRecord) map[string]any {

@@ -310,6 +310,14 @@ export function TopicForm({
     }
   }, [isEdit, initial.replaceOnUpdate, initial.replaceDeleteData]);
 
+  // Same late-seed rule for the instance default check interval (issue #250).
+  const intervalOwned = useRef(false);
+  useEffect(() => {
+    if (!isEdit && !intervalOwned.current) {
+      setDelivery((d) => ({ ...d, checkIntervalSec: initial.checkIntervalSec }));
+    }
+  }, [isEdit, initial.checkIntervalSec]);
+
   // While the name differs from the one the form was opened with, the checkbox
   // is forced off and disabled: the store clears follow_tracker_title on a
   // rename (see repo.Topics.Update), so a re-tick would be silently discarded
@@ -639,7 +647,10 @@ export function TopicForm({
 
       <CheckIntervalSelect
         value={delivery.checkIntervalSec}
-        onChange={(v) => setDelivery((d) => ({ ...d, checkIntervalSec: v }))}
+        onChange={(v) => {
+          intervalOwned.current = true;
+          setDelivery((d) => ({ ...d, checkIntervalSec: v }));
+        }}
       />
 
       {error && (

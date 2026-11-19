@@ -226,6 +226,7 @@ const en: Record<string, string> = {
   "settings.sonarr.useGlobalDefaultCurrent": "Use global default (currently: {value})",
   "settings.topicDefaults.replaceHelp": "New topics replace the previous torrent when an update arrives. Each topic can override this.",
   "settings.topicDefaults.deleteDataHelp": "For Sonarr season packs that reuse the same folder, turn this off to keep the files for the new torrent.",
+  "settings.topicDefaults.intervalHelp": "How often new topics are checked. Each topic can override this.",
   "settings.topicDefaults.title": "Topic defaults",
   "settings.topicDefaults.blurb":
     "What new topics are created with. Existing topics keep their own setting.",

@@ -43,6 +43,9 @@ func (f *fakeSettingsStore) Update(_ context.Context, p repo.SettingsPatch) (*re
 	if p.DefaultReplaceDeleteData != nil {
 		f.value.DefaultReplaceDeleteData = *p.DefaultReplaceDeleteData
 	}
+	if p.DefaultCheckIntervalSec != nil {
+		f.value.DefaultCheckIntervalSec = *p.DefaultCheckIntervalSec
+	}
 	f.patches = append(f.patches, p)
 	s := f.value
 	return &s, nil

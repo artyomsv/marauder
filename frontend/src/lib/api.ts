@@ -428,6 +428,8 @@ export interface InstanceSettings {
   default_follow_tracker_title: boolean;
   default_replace_on_update: boolean;
   default_replace_delete_data: boolean;
+  // Seconds; new topics without their own interval use it (issue #250).
+  default_check_interval_sec: number;
 }
 
 // PUT /system/settings body. Pointer semantics server-side: an omitted field
@@ -436,6 +438,7 @@ export interface UpdateSettingsBody {
   default_follow_tracker_title?: boolean;
   default_replace_on_update?: boolean;
   default_replace_delete_data?: boolean;
+  default_check_interval_sec?: number;
 }
 
 // GET /notifiers/{id} — includes decrypted config for the edit form.

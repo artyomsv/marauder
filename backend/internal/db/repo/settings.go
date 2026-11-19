@@ -27,6 +27,9 @@ type InstanceSettings struct {
 	DefaultFollowTrackerTitle bool
 	DefaultReplaceOnUpdate    bool
 	DefaultReplaceDeleteData  bool
+	// DefaultCheckIntervalSec seeds new topics' check_interval_sec when the
+	// creator does not send one (issue #250).
+	DefaultCheckIntervalSec int
 }
 
 // SettingsPatch carries the fields to change; nil leaves a column alone.
@@ -34,14 +37,23 @@ type SettingsPatch struct {
 	DefaultFollowTrackerTitle *bool
 	DefaultReplaceOnUpdate    *bool
 	DefaultReplaceDeleteData  *bool
+	DefaultCheckIntervalSec   *int
+}
+
+// settingsColumns is the column list Get and Update read back, in the order
+// scanTargets scans them.
+const settingsColumns = `follow_tracker_title_default, replace_on_update_default, replace_delete_data_default, check_interval_sec_default`
+
+func (s *InstanceSettings) scanTargets() []any {
+	return []any{&s.DefaultFollowTrackerTitle, &s.DefaultReplaceOnUpdate, &s.DefaultReplaceDeleteData, &s.DefaultCheckIntervalSec}
 }
 
 // Get reads the singleton settings row.
 func (r *Settings) Get(ctx context.Context) (*InstanceSettings, error) {
 	var s InstanceSettings
 	err := r.pool.QueryRow(ctx,
-		`SELECT follow_tracker_title_default, replace_on_update_default, replace_delete_data_default FROM settings WHERE id = 1`).
-		Scan(&s.DefaultFollowTrackerTitle, &s.DefaultReplaceOnUpdate, &s.DefaultReplaceDeleteData)
+		`SELECT `+settingsColumns+` FROM settings WHERE id = 1`).
+		Scan(s.scanTargets()...)
 	if err != nil {
 		return nil, fmt.Errorf("settings: get: %w", err)
 	}
@@ -55,10 +67,11 @@ func (r *Settings) Update(ctx context.Context, p SettingsPatch) (*InstanceSettin
     follow_tracker_title_default = COALESCE($1, follow_tracker_title_default),
     replace_on_update_default = COALESCE($2, replace_on_update_default),
     replace_delete_data_default = COALESCE($3, replace_delete_data_default),
+    check_interval_sec_default = COALESCE($4, check_interval_sec_default),
     updated_at = now()
-WHERE id = 1 RETURNING follow_tracker_title_default, replace_on_update_default, replace_delete_data_default`,
-		p.DefaultFollowTrackerTitle, p.DefaultReplaceOnUpdate, p.DefaultReplaceDeleteData).
-		Scan(&s.DefaultFollowTrackerTitle, &s.DefaultReplaceOnUpdate, &s.DefaultReplaceDeleteData)
+WHERE id = 1 RETURNING `+settingsColumns,
+		p.DefaultFollowTrackerTitle, p.DefaultReplaceOnUpdate, p.DefaultReplaceDeleteData, p.DefaultCheckIntervalSec).
+		Scan(s.scanTargets()...)
 	if err != nil {
 		return nil, fmt.Errorf("settings: update: %w", err)
 	}

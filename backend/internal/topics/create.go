@@ -31,8 +31,9 @@ const metadataTimeout = 8 * time.Second
 // warm exists to prevent.
 const credentialWarmTimeout = 5 * time.Second
 
-// defaultCheckIntervalSec is used when the caller doesn't specify one.
-const defaultCheckIntervalSec = 900 // 15 min
+// DefaultCheckIntervalSec is the built-in interval used when neither the caller
+// nor the instance settings supply one.
+const DefaultCheckIntervalSec = 900 // 15 min
 
 // The range a user may choose for a topic's check interval (issue #204). The
 // floor keeps one topic from hammering a tracker; the ceiling catches a units
@@ -173,7 +174,7 @@ func BuildAndCreate(ctx context.Context, store Store, in CreateInput) (*Result, 
 
 	interval := in.CheckIntervalSec
 	if interval == 0 {
-		interval = defaultCheckIntervalSec
+		interval = DefaultCheckIntervalSec
 	}
 	displayName := in.DisplayName
 	resolved := in.DisplayName != "" // caller-supplied name is authoritative

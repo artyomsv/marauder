@@ -125,3 +125,38 @@ func TestPoller_ExistingTopicKeepsReplacePolicyWithoutReadingDefaults(t *testing
 		}
 	}
 }
+
+// Issue #250: a Sonarr-created topic takes the global default interval, and
+// the built-in 900 s when settings are absent or unreadable.
+func TestPoller_Create_CheckIntervalDefault(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		global       int
+		fail, absent bool
+		want         int
+	}{
+		{name: "global", global: 3600, want: 3600},
+		{name: "no settings", absent: true, want: 900},
+		{name: "settings error", global: 3600, fail: true, want: 900},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			settings := &defaultsSettings{value: repo.InstanceSettings{DefaultCheckIntervalSec: tc.global}}
+			if tc.fail {
+				settings.err = errors.New("db down")
+			}
+			store := &fakeTopics{}
+			p := newTestPoller(&fakeInstances{}, fakeAdmin{}, store)
+			if !tc.absent {
+				p.settings = settings
+			}
+			p.processURL(context.Background(), domain.SonarrInstance{}, uuid.New(),
+				HistoryRecord{Data: HistoryData{NzbInfoURL: fakeURL}})
+			if len(store.created) != 1 {
+				t.Fatalf("created = %d, want 1", len(store.created))
+			}
+			if got := store.created[0].CheckIntervalSec; got != tc.want {
+				t.Errorf("stored interval = %d, want %d", got, tc.want)
+			}
+		})
+	}
+}

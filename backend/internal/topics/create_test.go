@@ -433,7 +433,7 @@ func TestBuildAndCreate_CheckIntervalRange(t *testing.T) {
 		wantErr bool
 		want    int
 	}{
-		{"zero uses default", 0, false, defaultCheckIntervalSec},
+		{"zero uses default", 0, false, DefaultCheckIntervalSec},
 		{"minimum accepted", MinCheckIntervalSec, false, MinCheckIntervalSec},
 		{"maximum accepted", MaxCheckIntervalSec, false, MaxCheckIntervalSec},
 		{"below minimum refused", MinCheckIntervalSec - 1, true, 0},

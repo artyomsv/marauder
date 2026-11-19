@@ -159,6 +159,7 @@ export function AddTopicCard({ onClose, onCreated }: AddTopicCardProps) {
               followTrackerTitle: settings.data?.default_follow_tracker_title ?? false,
               replaceOnUpdate: settings.data?.default_replace_on_update ?? EMPTY.replaceOnUpdate,
               replaceDeleteData: settings.data?.default_replace_delete_data ?? EMPTY.replaceDeleteData,
+              checkIntervalSec: settings.data?.default_check_interval_sec ?? EMPTY.checkIntervalSec,
             }}
             isPending={create.isPending}
             error={error}
