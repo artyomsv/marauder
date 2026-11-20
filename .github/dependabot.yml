@@ -43,7 +43,10 @@ updates:
       # pgx 5.12 added Tx() to pgx.BatchResults. pgxmock v5.2.0 does not
       # implement it, so every repo test fails to compile (PR #246). The
       # fix exists only in pgxmock v6, still in beta. Remove this once we
-      # move to a stable pgxmock v6.
+      # move to a stable pgxmock v6
+      # (techdebt/backend/3-2-pgx-held-below-5-12-for-pgxmock.md).
+      # Cost: `ignore` also applies to security updates, so a pgx advisory
+      # fixed only in >=5.12 raises an alert but no PR. Act on it by hand.
       - dependency-name: "github.com/jackc/pgx/v5"
         versions: [">=5.12.0"]
 

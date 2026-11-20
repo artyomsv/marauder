@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Client canary no longer files false issues on a registry quota.**
+  lscr.io now reports its pull limit as `error from registry: retry-after:`,
+  which the canary did not recognise, so it reported the clients as broken.
+  Ref #252, Ref #253.
+
 ## [1.29.0] - 2026-11-19
 
 ### Added

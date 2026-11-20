@@ -96,6 +96,11 @@ check "build-service pull warning is not infra" 1 \
 check "manifest unknown is not infra" 1 \
   'manifest for linuxserver/qbittorrent:latest not found: manifest unknown'
 
+# Guard: `error from registry:` wraps every registry error; only the
+# `retry-after:` form is the quota. (Constructed from the wrapper format.)
+check "error from registry without retry-after is not infra" 1 \
+  'Error response from daemon: error from registry: manifest unknown'
+
 # ---------------------------------------------------------------------- tally
 if [[ "$fail" -gt 0 ]]; then
   printf '\n%d passed, %d FAILED\n' "$pass" "$fail"
