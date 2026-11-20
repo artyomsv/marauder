@@ -39,6 +39,13 @@ check "docker hub quota, daemon wording" 0 \
 check "docker hub quota, deluge leg" 0 \
   ' deluge-220 Error toomanyrequests: retry-after: 1.248776ms, allowed: 44000/minute'
 
+# Verbatim from run 44538823680 (issues #252/#253): lscr.io quota in newer
+# daemon wording, which carries no `toomanyrequests` code.
+check "lscr.io quota, deluge leg" 0 \
+  ' Image lscr.io/linuxserver/deluge:latest Error error from registry: retry-after: 1.260936ms, allowed: 44000/minute'
+check "lscr.io quota, daemon wording" 0 \
+  'Error response from daemon: error from registry: retry-after: 1.260936ms, allowed: 44000/minute'
+
 # The same quota reported in Docker Hub's human wording.
 check "docker hub quota, human wording" 0 \
   'toomanyrequests: You have reached your pull rate limit. https://www.docker.com/increase-rate-limit'
