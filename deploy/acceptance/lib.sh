@@ -30,6 +30,9 @@ acceptance_is_registry_failure() {
   case "$log" in
     # Registry quota, both the daemon wording and Docker Hub's human one.
     *toomanyrequests*|*"pull rate limit"*) return 0 ;;
+    # The same quota in newer daemon wording, with no `toomanyrequests` code
+    # (lscr.io, 2026-11-19, issues #252/#253).
+    *"error from registry: retry-after:"*) return 0 ;;
     # Registry answered, but unhealthy: 5xx / gateway errors.
     *"received unexpected HTTP status: 5"*|*"Service Unavailable"*|*"502 Bad Gateway"*)
       return 0 ;;

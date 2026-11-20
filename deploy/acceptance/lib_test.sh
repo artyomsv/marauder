@@ -39,6 +39,13 @@ check "docker hub quota, daemon wording" 0 \
 check "docker hub quota, deluge leg" 0 \
   ' deluge-220 Error toomanyrequests: retry-after: 1.248776ms, allowed: 44000/minute'
 
+# Verbatim from run 44538823680 (issues #252/#253): lscr.io quota in newer
+# daemon wording, which carries no `toomanyrequests` code.
+check "lscr.io quota, deluge leg" 0 \
+  ' Image lscr.io/linuxserver/deluge:latest Error error from registry: retry-after: 1.260936ms, allowed: 44000/minute'
+check "lscr.io quota, daemon wording" 0 \
+  'Error response from daemon: error from registry: retry-after: 1.260936ms, allowed: 44000/minute'
+
 # The same quota reported in Docker Hub's human wording.
 check "docker hub quota, human wording" 0 \
   'toomanyrequests: You have reached your pull rate limit. https://www.docker.com/increase-rate-limit'
@@ -88,6 +95,11 @@ check "build-service pull warning is not infra" 1 \
 # (typo, withdrawn release) is reported instead of retried forever.
 check "manifest unknown is not infra" 1 \
   'manifest for linuxserver/qbittorrent:latest not found: manifest unknown'
+
+# Guard: `error from registry:` wraps every registry error; only the
+# `retry-after:` form is the quota. (Constructed from the wrapper format.)
+check "error from registry without retry-after is not infra" 1 \
+  'Error response from daemon: error from registry: manifest unknown'
 
 # ---------------------------------------------------------------------- tally
 if [[ "$fail" -gt 0 ]]; then
